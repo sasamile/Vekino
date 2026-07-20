@@ -1,0 +1,31 @@
+{
+  "name": "vekino",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Vekino SaaS — plataforma de gestión de condominios (monorepo)",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "backend:dev": "turbo run dev --filter=@vekino/backend",
+    "web:dev": "turbo run dev --filter=@vekino/web"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.20.0",
+    "pg": "^8.22.0",
+    "turbo": "^2.3.3",
+    "typescript": "^5.7.3"
+  },
+  "packageManager": "bun@1.3.14",
+  "engines": {
+    "bun": ">=1.3.0"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.112.3"
+  }
+}

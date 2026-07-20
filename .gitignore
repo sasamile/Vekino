@@ -1,0 +1,28 @@
+# deps
+node_modules
+.pnp
+.pnp.js
+
+# builds
+.next
+dist
+out
+build
+
+# turbo
+.turbo
+
+# env
+.env
+.env.local
+.env*.local
+
+# convex
+packages/backend/.env.local
+
+# misc
+.DS_Store
+*.log
+npm-debug.log*
+coverage
+*.tsbuildinfo

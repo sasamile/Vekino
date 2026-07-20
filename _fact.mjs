@@ -1,0 +1,16 @@
+import pg from "pg";
+const c = new pg.Client({ connectionString: process.env.SRC_DB.replace(/[?&]sslmode=[^&]*/i,""), ssl:{rejectUnauthorized:false}});
+await c.connect();
+const q = async s => (await c.query(s)).rows;
+console.log("=== count / rango fechas ===");
+console.log(JSON.stringify(await q(`select count(*)::int n, min("fechaEmision") minE, max("fechaEmision") maxE, min("createdAt") minC from factura`)));
+console.log("=== periodos ===");
+console.log(JSON.stringify(await q(`select periodo, count(*)::int n from factura group by periodo order by periodo`)));
+console.log("=== estados ===");
+console.log(JSON.stringify(await q(`select estado::text, count(*)::int n from factura group by estado`)));
+console.log("=== cuántas tienen descripcion / observaciones / pdf ===");
+console.log(JSON.stringify(await q(`select count(*) filter (where descripcion is not null and descripcion<>'')::int con_desc, count(*) filter (where observaciones is not null and observaciones<>'')::int con_obs, count(*) filter (where "pdfUrl" is not null)::int con_pdf, count(*) filter (where "saldoAnterior" is not null and "saldoAnterior">0)::int con_saldo from factura`)));
+console.log("=== 4 primeras facturas (por fechaEmision) TODO ===");
+const f = await q(`select * from factura order by "fechaEmision" asc, "createdAt" asc limit 4`);
+console.log(JSON.stringify(f, null, 1));
+await c.end();

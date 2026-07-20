@@ -1,0 +1,4 @@
+# React Native / Expo requiere una única instancia de react, react-native y expo.
+# El linker "hoisted" evita copias aisladas por paquete en el monorepo.
+[install]
+linker = "hoisted"
