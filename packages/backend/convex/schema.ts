@@ -550,8 +550,11 @@ export default defineSchema({
     coeficiente: v.optional(v.number()),
     otorganteUserId: v.id("users"),
     otorganteNombre: v.string(),
-    representanteUserId: v.id("users"),
+    // Apoderado: usuario existente (opcional) o persona externa con código.
+    representanteUserId: v.optional(v.id("users")),
     representanteNombre: v.string(),
+    apoderadoDocumento: v.optional(v.string()),
+    codigoAcceso: v.string(), // código que usa el apoderado para ingresar y votar
     validado: v.boolean(),
     createdAt: v.number(),
     updatedAt: v.number(),
@@ -559,7 +562,8 @@ export default defineSchema({
     .index("by_asamblea", ["asambleaId"])
     .index("by_asamblea_unidad", ["asambleaId", "unidadId"])
     .index("by_representante", ["asambleaId", "representanteUserId"])
-    .index("by_otorgante", ["asambleaId", "otorganteUserId"]),
+    .index("by_otorgante", ["asambleaId", "otorganteUserId"])
+    .index("by_codigo", ["codigoAcceso"]),
 
   // ─────────────────────────────────────────────────────────────
   // Votos individuales (un voto por unidad por votación)

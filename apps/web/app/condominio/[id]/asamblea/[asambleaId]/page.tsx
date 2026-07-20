@@ -487,17 +487,17 @@ function TablaTab({ asambleaId, tituloAsamblea }: { asambleaId: Id<"asambleas">;
         <div className="overflow-x-auto">
           <table className="w-full min-w-[42rem] text-sm">
             <thead><tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
-              <th className="py-2 font-medium">Unidad</th><th className="py-2 font-medium">Propietario</th><th className="py-2 font-medium">Asistencia</th>
-              <th className="py-2 text-right font-medium">Coef.</th><th className="py-2 font-medium">Representa</th><th className="py-2 font-medium">Hora</th>
+              <th className="py-2 pr-4 font-medium">Unidad</th><th className="py-2 pr-4 font-medium">Propietario</th><th className="py-2 pr-4 font-medium">Asistencia</th>
+              <th className="py-2 pr-6 font-medium">Coef.</th><th className="py-2 pr-4 font-medium">Representa</th><th className="py-2 font-medium">Hora</th>
             </tr></thead>
             <tbody className="divide-y divide-border">
               {visibles.slice(0, 300).map((f) => (
                 <tr key={f.unidadId}>
-                  <td className="py-2 font-medium text-foreground">{f.unidadNumero}</td>
-                  <td className="py-2 text-muted-foreground">{f.asistente ?? "—"}</td>
-                  <td className="py-2">{f.presente ? <Badge tone="success">Presente</Badge> : <Badge tone="destructive">Ausente</Badge>}</td>
-                  <td className="py-2 text-right tabular-nums text-muted-foreground">{f.coeficiente ?? "—"}</td>
-                  <td className="py-2 text-muted-foreground">{f.representa ?? "—"}</td>
+                  <td className="py-2 pr-4 font-medium text-foreground">{f.unidadNumero}</td>
+                  <td className="py-2 pr-4 text-muted-foreground">{f.propietario ?? "—"}</td>
+                  <td className="py-2 pr-4">{f.presente ? <Badge tone="success">Presente</Badge> : <Badge tone="destructive">Ausente</Badge>}</td>
+                  <td className="py-2 pr-6 tabular-nums text-muted-foreground">{f.coeficiente ?? "—"}</td>
+                  <td className="py-2 pr-4 text-muted-foreground">{f.representa ?? "—"}</td>
                   <td className="py-2 text-muted-foreground">{f.horaRegistro ? fmtHora(f.horaRegistro) : "—"}</td>
                 </tr>
               ))}
