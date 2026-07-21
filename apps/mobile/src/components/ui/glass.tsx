@@ -22,7 +22,7 @@ export function ScreenBackground({ children }: { children: React.ReactNode }) {
   const { theme, condominioId } = useCondominio();
   const segments = useSegments();
   // Blurs inferiores solo con el tab bar visible
-  const bottomGlows = segments.includes("(tabs)");
+  const bottomGlows = (segments as string[]).includes("(tabs)");
 
   return (
     <PastelShell

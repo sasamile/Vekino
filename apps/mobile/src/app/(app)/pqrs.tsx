@@ -74,7 +74,7 @@ function Inner() {
       ? undefined
       : canManage
         ? todas
-        : todas.filter((p) => p.solicitanteUserId === me?._id);
+        : todas.filter((p) => p.solicitanteUserId === me?.id);
 
   const unidadNumero =
     home && home.allowed ? home.unidades[0]?.numero : undefined;

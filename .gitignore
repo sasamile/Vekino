@@ -26,3 +26,6 @@ packages/backend/.env.local
 npm-debug.log*
 coverage
 *.tsbuildinfo
+
+# scripts one-shot de migración (no runtime)
+migrate/
