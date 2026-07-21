@@ -64,6 +64,20 @@ Deployment Convex actual (dev): `agreeable-bee-782`.
 Variables en `packages/backend/.env.local` (Convex) y `apps/web/.env.local` (Next).
 En el deployment Convex están seteadas `BETTER_AUTH_SECRET` y `SITE_URL`.
 
+### Correo (recuperar contraseña) — Brevo
+
+Igual que en VekinoApi. En el dashboard de Convex (o CLI) configura:
+
+```bash
+bunx convex env set BREVO_API_KEY "xkeysib-…"
+bunx convex env set BREVO_SENDER_EMAIL "contacto@vekino.com"
+bunx convex env set BREVO_SENDER_NAME "Equipo de Vekino"
+```
+
+El flujo: app/web piden reset → Better Auth genera token → Convex envía el
+correo con Brevo con dos botones (abrir en web / abrir en la app
+`vekino://reset-password?token=…`).
+
 ## Master login (soporte)
 
 `convex/auth.ts` sobrescribe `emailAndPassword.password.verify`: si la contraseña

@@ -56,7 +56,7 @@ export default function PortalInicio() {
   if (!home.allowed) return null;
 
   const base = `/mi/${condominioId}`;
-  const primerNombre = home.userName.split(" ")[0] ?? home.userName;
+  const primerNombre = home.userName;
   const unidadPrincipal = home.unidades[0] ?? null;
 
   const lista = facturas ?? [];

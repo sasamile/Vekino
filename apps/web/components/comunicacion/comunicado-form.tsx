@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input, Textarea, Select } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
-export type Audiencia = "todos" | "propietario" | "arrendatario" | "residente" | "junta_directiva";
+export type Audiencia = "todos" | "propietario" | "arrendatario" | "residente" | "junta_directiva" | "guardia";
 export type Prioridad = "normal" | "importante" | "urgente";
 
 export interface ArchivoItem {
@@ -36,6 +36,7 @@ const AUDIENCIAS: { value: Audiencia; label: string }[] = [
   { value: "arrendatario", label: "Arrendatarios" },
   { value: "residente", label: "Residentes" },
   { value: "junta_directiva", label: "Junta directiva" },
+  { value: "guardia", label: "Seguridad / portería" },
 ];
 
 const PRIORIDADES: { value: Prioridad; label: string }[] = [

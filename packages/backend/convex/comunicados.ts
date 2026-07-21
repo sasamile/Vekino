@@ -7,7 +7,8 @@ const audienciaValidator = v.union(
   v.literal("propietario"),
   v.literal("arrendatario"),
   v.literal("residente"),
-  v.literal("junta_directiva")
+  v.literal("junta_directiva"),
+  v.literal("guardia")
 );
 const prioridadValidator = v.union(
   v.literal("normal"),

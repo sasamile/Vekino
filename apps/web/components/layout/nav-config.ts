@@ -13,6 +13,7 @@ import {
   MessageSquareWarning,
   Users2,
   History,
+  LifeBuoy,
   type LucideIcon,
 } from "lucide-react";
 
@@ -56,6 +57,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { label: "Comunicación", segment: "comunicacion", icon: MessageSquare, ready: true },
       { label: "PQRS", segment: "pqrs", icon: MessageSquareWarning, ready: true },
+      { label: "Soporte", segment: "soporte", icon: LifeBuoy, ready: true },
       { label: "Documentos", segment: "documentos", icon: FileText, ready: true },
       { label: "Reportes", segment: "reportes", icon: BarChart3, ready: true },
     ],
@@ -69,3 +71,37 @@ export const NAV_GROUPS: NavGroup[] = [
     ],
   },
 ];
+
+/**
+ * Segmentos visibles por rol operativo. `administrador` (y staff de plataforma)
+ * ven todo. Los demás roles ven un subconjunto acorde a su función.
+ * "" = Dashboard (inicio del condominio).
+ */
+const ROLE_SEGMENTS: Record<string, string[]> = {
+  // Finanzas / cartera: solo lo económico.
+  contadora: ["", "finanzas", "reportes", "documentos"],
+  // Consejo / junta: gobernanza y supervisión de la comunidad (sin finanzas).
+  junta_directiva: [
+    "", "residentes", "unidades", "vehiculos", "control", "reservas",
+    "comunicacion", "pqrs", "soporte", "documentos", "reportes", "asamblea", "consejo", "historial",
+  ],
+  // Vocero de asamblea: gobernanza y documentos.
+  representante_asamblea: ["", "asamblea", "consejo", "documentos", "historial"],
+};
+
+/**
+ * Grupos de navegación visibles para los roles dados. Administrador o staff de
+ * plataforma → todo. Sin rol reconocido → solo el Dashboard (fallback seguro).
+ */
+export function visibleNavGroups(roles: string[], isPlatform: boolean): NavGroup[] {
+  if (isPlatform || roles.includes("administrador")) return NAV_GROUPS;
+
+  const allowed = new Set<string>([""]); // Dashboard siempre visible
+  for (const r of roles) {
+    for (const seg of ROLE_SEGMENTS[r] ?? []) allowed.add(seg);
+  }
+
+  return NAV_GROUPS
+    .map((g) => ({ ...g, items: g.items.filter((it) => allowed.has(it.segment)) }))
+    .filter((g) => g.items.length > 0);
+}

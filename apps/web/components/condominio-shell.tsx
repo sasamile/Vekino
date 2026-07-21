@@ -83,7 +83,9 @@ function Guard({ children }: { children: React.ReactNode }) {
           name={home.condominio.name}
           logo={home.condominio.logo}
           userName={home.userName}
+          userImage={home.userImage}
           isPlatform={home.isPlatform}
+          roles={home.myRoles}
         />
       </aside>
 
@@ -92,7 +94,9 @@ function Guard({ children }: { children: React.ReactNode }) {
         name={home.condominio.name}
         logo={home.condominio.logo}
         userName={home.userName}
+        userImage={home.userImage}
         isPlatform={home.isPlatform}
+        roles={home.myRoles}
       />
 
       <main className="min-w-0 lg:pl-64">{children}</main>

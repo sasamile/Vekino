@@ -1,0 +1,43 @@
+{
+  "cli": {
+    "version": ">= 16.0.0",
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "bun": "1.3.14",
+      "ios": {
+        "simulator": false
+      },
+      "env": {
+        "EXPO_NO_DOTENV": "1"
+      }
+    },
+    "preview": {
+      "distribution": "internal",
+      "bun": "1.3.14",
+      "ios": {
+        "simulator": false
+      },
+      "env": {
+        "EXPO_NO_DOTENV": "1",
+        "EXPO_PUBLIC_CONVEX_URL": "https://agreeable-bee-782.convex.cloud",
+        "EXPO_PUBLIC_CONVEX_SITE_URL": "https://agreeable-bee-782.convex.site"
+      }
+    },
+    "production": {
+      "bun": "1.3.14",
+      "autoIncrement": true,
+      "env": {
+        "EXPO_NO_DOTENV": "1",
+        "EXPO_PUBLIC_CONVEX_URL": "https://agreeable-bee-782.convex.cloud",
+        "EXPO_PUBLIC_CONVEX_SITE_URL": "https://agreeable-bee-782.convex.site"
+      }
+    }
+  },
+  "submit": {
+    "production": {}
+  }
+}

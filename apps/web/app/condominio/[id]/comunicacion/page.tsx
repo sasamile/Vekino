@@ -23,7 +23,7 @@ import { initials, cn } from "@/lib/utils";
 
 const AUDIENCIA_LABEL: Record<string, string> = {
   todos: "Todos", propietario: "Propietarios", arrendatario: "Arrendatarios",
-  residente: "Residentes", junta_directiva: "Junta directiva",
+  residente: "Residentes", junta_directiva: "Junta directiva", guardia: "Seguridad / portería",
 };
 const PRIORIDAD_LABEL: Record<string, string> = {
   normal: "Normal", importante: "Importante", urgente: "Urgente",

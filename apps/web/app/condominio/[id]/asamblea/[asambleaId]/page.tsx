@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useQuery, useMutation } from "convex/react";
@@ -9,8 +9,9 @@ import type { Id } from "@vekino/backend/dataModel";
 import {
   ArrowLeft, Calendar, MapPin, Users, Loader2, Check, Play, CheckCircle2,
   XCircle, Vote, ListOrdered, Scale, Save, Plus, Trash2, ChevronUp, ChevronDown,
-  Lock, Unlock, BarChart3, LayoutDashboard, Table2, TrendingUp, UserPlus,
-  UserSquare, QrCode, Mail, Search, Download, Wifi, WifiOff,
+  Lock, LayoutDashboard, Table2, TrendingUp, UserPlus,
+  UserSquare, QrCode, Mail, Search, Download, Wifi, KeyRound, ClipboardList, X,
+  FileText, FileArchive,
 } from "lucide-react";
 import { PageContainer } from "@/components/layout/page-container";
 import { Card } from "@/components/ui/card";
@@ -19,6 +20,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
+import {
+  descargarActaPDF,
+  descargarPoderesCSV,
+  descargarPoderesZIP,
+} from "@/lib/asamblea-auditoria";
+import { VotacionEnVivoTab, DetalleVotosTab } from "./votacion-en-vivo";
 
 type Estado = "programada" | "en_curso" | "finalizada" | "cancelada";
 const ESTADO_META: Record<Estado, { label: string; tone: React.ComponentProps<typeof Badge>["tone"] }> = {
@@ -40,13 +47,14 @@ function fmtHora(ts: number | null) {
 
 const TABS = [
   { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { key: "orden", label: "Orden del día", icon: ListOrdered },
-  { key: "votacion", label: "Votación en vivo", icon: Vote },
+  { key: "orden", label: "Orden", icon: ListOrdered },
+  { key: "votacion", label: "En vivo", icon: Vote },
+  { key: "detalle_votos", label: "Detalle", icon: ClipboardList },
   { key: "tabla", label: "Tabla", icon: Table2 },
   { key: "resultados", label: "Resultados", icon: TrendingUp },
   { key: "poderes", label: "Poderes", icon: UserPlus },
-  { key: "representantes", label: "Representantes", icon: UserSquare },
-  { key: "qr", label: "Registrar asistencia", icon: QrCode },
+  { key: "representantes", label: "Reps", icon: UserSquare },
+  { key: "qr", label: "Asistencia", icon: QrCode },
 ] as const;
 type TabKey = (typeof TABS)[number]["key"];
 
@@ -96,26 +104,34 @@ export default function AsambleaAdmin() {
         </div>
       </Card>
 
-      {/* Tabs */}
-      <div className="overflow-x-auto">
-        <nav className="flex items-center gap-1 rounded-xl border border-border bg-card p-1">
-          {TABS.map((t) => {
-            const Icon = t.icon;
-            const active = tab === t.key;
-            return (
-              <button key={t.key} onClick={() => setTab(t.key)}
-                className={cn("flex items-center gap-2 whitespace-nowrap rounded-lg px-3 py-2 text-sm font-medium transition-colors",
-                  active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent hover:text-foreground")}>
-                <Icon className="h-4 w-4" /> {t.label}
-              </button>
-            );
-          })}
-        </nav>
-      </div>
+      {/* Tabs — full width */}
+      <nav className="flex w-full flex-wrap items-stretch gap-1 rounded-xl border border-border bg-card p-1">
+        {TABS.map((t) => {
+          const Icon = t.icon;
+          const active = tab === t.key;
+          return (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => setTab(t.key)}
+              className={cn(
+                "inline-flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-lg px-2 py-2.5 text-sm font-medium transition-colors",
+                active
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:bg-accent hover:text-foreground",
+              )}
+            >
+              <Icon className="h-4 w-4 shrink-0" />
+              <span className="truncate">{t.label}</span>
+            </button>
+          );
+        })}
+      </nav>
 
       {tab === "dashboard" && <DashboardTab asambleaId={asambleaId} estado={a.estado} />}
       {tab === "orden" && <OrdenDelDia asambleaId={asambleaId} puntos={a.ordenDia ?? a.agenda.map((t) => ({ titulo: t }))} />}
-      {tab === "votacion" && <VotacionTab asambleaId={asambleaId} agenda={a.agenda} />}
+      {tab === "votacion" && <VotacionEnVivoTab asambleaId={asambleaId} agenda={a.agenda} />}
+      {tab === "detalle_votos" && <DetalleVotosTab asambleaId={asambleaId} />}
       {tab === "tabla" && <TablaTab asambleaId={asambleaId} tituloAsamblea={a.titulo} />}
       {tab === "resultados" && <ResultadosTab asambleaId={asambleaId} />}
       {tab === "poderes" && <PoderesTab asambleaId={asambleaId} />}
@@ -154,6 +170,9 @@ function DashboardTab({ asambleaId, estado }: { asambleaId: Id<"asambleas">; est
           <Stat value={String(q.poderesActivos ?? 0)} label="Poderes activos" tone="text-emerald-600" />
           <Stat value={String(q.totalUnidades)} label="Total unidades" tone="text-foreground" />
         </div>
+        <p className="mt-3 text-xs text-muted-foreground">
+          Unidades presentes = solo check-in en sala (QR o código). Aceptar un poder no marca asistencia.
+        </p>
         <div className="mt-4">
           <div className="mb-1 flex items-center justify-between text-sm">
             <span className="text-muted-foreground">Progreso de quórum</span>
@@ -169,30 +188,60 @@ function DashboardTab({ asambleaId, estado }: { asambleaId: Id<"asambleas">; est
 
       <Card className="p-6">
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="flex items-center gap-2 text-base font-semibold text-foreground"><Users className="h-5 w-5 text-brand" /> Asistentes registrados</h2>
-          <span className="text-xs text-muted-foreground"><Wifi className="mr-1 inline h-3.5 w-3.5" />{det?.asistentes.length ?? 0} presentes</span>
+          <h2 className="flex items-center gap-2 text-base font-semibold text-foreground"><Users className="h-5 w-5 text-brand" /> Quiénes asistieron</h2>
+          <span className="text-xs text-muted-foreground">
+            <Wifi className="mr-1 inline h-3.5 w-3.5" />
+            {(det?.filas ?? []).filter((f) => f.presente).length} unidades
+          </span>
         </div>
-        {det === undefined ? <Spinner className="mx-auto my-4 h-5 w-5" /> : det.asistentes.length === 0 ? (
+        {det === undefined ? <Spinner className="mx-auto my-4 h-5 w-5" /> : (det.filas.filter((f) => f.presente).length === 0) ? (
           <p className="rounded-lg bg-muted/40 p-4 text-sm text-muted-foreground">Aún no hay asistentes registrados.</p>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[36rem] text-sm">
+            <table className="w-full min-w-xl text-sm">
               <thead><tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
-                <th className="py-2 font-medium">Unidad</th><th className="py-2 font-medium">Propietario</th>
-                <th className="py-2 text-right font-medium">Coeficiente</th><th className="py-2 font-medium">Hora</th><th className="py-2"></th>
+                <th className="py-2 pr-4 font-medium">Unidad</th>
+                <th className="py-2 pr-4 font-medium">Quién</th>
+                <th className="py-2 pr-4 font-medium">Tipo</th>
+                <th className="py-2 pr-6 text-right font-medium">Coeficiente</th>
+                <th className="py-2 pr-4 font-medium">Hora</th>
+                <th className="py-2"></th>
               </tr></thead>
               <tbody className="divide-y divide-border">
-                {det.asistentes.map((a) => (
-                  <tr key={a._id}>
-                    <td className="py-2 font-medium text-foreground">{a.unidadNumero}</td>
-                    <td className="py-2 text-muted-foreground">{a.userNombre}</td>
-                    <td className="py-2 text-right tabular-nums text-muted-foreground">{a.coeficiente != null ? `${a.coeficiente}` : "—"}</td>
-                    <td className="py-2 text-muted-foreground">{fmtHora(a.createdAt)}</td>
-                    <td className="py-2 text-right">
-                      <button onClick={() => quitar({ asistenteId: a._id })} aria-label="Quitar" className="rounded p-1 text-muted-foreground hover:text-red-600"><Trash2 className="h-4 w-4" /></button>
-                    </td>
-                  </tr>
-                ))}
+                {det.filas.filter((f) => f.presente).map((f) => {
+                  const asisRow = det.asistentes.find((a) => a.unidadNumero === f.unidadNumero);
+                  const esPoder = !!f.porPoder;
+                  const tambien = f.tambienRepresenta ?? [];
+                  return (
+                    <tr key={f.unidadId}>
+                      <td className="py-2 pr-4 font-medium text-foreground">{f.unidadNumero}</td>
+                      <td className="py-2 pr-4 text-muted-foreground">
+                        <span className="text-foreground">{f.asistente ?? f.propietario ?? "—"}</span>
+                        {!esPoder && tambien.length > 0 ? (
+                          <span className="mt-0.5 block text-xs text-brand">
+                            También representa {tambien.length === 1 ? "la unidad" : "las unidades"}{" "}
+                            {tambien.join(", ")}
+                          </span>
+                        ) : null}
+                        {esPoder ? (
+                          <span className="mt-0.5 block text-xs text-muted-foreground">
+                            Propietario: {f.propietario ?? "—"} · Representada por poder
+                          </span>
+                        ) : null}
+                      </td>
+                      <td className="py-2 pr-4">
+                        <Badge tone={esPoder ? "info" : "success"}>{esPoder ? "Por poder" : "Presente"}</Badge>
+                      </td>
+                      <td className="py-2 pr-6 text-right tabular-nums text-muted-foreground">{f.coeficiente != null ? `${f.coeficiente}` : "—"}</td>
+                      <td className="py-2 pr-4 text-muted-foreground whitespace-nowrap">{fmtHora(f.horaRegistro)}</td>
+                      <td className="py-2 text-right">
+                        {asisRow ? (
+                          <button onClick={() => quitar({ asistenteId: asisRow._id })} aria-label="Quitar" className="rounded p-1 text-muted-foreground hover:text-red-600"><Trash2 className="h-4 w-4" /></button>
+                        ) : null}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -206,21 +255,26 @@ function Stat({ value, label, tone }: { value: string; label: string; tone: stri
 }
 
 /* ───────── Orden del día (puntos con votación) ───────── */
-type Punto = { titulo: string; descripcion?: string; votacionId?: Id<"votaciones"> };
+type Punto = { titulo: string; descripcion?: string; votacionId?: Id<"votaciones">; hecho?: boolean };
 
 function OrdenDelDia({ asambleaId, puntos }: { asambleaId: Id<"asambleas">; puntos: Punto[] }) {
   const votaciones = useQuery(api.asambleas.listVotaciones, { asambleaId });
   const eliminar = useMutation(api.asambleas.eliminarPunto);
   const mover = useMutation(api.asambleas.moverPunto);
+  const toggleHecho = useMutation(api.asambleas.togglePuntoHecho);
   const [modal, setModal] = useState<{ index: number | null } | null>(null);
+  const [busyHecho, setBusyHecho] = useState<number | null>(null);
 
   const votMap = new Map((votaciones ?? []).map((v) => [v._id as string, v]));
+  const hechos = puntos.filter((p) => p.hecho).length;
 
   return (
     <Card className="p-6">
-      <div className="mb-4 flex items-center justify-between">
+      <div className="mb-4 flex items-center justify-between gap-3">
         <h2 className="flex items-center gap-2 text-lg font-semibold text-foreground"><ListOrdered className="h-5 w-5 text-brand" /> Orden del día</h2>
-        <span className="text-xs text-muted-foreground">Puedes editarlo en cualquier momento</span>
+        <span className="text-xs text-muted-foreground">
+          {puntos.length > 0 ? `${hechos}/${puntos.length} realizados` : "Puedes editarlo en cualquier momento"}
+        </span>
       </div>
 
       {puntos.length === 0 ? (
@@ -229,12 +283,44 @@ function OrdenDelDia({ asambleaId, puntos }: { asambleaId: Id<"asambleas">; punt
         <ol className="space-y-2">
           {puntos.map((p, i) => {
             const vt = p.votacionId ? votMap.get(p.votacionId as string) : null;
+            const hecho = !!p.hecho;
             return (
-              <li key={i} className="flex items-start gap-3 rounded-xl border border-border p-3">
-                <span className="mt-0.5 w-6 shrink-0 text-sm font-semibold text-muted-foreground">{i + 1}.</span>
+              <li
+                key={i}
+                className={cn(
+                  "flex items-start gap-3 rounded-xl border p-3 transition-colors",
+                  hecho ? "border-emerald-500/30 bg-emerald-500/5" : "border-border",
+                )}
+              >
+                <button
+                  type="button"
+                  title={hecho ? "Marcar como pendiente" : "Marcar como realizado"}
+                  disabled={busyHecho === i}
+                  onClick={() => {
+                    setBusyHecho(i);
+                    toggleHecho({ asambleaId, index: i }).finally(() => setBusyHecho(null));
+                  }}
+                  className={cn(
+                    "mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border transition-colors",
+                    hecho
+                      ? "border-emerald-500 bg-emerald-500 text-white"
+                      : "border-border bg-background text-muted-foreground hover:border-brand hover:text-brand",
+                  )}
+                >
+                  {busyHecho === i ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : hecho ? (
+                    <Check className="h-4 w-4" />
+                  ) : (
+                    <span className="text-xs font-semibold tabular-nums">{i + 1}</span>
+                  )}
+                </button>
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
-                    <p className="font-medium text-foreground">{p.titulo}</p>
+                    <p className={cn("font-medium", hecho ? "text-muted-foreground line-through" : "text-foreground")}>
+                      {p.titulo}
+                    </p>
+                    {hecho && <Badge tone="success">Hecho</Badge>}
                     {p.votacionId && (
                       <Badge tone={vt?.estado === "abierta" ? "success" : "info"}>
                         <Vote className="h-3 w-3" /> Votación {vt?.estado === "abierta" ? "abierta" : "cerrada"}
@@ -335,7 +421,7 @@ function PuntoModal({
           </label>
 
           <label className="flex items-center gap-2.5">
-            <input type="checkbox" checked={habilitar} onChange={(e) => setHabilitar(e.target.checked)} className="h-4 w-4 rounded border-border text-brand accent-[hsl(var(--brand))]" />
+            <input type="checkbox" checked={habilitar} onChange={(e) => setHabilitar(e.target.checked)} className="h-4 w-4 rounded border-border text-brand accent-brand" />
             <span className="text-sm font-medium text-foreground">Habilitar votación en este punto</span>
           </label>
 
@@ -363,79 +449,14 @@ function PuntoModal({
   );
 }
 
-/* ───────── Votación en vivo ───────── */
-function VotacionTab({ asambleaId, agenda }: { asambleaId: Id<"asambleas">; agenda: string[] }) {
-  const votaciones = useQuery(api.asambleas.listVotaciones, { asambleaId });
-  const createVotacion = useMutation(api.asambleas.createVotacion);
-  const [pregunta, setPregunta] = useState("");
-  const [opciones, setOpciones] = useState<string[]>(["A favor", "En contra", "Abstención"]);
-  const [showForm, setShowForm] = useState(false);
-  const [busy, setBusy] = useState(false);
-  async function crear() {
-    const ops = opciones.map((o) => o.trim()).filter(Boolean);
-    if (!pregunta.trim() || ops.length < 2) return;
-    setBusy(true);
-    try { await createVotacion({ asambleaId, pregunta, opciones: ops }); setPregunta(""); setOpciones(["A favor", "En contra", "Abstención"]); setShowForm(false); } finally { setBusy(false); }
-  }
-  return (
-    <Card className="p-6">
-      <div className="mb-4 flex items-center justify-between">
-        <h2 className="flex items-center gap-2 text-lg font-semibold text-foreground"><Vote className="h-5 w-5 text-brand" /> Votación en vivo</h2>
-        <Button variant="outline" size="sm" onClick={() => setShowForm((s) => !s)}><Plus className="h-4 w-4" /> Nueva pregunta</Button>
-      </div>
-      {showForm && (
-        <div className="mb-4 space-y-3 rounded-xl border border-border bg-muted/30 p-4">
-          <Input value={pregunta} onChange={(e) => setPregunta(e.target.value)} placeholder="¿Se aprueba…?" />
-          {agenda.length > 0 && <div className="flex flex-wrap gap-1.5">{agenda.map((p, i) => <button key={i} onClick={() => setPregunta(p)} className="rounded-full bg-brand/10 px-2 py-0.5 text-xs text-brand hover:bg-brand/20">{i + 1}. {p.length > 30 ? p.slice(0, 30) + "…" : p}</button>)}</div>}
-          <div className="space-y-2">{opciones.map((op, i) => (
-            <div key={i} className="flex items-center gap-2">
-              <Input value={op} onChange={(e) => setOpciones((p) => p.map((x, idx) => idx === i ? e.target.value : x))} placeholder={`Opción ${i + 1}`} />
-              {opciones.length > 2 && <button onClick={() => setOpciones((p) => p.filter((_, idx) => idx !== i))} className="rounded p-1.5 text-muted-foreground hover:text-red-600"><Trash2 className="h-4 w-4" /></button>}
-            </div>
-          ))}</div>
-          <button onClick={() => setOpciones((p) => [...p, ""])} className="text-sm font-medium text-brand hover:underline">+ Agregar opción</button>
-          <div className="flex justify-end gap-2"><Button variant="ghost" size="sm" onClick={() => setShowForm(false)}>Cancelar</Button><Button size="sm" onClick={crear} disabled={busy}>{busy && <Loader2 className="h-4 w-4 animate-spin" />} Crear</Button></div>
-        </div>
-      )}
-      {votaciones === undefined ? <Spinner className="mx-auto my-4 h-5 w-5" /> : votaciones.length === 0 ? (
-        <p className="rounded-lg bg-muted/40 p-4 text-sm text-muted-foreground">No hay votaciones. Crea una pregunta.</p>
-      ) : <div className="space-y-4">{votaciones.map((vt) => <VotacionAdminCard key={vt._id} votacionId={vt._id} pregunta={vt.pregunta} estado={vt.estado} />)}</div>}
-    </Card>
-  );
-}
-function VotacionAdminCard({ votacionId, pregunta, estado }: { votacionId: Id<"votaciones">; pregunta: string; estado: "abierta" | "cerrada" }) {
-  const res = useQuery(api.asambleas.resultadosVotacion, { votacionId });
-  const toggle = useMutation(api.asambleas.toggleVotacion);
-  const remove = useMutation(api.asambleas.removeVotacion);
-  const totalCoef = res ? res.opciones.reduce((s, o) => s + o.coeficiente, 0) : 0;
-  return (
-    <div className="rounded-xl border border-border p-4">
-      <div className="mb-3 flex items-start justify-between gap-3">
-        <p className="font-semibold text-foreground">{pregunta}</p>
-        <div className="flex shrink-0 items-center gap-1">
-          <Badge tone={estado === "abierta" ? "success" : "neutral"}>{estado === "abierta" ? "Abierta" : "Cerrada"}</Badge>
-          <button onClick={() => toggle({ id: votacionId })} className="rounded p-1.5 text-muted-foreground hover:text-foreground" aria-label="Abrir/cerrar">{estado === "abierta" ? <Lock className="h-4 w-4" /> : <Unlock className="h-4 w-4" />}</button>
-          <button onClick={() => remove({ id: votacionId })} className="rounded p-1.5 text-muted-foreground hover:text-red-600" aria-label="Eliminar"><Trash2 className="h-4 w-4" /></button>
-        </div>
-      </div>
-      {res && <div className="space-y-2">{res.opciones.map((op, i) => {
-        const pct = totalCoef > 0 ? Math.round((op.coeficiente / totalCoef) * 100) : 0;
-        return <div key={i}>
-          <div className="mb-1 flex items-center justify-between text-sm"><span className="text-foreground">{op.texto}</span><span className="tabular-nums text-muted-foreground">{op.votos} und · {op.coeficiente} coef · {pct}%</span></div>
-          <div className="h-2 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-brand transition-all" style={{ width: `${pct}%` }} /></div>
-        </div>;
-      })}</div>}
-      <p className="mt-2 text-xs text-muted-foreground">{res?.totalVotos ?? 0} unidades votaron</p>
-    </div>
-  );
-}
-
 /* ───────── Tabla (registro detallado) ───────── */
 function TablaTab({ asambleaId, tituloAsamblea }: { asambleaId: Id<"asambleas">; tituloAsamblea: string }) {
   const det = useQuery(api.asambleas.asistentesDetallado, { asambleaId });
   const votaciones = useQuery(api.asambleas.listVotaciones, { asambleaId });
   const [filtro, setFiltro] = useState<"todos" | "votaron" | "pendientes" | "ausentes">("todos");
   const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 40;
 
   const filas = det?.filas ?? [];
   const conteos = useMemo(() => {
@@ -444,20 +465,26 @@ function TablaTab({ asambleaId, tituloAsamblea }: { asambleaId: Id<"asambleas">;
     return { todos: filas.length, votaron, pendientes: presentes - votaron, ausentes: filas.length - presentes };
   }, [filas]);
 
-  const visibles = filas.filter((f) => {
-    if (search && !f.unidadNumero.toLowerCase().includes(search.toLowerCase()) && !(f.asistente ?? "").toLowerCase().includes(search.toLowerCase())) return false;
+  const visibles = useMemo(() => filas.filter((f) => {
+    if (search && !f.unidadNumero.toLowerCase().includes(search.toLowerCase()) && !(f.asistente ?? "").toLowerCase().includes(search.toLowerCase()) && !(f.propietario ?? "").toLowerCase().includes(search.toLowerCase())) return false;
     const voto = Object.keys(f.votos).length > 0;
     if (filtro === "votaron") return voto;
     if (filtro === "pendientes") return f.presente && !voto;
     if (filtro === "ausentes") return !f.presente;
     return true;
-  });
+  }), [filas, search, filtro]);
+
+  const totalPages = Math.max(1, Math.ceil(visibles.length / PAGE_SIZE));
+  const pageSafe = Math.min(page, totalPages);
+  const pageRows = visibles.slice((pageSafe - 1) * PAGE_SIZE, pageSafe * PAGE_SIZE);
+
+  useEffect(() => { setPage(1); }, [filtro, search]);
 
   function exportarCSV() {
     const vs = votaciones ?? [];
     const head = ["Unidad", "Propietario", "Asistencia", "Coeficiente", "Hora", ...vs.map((v, i) => `P${i + 1}`)];
     const rows = filas.map((f) => [
-      f.unidadNumero, f.asistente ?? "", f.presente ? "Presente" : "Ausente",
+      f.unidadNumero, f.asistente ?? "", f.presente ? (f.porPoder ? "Por poder" : "Presente") : f.tienePoder ? "Poder" : "Ausente",
       f.coeficiente != null ? String(f.coeficiente) : "", f.horaRegistro ? fmtHora(f.horaRegistro) : "",
       ...vs.map((v) => { const idx = f.votos[v._id as string]; return idx != null ? (v.opciones[idx]?.texto ?? "") : ""; }),
     ]);
@@ -484,18 +511,27 @@ function TablaTab({ asambleaId, tituloAsamblea }: { asambleaId: Id<"asambleas">;
         ))}
       </div>
       {det === undefined ? <Spinner className="mx-auto my-6 h-5 w-5" /> : (
+        <>
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[42rem] text-sm">
+          <table className="w-full min-w-2xl text-sm">
             <thead><tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
               <th className="py-2 pr-4 font-medium">Unidad</th><th className="py-2 pr-4 font-medium">Propietario</th><th className="py-2 pr-4 font-medium">Asistencia</th>
               <th className="py-2 pr-6 font-medium">Coef.</th><th className="py-2 pr-4 font-medium">Representa</th><th className="py-2 font-medium">Hora</th>
             </tr></thead>
             <tbody className="divide-y divide-border">
-              {visibles.slice(0, 300).map((f) => (
+              {pageRows.map((f) => (
                 <tr key={f.unidadId}>
                   <td className="py-2 pr-4 font-medium text-foreground">{f.unidadNumero}</td>
                   <td className="py-2 pr-4 text-muted-foreground">{f.propietario ?? "—"}</td>
-                  <td className="py-2 pr-4">{f.presente ? <Badge tone="success">Presente</Badge> : <Badge tone="destructive">Ausente</Badge>}</td>
+                  <td className="py-2 pr-4">
+                    {f.presente ? (
+                      <Badge tone={f.porPoder ? "info" : "success"}>{f.porPoder ? "Por poder" : "Presente"}</Badge>
+                    ) : f.tienePoder ? (
+                      <Badge tone="neutral">Poder</Badge>
+                    ) : (
+                      <Badge tone="destructive">Ausente</Badge>
+                    )}
+                  </td>
                   <td className="py-2 pr-6 tabular-nums text-muted-foreground">{f.coeficiente ?? "—"}</td>
                   <td className="py-2 pr-4 text-muted-foreground">{f.representa ?? "—"}</td>
                   <td className="py-2 text-muted-foreground">{f.horaRegistro ? fmtHora(f.horaRegistro) : "—"}</td>
@@ -503,8 +539,20 @@ function TablaTab({ asambleaId, tituloAsamblea }: { asambleaId: Id<"asambleas">;
               ))}
             </tbody>
           </table>
-          {visibles.length > 300 && <p className="mt-2 text-xs text-muted-foreground">Mostrando 300 de {visibles.length}. Usa el buscador para filtrar.</p>}
         </div>
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm">
+          <p className="text-muted-foreground">
+            {visibles.length === 0
+              ? "Sin registros"
+              : `Mostrando ${(pageSafe - 1) * PAGE_SIZE + 1}–${Math.min(pageSafe * PAGE_SIZE, visibles.length)} de ${visibles.length}`}
+          </p>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" disabled={pageSafe <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>Anterior</Button>
+            <span className="tabular-nums text-muted-foreground">{pageSafe} / {totalPages}</span>
+            <Button variant="outline" size="sm" disabled={pageSafe >= totalPages} onClick={() => setPage((p) => Math.min(totalPages, p + 1))}>Siguiente</Button>
+          </div>
+        </div>
+        </>
       )}
     </Card>
   );
@@ -513,9 +561,65 @@ function TablaTab({ asambleaId, tituloAsamblea }: { asambleaId: Id<"asambleas">;
 /* ───────── Resultados ───────── */
 function ResultadosTab({ asambleaId }: { asambleaId: Id<"asambleas"> }) {
   const votaciones = useQuery(api.asambleas.listVotaciones, { asambleaId });
+  const paquete = useQuery(api.asambleas.paqueteAuditoria, { asambleaId });
+  const [pdfBusy, setPdfBusy] = useState(false);
+  const [pdfError, setPdfError] = useState<string | null>(null);
+  const conResultados = useMemo(
+    () =>
+      (votaciones ?? []).filter(
+        (vt) =>
+          vt.estado === "abierta" ||
+          vt.abiertaAlgunaVez === true ||
+          vt.opciones.some((o) => o.votos > 0),
+      ),
+    [votaciones],
+  );
+
+  async function descargarActa() {
+    if (!paquete) return;
+    setPdfBusy(true);
+    setPdfError(null);
+    try {
+      await descargarActaPDF(paquete);
+    } catch (e) {
+      setPdfError(e instanceof Error ? e.message : "No se pudo generar el PDF.");
+    } finally {
+      setPdfBusy(false);
+    }
+  }
+
   if (votaciones === undefined) return <Card className="p-8"><Spinner className="mx-auto h-5 w-5" /></Card>;
-  if (votaciones.length === 0) return <Card className="p-6"><p className="text-sm text-muted-foreground">Aún no hay votaciones con resultados.</p></Card>;
-  return <div className="space-y-4">{votaciones.map((vt) => <ResultadoCard key={vt._id} votacionId={vt._id} pregunta={vt.pregunta} />)}</div>;
+  if (conResultados.length === 0) {
+    return (
+      <Card className="p-6">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <p className="text-sm text-muted-foreground">Aún no hay votaciones con resultados. Se muestran cuando se abre una pregunta.</p>
+          <Button variant="outline" size="sm" disabled={!paquete || pdfBusy} onClick={descargarActa}>
+            {pdfBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
+            Descargar acta PDF
+          </Button>
+        </div>
+        {pdfError ? <p className="text-sm text-red-600">{pdfError}</p> : null}
+      </Card>
+    );
+  }
+  return (
+    <div className="space-y-4">
+      <Card className="flex flex-wrap items-center justify-between gap-3 p-4">
+        <p className="text-sm text-muted-foreground">
+          Documento con las preguntas, conteos por coeficiente y veredicto de cada votación.
+        </p>
+        <Button variant="outline" size="sm" disabled={!paquete || pdfBusy} onClick={descargarActa}>
+          {pdfBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
+          Descargar acta PDF
+        </Button>
+      </Card>
+      {pdfError ? <p className="text-sm text-red-600">{pdfError}</p> : null}
+      {conResultados.map((vt) => (
+        <ResultadoCard key={vt._id} votacionId={vt._id} pregunta={vt.pregunta} />
+      ))}
+    </div>
+  );
 }
 function ResultadoCard({ votacionId, pregunta }: { votacionId: Id<"votaciones">; pregunta: string }) {
   const res = useQuery(api.asambleas.resultadosVotacion, { votacionId });
@@ -523,12 +627,12 @@ function ResultadoCard({ votacionId, pregunta }: { votacionId: Id<"votaciones">;
   const totalCoef = res.opciones.reduce((s, o) => s + o.coeficiente, 0);
   const ganadora = [...res.opciones].sort((a, b) => b.coeficiente - a.coeficiente)[0];
   const pctGana = totalCoef > 0 && ganadora ? (ganadora.coeficiente / totalCoef) * 100 : 0;
-  const aprobada = pctGana >= 51 && (ganadora?.texto.toLowerCase().includes("favor") || ganadora?.texto.toLowerCase().includes("sí") || ganadora?.texto.toLowerCase().includes("si"));
+  const badge = veredictoBadge(res.estado, res.opciones, ganadora?.texto, pctGana);
   return (
     <Card className="p-6">
       <div className="mb-3 flex items-start justify-between gap-3">
         <h3 className="font-semibold text-foreground">{pregunta}</h3>
-        <Badge tone={res.estado === "cerrada" ? (aprobada ? "success" : "destructive") : "info"}>{res.estado === "cerrada" ? (aprobada ? "Aprobada" : "No aprobada") : "En curso"}</Badge>
+        <Badge tone={badge.tone}>{badge.label}</Badge>
       </div>
       <div className="space-y-2">{res.opciones.map((op, i) => {
         const pct = totalCoef > 0 ? Math.round((op.coeficiente / totalCoef) * 100) : 0;
@@ -538,31 +642,449 @@ function ResultadoCard({ votacionId, pregunta }: { votacionId: Id<"votaciones">;
   );
 }
 
+/** Sí/No → Aprobada/No aprobada. Candidatos u otras → Ganó: X. */
+function veredictoBadge(
+  estado: string,
+  opciones: { texto: string; coeficiente: number }[],
+  ganadoraTexto: string | undefined,
+  pctGana: number,
+): { label: string; tone: React.ComponentProps<typeof Badge>["tone"] } {
+  if (estado !== "cerrada") return { label: "En curso", tone: "info" };
+  if (!ganadoraTexto || pctGana <= 0) return { label: "Sin votos", tone: "neutral" };
+
+  const textos = opciones.map((o) => o.texto.toLowerCase());
+  const esSiNo =
+    textos.some((t) => t.includes("favor") || t.includes("sí") || t === "si" || t.includes("aprob")) &&
+    textos.some((t) => t.includes("contra") || t === "no" || t.includes("rechaz"));
+
+  const g = ganadoraTexto.toLowerCase();
+  if (esSiNo) {
+    const aFavor =
+      g.includes("favor") || g.includes("sí") || g === "si" || g.includes("aprob");
+    if (aFavor && pctGana >= 51) return { label: "Aprobada", tone: "success" };
+    return { label: "No aprobada", tone: "destructive" };
+  }
+
+  // Elección / lista de opciones: mostrar quién ganó, no “No aprobada”.
+  return { label: `Ganó: ${ganadoraTexto}`, tone: "success" };
+}
+
 /* ───────── Poderes (admin) ───────── */
+const poderInputCls =
+  "h-9 w-full rounded-lg border border-border bg-background px-2 text-sm text-foreground outline-none focus:border-brand focus:ring-2 focus:ring-brand/20";
+
 function PoderesTab({ asambleaId }: { asambleaId: Id<"asambleas"> }) {
+  const a = useQuery(api.asambleas.get, { id: asambleaId });
   const poderes = useQuery(api.asambleas.listPoderes, { asambleaId });
+  const paquete = useQuery(api.asambleas.paqueteAuditoria, { asambleaId });
+  const unidades = useQuery(
+    api.unidades.listByCondominio,
+    a ? { condominioId: a.condominioId } : "skip",
+  );
   const responder = useMutation(api.asambleas.responderPoder);
   const revocar = useMutation(api.asambleas.revocarPoder);
+  const otorgar = useMutation(api.asambleas.otorgarPoder);
+  const generarUrl = useMutation(api.asambleas.generateUploadUrl);
+  const [unidadId, setUnidadId] = useState("");
+  const [modo, setModo] = useState<"propietario" | "externo">("propietario");
+  const [rep, setRep] = useState<{ _id: Id<"users">; name: string } | null>(null);
+  const [nombre, setNombre] = useState("");
+  const [documento, setDocumento] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [exportBusy, setExportBusy] = useState<"csv" | "zip" | "pdf" | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [okMsg, setOkMsg] = useState<string | null>(null);
+
+  const ocupadas = new Set((poderes ?? []).map((p) => p.unidadId as string));
+  const disponibles = (unidades ?? [])
+    .filter((u) => !ocupadas.has(u._id as string))
+    .sort((x, y) => x.numero.localeCompare(y.numero, undefined, { numeric: true }));
+
+  const puedeRegistrar = a?.estado === "programada" || a?.estado === "en_curso";
+  const conDocumento = (poderes ?? []).filter((p) => p.documentoUrl).length;
+
+  async function withExport(
+    kind: "csv" | "zip" | "pdf",
+    fn: () => void | Promise<void>,
+  ) {
+    if (!paquete) {
+      setExportError("Aún se están cargando los datos de auditoría.");
+      return;
+    }
+    setExportBusy(kind);
+    setExportError(null);
+    try {
+      await fn();
+    } catch (e) {
+      setExportError(e instanceof Error ? e.message : "No se pudo exportar.");
+    } finally {
+      setExportBusy(null);
+    }
+  }
+
+  async function registrarManual() {
+    if (!unidadId) {
+      setError("Elige la unidad.");
+      return;
+    }
+    if (modo === "propietario" && !rep) {
+      setError("Busca y selecciona el propietario apoderado.");
+      return;
+    }
+    if (modo === "externo" && !nombre.trim()) {
+      setError("Escribe el nombre completo del apoderado.");
+      return;
+    }
+    if (modo === "externo" && !documento.trim()) {
+      setError("El documento (cédula / NIP) es obligatorio para externos.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setOkMsg(null);
+    try {
+      let documentoStorageId: Id<"_storage"> | undefined;
+      if (file) {
+        const url = await generarUrl({});
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": file.type || "application/octet-stream" },
+          body: file,
+        });
+        if (!res.ok) throw new Error("No se pudo subir el documento.");
+        const json = (await res.json()) as { storageId: Id<"_storage"> };
+        documentoStorageId = json.storageId;
+      }
+      const r = await otorgar({
+        asambleaId,
+        unidadId: unidadId as Id<"unidades">,
+        documentoStorageId,
+        ...(modo === "propietario"
+          ? { representanteUserId: rep!._id }
+          : {
+              apoderadoNombre: nombre.trim(),
+              apoderadoDocumento: documento.trim(),
+            }),
+      });
+      setOkMsg(
+        `Poder registrado para ${r.nombre}. Código: ${r.codigo}${
+          r.esPropietario ? " (propietario del conjunto)" : " (externo)"
+        }`,
+      );
+      setUnidadId("");
+      setRep(null);
+      setNombre("");
+      setDocumento("");
+      setFile(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudo registrar.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <Card className="p-6">
-      <h2 className="mb-4 flex items-center gap-2 text-lg font-semibold text-foreground"><UserPlus className="h-5 w-5 text-brand" /> Poderes</h2>
-      {poderes === undefined ? <Spinner className="mx-auto my-4 h-5 w-5" /> : poderes.length === 0 ? (
-        <p className="rounded-lg bg-muted/40 p-4 text-sm text-muted-foreground">No hay poderes otorgados en esta asamblea.</p>
-      ) : (
-        <div className="space-y-2">{poderes.map((p) => (
-          <div key={p._id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border p-3">
-            <div>
-              <p className="text-sm font-medium text-foreground">Unidad {p.unidadNumero}: {p.otorganteNombre} → {p.representanteNombre}</p>
-              <p className="text-xs text-muted-foreground">{p.validado ? "Validado" : "Pendiente de validación"}</p>
-            </div>
-            <div className="flex items-center gap-2">
-              {!p.validado && <Button size="sm" onClick={() => responder({ poderId: p._id, aceptar: true })}><Check className="h-3.5 w-3.5" /> Validar</Button>}
-              <button onClick={() => revocar({ poderId: p._id }).catch(() => {})} className="rounded-lg p-1.5 text-muted-foreground hover:text-red-600" aria-label="Eliminar"><Trash2 className="h-4 w-4" /></button>
-            </div>
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <h2 className="flex items-center gap-2 text-lg font-semibold text-foreground">
+          <UserPlus className="h-5 w-5 text-brand" /> Poderes
+        </h2>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!paquete || (poderes?.length ?? 0) === 0 || exportBusy !== null}
+            onClick={() => withExport("csv", () => descargarPoderesCSV(paquete!))}
+          >
+            {exportBusy === "csv" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+            Listado CSV
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!paquete || conDocumento === 0 || exportBusy !== null}
+            title={conDocumento === 0 ? "Ningún poder tiene documento adjunto" : undefined}
+            onClick={() => withExport("zip", async () => { await descargarPoderesZIP(paquete!); })}
+          >
+            {exportBusy === "zip" ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileArchive className="h-4 w-4" />}
+            Documentos ZIP{conDocumento > 0 ? ` (${conDocumento})` : ""}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!paquete || exportBusy !== null}
+            onClick={() => withExport("pdf", () => descargarActaPDF(paquete!))}
+          >
+            {exportBusy === "pdf" ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
+            Acta PDF
+          </Button>
+        </div>
+      </div>
+      <p className="mb-4 rounded-lg border border-border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
+        Puedes registrar poderes <strong className="text-foreground">antes o durante</strong> la
+        asamblea (cuando llegan con el documento en mano). Al registrar se genera un código para el
+        apoderado.
+        {a?.estado === "en_curso" ? (
+          <> El público ya no puede otorgar poderes por su cuenta.</>
+        ) : null}
+        {" "}Para auditoría: descarga el <strong className="text-foreground">listado CSV</strong>, el{" "}
+        <strong className="text-foreground">ZIP de documentos</strong> y el{" "}
+        <strong className="text-foreground">acta PDF</strong> (orden del día, poderes y resultados de votación).
+      </p>
+      {exportError ? <p className="mb-3 text-sm text-red-600">{exportError}</p> : null}
+
+      {puedeRegistrar ? (
+        <div className="mb-5 space-y-3 rounded-xl border border-border bg-muted/20 p-4">
+          <p className="text-sm font-semibold text-foreground">Registrar poder (admin)</p>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setModo("propietario");
+                setNombre("");
+                setDocumento("");
+              }}
+              className={cn(
+                "flex-1 rounded-lg border py-2 text-sm font-medium",
+                modo === "propietario"
+                  ? "border-brand bg-brand/10 text-brand"
+                  : "border-border text-muted-foreground",
+              )}
+            >
+              Propietario del conjunto
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setModo("externo");
+                setRep(null);
+              }}
+              className={cn(
+                "flex-1 rounded-lg border py-2 text-sm font-medium",
+                modo === "externo"
+                  ? "border-brand bg-brand/10 text-brand"
+                  : "border-border text-muted-foreground",
+              )}
+            >
+              Persona externa
+            </button>
           </div>
-        ))}</div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="block space-y-1">
+              <span className="text-xs text-muted-foreground">Unidad</span>
+              <select
+                value={unidadId}
+                onChange={(e) => setUnidadId(e.target.value)}
+                className={poderInputCls}
+              >
+                <option value="">Selecciona…</option>
+                {disponibles.map((u) => (
+                  <option key={u._id} value={u._id}>
+                    Unidad {u.numero}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {modo === "propietario" && a ? (
+              <label className="block space-y-1">
+                <span className="text-xs text-muted-foreground">Buscar propietario</span>
+                <AdminUserSearch
+                  condominioId={a.condominioId}
+                  value={rep}
+                  onChange={setRep}
+                />
+              </label>
+            ) : (
+              <>
+                <label className="block space-y-1">
+                  <span className="text-xs text-muted-foreground">Nombre completo</span>
+                  <Input
+                    value={nombre}
+                    onChange={(e) => setNombre(e.target.value)}
+                    placeholder="Nombre del apoderado"
+                    className="h-9"
+                  />
+                </label>
+                <label className="block space-y-1 sm:col-span-2">
+                  <span className="text-xs text-muted-foreground">Documento (cédula / NIP)</span>
+                  <Input
+                    value={documento}
+                    onChange={(e) => setDocumento(e.target.value)}
+                    placeholder="Número de documento"
+                    className="h-9"
+                  />
+                </label>
+              </>
+            )}
+          </div>
+          <label className="block space-y-1">
+            <span className="text-xs text-muted-foreground">
+              Documento del poder (PDF o foto) — recomendado
+            </span>
+            <input
+              type="file"
+              accept="application/pdf,image/*"
+              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+              className="block w-full text-sm text-muted-foreground file:mr-3 file:rounded-lg file:border-0 file:bg-brand/10 file:px-3 file:py-2 file:text-sm file:font-medium file:text-brand hover:file:bg-brand/20"
+            />
+            {file ? <span className="text-xs text-emerald-600">✓ {file.name}</span> : null}
+          </label>
+          {error ? <p className="text-sm text-red-600">{error}</p> : null}
+          {okMsg ? (
+            <p className="rounded-lg bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800">
+              {okMsg}
+            </p>
+          ) : null}
+          <Button size="sm" onClick={registrarManual} disabled={busy}>
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+            Registrar
+          </Button>
+        </div>
+      ) : (
+        <p className="mb-4 rounded-lg bg-muted/40 p-3 text-sm text-muted-foreground">
+          La asamblea ya no admite nuevos poderes.
+        </p>
+      )}
+
+      {poderes === undefined ? (
+        <Spinner className="mx-auto my-4 h-5 w-5" />
+      ) : poderes.length === 0 ? (
+        <p className="rounded-lg bg-muted/40 p-4 text-sm text-muted-foreground">
+          No hay poderes otorgados en esta asamblea.
+        </p>
+      ) : (
+        <div className="space-y-2">
+          {poderes.map((p) => (
+            <div
+              key={p._id}
+              className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border p-3"
+            >
+              <div>
+                <p className="text-sm font-medium text-foreground">
+                  Unidad {p.unidadNumero}: {p.otorganteNombre} → {p.representanteNombre}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {p.validado ? "Validado" : "Pendiente de validación"}
+                  {p.codigoAcceso && (
+                    <>
+                      {" "}
+                      · Código{" "}
+                      <span className="font-mono font-semibold text-foreground">
+                        {p.codigoAcceso}
+                      </span>
+                    </>
+                  )}
+                  {" · "}
+                  <span className="font-medium text-foreground">
+                    {p.representanteTipo === "propietario"
+                      ? "Apoderado: propietario"
+                      : "Apoderado: persona externa"}
+                  </span>
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                {p.documentoUrl ? (
+                  <a
+                    href={p.documentoUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
+                  >
+                    <FileText className="h-3.5 w-3.5" /> Ver doc.
+                  </a>
+                ) : null}
+                {!p.validado && (
+                  <Button size="sm" onClick={() => responder({ poderId: p._id, aceptar: true })}>
+                    <Check className="h-3.5 w-3.5" /> Validar
+                  </Button>
+                )}
+                <button
+                  onClick={() => revocar({ poderId: p._id }).catch(() => {})}
+                  className="rounded-lg p-1.5 text-muted-foreground hover:text-red-600"
+                  aria-label="Eliminar"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
       )}
     </Card>
+  );
+}
+
+function AdminUserSearch({
+  condominioId,
+  value,
+  onChange,
+}: {
+  condominioId: Id<"condominios">;
+  value: { _id: Id<"users">; name: string } | null;
+  onChange: (u: { _id: Id<"users">; name: string } | null) => void;
+}) {
+  const [term, setTerm] = useState("");
+  const [open, setOpen] = useState(false);
+  const results = useQuery(
+    api.asambleas.buscarUsuarios,
+    term.trim().length >= 2 ? { condominioId, search: term } : "skip",
+  );
+  if (value) {
+    return (
+      <div className="flex h-9 items-center justify-between gap-2 rounded-lg border border-border bg-background px-2 text-sm">
+        <span className="truncate text-foreground">{value.name}</span>
+        <button
+          type="button"
+          onClick={() => onChange(null)}
+          aria-label="Quitar"
+          className="text-muted-foreground hover:text-red-600"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div className="relative">
+      <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+      <input
+        value={term}
+        onChange={(e) => {
+          setTerm(e.target.value);
+          setOpen(true);
+        }}
+        onFocus={() => setOpen(true)}
+        placeholder="Nombre o correo…"
+        className={cn(poderInputCls, "pl-8")}
+      />
+      {open && term.trim().length >= 2 && (
+        <div className="absolute z-20 mt-1 max-h-56 w-full overflow-auto rounded-lg border border-border bg-card p-1 shadow-lg">
+          {results === undefined ? (
+            <p className="px-3 py-2 text-sm text-muted-foreground">Buscando…</p>
+          ) : results.length === 0 ? (
+            <p className="px-3 py-2 text-sm text-muted-foreground">Sin resultados.</p>
+          ) : (
+            results.map((u) => (
+              <button
+                key={u._id}
+                type="button"
+                onClick={() => {
+                  onChange({ _id: u._id, name: u.name });
+                  setOpen(false);
+                  setTerm("");
+                }}
+                className="block w-full rounded-md px-3 py-2 text-left text-sm hover:bg-accent"
+              >
+                <span className="font-medium text-foreground">{u.name}</span>{" "}
+                <span className="text-xs text-muted-foreground">{u.email}</span>
+              </button>
+            ))
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -596,37 +1118,381 @@ function RepresentantesTab({ asambleaId }: { asambleaId: Id<"asambleas"> }) {
   );
 }
 
-/* ───────── Registrar asistencia (QR / manual) ───────── */
+/* ───────── Registrar asistencia (QR / código / búsqueda) ───────── */
+type ModoAsistencia = "qr" | "codigo" | "buscar";
+
 function RegistrarTab({ asambleaId, condominioId }: { asambleaId: Id<"asambleas">; condominioId: Id<"condominios"> }) {
+  const det = useQuery(api.asambleas.asistentesDetallado, { asambleaId });
+  const quorum = useQuery(api.asambleas.quorum, { asambleaId });
+  const quitar = useMutation(api.asambleas.quitarAsistencia);
+  const [modo, setModo] = useState<ModoAsistencia>("qr");
+  const [msg, setMsg] = useState<string | null>(null);
+  const presentes = (det?.filas ?? []).filter((f) => f.presente);
+
+  return (
+    <div className="space-y-5">
+      {quorum ? (
+        <Card className="p-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-sm text-muted-foreground">Quórum</p>
+              <p className="text-2xl font-bold tabular-nums text-foreground">
+                {quorum.pct.toFixed(2)}% <span className="text-base font-medium text-muted-foreground">/ {quorum.quorumRequerido}%</span>
+              </p>
+            </div>
+            <div className="text-right text-sm text-muted-foreground">
+              <p>{quorum.unidadesPresentes} de {quorum.totalUnidades} unidades</p>
+              <p>{quorum.poderesActivos} poder(es) activos</p>
+            </div>
+          </div>
+        </Card>
+      ) : null}
+
+      <Card className="p-6">
+        <h2 className="mb-1 flex items-center gap-2 text-lg font-semibold text-foreground">
+          <QrCode className="h-5 w-5 text-brand" /> Registrar asistencia
+        </h2>
+        <p className="mb-4 text-sm text-muted-foreground">
+          Escanea el QR del propietario, ingresa el código del apoderado o búscalo por nombre.
+        </p>
+
+        <div className="mb-4 flex flex-wrap gap-2">
+          {(
+            [
+              { key: "qr" as const, label: "Escanear QR", icon: QrCode },
+              { key: "codigo" as const, label: "Código", icon: KeyRound },
+              { key: "buscar" as const, label: "Buscar", icon: Search },
+            ] as const
+          ).map((m) => {
+            const Icon = m.icon;
+            const active = modo === m.key;
+            return (
+              <button
+                key={m.key}
+                type="button"
+                onClick={() => { setModo(m.key); setMsg(null); }}
+                className={cn(
+                  "inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition-colors",
+                  active
+                    ? "border-brand bg-brand/10 text-brand"
+                    : "border-border text-muted-foreground hover:bg-accent hover:text-foreground",
+                )}
+              >
+                <Icon className="h-4 w-4" /> {m.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {modo === "qr" ? (
+          <WebQrScanner
+            asambleaId={asambleaId}
+            onDone={(text) => setMsg(text)}
+          />
+        ) : null}
+        {modo === "codigo" ? (
+          <CodigoAsistenciaForm asambleaId={asambleaId} onDone={(text) => setMsg(text)} />
+        ) : null}
+        {modo === "buscar" ? (
+          <BuscarAsistenciaForm
+            asambleaId={asambleaId}
+            condominioId={condominioId}
+            onDone={(text) => setMsg(text)}
+          />
+        ) : null}
+
+        {msg ? <p className="mt-4 text-sm font-medium text-emerald-600">{msg}</p> : null}
+      </Card>
+
+      <Card className="p-6">
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <h2 className="flex items-center gap-2 text-base font-semibold text-foreground">
+            <Users className="h-5 w-5 text-brand" /> Quiénes asistieron
+          </h2>
+          <span className="text-xs text-muted-foreground">{presentes.length} unidad{presentes.length === 1 ? "" : "es"}</span>
+        </div>
+        {det === undefined ? (
+          <Spinner className="mx-auto my-4 h-5 w-5" />
+        ) : presentes.length === 0 ? (
+          <p className="rounded-lg bg-muted/40 p-4 text-sm text-muted-foreground">Nadie registrado todavía.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-xl text-sm">
+              <thead>
+                <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
+                  <th className="py-2 font-medium">Unidad</th>
+                  <th className="py-2 font-medium">Quién</th>
+                  <th className="py-2 font-medium">Tipo</th>
+                  <th className="py-2 text-right font-medium">Coef.</th>
+                  <th className="py-2 font-medium">Hora</th>
+                  <th className="py-2" />
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {presentes.map((f) => {
+                  const asisRow = det.asistentes.find((a) => a.unidadNumero === f.unidadNumero);
+                  const esPoder = !!f.porPoder;
+                  const tambien = f.tambienRepresenta ?? [];
+                  return (
+                    <tr key={f.unidadId}>
+                      <td className="py-2 pr-4 font-medium text-foreground">{f.unidadNumero}</td>
+                      <td className="py-2 pr-4 text-muted-foreground">
+                        <span className="text-foreground">{f.asistente ?? f.propietario ?? "—"}</span>
+                        {!esPoder && tambien.length > 0 ? (
+                          <span className="mt-0.5 block text-xs text-brand">
+                            También representa {tambien.length === 1 ? "la unidad" : "las unidades"}{" "}
+                            {tambien.join(", ")}
+                          </span>
+                        ) : null}
+                        {esPoder ? (
+                          <span className="mt-0.5 block text-xs text-muted-foreground">
+                            Propietario: {f.propietario ?? "—"} · Representada por poder
+                          </span>
+                        ) : null}
+                      </td>
+                      <td className="py-2 pr-4"><Badge tone={esPoder ? "info" : "success"}>{esPoder ? "Por poder" : "Presente"}</Badge></td>
+                      <td className="py-2 pr-6 text-right tabular-nums text-muted-foreground">{f.coeficiente ?? "—"}</td>
+                      <td className="py-2 pr-4 text-muted-foreground whitespace-nowrap">{fmtHora(f.horaRegistro)}</td>
+                      <td className="py-2 text-right">
+                        {asisRow ? (
+                          <button
+                            type="button"
+                            onClick={() => quitar({ asistenteId: asisRow._id })}
+                            aria-label="Quitar"
+                            className="rounded p-1 text-muted-foreground hover:text-red-600"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        ) : null}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+function CodigoAsistenciaForm({
+  asambleaId,
+  onDone,
+}: {
+  asambleaId: Id<"asambleas">;
+  onDone: (msg: string) => void;
+}) {
+  const registrar = useMutation(api.asambleas.registrarAsistenciaPorCodigo);
+  const [codigo, setCodigo] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await registrar({ asambleaId, codigo });
+      onDone(`✓ ${r.nombre}: ${r.registradas} unidad(es) · ${r.unidades.join(", ")}`);
+      setCodigo("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Error al registrar.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form onSubmit={submit} className="max-w-md space-y-3">
+      <p className="text-sm text-muted-foreground">
+        Código de apoderado que te entrega el propietario (el mismo de poderes).
+      </p>
+      <Input
+        value={codigo}
+        onChange={(e) => setCodigo(e.target.value.toUpperCase())}
+        placeholder="XXXXXX"
+        maxLength={8}
+        className="h-12 text-center font-mono text-xl tracking-[0.35em]"
+        autoComplete="off"
+      />
+      {error ? <p className="text-sm text-red-600">{error}</p> : null}
+      <Button type="submit" disabled={busy || codigo.trim().length < 4}>
+        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+        Registrar código
+      </Button>
+    </form>
+  );
+}
+
+function BuscarAsistenciaForm({
+  asambleaId,
+  condominioId,
+  onDone,
+}: {
+  asambleaId: Id<"asambleas">;
+  condominioId: Id<"condominios">;
+  onDone: (msg: string) => void;
+}) {
   const registrar = useMutation(api.asambleas.registrarAsistenciaAdmin);
   const [term, setTerm] = useState("");
-  const [msg, setMsg] = useState<string | null>(null);
-  const results = useQuery(api.asambleas.buscarUsuarios, term.trim().length >= 2 ? { condominioId, search: term } : "skip");
+  const results = useQuery(
+    api.asambleas.buscarUsuarios,
+    term.trim().length >= 2 ? { condominioId, search: term } : "skip",
+  );
 
   async function reg(userId: Id<"users">, nombre: string) {
-    try { const r = await registrar({ asambleaId, userId }); setMsg(`✓ ${nombre}: ${r.registradas} unidad(es) registrada(s).`); setTerm(""); }
-    catch (e) { setMsg(e instanceof Error ? e.message : "Error."); }
+    try {
+      const r = await registrar({ asambleaId, userId });
+      onDone(`✓ ${nombre}: ${r.registradas} unidad(es) registrada(s).`);
+      setTerm("");
+    } catch (e) {
+      onDone(e instanceof Error ? e.message : "Error.");
+    }
   }
+
   return (
-    <Card className="p-6">
-      <h2 className="mb-1 flex items-center gap-2 text-lg font-semibold text-foreground"><QrCode className="h-5 w-5 text-brand" /> Registrar asistencia</h2>
-      <p className="mb-4 text-sm text-muted-foreground">Busca al propietario y regístralo como presente (equivale a escanear su QR).</p>
-      <div className="relative max-w-md">
+    <div className="max-w-md space-y-2">
+      <div className="relative">
         <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-        <Input value={term} onChange={(e) => { setTerm(e.target.value); setMsg(null); }} placeholder="Nombre o correo del propietario…" className="pl-9" />
+        <Input
+          value={term}
+          onChange={(e) => setTerm(e.target.value)}
+          placeholder="Nombre o correo del propietario…"
+          className="pl-9"
+        />
       </div>
-      {term.trim().length >= 2 && (
-        <div className="mt-2 max-w-md space-y-1">
-          {results === undefined ? <Spinner className="my-2 h-4 w-4" /> : results.length === 0 ? <p className="text-sm text-muted-foreground">Sin resultados.</p> : results.map((u) => (
-            <button key={u._id} onClick={() => reg(u._id, u.name)} className="flex w-full items-center justify-between rounded-lg border border-border p-2.5 text-left text-sm hover:bg-accent">
-              <span><span className="font-medium text-foreground">{u.name}</span> <span className="text-xs text-muted-foreground">{u.email}</span></span>
-              <Check className="h-4 w-4 text-brand" />
-            </button>
-          ))}
+      {term.trim().length >= 2 ? (
+        <div className="space-y-1">
+          {results === undefined ? (
+            <Spinner className="my-2 h-4 w-4" />
+          ) : results.length === 0 ? (
+            <p className="text-sm text-muted-foreground">Sin resultados.</p>
+          ) : (
+            results.map((u) => (
+              <button
+                key={u._id}
+                type="button"
+                onClick={() => reg(u._id, u.name)}
+                className="flex w-full items-center justify-between rounded-lg border border-border p-2.5 text-left text-sm hover:bg-accent"
+              >
+                <span>
+                  <span className="font-medium text-foreground">{u.name}</span>{" "}
+                  <span className="text-xs text-muted-foreground">{u.email}</span>
+                </span>
+                <Check className="h-4 w-4 text-brand" />
+              </button>
+            ))
+          )}
         </div>
-      )}
-      {msg && <p className="mt-3 text-sm font-medium text-emerald-600">{msg}</p>}
-      <p className="mt-4 text-xs text-muted-foreground">Nota: el escaneo con cámara del QR se puede agregar después; por ahora el registro es por búsqueda (misma lógica de asistencia).</p>
-    </Card>
+      ) : null}
+    </div>
+  );
+}
+
+declare global {
+  interface Window {
+    BarcodeDetector?: new (options?: { formats: string[] }) => {
+      detect: (source: ImageBitmapSource) => Promise<Array<{ rawValue: string }>>;
+    };
+  }
+}
+
+function WebQrScanner({
+  asambleaId,
+  onDone,
+}: {
+  asambleaId: Id<"asambleas">;
+  onDone: (msg: string) => void;
+}) {
+  const registrar = useMutation(api.asambleas.registrarAsistenciaAdmin);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [supported, setSupported] = useState<boolean | null>(null);
+  const lock = useRef(false);
+
+  useEffect(() => {
+    const ok = typeof window !== "undefined" && typeof window.BarcodeDetector === "function";
+    setSupported(ok);
+    if (!ok) return;
+
+    let stream: MediaStream | null = null;
+    let raf = 0;
+    let alive = true;
+    const detector = new window.BarcodeDetector!({ formats: ["qr_code"] });
+
+    async function start() {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: "environment" } },
+          audio: false,
+        });
+        const video = videoRef.current;
+        if (!video || !alive) return;
+        video.srcObject = stream;
+        await video.play();
+
+        const tick = async () => {
+          if (!alive || !videoRef.current) return;
+          if (!lock.current && videoRef.current.readyState >= 2) {
+            try {
+              const codes = await detector.detect(videoRef.current);
+              const raw = codes[0]?.rawValue;
+              if (raw) {
+                lock.current = true;
+                try {
+                  const parsed = JSON.parse(raw) as { asambleaId?: string; userId?: string };
+                  if (!parsed.userId || !parsed.asambleaId) throw new Error("QR inválido.");
+                  if (parsed.asambleaId !== asambleaId) throw new Error("Este QR es de otra asamblea.");
+                  const r = await registrar({
+                    asambleaId,
+                    userId: parsed.userId as Id<"users">,
+                  });
+                  onDone(`✓ ${r.nombre}: ${r.registradas} unidad(es)`);
+                  setError(null);
+                } catch (e) {
+                  setError(e instanceof Error ? e.message : "No se pudo registrar.");
+                } finally {
+                  setTimeout(() => { lock.current = false; }, 2000);
+                }
+              }
+            } catch {
+              /* frame skip */
+            }
+          }
+          raf = requestAnimationFrame(() => { void tick(); });
+        };
+        raf = requestAnimationFrame(() => { void tick(); });
+      } catch {
+        setError("No se pudo abrir la cámara. Revisa permisos del navegador.");
+      }
+    }
+
+    void start();
+    return () => {
+      alive = false;
+      cancelAnimationFrame(raf);
+      stream?.getTracks().forEach((t) => t.stop());
+    };
+  }, [asambleaId, onDone, registrar]);
+
+  if (supported === false) {
+    return (
+      <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 text-sm text-amber-800 dark:text-amber-300">
+        Tu navegador no soporta escaneo QR nativo. Usa <b>Código</b> o <b>Buscar</b>, o abre Chrome/Edge.
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-lg space-y-3">
+      <div className="relative aspect-video overflow-hidden rounded-xl border border-border bg-black">
+        <video ref={videoRef} className="h-full w-full object-cover" muted playsInline />
+        <div className="pointer-events-none absolute inset-[18%] rounded-2xl border-2 border-white/80" />
+      </div>
+      <p className="text-center text-xs text-muted-foreground">Apunta al QR del propietario en la app móvil</p>
+      {error ? <p className="text-center text-sm text-red-600">{error}</p> : null}
+    </div>
   );
 }

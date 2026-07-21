@@ -2,21 +2,26 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { NAV_GROUPS } from "./nav-config";
+import { visibleNavGroups } from "./nav-config";
 import { cn } from "@/lib/utils";
 
 export function SidebarNav({
   base,
+  roles,
+  isPlatform,
   onNavigate,
 }: {
   base: string;
+  roles: string[];
+  isPlatform: boolean;
   onNavigate?: () => void;
 }) {
   const pathname = usePathname();
+  const groups = visibleNavGroups(roles, isPlatform);
 
   return (
     <nav className="flex-1 space-y-5 overflow-y-auto px-3 py-4">
-      {NAV_GROUPS.map((group, gi) => (
+      {groups.map((group, gi) => (
         <div key={group.title ?? `g-${gi}`} className="space-y-1">
           {group.title && (
             <p className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">

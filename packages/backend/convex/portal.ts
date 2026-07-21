@@ -6,6 +6,7 @@ import {
   getMembership,
   hasPlatformRole,
 } from "./model/authz";
+import { displayNameFromUser } from "./model/displayName";
 
 /**
  * PORTAL DEL RESIDENTE / PROPIETARIO
@@ -80,7 +81,8 @@ export const home = query({
       allowed: true as const,
       isPlatform,
       userId: user._id as string,
-      userName: user.name,
+      userName: displayNameFromUser(user),
+      userImage: user.image ?? null,
       userEmail: user.email,
       myRoles: membership?.roles ?? [],
       membershipId: (membership?._id ?? null) as string | null,

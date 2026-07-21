@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { usePaginatedQuery, useMutation } from "convex/react";
-import { Pencil, Users, Loader2, Check } from "lucide-react";
+import { Pencil, Trash2, Users, Loader2, Check } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
 import { PageContainer } from "@/components/layout/page-container";
@@ -61,6 +61,7 @@ function useDebounced(value: string, ms: number) {
 export default function ResidentesPage() {
   const params = useParams<{ id: string }>();
   const condominioId = params.id as Id<"condominios">;
+  const deactivate = useMutation(api.memberships.deactivate);
   const [search, setSearch] = useState("");
   const [roleFilter, setRoleFilter] = useState<OpRole | "">("");
   const deferredQ = useDebounced(search, 280);
@@ -69,6 +70,12 @@ export default function ResidentesPage() {
     name: string;
     roles: OpRole[];
   } | null>(null);
+  const [removing, setRemoving] = useState<{
+    membershipId: Id<"memberships">;
+    name: string;
+  } | null>(null);
+  const [removingBusy, setRemovingBusy] = useState(false);
+  const [removeError, setRemoveError] = useState<string | null>(null);
 
   const { results, status, loadMore } = usePaginatedQuery(
     api.memberships.listPage,
@@ -84,6 +91,20 @@ export default function ResidentesPage() {
   const loading = status === "LoadingFirstPage";
   const canLoadMore = status === "CanLoadMore";
   const loadingMore = status === "LoadingMore";
+
+  async function confirmRemove() {
+    if (!removing) return;
+    setRemovingBusy(true);
+    setRemoveError(null);
+    try {
+      await deactivate({ membershipId: removing.membershipId });
+      setRemoving(null);
+    } catch (e) {
+      setRemoveError(e instanceof Error ? e.message : "No se pudo eliminar.");
+    } finally {
+      setRemovingBusy(false);
+    }
+  }
 
   return (
     <PageContainer>
@@ -154,7 +175,7 @@ export default function ResidentesPage() {
                     <TH>Usuario</TH>
                     <TH className="hidden sm:table-cell">Correo</TH>
                     <TH>Roles</TH>
-                    <TH className="text-right">Editar</TH>
+                    <TH className="text-right">Acciones</TH>
                   </tr>
                 </THead>
                 <TBody>
@@ -192,19 +213,34 @@ export default function ResidentesPage() {
                         )}
                       </TD>
                       <TD className="text-right">
-                        <button
-                          onClick={() =>
-                            setEditing({
-                              userId: m.userId,
-                              name: m.name ?? m.email ?? "Usuario",
-                              roles: m.roles as OpRole[],
-                            })
-                          }
-                          aria-label="Editar roles"
-                          className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                        >
-                          <Pencil className="h-4 w-4" />
-                        </button>
+                        <div className="inline-flex items-center gap-1">
+                          <button
+                            onClick={() =>
+                              setEditing({
+                                userId: m.userId,
+                                name: m.name ?? m.email ?? "Usuario",
+                                roles: m.roles as OpRole[],
+                              })
+                            }
+                            aria-label="Editar roles"
+                            className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </button>
+                          <button
+                            onClick={() => {
+                              setRemoveError(null);
+                              setRemoving({
+                                membershipId: m.membershipId,
+                                name: m.name ?? m.email ?? "este usuario",
+                              });
+                            }}
+                            aria-label="Eliminar residente"
+                            className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-red-50 hover:text-red-600"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
                       </TD>
                     </TR>
                   ))}
@@ -243,6 +279,36 @@ export default function ResidentesPage() {
           initial={editing.roles}
           onClose={() => setEditing(null)}
         />
+      )}
+
+      {removing && (
+        <Modal
+          open
+          onClose={() => !removingBusy && setRemoving(null)}
+          title="Eliminar residente"
+          description={`¿Quitar a ${removing.name} de este condominio? Perderá acceso y sus vínculos a unidades.`}
+          footer={
+            <>
+              <Button
+                variant="ghost"
+                onClick={() => setRemoving(null)}
+                disabled={removingBusy}
+              >
+                Cancelar
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={confirmRemove}
+                disabled={removingBusy}
+              >
+                {removingBusy && <Loader2 className="h-4 w-4 animate-spin" aria-hidden />}
+                Eliminar
+              </Button>
+            </>
+          }
+        >
+          {removeError ? <p className="text-sm text-red-600">{removeError}</p> : null}
+        </Modal>
       )}
     </PageContainer>
   );

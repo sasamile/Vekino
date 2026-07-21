@@ -9,6 +9,7 @@ import {
   hasPlatformRole,
 } from "./model/authz";
 import { subscriptionPlanValidator } from "./model/roles";
+import { displayNameFromUser } from "./model/displayName";
 
 /**
  * Condominios visibles para el usuario actual:
@@ -70,7 +71,8 @@ export const adminHome = query({
     return {
       allowed: true as const,
       isPlatform,
-      userName: user.name,
+      userName: displayNameFromUser(user),
+      userImage: user.image ?? null,
       myRoles: membership?.roles ?? [],
       condominio: {
         _id: condominio._id,

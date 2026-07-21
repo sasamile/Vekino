@@ -10,13 +10,17 @@ export function MobileNav({
   name,
   logo,
   userName,
+  userImage,
   isPlatform,
+  roles,
 }: {
   base: string;
   name: string;
   logo: string | null;
   userName: string;
+  userImage?: string | null;
   isPlatform: boolean;
+  roles: string[];
 }) {
   const [open, setOpen] = useState(false);
 
@@ -53,7 +57,7 @@ export function MobileNav({
             className="animate-fade-in absolute inset-0 bg-foreground/40 backdrop-blur-sm"
             onClick={() => setOpen(false)}
           />
-          <div className="animate-slide-up absolute inset-y-0 left-0 w-[17rem] border-r border-border shadow-lg">
+          <div className="animate-slide-up absolute inset-y-0 left-0 w-68 border-r border-border shadow-lg">
             <button
               onClick={() => setOpen(false)}
               aria-label="Cerrar menú"
@@ -66,7 +70,9 @@ export function MobileNav({
               name={name}
               logo={logo}
               userName={userName}
+              userImage={userImage}
               isPlatform={isPlatform}
+              roles={roles}
               onNavigate={() => setOpen(false)}
             />
           </div>

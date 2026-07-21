@@ -47,7 +47,8 @@ export const listByCondominio = query({
       )
       .collect();
 
-    return await Promise.all(memberships.map((m) => hydrateMembership(ctx, m)));
+    const activos = memberships.filter((m) => m.isActive);
+    return await Promise.all(activos.map((m) => hydrateMembership(ctx, m)));
   },
 });
 
@@ -82,6 +83,7 @@ export const listPage = query({
 
       const hydrated = await Promise.all(scan.map((m) => hydrateMembership(ctx, m)));
       const filtered = hydrated.filter((m) => {
+        if (!m.isActive) return false;
         if (role && !m.roles.includes(role)) return false;
         if (!needle) return true;
         return (
@@ -98,16 +100,39 @@ export const listPage = query({
       };
     }
 
-    const result = await ctx.db
-      .query("memberships")
-      .withIndex("by_condominio", (q) =>
-        q.eq("condominioId", args.condominioId),
-      )
-      .order("desc")
-      .paginate(args.paginationOpts);
+    // Paginación real: tomamos un poco de más y filtramos inactivos.
+    const want = Math.min(Math.max(args.paginationOpts.numItems || 30, 1), 60);
+    let cursor = args.paginationOpts.cursor;
+    const page: Awaited<ReturnType<typeof hydrateMembership>>[] = [];
+    let isDone = false;
+    let continueCursor = "";
+    let guard = 0;
 
-    const page = await Promise.all(result.page.map((m) => hydrateMembership(ctx, m)));
-    return { ...result, page };
+    while (page.length < want && !isDone && guard < 8) {
+      guard += 1;
+      const result = await ctx.db
+        .query("memberships")
+        .withIndex("by_condominio", (q) =>
+          q.eq("condominioId", args.condominioId),
+        )
+        .order("desc")
+        .paginate({ numItems: want, cursor });
+
+      const hydrated = await Promise.all(
+        result.page.filter((m) => m.isActive).map((m) => hydrateMembership(ctx, m)),
+      );
+      page.push(...hydrated);
+      isDone = result.isDone;
+      continueCursor = result.continueCursor;
+      cursor = result.continueCursor;
+      if (result.isDone) break;
+    }
+
+    return {
+      page: page.slice(0, want),
+      isDone,
+      continueCursor,
+    };
   },
 });
 
@@ -209,15 +234,25 @@ export const updateMember = mutation({
   },
 });
 
-/** Desactiva la membresía de un usuario en un condominio. */
+/** Desactiva la membresía de un usuario en un condominio y quita vínculos a unidades. */
 export const deactivate = mutation({
   args: { membershipId: v.id("memberships") },
   handler: async (ctx, args) => {
     const membership = await ctx.db.get(args.membershipId);
     if (!membership) throw new Error("Membresía inexistente.");
     await requireCondominioRole(ctx, membership.condominioId, ["administrador"]);
+
+    const links = await ctx.db
+      .query("usuarioUnidad")
+      .withIndex("by_membership", (q) => q.eq("membershipId", args.membershipId))
+      .collect();
+    for (const link of links) {
+      await ctx.db.delete(link._id);
+    }
+
     await ctx.db.patch(args.membershipId, {
       isActive: false,
+      roles: [],
       updatedAt: Date.now(),
     });
   },

@@ -134,6 +134,19 @@ export const setEstado = mutation({
       quorumAlcanzado: args.quorumAlcanzado ?? existing.quorumAlcanzado,
       updatedAt: Date.now(),
     });
+    // Fuera de "en_curso" no debe haber votaciones abiertas al público.
+    if (args.estado !== "en_curso") {
+      const votaciones = await ctx.db
+        .query("votaciones")
+        .withIndex("by_asamblea", (q) => q.eq("asambleaId", args.id))
+        .collect();
+      const now = Date.now();
+      for (const vt of votaciones) {
+        if (vt.estado === "abierta") {
+          await ctx.db.patch(vt._id, { estado: "cerrada", updatedAt: now });
+        }
+      }
+    }
   },
 });
 
@@ -170,6 +183,29 @@ export const listVotaciones = query({
   },
 });
 
+export const cerrarVotacionesSiInactiva = mutation({
+  args: { asambleaId: v.id("asambleas") },
+  handler: async (ctx, args) => {
+    const asamblea = await ctx.db.get(args.asambleaId);
+    if (!asamblea) return { cerradas: 0 };
+    await requireCondominioRole(ctx, asamblea.condominioId, [...WRITE_ROLES]);
+    if (asamblea.estado === "en_curso") return { cerradas: 0 };
+    const votaciones = await ctx.db
+      .query("votaciones")
+      .withIndex("by_asamblea", (q) => q.eq("asambleaId", args.asambleaId))
+      .collect();
+    const now = Date.now();
+    let cerradas = 0;
+    for (const vt of votaciones) {
+      if (vt.estado === "abierta") {
+        await ctx.db.patch(vt._id, { estado: "cerrada", updatedAt: now });
+        cerradas++;
+      }
+    }
+    return { cerradas };
+  },
+});
+
 export const createVotacion = mutation({
   args: {
     asambleaId: v.id("asambleas"),
@@ -181,13 +217,16 @@ export const createVotacion = mutation({
     if (!asamblea) throw new Error("Asamblea no encontrada.");
     await requireCondominioRole(ctx, asamblea.condominioId, [...WRITE_ROLES]);
     const now = Date.now();
+    // Solo se abre al público si la asamblea ya está en curso.
+    const enCurso = asamblea.estado === "en_curso";
     return await ctx.db.insert("votaciones", {
       condominioId: asamblea.condominioId,
       asambleaId: args.asambleaId,
       asambleaTitulo: asamblea.titulo,
       pregunta: args.pregunta.trim(),
       opciones: args.opciones.map((o) => o.trim()).filter(Boolean).map((texto) => ({ texto, votos: 0 })),
-      estado: "abierta",
+      estado: enCurso ? "abierta" : "cerrada",
+      ...(enCurso ? { abiertaAlgunaVez: true } : {}),
       createdAt: now,
       updatedAt: now,
     });
@@ -213,8 +252,16 @@ export const toggleVotacion = mutation({
     const existing = await ctx.db.get(args.id);
     if (!existing) throw new Error("Votación no encontrada.");
     await requireCondominioRole(ctx, existing.condominioId, [...WRITE_ROLES]);
+    const abrir = existing.estado !== "abierta";
+    if (abrir) {
+      const asamblea = await ctx.db.get(existing.asambleaId);
+      if (!asamblea || asamblea.estado !== "en_curso") {
+        throw new Error("Inicia la asamblea antes de abrir una votación.");
+      }
+    }
     await ctx.db.patch(args.id, {
-      estado: existing.estado === "abierta" ? "cerrada" : "abierta",
+      estado: abrir ? "abierta" : "cerrada",
+      ...(abrir ? { abiertaAlgunaVez: true } : {}),
       updatedAt: Date.now(),
     });
   },
@@ -250,8 +297,41 @@ async function misUnidades(
   return unidades.filter((u): u is NonNullable<typeof u> => u !== null);
 }
 
+/** Admin / junta / representante de asamblea (o platform admin). */
+async function esGestorAsamblea(
+  ctx: QueryCtx | MutationCtx,
+  condominioId: Id<"condominios">,
+  user: { _id: Id<"users">; platformRole?: string | null },
+) {
+  if (user.platformRole === "superadmin" || user.platformRole === "admin") return true;
+  const m = await getMembership(ctx, user._id, condominioId);
+  if (!m?.isActive) return false;
+  return m.roles.some((r) => (WRITE_ROLES as readonly string[]).includes(r));
+}
+
+/** Dueño (propietario) de una unidad, si existe. */
+async function dueñoUnidad(
+  ctx: QueryCtx | MutationCtx,
+  unidadId: Id<"unidades">,
+): Promise<{ userId: Id<"users">; nombre: string } | null> {
+  const links = await ctx.db
+    .query("usuarioUnidad")
+    .withIndex("by_unidad", (q) => q.eq("unidadId", unidadId))
+    .collect();
+  if (links.length === 0) return null;
+  const preferido =
+    links.find((l) => l.vinculo === "propietario") ??
+    links.find((l) => l.esPrincipal) ??
+    links[0]!;
+  const membership = await ctx.db.get(preferido.membershipId);
+  if (!membership) return null;
+  const usr = await ctx.db.get(membership.userId);
+  if (!usr) return null;
+  return { userId: usr._id, nombre: usr.name };
+}
+
 /**
- * El propietario registra su asistencia (una fila por unidad suya).
+ * El propietario registra su asistencia (sus casas + las que representa por poder).
  * Idempotente: si la unidad ya está presente, no duplica.
  */
 export const registrarAsistencia = mutation({
@@ -263,34 +343,24 @@ export const registrarAsistencia = mutation({
       throw new Error("La asamblea ya no está activa.");
     }
     const user = await requireAppUser(ctx);
-    const unidades = await misUnidades(ctx, user._id, asamblea.condominioId);
-    if (unidades.length === 0) {
-      throw new Error("No tienes unidades vinculadas en este condominio.");
+    const { filas, poderesRecibidos } = await filasAsistenciaPersona(ctx, {
+      asambleaId: args.asambleaId,
+      condominioId: asamblea.condominioId,
+      userId: user._id,
+      userNombre: user.name,
+    });
+    if (filas.length === 0) {
+      throw new Error(
+        "No tienes unidades para registrar. Si delegaste tu poder, el apoderado usa su código en sala.",
+      );
     }
-
-    const now = Date.now();
-    let registradas = 0;
-    for (const unidad of unidades) {
-      const existing = await ctx.db
-        .query("asambleaAsistentes")
-        .withIndex("by_asamblea_unidad", (q) =>
-          q.eq("asambleaId", args.asambleaId).eq("unidadId", unidad._id),
-        )
-        .first();
-      if (existing) continue;
-      await ctx.db.insert("asambleaAsistentes", {
-        condominioId: asamblea.condominioId,
-        asambleaId: args.asambleaId,
-        unidadId: unidad._id,
-        unidadNumero: unidad.numero,
-        userId: user._id,
-        userNombre: user.name,
-        coeficiente: unidad.coeficiente,
-        createdAt: now,
-      });
-      registradas++;
-    }
-    return { registradas, unidades: unidades.length };
+    await validarPoderesAlRegistrar(ctx, poderesRecibidos);
+    const registradas = await insertarAsistencias(ctx, {
+      condominioId: asamblea.condominioId,
+      asambleaId: args.asambleaId,
+      filas,
+    });
+    return { registradas, unidades: filas.length };
   },
 });
 
@@ -321,14 +391,12 @@ export const quorum = query({
       .withIndex("by_condominio", (q) => q.eq("condominioId", asamblea.condominioId))
       .collect();
 
-    // Unidades presentes = asistencia ∪ poderes validados (dedup por unidad).
+    // Solo cuenta como presente el check-in real (QR / código / manual).
+    // Aceptar un poder NO suma al quórum por sí solo: el apoderado debe
+    // registrarse en sala. Si ya está presente, las unidades que representa SÍ cuentan.
     const presentes = new Map<string, number>(); // unidadId → coeficiente
     for (const a of asistentes) presentes.set(a.unidadId as string, a.coeficiente ?? 0);
-    for (const p of poderesValidados) {
-      if (!presentes.has(p.unidadId as string)) {
-        presentes.set(p.unidadId as string, p.coeficiente ?? 0);
-      }
-    }
+    sumarUnidadesPorPoderPresente(presentes, asistentes, poderes);
 
     const totalCoef = unidades.reduce((s, u) => s + (u.coeficiente ?? 0), 0);
     const presenteCoef = [...presentes.values()].reduce((s, c) => s + c, 0);
@@ -356,7 +424,7 @@ export const quorum = query({
           userNombre: a.userNombre,
           coeficiente: a.coeficiente ?? null,
           createdAt: a.createdAt,
-          esPoder: false,
+          esPoder: !!a.esPoder,
         })),
     };
   },
@@ -384,9 +452,33 @@ export const miParticipacion = query({
       .collect();
     const misVotos = votos.filter((vt) => vt.userId === user._id);
 
+    // Casas que este usuario representa por poder (validado) — si es apoderado con cuenta.
+    const poderesRecibidos = await ctx.db
+      .query("poderesAsamblea")
+      .withIndex("by_representante", (q) =>
+        q.eq("asambleaId", args.asambleaId).eq("representanteUserId", user._id),
+      )
+      .collect();
+    const representa = poderesRecibidos.filter((p) => p.validado).map((p) => p.unidadNumero);
+
+    // Unidades propias que ya delegó (poder validado) → no necesita QR de asistencia.
+    const poderesOtorgados = (
+      await ctx.db
+        .query("poderesAsamblea")
+        .withIndex("by_asamblea", (q) => q.eq("asambleaId", args.asambleaId))
+        .collect()
+    ).filter((p) => p.validado && p.otorganteUserId === user._id);
+    const unidades = await misUnidades(ctx, user._id, asamblea.condominioId);
+    const delegadas = new Set(poderesOtorgados.map((p) => p.unidadId as string));
+    const propiasSinDelegar = unidades.filter((u) => !delegadas.has(u._id as string));
+    const delegoTodo = unidades.length > 0 && propiasSinDelegar.length === 0;
+
     return {
       presente: misAsistencias.length > 0,
       unidades: misAsistencias.map((a) => a.unidadNumero),
+      representa,
+      delegoTodo,
+      apoderadoNombre: poderesOtorgados[0]?.representanteNombre ?? null,
       votos: Object.fromEntries(misVotos.map((vt) => [vt.votacionId as string, vt.opcionIndex])),
     };
   },
@@ -405,6 +497,10 @@ export const votar = mutation({
     if (votacion.estado !== "abierta") throw new Error("La votación está cerrada.");
     if (args.opcionIndex < 0 || args.opcionIndex >= votacion.opciones.length) {
       throw new Error("Opción inválida.");
+    }
+    const asamblea = await ctx.db.get(votacion.asambleaId);
+    if (!asamblea || asamblea.estado !== "en_curso") {
+      throw new Error("La asamblea aún no ha iniciado.");
     }
     const user = await requireAppUser(ctx);
 
@@ -545,29 +641,96 @@ export const buscarUsuarios = query({
 });
 
 /** El propietario otorga un poder de una de SUS unidades a un representante. */
+/** Genera un código de acceso corto (evita caracteres ambiguos). */
+function generarCodigo(unidadId: string): string {
+  const raw = (Date.now().toString(36) + unidadId)
+    .replace(/[^a-z0-9]/gi, "")
+    .toUpperCase()
+    .replace(/[O0I1L]/g, "X");
+  return raw.slice(-6);
+}
+
+/**
+ * El propietario otorga un poder de una de SUS unidades a un apoderado (persona,
+ * puede no tener cuenta). Se genera un CÓDIGO que el apoderado usará para entrar
+ * y votar. Si el mismo apoderado (documento) ya tiene poder en esta asamblea, se
+ * reutiliza su código (así representa varias casas con el mismo código).
+ */
 export const otorgarPoder = mutation({
   args: {
     asambleaId: v.id("asambleas"),
     unidadId: v.id("unidades"),
-    representanteUserId: v.id("users"),
+    documentoStorageId: v.optional(v.id("_storage")), // PDF/foto del poder firmado
+    // Modo A: seleccionar un propietario existente del conjunto.
+    representanteUserId: v.optional(v.id("users")),
+    // Modo B: persona externa (por nombre/documento).
+    apoderadoNombre: v.optional(v.string()),
+    apoderadoDocumento: v.optional(v.string()),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<{ codigo: string; nombre: string; esPropietario: boolean }> => {
     const asamblea = await ctx.db.get(args.asambleaId);
     if (!asamblea) throw new Error("Asamblea no encontrada.");
     if (asamblea.estado === "finalizada" || asamblea.estado === "cancelada") {
       throw new Error("La asamblea ya no está activa.");
     }
     const user = await requireAppUser(ctx);
+    const esWriter = await esGestorAsamblea(ctx, asamblea.condominioId, user);
 
-    const propias = await misUnidades(ctx, user._id, asamblea.condominioId);
-    const unidad = propias.find((u) => u._id === args.unidadId);
-    if (!unidad) throw new Error("Esa unidad no está vinculada a tu cuenta.");
-
-    if (args.representanteUserId === user._id) {
-      throw new Error("No puedes otorgarte un poder a ti mismo.");
+    // Público solo puede otorgar mientras la asamblea está programada.
+    // En curso: únicamente administración (registro manual interno).
+    if (asamblea.estado === "en_curso") {
+      if (!esWriter) {
+        throw new Error(
+          "La asamblea ya inició. Solo la administración puede registrar poderes.",
+        );
+      }
+    } else if (asamblea.estado !== "programada") {
+      throw new Error("La asamblea ya no está activa.");
     }
-    const representante = await ctx.db.get(args.representanteUserId);
-    if (!representante) throw new Error("Representante no encontrado.");
+
+    let unidadNumero: string;
+    let coeficiente: number | undefined;
+    let otorganteUserId: Id<"users">;
+    let otorganteNombre: string;
+
+    if (esWriter) {
+      const unidad = await ctx.db.get(args.unidadId);
+      if (!unidad || unidad.condominioId !== asamblea.condominioId) {
+        throw new Error("Unidad no válida para esta asamblea.");
+      }
+      unidadNumero = unidad.numero;
+      coeficiente = unidad.coeficiente;
+      const dueño = await dueñoUnidad(ctx, args.unidadId);
+      otorganteUserId = dueño?.userId ?? user._id;
+      otorganteNombre = dueño?.nombre ?? user.name;
+    } else {
+      const propias = await misUnidades(ctx, user._id, asamblea.condominioId);
+      const unidad = propias.find((u) => u._id === args.unidadId);
+      if (!unidad) throw new Error("Esa unidad no está vinculada a tu cuenta.");
+      unidadNumero = unidad.numero;
+      coeficiente = unidad.coeficiente;
+      otorganteUserId = user._id;
+      otorganteNombre = user.name;
+    }
+
+    // Resuelve el apoderado: usuario existente o persona externa.
+    let nombre: string;
+    let documento: string | undefined;
+    let representanteExistente: Id<"users"> | undefined;
+    if (args.representanteUserId) {
+      if (args.representanteUserId === otorganteUserId) {
+        throw new Error("No puedes dar el poder al mismo otorgante.");
+      }
+      const rep = await ctx.db.get(args.representanteUserId);
+      if (!rep) throw new Error("Propietario no encontrado.");
+      nombre = rep.name;
+      documento = rep.numeroDocumento ?? undefined;
+      representanteExistente = rep._id;
+    } else {
+      nombre = (args.apoderadoNombre ?? "").trim();
+      if (!nombre) throw new Error("El nombre del apoderado es obligatorio.");
+      documento = args.apoderadoDocumento?.trim() || undefined;
+    }
 
     // Una unidad → un solo poder por asamblea.
     const existing = await ctx.db
@@ -578,35 +741,54 @@ export const otorgarPoder = mutation({
       .first();
     if (existing) throw new Error("Esta unidad ya tiene un poder en esta asamblea.");
 
-    // Límite: representante CON unidad propia → máximo 2 poderes. Externo: sin límite.
-    const repUnidades = await misUnidades(ctx, representante._id, asamblea.condominioId);
-    if (repUnidades.length > 0) {
-      const suyos = await ctx.db
-        .query("poderesAsamblea")
-        .withIndex("by_representante", (q) =>
-          q.eq("asambleaId", args.asambleaId).eq("representanteUserId", representante._id),
-        )
-        .collect();
-      if (suyos.length >= 2) {
-        throw new Error("Ese representante ya tiene el máximo de 2 poderes en esta asamblea.");
+    // Reutiliza el código si el mismo apoderado (documento, o nombre) ya tiene poder.
+    const todos = await ctx.db
+      .query("poderesAsamblea")
+      .withIndex("by_asamblea", (q) => q.eq("asambleaId", args.asambleaId))
+      .collect();
+    const mismo = todos.find((p) =>
+      documento
+        ? p.apoderadoDocumento === documento
+        : p.representanteNombre.toLowerCase() === nombre.toLowerCase(),
+    );
+    const codigo = mismo?.codigoAcceso ?? generarCodigo(args.unidadId as string);
+
+    // Si el apoderado ya es un propietario del conjunto, se enlaza a su cuenta
+    // para que también pueda votar desde su propia sesión.
+    let representanteUserId: Id<"users"> | undefined =
+      representanteExistente ?? mismo?.representanteUserId;
+    if (!representanteUserId && documento) {
+      const posible = await ctx.db
+        .query("users")
+        .withIndex("by_numeroDocumento", (q) => q.eq("numeroDocumento", documento))
+        .first();
+      if (posible) {
+        const m = await getMembership(ctx, posible._id, asamblea.condominioId);
+        if (m) representanteUserId = posible._id;
       }
     }
 
     const now = Date.now();
-    return await ctx.db.insert("poderesAsamblea", {
+    await ctx.db.insert("poderesAsamblea", {
       condominioId: asamblea.condominioId,
       asambleaId: args.asambleaId,
       unidadId: args.unidadId,
-      unidadNumero: unidad.numero,
-      coeficiente: unidad.coeficiente,
-      otorganteUserId: user._id,
-      otorganteNombre: user.name,
-      representanteUserId: representante._id,
-      representanteNombre: representante.name,
-      validado: false,
+      unidadNumero,
+      coeficiente,
+      otorganteUserId,
+      otorganteNombre,
+      representanteUserId,
+      representanteNombre: nombre,
+      apoderadoDocumento: documento,
+      codigoAcceso: codigo,
+      documentoStorageId: args.documentoStorageId,
+      // Vecino del conjunto: debe aceptar el poder. Externo: válido con el código.
+      // Registro por administración queda validado de una vez.
+      validado: esWriter ? true : !representanteUserId,
       createdAt: now,
       updatedAt: now,
     });
+    return { codigo, nombre, esPropietario: !!representanteUserId };
   },
 });
 
@@ -616,14 +798,48 @@ export const responderPoder = mutation({
   handler: async (ctx, args) => {
     const poder = await ctx.db.get(args.poderId);
     if (!poder) throw new Error("Poder no encontrado.");
+    const asamblea = await ctx.db.get(poder.asambleaId);
+    if (!asamblea) throw new Error("Asamblea no encontrada.");
     const { user } = await requireCondominioRole(ctx, poder.condominioId, []);
-    const esAdmin =
-      user.platformRole === "superadmin" || user.platformRole === "admin";
-    if (poder.representanteUserId !== user._id && !esAdmin) {
+    const esWriter = await esGestorAsamblea(ctx, poder.condominioId, user);
+
+    if (asamblea.estado !== "programada") {
+      if (!esWriter) {
+        throw new Error(
+          "Con la asamblea en curso, solo la administración puede gestionar poderes.",
+        );
+      }
+    } else if (poder.representanteUserId !== user._id && !esWriter) {
       throw new Error("Solo el representante puede responder este poder.");
     }
+
     if (args.aceptar) {
       await ctx.db.patch(args.poderId, { validado: true, updatedAt: Date.now() });
+      // Si el apoderado ya hizo check-in, suma ya la unidad al quórum.
+      if (poder.representanteUserId) {
+        const yaPresente = await ctx.db
+          .query("asambleaAsistentes")
+          .withIndex("by_asamblea_user", (q) =>
+            q.eq("asambleaId", poder.asambleaId).eq("userId", poder.representanteUserId!),
+          )
+          .first();
+        if (yaPresente) {
+          await insertarAsistencias(ctx, {
+            condominioId: poder.condominioId,
+            asambleaId: poder.asambleaId,
+            filas: [
+              {
+                unidadId: poder.unidadId,
+                unidadNumero: poder.unidadNumero,
+                userId: poder.representanteUserId,
+                userNombre: poder.representanteNombre,
+                coeficiente: poder.coeficiente,
+                esPoder: true,
+              },
+            ],
+          });
+        }
+      }
     } else {
       await ctx.db.delete(args.poderId);
     }
@@ -636,12 +852,21 @@ export const revocarPoder = mutation({
   handler: async (ctx, args) => {
     const poder = await ctx.db.get(args.poderId);
     if (!poder) throw new Error("Poder no encontrado.");
+    const asamblea = await ctx.db.get(poder.asambleaId);
+    if (!asamblea) throw new Error("Asamblea no encontrada.");
     const { user } = await requireCondominioRole(ctx, poder.condominioId, []);
-    const esAdmin =
-      user.platformRole === "superadmin" || user.platformRole === "admin";
-    if (poder.otorganteUserId !== user._id && !esAdmin) {
+    const esWriter = await esGestorAsamblea(ctx, poder.condominioId, user);
+
+    if (asamblea.estado !== "programada") {
+      if (!esWriter) {
+        throw new Error(
+          "Con la asamblea en curso, solo la administración puede revocar poderes.",
+        );
+      }
+    } else if (poder.otorganteUserId !== user._id && !esWriter) {
       throw new Error("Solo quien otorgó el poder puede revocarlo.");
     }
+
     // No revocar si esa unidad ya votó en la asamblea.
     const yaVoto = await ctx.db
       .query("votosAsamblea")
@@ -654,18 +879,33 @@ export const revocarPoder = mutation({
   },
 });
 
+/** URL firmada para subir el documento del poder (Convex Storage). */
+export const generateUploadUrl = mutation({
+  args: {},
+  handler: async (ctx) => {
+    await requireAppUser(ctx);
+    return await ctx.storage.generateUploadUrl();
+  },
+});
+
 /** Poderes que el usuario RECIBIÓ en esta asamblea (para aceptar/rechazar). */
 export const poderesRecibidos = query({
   args: { asambleaId: v.id("asambleas") },
   handler: async (ctx, args) => {
     const user = await getCurrentAppUser(ctx);
     if (!user) return [];
-    return await ctx.db
+    const poderes = await ctx.db
       .query("poderesAsamblea")
       .withIndex("by_representante", (q) =>
         q.eq("asambleaId", args.asambleaId).eq("representanteUserId", user._id),
       )
       .collect();
+    return await Promise.all(
+      poderes.map(async (p) => ({
+        ...p,
+        documentoUrl: p.documentoStorageId ? await ctx.storage.getUrl(p.documentoStorageId) : null,
+      })),
+    );
   },
 });
 
@@ -675,12 +915,18 @@ export const poderesOtorgados = query({
   handler: async (ctx, args) => {
     const user = await getCurrentAppUser(ctx);
     if (!user) return [];
-    return await ctx.db
+    const poderes = await ctx.db
       .query("poderesAsamblea")
       .withIndex("by_otorgante", (q) =>
         q.eq("asambleaId", args.asambleaId).eq("otorganteUserId", user._id),
       )
       .collect();
+    return await Promise.all(
+      poderes.map(async (p) => ({
+        ...p,
+        documentoUrl: p.documentoStorageId ? await ctx.storage.getUrl(p.documentoStorageId) : null,
+      })),
+    );
   },
 });
 
@@ -691,16 +937,316 @@ export const listPoderes = query({
     const asamblea = await ctx.db.get(args.asambleaId);
     if (!asamblea) return [];
     await requireCondominioRole(ctx, asamblea.condominioId, []);
-    return await ctx.db
+    const poderes = await ctx.db
       .query("poderesAsamblea")
       .withIndex("by_asamblea", (q) => q.eq("asambleaId", args.asambleaId))
       .collect();
+
+    // ¿El apoderado es propietario del condominio (tiene unidad) o persona externa?
+    const propietariosUserIds = new Set<string>();
+    const memberships = await ctx.db
+      .query("memberships")
+      .withIndex("by_condominio", (q) => q.eq("condominioId", asamblea.condominioId))
+      .collect();
+    for (const m of memberships) {
+      if (!m.isActive) continue;
+      const links = await ctx.db
+        .query("usuarioUnidad")
+        .withIndex("by_membership", (q) => q.eq("membershipId", m._id))
+        .first();
+      if (links) propietariosUserIds.add(m.userId as string);
+    }
+
+    return await Promise.all(
+      poderes.map(async (p) => {
+        const esPropietario = p.representanteUserId
+          ? propietariosUserIds.has(p.representanteUserId as string)
+          : false;
+        const documentoUrl = p.documentoStorageId
+          ? await ctx.storage.getUrl(p.documentoStorageId)
+          : null;
+        return {
+          ...p,
+          documentoUrl,
+          representanteTipo: esPropietario ? ("propietario" as const) : ("externo" as const),
+        };
+      }),
+    );
+  },
+});
+
+/**
+ * Paquete completo para auditoría: asamblea, poderes (con URL de documento)
+ * y resultados de todas las votaciones (coeficiente + veredicto).
+ */
+export const paqueteAuditoria = query({
+  args: { asambleaId: v.id("asambleas") },
+  handler: async (ctx, args) => {
+    const asamblea = await ctx.db.get(args.asambleaId);
+    if (!asamblea) return null;
+    await requireCondominioRole(ctx, asamblea.condominioId, [...WRITE_ROLES]);
+
+    const condominio = await ctx.db.get(asamblea.condominioId);
+    const poderes = await ctx.db
+      .query("poderesAsamblea")
+      .withIndex("by_asamblea", (q) => q.eq("asambleaId", args.asambleaId))
+      .collect();
+
+    const propietariosUserIds = new Set<string>();
+    const memberships = await ctx.db
+      .query("memberships")
+      .withIndex("by_condominio", (q) => q.eq("condominioId", asamblea.condominioId))
+      .collect();
+    for (const m of memberships) {
+      if (!m.isActive) continue;
+      const links = await ctx.db
+        .query("usuarioUnidad")
+        .withIndex("by_membership", (q) => q.eq("membershipId", m._id))
+        .first();
+      if (links) propietariosUserIds.add(m.userId as string);
+    }
+
+    const poderesOut = await Promise.all(
+      poderes
+        .slice()
+        .sort((a, b) =>
+          a.unidadNumero.localeCompare(b.unidadNumero, undefined, { numeric: true }),
+        )
+        .map(async (p) => {
+          const esPropietario = p.representanteUserId
+            ? propietariosUserIds.has(p.representanteUserId as string)
+            : false;
+          const documentoUrl = p.documentoStorageId
+            ? await ctx.storage.getUrl(p.documentoStorageId)
+            : null;
+          return {
+            unidadNumero: p.unidadNumero,
+            coeficiente: p.coeficiente ?? null,
+            otorganteNombre: p.otorganteNombre,
+            representanteNombre: p.representanteNombre,
+            apoderadoDocumento: p.apoderadoDocumento ?? null,
+            codigoAcceso: p.codigoAcceso,
+            validado: p.validado,
+            representanteTipo: esPropietario
+              ? ("propietario" as const)
+              : ("externo" as const),
+            tieneDocumento: !!p.documentoStorageId,
+            documentoUrl,
+            createdAt: p.createdAt,
+          };
+        }),
+    );
+
+    const votaciones = await ctx.db
+      .query("votaciones")
+      .withIndex("by_asamblea", (q) => q.eq("asambleaId", args.asambleaId))
+      .collect();
+
+    const resultados = await Promise.all(
+      votaciones.map(async (vt) => {
+        const votos = await ctx.db
+          .query("votosAsamblea")
+          .withIndex("by_votacion", (q) => q.eq("votacionId", vt._id))
+          .collect();
+        const opciones = vt.opciones.map((o, i) => {
+          const propios = votos.filter((v) => v.opcionIndex === i);
+          return {
+            texto: o.texto,
+            votos: propios.length,
+            coeficiente:
+              Math.round(propios.reduce((s, v) => s + (v.coeficiente ?? 0), 0) * 100) / 100,
+          };
+        });
+        return {
+          pregunta: vt.pregunta,
+          estado: vt.estado,
+          abiertaAlgunaVez: vt.abiertaAlgunaVez ?? false,
+          totalVotos: votos.length,
+          opciones,
+        };
+      }),
+    );
+
+    const ordenDia =
+      asamblea.ordenDia && asamblea.ordenDia.length > 0
+        ? asamblea.ordenDia.map((p) => ({
+            titulo: p.titulo,
+            descripcion: p.descripcion ?? null,
+            hecho: !!p.hecho,
+            tieneVotacion: !!p.votacionId,
+          }))
+        : asamblea.agenda.map((t) => ({
+            titulo: t,
+            descripcion: null as string | null,
+            hecho: false,
+            tieneVotacion: false,
+          }));
+
+    return {
+      condominioNombre: condominio?.name ?? "Condominio",
+      asamblea: {
+        titulo: asamblea.titulo,
+        tipo: asamblea.tipo,
+        modalidad: asamblea.modalidad,
+        estado: asamblea.estado,
+        fecha: asamblea.fecha,
+        hora: asamblea.hora,
+        lugar: asamblea.lugar ?? null,
+        quorumRequerido: asamblea.quorumRequerido ?? 51,
+      },
+      ordenDia,
+      poderes: poderesOut,
+      resultados,
+      generadoEn: Date.now(),
+    };
   },
 });
 
 // ─────────────────────────────────────────────────────────────
 // Admin de la sala en vivo
 // ─────────────────────────────────────────────────────────────
+
+/**
+ * Inserta filas de asistencia (idempotente). Devuelve cuántas se crearon.
+ */
+async function insertarAsistencias(
+  ctx: MutationCtx,
+  args: {
+    condominioId: Id<"condominios">;
+    asambleaId: Id<"asambleas">;
+    filas: {
+      unidadId: Id<"unidades">;
+      unidadNumero: string;
+      userId: Id<"users">;
+      userNombre: string;
+      coeficiente?: number;
+      esPoder?: boolean;
+    }[];
+  },
+) {
+  const now = Date.now();
+  let registradas = 0;
+  for (const f of args.filas) {
+    const ex = await ctx.db
+      .query("asambleaAsistentes")
+      .withIndex("by_asamblea_unidad", (q) =>
+        q.eq("asambleaId", args.asambleaId).eq("unidadId", f.unidadId),
+      )
+      .first();
+    if (ex) continue;
+    await ctx.db.insert("asambleaAsistentes", {
+      condominioId: args.condominioId,
+      asambleaId: args.asambleaId,
+      unidadId: f.unidadId,
+      unidadNumero: f.unidadNumero,
+      userId: f.userId,
+      userNombre: f.userNombre,
+      coeficiente: f.coeficiente,
+      esPoder: f.esPoder,
+      createdAt: now,
+    });
+    registradas++;
+  }
+  return registradas;
+}
+
+/**
+ * Unidades a registrar cuando llega una persona:
+ * - sus casas propias (no delegadas)
+ * - casas que representa por poder (asignado a su userId; al check-in se valida)
+ */
+async function filasAsistenciaPersona(
+  ctx: MutationCtx,
+  args: {
+    asambleaId: Id<"asambleas">;
+    condominioId: Id<"condominios">;
+    userId: Id<"users">;
+    userNombre: string;
+  },
+) {
+  const poderes = await ctx.db
+    .query("poderesAsamblea")
+    .withIndex("by_asamblea", (q) => q.eq("asambleaId", args.asambleaId))
+    .collect();
+  const delegadasAway = new Set(
+    poderes
+      .filter((p) => p.validado && p.otorganteUserId === args.userId)
+      .map((p) => p.unidadId as string),
+  );
+  const propias = (await misUnidades(ctx, args.userId, args.condominioId)).filter(
+    (u) => !delegadasAway.has(u._id as string),
+  );
+  // Incluye pendientes: al registrarse en sala, el apoderado asume esos poderes.
+  const recibidos = poderes.filter((p) => p.representanteUserId === args.userId);
+
+  const filas: {
+    unidadId: Id<"unidades">;
+    unidadNumero: string;
+    userId: Id<"users">;
+    userNombre: string;
+    coeficiente?: number;
+    esPoder?: boolean;
+  }[] = [];
+
+  for (const u of propias) {
+    filas.push({
+      unidadId: u._id,
+      unidadNumero: u.numero,
+      userId: args.userId,
+      userNombre: args.userNombre,
+      coeficiente: u.coeficiente,
+      esPoder: false,
+    });
+  }
+  for (const p of recibidos) {
+    filas.push({
+      unidadId: p.unidadId,
+      unidadNumero: p.unidadNumero,
+      userId: args.userId,
+      userNombre: args.userNombre,
+      coeficiente: p.coeficiente,
+      esPoder: true,
+    });
+  }
+  return { filas, poderesRecibidos: recibidos };
+}
+
+/** Marca como validados los poderes que la persona acaba de ejercer en sala. */
+async function validarPoderesAlRegistrar(
+  ctx: MutationCtx,
+  poderes: { _id: Id<"poderesAsamblea">; validado: boolean }[],
+) {
+  const now = Date.now();
+  for (const p of poderes) {
+    if (!p.validado) {
+      await ctx.db.patch(p._id, { validado: true, updatedAt: now });
+    }
+  }
+}
+
+/**
+ * Si el apoderado ya está presente (check-in con su userId), las unidades
+ * de poderes que representa también suman al quórum (aunque el poder
+ * aún figure como pendiente: estar en sala lo ejerce de hecho).
+ */
+function sumarUnidadesPorPoderPresente(
+  presentes: Map<string, number>,
+  asistentes: { userId: Id<"users"> }[],
+  poderes: {
+    unidadId: Id<"unidades">;
+    coeficiente?: number;
+    representanteUserId?: Id<"users">;
+  }[],
+) {
+  const usersPresentes = new Set(asistentes.map((a) => a.userId as string));
+  for (const p of poderes) {
+    if (!p.representanteUserId) continue;
+    if (!usersPresentes.has(p.representanteUserId as string)) continue;
+    const uid = p.unidadId as string;
+    if (presentes.has(uid)) continue;
+    presentes.set(uid, p.coeficiente ?? 0);
+  }
+}
 
 /** El admin registra la asistencia de un usuario (QR o manual). */
 export const registrarAsistenciaAdmin = mutation({
@@ -711,31 +1257,24 @@ export const registrarAsistenciaAdmin = mutation({
     await requireCondominioRole(ctx, asamblea.condominioId, [...WRITE_ROLES]);
     const target = await ctx.db.get(args.userId);
     if (!target) throw new Error("Usuario no encontrado.");
-    const unidades = await misUnidades(ctx, args.userId, asamblea.condominioId);
-    if (unidades.length === 0) throw new Error("El usuario no tiene unidades vinculadas.");
 
-    const now = Date.now();
-    let registradas = 0;
-    for (const unidad of unidades) {
-      const ex = await ctx.db
-        .query("asambleaAsistentes")
-        .withIndex("by_asamblea_unidad", (q) =>
-          q.eq("asambleaId", args.asambleaId).eq("unidadId", unidad._id),
-        )
-        .first();
-      if (ex) continue;
-      await ctx.db.insert("asambleaAsistentes", {
-        condominioId: asamblea.condominioId,
-        asambleaId: args.asambleaId,
-        unidadId: unidad._id,
-        unidadNumero: unidad.numero,
-        userId: args.userId,
-        userNombre: target.name,
-        coeficiente: unidad.coeficiente,
-        createdAt: now,
-      });
-      registradas++;
+    const { filas, poderesRecibidos } = await filasAsistenciaPersona(ctx, {
+      asambleaId: args.asambleaId,
+      condominioId: asamblea.condominioId,
+      userId: args.userId,
+      userNombre: target.name,
+    });
+    if (filas.length === 0) {
+      throw new Error(
+        "Esta persona no tiene unidades propias ni poderes para registrar. Si solo es apoderado externo, usa su código.",
+      );
     }
+    await validarPoderesAlRegistrar(ctx, poderesRecibidos);
+    const registradas = await insertarAsistencias(ctx, {
+      condominioId: asamblea.condominioId,
+      asambleaId: args.asambleaId,
+      filas,
+    });
     return { registradas, nombre: target.name };
   },
 });
@@ -751,6 +1290,93 @@ export const quitarAsistencia = mutation({
   },
 });
 
+/** El admin registra asistencia con el código de un poder (apoderado). */
+export const registrarAsistenciaPorCodigo = mutation({
+  args: { asambleaId: v.id("asambleas"), codigo: v.string() },
+  handler: async (ctx, args) => {
+    const asamblea = await ctx.db.get(args.asambleaId);
+    if (!asamblea) throw new Error("Asamblea no encontrada.");
+    if (asamblea.estado === "finalizada" || asamblea.estado === "cancelada") {
+      throw new Error("La asamblea ya no está activa.");
+    }
+    await requireCondominioRole(ctx, asamblea.condominioId, [...WRITE_ROLES]);
+
+    const codigo = args.codigo.trim().toUpperCase();
+    if (codigo.length < 4) throw new Error("Código inválido.");
+
+    const poderes = (
+      await ctx.db
+        .query("poderesAsamblea")
+        .withIndex("by_codigo", (q) => q.eq("codigoAcceso", codigo))
+        .collect()
+    ).filter((p) => p.asambleaId === args.asambleaId);
+
+    if (poderes.length === 0) {
+      throw new Error("Código no encontrado en esta asamblea.");
+    }
+
+    const now = Date.now();
+    for (const p of poderes) {
+      if (!p.validado) {
+        await ctx.db.patch(p._id, { validado: true, updatedAt: now });
+      }
+    }
+
+    const repUserId = poderes.find((p) => p.representanteUserId)?.representanteUserId;
+    const repNombre = poderes[0]!.representanteNombre;
+
+    const filas: {
+      unidadId: Id<"unidades">;
+      unidadNumero: string;
+      userId: Id<"users">;
+      userNombre: string;
+      coeficiente?: number;
+      esPoder?: boolean;
+    }[] = [];
+
+    for (const p of poderes) {
+      const uid = p.representanteUserId ?? p.otorganteUserId;
+      filas.push({
+        unidadId: p.unidadId,
+        unidadNumero: p.unidadNumero,
+        userId: uid,
+        userNombre: p.representanteNombre,
+        coeficiente: p.coeficiente,
+        esPoder: true,
+      });
+    }
+
+    // Si el apoderado también es propietario, registra sus casas propias.
+    if (repUserId) {
+      const { filas: propias } = await filasAsistenciaPersona(ctx, {
+        asambleaId: args.asambleaId,
+        condominioId: asamblea.condominioId,
+        userId: repUserId,
+        userNombre: repNombre,
+      });
+      const seen = new Set(filas.map((f) => f.unidadId as string));
+      for (const f of propias) {
+        if (!seen.has(f.unidadId as string)) {
+          filas.push(f);
+          seen.add(f.unidadId as string);
+        }
+      }
+    }
+
+    const registradas = await insertarAsistencias(ctx, {
+      condominioId: asamblea.condominioId,
+      asambleaId: args.asambleaId,
+      filas,
+    });
+
+    return {
+      registradas,
+      nombre: repNombre,
+      unidades: filas.map((f) => f.unidadNumero),
+    };
+  },
+});
+
 /**
  * Registro detallado (tabla del admin): TODAS las unidades con su estado de
  * asistencia, quién representa (poder), coeficiente y el voto por cada votación.
@@ -760,7 +1386,11 @@ export const asistentesDetallado = query({
   handler: async (ctx, args) => {
     const asamblea = await ctx.db.get(args.asambleaId);
     if (!asamblea) return { filas: [], asistentes: [] };
-    await requireCondominioRole(ctx, asamblea.condominioId, []);
+    // Solo administración / mesa de asistencia (no residentes).
+    await requireCondominioRole(ctx, asamblea.condominioId, [
+      ...WRITE_ROLES,
+      "contadora",
+    ]);
 
     const unidades = await ctx.db
       .query("unidades")
@@ -783,6 +1413,22 @@ export const asistentesDetallado = query({
 
     const asisMap = new Map(asistentes.map((a) => [a.unidadId as string, a]));
     const podMap = new Map(poderes.map((p) => [p.unidadId as string, p]));
+
+    // Unidades que cada persona (userId / nombre) representa por poder.
+    const representaPorUser = new Map<string, string[]>();
+    const representaPorNombre = new Map<string, string[]>();
+    for (const p of poderes) {
+      if (p.representanteUserId) {
+        const key = p.representanteUserId as string;
+        const arr = representaPorUser.get(key) ?? [];
+        arr.push(p.unidadNumero);
+        representaPorUser.set(key, arr);
+      }
+      const nk = p.representanteNombre.trim().toLowerCase();
+      const arrN = representaPorNombre.get(nk) ?? [];
+      arrN.push(p.unidadNumero);
+      representaPorNombre.set(nk, arrN);
+    }
 
     // Dueño (propietario) por unidad: membership → usuarioUnidad → user.
     const memberships = await ctx.db
@@ -813,14 +1459,31 @@ export const asistentesDetallado = query({
         const asis = asisMap.get(u._id as string);
         const pod = podMap.get(u._id as string);
         const votosUnidad = votos.filter((vt) => vt.unidadId === u._id);
+        let tambienRepresenta: string[] = [];
+        if (asis && !asis.esPoder) {
+          const byUser = asis.userId
+            ? representaPorUser.get(asis.userId as string) ?? []
+            : [];
+          const byName = representaPorNombre.get((asis.userNombre ?? "").trim().toLowerCase()) ?? [];
+          tambienRepresenta = [...new Set([...byUser, ...byName])].sort((a, b) =>
+            a.localeCompare(b, undefined, { numeric: true }),
+          );
+        }
         return {
           unidadId: u._id as string,
           unidadNumero: u.numero,
           coeficiente: u.coeficiente ?? null,
-          presente: !!asis || !!pod,
+          // Solo cuenta como "asistió" si hubo registro explícito (QR/código/manual).
+          // Aceptar un poder NO marca asistencia.
+          presente: !!asis,
+          tienePoder: !!pod,
+          porPoder: !!asis?.esPoder,
           propietario: propietarioPorUnidad.get(u._id as string) ?? null,
           asistente: asis?.userNombre ?? null,
+          /** Nombre del apoderado (si esta unidad tiene poder). */
           representa: pod ? pod.representanteNombre : null,
+          /** Unidades que esta persona también representa (fila de su casa propia). */
+          tambienRepresenta,
           horaRegistro: asis?.createdAt ?? null,
           votos: Object.fromEntries(votosUnidad.map((vt) => [vt.votacionId as string, vt.opcionIndex])),
         };
@@ -850,6 +1513,7 @@ type PuntoOrden = {
   titulo: string;
   descripcion?: string;
   votacionId?: Id<"votaciones">;
+  hecho?: boolean;
 };
 
 /** Orden del día actual (usa el estructurado; si no existe, migra desde agenda). */
@@ -1010,5 +1674,257 @@ export const toggleVotacionPunto = mutation({
       });
     }
     await ctx.db.patch(args.asambleaId, { ordenDia: orden, updatedAt: now });
+  },
+});
+
+/** Marca / desmarca un punto del orden del día como realizado. */
+export const togglePuntoHecho = mutation({
+  args: { asambleaId: v.id("asambleas"), index: v.number() },
+  handler: async (ctx, args) => {
+    const asamblea = await ctx.db.get(args.asambleaId);
+    if (!asamblea) throw new Error("Asamblea no encontrada.");
+    await requireCondominioRole(ctx, asamblea.condominioId, [...WRITE_ROLES]);
+    const orden = ordenDiaActual(asamblea);
+    const p = orden[args.index];
+    if (!p) throw new Error("Punto no encontrado.");
+    p.hecho = !p.hecho;
+    await ctx.db.patch(args.asambleaId, {
+      ordenDia: orden,
+      updatedAt: Date.now(),
+    });
+    return { hecho: !!p.hecho };
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// Acceso del APODERADO por código (sin cuenta)
+// ─────────────────────────────────────────────────────────────
+
+/** El apoderado entra con su código: ve las casas que representa y las votaciones. */
+export const accederConCodigo = query({
+  args: { codigo: v.string() },
+  handler: async (ctx, args) => {
+    const codigo = args.codigo.trim().toUpperCase();
+    if (codigo.length < 4) return null;
+
+    const poderes = await ctx.db
+      .query("poderesAsamblea")
+      .withIndex("by_codigo", (q) => q.eq("codigoAcceso", codigo))
+      .collect();
+    if (poderes.length === 0) return null;
+
+    const asamblea = await ctx.db.get(poderes[0]!.asambleaId);
+    if (!asamblea) return null;
+    // Código deja de servir cuando la asamblea cierra.
+    if (asamblea.estado === "finalizada" || asamblea.estado === "cancelada") {
+      return null;
+    }
+
+    const votaciones = await ctx.db
+      .query("votaciones")
+      .withIndex("by_asamblea", (q) => q.eq("asambleaId", asamblea._id))
+      .order("desc")
+      .collect();
+
+    const misVotos = (
+      await ctx.db
+        .query("votosAsamblea")
+        .withIndex("by_asamblea", (q) => q.eq("asambleaId", asamblea._id))
+        .collect()
+    ).filter((vt) => vt.codigoApoderado === codigo);
+    const votoPorVotacion = new Map<string, number>();
+    for (const vt of misVotos) votoPorVotacion.set(vt.votacionId as string, vt.opcionIndex);
+
+    // Quórum (mismo cálculo que la vista de admin: solo check-in real).
+    const asistentes = await ctx.db
+      .query("asambleaAsistentes")
+      .withIndex("by_asamblea", (q) => q.eq("asambleaId", asamblea._id))
+      .collect();
+    const unidadesCond = await ctx.db
+      .query("unidades")
+      .withIndex("by_condominio", (q) => q.eq("condominioId", asamblea.condominioId))
+      .collect();
+    const presentes = new Map<string, number>();
+    for (const a of asistentes) presentes.set(a.unidadId as string, a.coeficiente ?? 0);
+    const poderesAsamblea = await ctx.db
+      .query("poderesAsamblea")
+      .withIndex("by_asamblea", (q) => q.eq("asambleaId", asamblea._id))
+      .collect();
+    sumarUnidadesPorPoderPresente(
+      presentes,
+      asistentes,
+      poderesAsamblea,
+    );
+    // ¿Ya están registradas como presentes TODAS las unidades de este apoderado?
+    const asistenciaRegistrada = poderes.every((p) => presentes.has(p.unidadId as string));
+    const totalCoef = unidadesCond.reduce((s, u) => s + (u.coeficiente ?? 0), 0);
+    const presenteCoef = [...presentes.values()].reduce((s, c) => s + c, 0);
+    const pctQuorum =
+      totalCoef > 0
+        ? (presenteCoef / totalCoef) * 100
+        : unidadesCond.length > 0
+          ? (presentes.size / unidadesCond.length) * 100
+          : 0;
+
+    // Orden del día (con la pregunta/estado de su votación si tiene).
+    const votacionPorId = new Map(votaciones.map((vt) => [vt._id as string, vt]));
+    const ordenDia = ordenDiaActual(asamblea).map((p) => {
+      const vt = p.votacionId ? votacionPorId.get(p.votacionId as string) : undefined;
+      return {
+        titulo: p.titulo,
+        descripcion: p.descripcion ?? null,
+        votacionId: p.votacionId ?? null,
+        hecho: !!p.hecho,
+        estadoVotacion: vt ? vt.estado : null,
+      };
+    });
+
+    return {
+      apoderadoNombre: poderes[0]!.representanteNombre,
+      asamblea: {
+        _id: asamblea._id,
+        titulo: asamblea.titulo,
+        tipo: asamblea.tipo,
+        modalidad: asamblea.modalidad,
+        estado: asamblea.estado,
+        fecha: asamblea.fecha,
+        hora: asamblea.hora,
+      },
+      validado: poderes.every((p) => p.validado),
+      asistenciaRegistrada,
+      quorum: {
+        pct: Math.round(pctQuorum * 100) / 100,
+        unidadesPresentes: presentes.size,
+        totalUnidades: unidadesCond.length,
+        quorumRequerido: asamblea.quorumRequerido ?? 51,
+      },
+      ordenDia,
+      unidades: poderes.map((p) => ({ unidadNumero: p.unidadNumero, coeficiente: p.coeficiente ?? null, validado: p.validado })),
+      votaciones: votaciones.map((vt) => ({
+        _id: vt._id,
+        pregunta: vt.pregunta,
+        estado: vt.estado,
+        abiertaAlgunaVez: vt.abiertaAlgunaVez ?? false,
+        opciones: vt.opciones,
+        miVoto: votoPorVotacion.get(vt._id as string) ?? null,
+      })),
+    };
+  },
+});
+
+/**
+ * El apoderado registra su asistencia con el código (página pública `/apoderado`).
+ * El código es la credencial: marca presentes las casas que representa y valida
+ * los poderes. Sirve para asambleas presenciales/mixtas donde se toma asistencia.
+ */
+export const registrarAsistenciaConCodigo = mutation({
+  args: { codigo: v.string() },
+  handler: async (ctx, args) => {
+    const codigo = args.codigo.trim().toUpperCase();
+    if (codigo.length < 4) throw new Error("Código inválido.");
+
+    const poderes = await ctx.db
+      .query("poderesAsamblea")
+      .withIndex("by_codigo", (q) => q.eq("codigoAcceso", codigo))
+      .collect();
+    if (poderes.length === 0) throw new Error("Código no encontrado.");
+
+    const asamblea = await ctx.db.get(poderes[0]!.asambleaId);
+    if (!asamblea) throw new Error("Asamblea no encontrada.");
+    if (asamblea.estado === "finalizada" || asamblea.estado === "cancelada") {
+      throw new Error("La asamblea ya no está activa.");
+    }
+    // En presenciales/mixtas la asistencia la corrobora el administrador; el
+    // apoderado solo puede auto-registrarse en asambleas virtuales.
+    if (asamblea.modalidad !== "virtual") {
+      throw new Error("En asambleas presenciales el administrador registra la asistencia con tu código.");
+    }
+
+    const now = Date.now();
+    let registradas = 0;
+    for (const p of poderes) {
+      if (!p.validado) await ctx.db.patch(p._id, { validado: true, updatedAt: now });
+      const ex = await ctx.db
+        .query("asambleaAsistentes")
+        .withIndex("by_asamblea_unidad", (q) =>
+          q.eq("asambleaId", asamblea._id).eq("unidadId", p.unidadId),
+        )
+        .first();
+      if (ex) continue;
+      await ctx.db.insert("asambleaAsistentes", {
+        condominioId: asamblea.condominioId,
+        asambleaId: asamblea._id,
+        unidadId: p.unidadId,
+        unidadNumero: p.unidadNumero,
+        userId: p.representanteUserId ?? p.otorganteUserId,
+        userNombre: p.representanteNombre,
+        coeficiente: p.coeficiente,
+        esPoder: true,
+        createdAt: now,
+      });
+      registradas++;
+    }
+    return { registradas, unidades: poderes.map((p) => p.unidadNumero) };
+  },
+});
+
+/** El apoderado vota (con su código) por todas las casas que representa. */
+export const votarConCodigo = mutation({
+  args: { codigo: v.string(), votacionId: v.id("votaciones"), opcionIndex: v.number() },
+  handler: async (ctx, args) => {
+    const codigo = args.codigo.trim().toUpperCase();
+    const votacion = await ctx.db.get(args.votacionId);
+    if (!votacion) throw new Error("Votación no encontrada.");
+    if (votacion.estado !== "abierta") throw new Error("La votación está cerrada.");
+    if (args.opcionIndex < 0 || args.opcionIndex >= votacion.opciones.length) {
+      throw new Error("Opción inválida.");
+    }
+    const asamblea = await ctx.db.get(votacion.asambleaId);
+    if (!asamblea || asamblea.estado !== "en_curso") {
+      throw new Error("La asamblea aún no ha iniciado.");
+    }
+
+    const poderes = (
+      await ctx.db
+        .query("poderesAsamblea")
+        .withIndex("by_codigo", (q) => q.eq("codigoAcceso", codigo))
+        .collect()
+    ).filter((p) => p.validado && p.asambleaId === votacion.asambleaId);
+    if (poderes.length === 0) throw new Error("Código inválido o poderes no validados.");
+
+    const now = Date.now();
+    for (const p of poderes) {
+      const ex = await ctx.db
+        .query("votosAsamblea")
+        .withIndex("by_votacion_unidad", (q) =>
+          q.eq("votacionId", args.votacionId).eq("unidadId", p.unidadId),
+        )
+        .first();
+      if (ex) {
+        await ctx.db.patch(ex._id, { opcionIndex: args.opcionIndex, codigoApoderado: codigo, userId: undefined, createdAt: now });
+      } else {
+        await ctx.db.insert("votosAsamblea", {
+          condominioId: votacion.condominioId,
+          asambleaId: votacion.asambleaId,
+          votacionId: args.votacionId,
+          unidadId: p.unidadId,
+          unidadNumero: p.unidadNumero,
+          codigoApoderado: codigo,
+          opcionIndex: args.opcionIndex,
+          coeficiente: p.coeficiente,
+          createdAt: now,
+        });
+      }
+    }
+
+    const votos = await ctx.db
+      .query("votosAsamblea")
+      .withIndex("by_votacion", (q) => q.eq("votacionId", args.votacionId))
+      .collect();
+    await ctx.db.patch(args.votacionId, {
+      opciones: votacion.opciones.map((o, i) => ({ texto: o.texto, votos: votos.filter((vt) => vt.opcionIndex === i).length })),
+      updatedAt: now,
+    });
+    return { ok: true as const };
   },
 });

@@ -1,0 +1,5 @@
+@tailwind components;
+@tailwind utilities;
+
+/* Sin @tailwind base: el preflight rompe Pressable/TouchableOpacity
+   (colapsa botones con height 0 en iOS). */

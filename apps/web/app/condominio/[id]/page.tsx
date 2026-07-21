@@ -44,7 +44,7 @@ export default function CondominioHome() {
     return <DashboardSkeleton />;
   }
 
-  const firstName = home.userName.split(" ")[0];
+  const firstName = home.userName;
 
   return (
     <PageContainer>
@@ -120,7 +120,7 @@ export default function CondominioHome() {
             </CardHeader>
             <CardContent>
               {serie === undefined ? (
-                <Skeleton className="h-[220px] w-full rounded-xl" />
+                <Skeleton className="h-55 w-full rounded-xl" />
               ) : serie.length === 0 ? (
                 <p className="py-16 text-center text-sm text-muted-foreground">
                   Aún no hay facturas cargadas.
@@ -143,7 +143,7 @@ export default function CondominioHome() {
             <CardContent>
               {serie === undefined ? (
                 <div className="flex flex-col items-center gap-5">
-                  <Skeleton className="h-[168px] w-[168px] rounded-full" />
+                  <Skeleton className="h-42 w-42 rounded-full" />
                   <Skeleton className="h-16 w-full" />
                 </div>
               ) : last ? (

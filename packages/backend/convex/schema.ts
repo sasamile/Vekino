@@ -302,10 +302,11 @@ export default defineSchema({
   // ─────────────────────────────────────────────────────────────
   // Visitantes (control de acceso)
   //
-  // Flujo: el propietario autoriza un visitante esperado (estado "pendiente")
-  // y obtiene un QR (= _id del visitante). El guardia escanea/registra el
-  // ingreso ("activo", fechaIngreso) y la salida ("finalizado", fechaSalida).
-  // El guardia también puede registrar visitantes directamente (activo).
+  // Flujo A: propietario autoriza (estado "pendiente") → QR del día →
+  //          guardia escanea → "activo" → salida → "finalizado".
+  //          Si no ingresó ese día, el QR expira y se elimina.
+  // Flujo B: walk-in en portería → "esperando_aprobacion" → el residente
+  //          acepta → "activo" (o rechaza → se elimina).
   // ─────────────────────────────────────────────────────────────
   visitantes: defineTable({
     condominioId: v.id("condominios"),
@@ -330,14 +331,16 @@ export default defineSchema({
     ),
     placa: v.optional(v.string()),
 
-    // Ventana autorizada
+    // Ventana autorizada (día civil America/Bogota)
     fechaVisitaInicio: v.optional(v.number()),
     fechaVisitaFin: v.optional(v.number()),
 
     estado: v.union(
       v.literal("pendiente"),
+      v.literal("esperando_aprobacion"),
       v.literal("activo"),
-      v.literal("finalizado")
+      v.literal("finalizado"),
+      v.literal("rechazado")
     ),
     fechaIngreso: v.optional(v.number()),
     fechaSalida: v.optional(v.number()),
@@ -388,6 +391,9 @@ export default defineSchema({
       v.literal("cancelada")
     ),
     observaciones: v.optional(v.string()),
+    // Control operativo en portería (guardia).
+    ingresoValidadoAt: v.optional(v.number()),
+    salidaValidadaAt: v.optional(v.number()),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
@@ -457,7 +463,8 @@ export default defineSchema({
       v.literal("propietario"),
       v.literal("arrendatario"),
       v.literal("residente"),
-      v.literal("junta_directiva")
+      v.literal("junta_directiva"),
+      v.literal("guardia") // avisos dirigidos a seguridad/portería
     ),
     prioridad: v.union(
       v.literal("normal"),
@@ -505,6 +512,8 @@ export default defineSchema({
           titulo: v.string(),
           descripcion: v.optional(v.string()),
           votacionId: v.optional(v.id("votaciones")),
+          /** true cuando la mesa marca el punto como realizado. */
+          hecho: v.optional(v.boolean()),
         })
       )
     ),
@@ -555,6 +564,7 @@ export default defineSchema({
     representanteNombre: v.string(),
     apoderadoDocumento: v.optional(v.string()),
     codigoAcceso: v.string(), // código que usa el apoderado para ingresar y votar
+    documentoStorageId: v.optional(v.id("_storage")), // PDF/foto del poder firmado
     validado: v.boolean(),
     createdAt: v.number(),
     updatedAt: v.number(),
@@ -574,7 +584,8 @@ export default defineSchema({
     votacionId: v.id("votaciones"),
     unidadId: v.id("unidades"),
     unidadNumero: v.string(),
-    userId: v.id("users"),
+    userId: v.optional(v.id("users")),      // quién emitió (si es usuario)
+    codigoApoderado: v.optional(v.string()), // o el código del apoderado
     opcionIndex: v.number(),
     coeficiente: v.optional(v.number()),
     createdAt: v.number(),
@@ -593,6 +604,8 @@ export default defineSchema({
     pregunta: v.string(),
     opciones: v.array(v.object({ texto: v.string(), votos: v.number() })),
     estado: v.union(v.literal("abierta"), v.literal("cerrada")),
+    /** true si alguna vez se abrió (para resultados: ocultar puntos nunca abiertos). */
+    abiertaAlgunaVez: v.optional(v.boolean()),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
@@ -687,4 +700,228 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_condominio", ["condominioId"]),
+
+  // ─────────────────────────────────────────────────────────────
+  // Paquetería (portería / guardia)
+  //
+  // El guardia recibe un paquete para una unidad ("recibido") y luego lo
+  // marca "entregado" cuando el residente lo recoge.
+  // ─────────────────────────────────────────────────────────────
+  paquetes: defineTable({
+    condominioId: v.id("condominios"),
+    unidadNumero: v.string(),
+    destinatario: v.optional(v.string()),      // nombre de quien recibe
+    remitente: v.optional(v.string()),          // empresa / transportadora
+    tipo: v.union(
+      v.literal("paquete"),
+      v.literal("sobre"),
+      v.literal("comida"),
+      v.literal("mercado"),
+      v.literal("otro")
+    ),
+    descripcion: v.optional(v.string()),
+    estado: v.union(v.literal("recibido"), v.literal("entregado")),
+    // Evidencia fotográfica (llegada y entrega).
+    fotoStorageId: v.optional(v.id("_storage")),
+    fotoEntregaStorageId: v.optional(v.id("_storage")),
+    observacionesEntrega: v.optional(v.string()),
+    recibidoPorNombre: v.string(),              // guardia que recibió
+    entregadoPorNombre: v.optional(v.string()), // guardia que entregó
+    entregadoANombre: v.optional(v.string()),   // quién recogió
+    fechaRecibido: v.number(),
+    fechaEntregado: v.optional(v.number()),
+  })
+    .index("by_condominio", ["condominioId"])
+    .index("by_estado", ["condominioId", "estado"]),
+
+  // ─────────────────────────────────────────────────────────────
+  // Guardia — turnos, checklist, rondas, minuta digital
+  //
+  // Réplica de la lógica de VekinoApi: el turno gobierna la operación
+  // (sin turno abierto no hay minuta ni rondas); solo puede existir UN
+  // turno abierto por condominio; el cierre es la "entrega" del turno
+  // (consignas + quién recibe). La minuta es append-only: cada acción
+  // del guardia genera un evento automáticamente.
+  // ─────────────────────────────────────────────────────────────
+
+  /** Plantilla de ítems que el guardia verifica al iniciar turno (dotación). */
+  guardiaChecklistTemplates: defineTable({
+    condominioId: v.id("condominios"),
+    nombre: v.string(),
+    obligatorio: v.boolean(),
+    cantidadEsperada: v.number(),
+    activo: v.boolean(),
+    orden: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_condominio", ["condominioId"]),
+
+  /** Catálogo de zonas de inspección para las rondas. */
+  guardiaRondaZonas: defineTable({
+    condominioId: v.id("condominios"),
+    nombre: v.string(),
+    activa: v.boolean(),
+    orden: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_condominio", ["condominioId"]),
+
+  guardiaTurnos: defineTable({
+    condominioId: v.id("condominios"),
+    guardiaUserId: v.id("users"),
+    guardiaNombre: v.string(),
+    // Turno compartido (segundo guardia): si uno cierra, se cierra para ambos.
+    guardiaSecundarioUserId: v.optional(v.id("users")),
+    guardiaSecundarioNombre: v.optional(v.string()),
+    observacionesInicio: v.optional(v.string()),
+    // Snapshot del checklist de dotación al abrir el turno.
+    checklist: v.array(
+      v.object({
+        item: v.string(),
+        obligatorio: v.boolean(),
+        cantidadEsperada: v.number(),
+        cantidadEncontrada: v.number(),
+        estadoOk: v.boolean(),
+        observacion: v.optional(v.string()),
+      })
+    ),
+    // Cierre formal / entrega del turno.
+    consignas: v.optional(v.string()),          // pendientes para el relevo
+    recibe: v.optional(v.string()),             // quién recibe el turno
+    observacionesCierre: v.optional(v.string()),
+    estado: v.union(v.literal("abierto"), v.literal("cerrado")),
+    fechaInicio: v.number(),
+    fechaCierre: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_condominio", ["condominioId"])
+    .index("by_condominio_estado", ["condominioId", "estado"]),
+
+  /** Ronda de control dentro de un turno (zona + novedad + hasta 5 fotos). */
+  guardiaRondas: defineTable({
+    condominioId: v.id("condominios"),
+    turnoId: v.id("guardiaTurnos"),
+    zonaId: v.optional(v.id("guardiaRondaZonas")),
+    zona: v.string(), // nombre denormalizado
+    novedad: v.optional(v.string()),
+    fotos: v.array(v.id("_storage")),
+    createdAt: v.number(),
+  })
+    .index("by_turno", ["turnoId"])
+    .index("by_condominio", ["condominioId"]),
+
+  /**
+   * Minuta digital (bitácora append-only). Los eventos se generan
+   * automáticamente desde cada acción del guardia y también manualmente.
+   * Sin update/delete: es el registro de auditoría de portería.
+   */
+  minutaEventos: defineTable({
+    condominioId: v.id("condominios"),
+    turnoId: v.optional(v.id("guardiaTurnos")), // turno activo al momento (si había)
+    modulo: v.union(
+      v.literal("visitantes"),
+      v.literal("paqueteria"),
+      v.literal("reservas"),
+      v.literal("novedades"),
+      v.literal("minuta") // turnos, rondas y eventos manuales
+    ),
+    tipo: v.string(),     // "Ingreso", "Salida", "Registro", "Ronda de Control"…
+    unidad: v.string(),   // unidad relacionada o "Portería"
+    resumen: v.string(),
+    estado: v.union(v.literal("abierto"), v.literal("cerrado")),
+    actorUserId: v.optional(v.id("users")),
+    actorNombre: v.string(),
+    createdAt: v.number(),
+  })
+    .index("by_condominio", ["condominioId"])
+    .index("by_turno", ["turnoId"]),
+
+  /** Reporte de novedad / incidente de seguridad (con adjunto opcional). */
+  guardiaNovedadReportes: defineTable({
+    condominioId: v.id("condominios"),
+    turnoId: v.optional(v.id("guardiaTurnos")),
+    titulo: v.string(),
+    descripcion: v.string(),
+    prioridad: v.union(v.literal("baja"), v.literal("media"), v.literal("alta")),
+    archivoStorageId: v.optional(v.id("_storage")),
+    archivoNombre: v.optional(v.string()),
+    reportadoPorUserId: v.id("users"),
+    reportadoPorNombre: v.string(),
+    createdAt: v.number(),
+  }).index("by_condominio", ["condominioId"]),
+
+  /**
+   * Depósito / garantía de una reserva de zona común, controlado en portería.
+   * La salida de la reserva NO se puede validar mientras el depósito siga
+   * "registrado" (hay que resolverlo: devuelto o no devuelto con evidencia).
+   */
+  guardiaReservaDepositos: defineTable({
+    condominioId: v.id("condominios"),
+    reservaId: v.id("reservas"),
+    monto: v.number(),
+    observacionesIngreso: v.optional(v.string()),
+    fotoIngresoStorageId: v.optional(v.id("_storage")),
+    estado: v.union(
+      v.literal("registrado"),
+      v.literal("devuelto"),
+      v.literal("no_devuelto")
+    ),
+    observacionesSalida: v.optional(v.string()),
+    fotoSalidaStorageId: v.optional(v.id("_storage")),
+    recibidoPorNombre: v.string(),
+    resueltoPorNombre: v.optional(v.string()),
+    fechaRegistro: v.number(),
+    fechaResolucion: v.optional(v.number()),
+  })
+    .index("by_reserva", ["reservaId"])
+    .index("by_condominio", ["condominioId"]),
+
+  // ─────────────────────────────────────────────────────────────
+  // Push notifications (tokens de dispositivo)
+  // ─────────────────────────────────────────────────────────────
+  pushTokens: defineTable({
+    userId: v.id("users"),
+    token: v.string(),
+    platform: v.union(v.literal("ios"), v.literal("android"), v.literal("web")),
+    enabled: v.boolean(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_user", ["userId"])
+    .index("by_token", ["token"]),
+
+  // ─────────────────────────────────────────────────────────────
+  // Soporte (ayuda al residente → admin del condo + superadmin)
+  // ─────────────────────────────────────────────────────────────
+  soporteTickets: defineTable({
+    condominioId: v.optional(v.id("condominios")),
+    condominioNombre: v.optional(v.string()),
+    userId: v.id("users"),
+    userNombre: v.string(),
+    userEmail: v.string(),
+    categoria: v.union(
+      v.literal("factura"),
+      v.literal("acceso"),
+      v.literal("app"),
+      v.literal("otro"),
+    ),
+    asunto: v.string(),
+    mensaje: v.string(),
+    estado: v.union(
+      v.literal("abierto"),
+      v.literal("en_gestion"),
+      v.literal("resuelto"),
+      v.literal("cerrado"),
+    ),
+    respuesta: v.optional(v.string()),
+    respondidoPorUserId: v.optional(v.id("users")),
+    respondidoPorNombre: v.optional(v.string()),
+    respondidoAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_user", ["userId"])
+    .index("by_condominio", ["condominioId"])
+    .index("by_estado", ["estado"]),
 });

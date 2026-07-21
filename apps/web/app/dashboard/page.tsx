@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useQuery } from "convex/react";
 import { Building2, CheckCircle2, Users, ShieldCheck } from "lucide-react";
 import { api } from "@vekino/backend/api";
+import { homeHrefForRoles } from "@/lib/role-routing";
 
 export default function DashboardHome() {
   const me = useQuery(api.users.me);
@@ -176,6 +177,7 @@ function UserHome({
                 const canAdmin = m.roles.some((r) =>
                   ["administrador", "junta_directiva", "contadora"].includes(r),
                 );
+                const esGuardia = !canAdmin && m.roles.includes("guardia");
                 const inner = (
                   <>
                     <span className="text-sm text-zinc-800">
@@ -186,9 +188,7 @@ function UserHome({
                     </span>
                   </>
                 );
-                const href = canAdmin
-                  ? `/condominio/${m.condominioId}`
-                  : `/mi/${m.condominioId}`;
+                const href = homeHrefForRoles(m.condominioId, m.roles);
                 return (
                   <li key={m.membershipId}>
                     <Link
@@ -197,7 +197,7 @@ function UserHome({
                     >
                       {inner}
                       <span className="text-xs text-primary opacity-0 group-hover:opacity-100">
-                        {canAdmin ? "Administrar →" : "Entrar →"}
+                        {canAdmin ? "Administrar →" : esGuardia ? "Portería →" : "Entrar →"}
                       </span>
                     </Link>
                   </li>

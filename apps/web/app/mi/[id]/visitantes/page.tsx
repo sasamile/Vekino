@@ -5,7 +5,7 @@ import { useParams } from "next/navigation";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
-import { UserCheck, Plus, X, Loader2, QrCode, Trash2, Car } from "lucide-react";
+import { UserCheck, Plus, X, Loader2, QrCode, Trash2, Car, Check, Phone } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Spinner } from "@/components/ui/spinner";
@@ -26,10 +26,12 @@ const TIPO_VIS = [
   { value: "domicilio", label: "Domicilio" },
 ] as const;
 
-const ESTADO_META: Record<string, { label: string; tone: "warning" | "success" | "neutral" }> = {
-  pendiente: { label: "Pendiente", tone: "warning" },
+const ESTADO_META: Record<string, { label: string; tone: "warning" | "success" | "neutral" | "info" | "destructive" }> = {
+  pendiente: { label: "QR listo", tone: "warning" },
+  esperando_aprobacion: { label: "Portería pide acceso", tone: "info" },
   activo: { label: "Adentro", tone: "success" },
   finalizado: { label: "Finalizado", tone: "neutral" },
+  rechazado: { label: "Rechazado", tone: "destructive" },
 };
 
 type TipoDoc = (typeof TIPO_DOC)[number]["value"];
@@ -59,7 +61,7 @@ export default function Visitantes() {
               Visitantes
             </h1>
             <p className="mt-0.5 text-sm text-muted-foreground">
-              Autoriza a tus visitantes y muéstrale el QR a la portería.
+              Autoriza visitas del día con QR. Si portería pide acceso sin QR, puedes aceptar o rechazar aquí.
             </p>
           </div>
         </div>
@@ -87,19 +89,29 @@ export default function Visitantes() {
           {visitantes.map((vis) => {
             const estado = ESTADO_META[vis.estado];
             const tipoVis = TIPO_VIS.find((t) => t.value === vis.tipo)?.label ?? vis.tipo;
+            const esWalkIn = vis.estado === "esperando_aprobacion";
             return (
-              <Card key={vis._id} className="flex flex-wrap items-center gap-4 p-5">
+              <Card
+                key={vis._id}
+                className={cn(
+                  "flex flex-wrap items-center gap-4 p-5",
+                  esWalkIn && "border-brand/40 bg-brand/3",
+                )}
+              >
                 <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-brand/10 text-brand">
-                  <UserCheck className="h-5 w-5" />
+                  {esWalkIn ? <Phone className="h-5 w-5" /> : <UserCheck className="h-5 w-5" />}
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <p className="font-semibold text-foreground">{vis.nombre}</p>
                     {estado && <Badge tone={estado.tone}>{estado.label}</Badge>}
-                    {vis.qrInvalidado && <Badge tone="neutral">QR usado</Badge>}
+                    {vis.qrInvalidado && vis.estado !== "esperando_aprobacion" && (
+                      <Badge tone="neutral">QR usado</Badge>
+                    )}
                   </div>
                   <p className="text-sm text-muted-foreground">
                     {vis.tipoDocumento} {vis.documento} · {tipoVis}
+                    {vis.unidadNumero ? ` · Unidad ${vis.unidadNumero}` : ""}
                     {vis.placa ? (
                       <span className="inline-flex items-center gap-1">
                         {" · "}
@@ -109,19 +121,31 @@ export default function Visitantes() {
                     ) : null}
                   </p>
                   <p className="text-xs text-muted-foreground">
-                    {vis.fechaVisitaInicio ? `Visita: ${fechaLarga(vis.fechaVisitaInicio)}` : ""}
+                    {esWalkIn
+                      ? "Portería solicita dejarlo entrar. ¿Lo autorizas?"
+                      : vis.fechaVisitaInicio
+                        ? `Válido: ${fechaLarga(vis.fechaVisitaInicio)} (solo ese día)`
+                        : ""}
                     {vis.fechaIngreso ? ` · Ingresó ${fechaLarga(vis.fechaIngreso)}` : ""}
                   </p>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
-                  <button
-                    onClick={() => setQrId(vis._id)}
-                    className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-border bg-card px-3 text-sm font-medium text-foreground transition-colors hover:bg-accent"
-                  >
-                    <QrCode className="h-4 w-4" />
-                    QR
-                  </button>
-                  <BorrarBtn id={vis._id} />
+                  {esWalkIn ? (
+                    <WalkInActions id={vis._id} />
+                  ) : (
+                    <>
+                      {vis.estado === "pendiente" && !vis.qrInvalidado && (
+                        <button
+                          onClick={() => setQrId(vis._id)}
+                          className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-border bg-card px-3 text-sm font-medium text-foreground transition-colors hover:bg-accent"
+                        >
+                          <QrCode className="h-4 w-4" />
+                          QR
+                        </button>
+                      )}
+                      {vis.estado !== "activo" && <BorrarBtn id={vis._id} />}
+                    </>
+                  )}
                 </div>
               </Card>
             );
@@ -141,6 +165,47 @@ export default function Visitantes() {
         />
       )}
       {qrId && <QrModal id={qrId} onClose={() => setQrId(null)} />}
+    </div>
+  );
+}
+
+function WalkInActions({ id }: { id: Id<"visitantes"> }) {
+  const responder = useMutation(api.visitantes.responderWalkIn);
+  const [busy, setBusy] = useState<"si" | "no" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function go(aceptar: boolean) {
+    setBusy(aceptar ? "si" : "no");
+    setError(null);
+    try {
+      await responder({ id, aceptar });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudo responder.");
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <div className="flex gap-2">
+        <button
+          onClick={() => go(false)}
+          disabled={busy !== null}
+          className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-border px-3 text-sm font-medium text-muted-foreground hover:bg-accent disabled:opacity-50"
+        >
+          {busy === "no" ? <Loader2 className="h-4 w-4 animate-spin" /> : <X className="h-4 w-4" />}
+          Rechazar
+        </button>
+        <button
+          onClick={() => go(true)}
+          disabled={busy !== null}
+          className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-brand px-3 text-sm font-semibold text-brand-foreground hover:bg-brand/90 disabled:opacity-50"
+        >
+          {busy === "si" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+          Aceptar ingreso
+        </button>
+      </div>
+      {error && <p className="text-xs text-red-600">{error}</p>}
     </div>
   );
 }
@@ -189,6 +254,16 @@ function QrModal({ id, onClose }: { id: Id<"visitantes">; onClose: () => void })
           </div>
         ) : vis === null ? (
           <p className="py-8 text-sm text-muted-foreground">No disponible.</p>
+        ) : !vis.qrVigente ? (
+          <>
+            <p className="mt-6 font-semibold text-foreground">{vis.nombre}</p>
+            <p className="mt-2 text-sm text-amber-700 dark:text-amber-400">
+              {vis.qrMensaje ?? "Este QR ya no es válido."}
+            </p>
+            <p className="mt-2 text-xs text-muted-foreground">
+              Genera una autorización nueva para el día de la visita.
+            </p>
+          </>
         ) : (
           <>
             {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -202,7 +277,7 @@ function QrModal({ id, onClose }: { id: Id<"visitantes">; onClose: () => void })
               {vis.tipoDocumento} {vis.documento}
             </p>
             <p className="mt-2 text-xs text-muted-foreground">
-              Muéstrale este QR al guardia para tu ingreso.
+              Válido solo el día de la visita. Muéstralo al guardia al llegar.
             </p>
           </>
         )}
@@ -242,8 +317,6 @@ function VisitanteForm({
     if (!unidadId) return setError("Selecciona una unidad.");
     setBusy(true);
     try {
-      const [y, m, d] = fecha.split("-").map(Number);
-      const inicio = y && m && d ? Date.UTC(y, m - 1, d, 12) : undefined;
       const newId = await crear({
         condominioId,
         unidadId: unidadId as Id<"unidades">,
@@ -252,7 +325,7 @@ function VisitanteForm({
         tipoDocumento,
         tipo,
         placa: placa.trim() || undefined,
-        fechaVisitaInicio: inicio,
+        fechaVisita: fecha,
       });
       onCreated(newId);
     } catch (err) {
@@ -309,6 +382,9 @@ function VisitanteForm({
 
           <Field label="Fecha de visita">
             <input type="date" value={fecha} min={hoy} onChange={(e) => setFecha(e.target.value)} className={inputCls} />
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              El QR solo sirve ese día. Si no llega, se elimina automáticamente.
+            </p>
           </Field>
 
           {unidades.length > 1 && (

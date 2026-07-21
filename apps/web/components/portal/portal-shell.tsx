@@ -82,6 +82,7 @@ function Guard({ children }: { children: React.ReactNode }) {
         name={home.condominio.name}
         logo={home.condominio.logo}
         userName={home.userName}
+        userImage={home.userImage}
         userEmail={home.userEmail}
         isPlatform={home.isPlatform}
       />

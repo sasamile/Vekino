@@ -17,9 +17,11 @@ import {
   ShieldCheck,
   LogOut,
   Users,
+  LifeBuoy,
 } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import { authClient } from "@/lib/auth-client";
+import { homeHrefForRoles } from "@/lib/role-routing";
 
 type NavItem = {
   href: string;
@@ -31,6 +33,7 @@ const PLATFORM_NAV: NavItem[] = [
   { href: "/dashboard", label: "Inicio", icon: LayoutDashboard },
   { href: "/dashboard/condominios", label: "Condominios", icon: Building2 },
   { href: "/dashboard/administradores", label: "Administradores", icon: Users },
+  { href: "/dashboard/soporte", label: "Soporte", icon: LifeBuoy },
 ];
 
 export function DashboardShell({ children }: { children: React.ReactNode }) {
@@ -86,14 +89,7 @@ function Shell({ children }: { children: React.ReactNode }) {
   // arrendatario, residente…) va a su portal personal.
   if (!isPlatform && me.memberships.length === 1 && me.memberships[0]) {
     const m = me.memberships[0];
-    const canAdmin = m.roles.some((r) =>
-      ["administrador", "junta_directiva", "contadora"].includes(r),
-    );
-    return (
-      <Redirect
-        to={canAdmin ? `/condominio/${m.condominioId}` : `/mi/${m.condominioId}`}
-      />
-    );
+    return <Redirect to={homeHrefForRoles(m.condominioId, m.roles)} />;
   }
 
   // Rutas solo de plataforma.

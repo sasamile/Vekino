@@ -6,20 +6,25 @@ import { ChevronLeft, LogOut } from "lucide-react";
 import { SidebarNav } from "./sidebar-nav";
 import { authClient } from "@/lib/auth-client";
 import { initials, cn } from "@/lib/utils";
+import { UserAvatar } from "@/components/ui/user-avatar";
 
 export function SidebarContent({
   base,
   name,
   logo,
   userName,
+  userImage,
   isPlatform,
+  roles,
   onNavigate,
 }: {
   base: string;
   name: string;
   logo: string | null;
   userName: string;
+  userImage?: string | null;
   isPlatform: boolean;
+  roles: string[];
   onNavigate?: () => void;
 }) {
   const router = useRouter();
@@ -53,7 +58,7 @@ export function SidebarContent({
         </div>
       </div>
 
-      <SidebarNav base={base} onNavigate={onNavigate} />
+      <SidebarNav base={base} roles={roles} isPlatform={isPlatform} onNavigate={onNavigate} />
 
       {/* Footer */}
       <div className="space-y-1 border-t border-border p-3">
@@ -71,12 +76,10 @@ export function SidebarContent({
           </Link>
         )}
         <div className="flex items-center gap-3 rounded-lg px-3 py-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-muted text-xs font-medium text-muted-foreground">
-            {initials(userName)}
-          </div>
+          <UserAvatar name={userName} image={userImage} className="bg-muted text-muted-foreground" />
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-medium text-foreground">
-              {userName.split(" ")[0]}
+              {userName}
             </p>
             <p className="truncate text-xs text-muted-foreground">Sesión activa</p>
           </div>

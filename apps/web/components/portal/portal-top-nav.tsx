@@ -7,6 +7,7 @@ import { LogOut, ChevronLeft } from "lucide-react";
 import { PORTAL_NAV } from "./portal-nav-config";
 import { authClient } from "@/lib/auth-client";
 import { initials, cn } from "@/lib/utils";
+import { UserAvatar } from "@/components/ui/user-avatar";
 
 /**
  * Barra de navegación superior del portal del propietario (réplica del diseño
@@ -18,6 +19,7 @@ export function PortalTopNav({
   name,
   logo,
   userName,
+  userImage,
   userEmail,
   isPlatform,
 }: {
@@ -25,6 +27,7 @@ export function PortalTopNav({
   name: string;
   logo: string | null;
   userName: string;
+  userImage?: string | null;
   userEmail: string;
   isPlatform: boolean;
 }) {
@@ -68,11 +71,13 @@ export function PortalTopNav({
               onClick={() => setMenuOpen((o) => !o)}
               className="flex items-center gap-2 rounded-lg px-2 py-1.5 transition-colors hover:bg-accent"
             >
-              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
-                {initials(userName)}
-              </div>
-              <span className="hidden text-sm font-medium text-foreground md:inline">
-                {userName.split(" ")[0]}
+              <UserAvatar
+                name={userName}
+                image={userImage}
+                className="bg-primary/10 font-semibold text-primary"
+              />
+              <span className="hidden max-w-40 truncate text-sm font-medium text-foreground md:inline">
+                {userName}
               </span>
             </button>
 
