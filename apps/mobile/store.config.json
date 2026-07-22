@@ -1,0 +1,72 @@
+{
+  "configVersion": 0,
+  "apple": {
+    "version": "1.0",
+    "release": {
+      "automaticRelease": true
+    },
+    "categories": ["LIFESTYLE", "UTILITIES"],
+    "info": {
+      "es-MX": {
+        "title": "Vekino",
+        "subtitle": "Administra tu conjunto",
+        "promoText": "Paga tu administración, reserva zonas comunes, autoriza visitantes y vota en asambleas, todo desde tu celular.",
+        "description": "Vekino es la app para vivir mejor en tu conjunto residencial. Desde tu celular puedes:\n\n• Pagos y facturas: consulta tu estado de cuenta y paga la administración en línea.\n• Reservas: aparta el salón social, la zona BBQ y demás áreas comunes.\n• Visitantes: autoriza a tus visitas y genera su código QR de ingreso.\n• PQRS: envía peticiones, quejas y reclamos, y haz seguimiento.\n• Asambleas: participa y vota desde donde estés.\n• Comunicados: entérate de los avisos de tu administración.\n• Vehículos: registra los vehículos de tu unidad.\n\nVekino conecta a propietarios, residentes y administración en un solo lugar, de forma simple y segura.",
+        "keywords": [
+          "conjunto",
+          "administracion",
+          "copropiedad",
+          "PH",
+          "residencial",
+          "pagos",
+          "reservas",
+          "PQRS",
+          "asamblea",
+          "porteria"
+        ],
+        "marketingUrl": "https://vekino.com",
+        "supportUrl": "https://vekino.com/soporte",
+        "privacyPolicyUrl": "https://vekino.com/privacidad"
+      }
+    },
+    "review": {
+      "firstName": "Santiago",
+      "lastName": "Suescun",
+      "email": "administracion@zyntek.com.co",
+      "phone": "+573181833248",
+      "demoUsername": "camiand@gmail.com",
+      "demoPassword": "Vekino123",
+      "demoRequired": true,
+      "notes": "App de administración de conjuntos residenciales. Inicie sesión con el usuario y contraseña de demostración para acceder al portal del propietario (pagos, facturas, reservas, visitantes, asambleas y comunicados)."
+    },
+    "advisory": {
+      "ageRatingOverride": "NONE",
+      "alcoholTobaccoOrDrugUseOrReferences": "NONE",
+      "contests": "NONE",
+      "gambling": false,
+      "gamblingSimulated": "NONE",
+      "horrorOrFearThemes": "NONE",
+      "kidsAgeBand": null,
+      "koreaAgeRatingOverride": "NONE",
+      "lootBox": false,
+      "matureOrSuggestiveThemes": "NONE",
+      "medicalOrTreatmentInformation": "NONE",
+      "profanityOrCrudeHumor": "NONE",
+      "sexualContentGraphicAndNudity": "NONE",
+      "sexualContentOrNudity": "NONE",
+      "unrestrictedWebAccess": false,
+      "violenceCartoonOrFantasy": "NONE",
+      "violenceRealistic": "NONE",
+      "violenceRealisticProlongedGraphicOrSadistic": "NONE",
+      "advertising": false,
+      "ageAssurance": false,
+      "ageRatingOverrideV2": "NONE",
+      "developerAgeRatingInfoUrl": null,
+      "gunsOrOtherWeapons": "NONE",
+      "healthOrWellnessTopics": false,
+      "messagingAndChat": false,
+      "parentalControls": false,
+      "userGeneratedContent": false
+    }
+  }
+}
