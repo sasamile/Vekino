@@ -184,6 +184,7 @@ export default function FinanzasPage() {
             <StatCard icon={CheckCircle2} label="Pagadas" value={resumen.pagadas} hint={cop(resumen.sumaPagado)} tone="success" />
             <StatCard icon={PiggyBank} label="Abonadas" value={resumen.abonadas ?? 0} hint="Pago parcial" tone="primary" />
             <StatCard icon={AlertTriangle} label="Vencidas" value={resumen.vencidas} hint="Con mora" tone="destructive" />
+            <StatCard icon={Wallet} label="Saldo a favor" value={resumen.saldoAFavorCount ?? 0} hint="Crédito del residente" tone="primary" />
           </div>
         ) : (
           <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
