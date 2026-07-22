@@ -138,7 +138,7 @@ export function PortalTopNav({
                 className={cn(
                   "flex items-center gap-2 whitespace-nowrap rounded-md px-4 py-2 text-sm font-medium transition-colors",
                   active
-                    ? "bg-primary text-primary-foreground"
+                    ? "bg-brand text-brand-foreground"
                     : "text-muted-foreground hover:bg-accent hover:text-foreground",
                 )}
               >

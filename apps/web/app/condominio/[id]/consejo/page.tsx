@@ -1,501 +1,1211 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery, useMutation, useAction } from "convex/react";
 import {
-  Users2, Plus, Trash2, Loader2, Phone, Mail, Home,
-  Crown, CalendarClock, FileText, Power,
+  Folder,
+  FolderPlus,
+  Plus,
+  Upload,
+  FileText,
+  MessageSquare,
+  Loader2,
+  ExternalLink,
+  Users2,
+  Trash2,
+  Download,
+  Search,
+  LayoutList,
+  Pencil,
+  History,
 } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
 import { PageContainer } from "@/components/layout/page-container";
 import { PageHeader } from "@/components/layout/page-header";
-import { StatCard } from "@/components/layout/stat-card";
-import { Select, Input, Textarea } from "@/components/ui/input";
-import { Card } from "@/components/ui/card";
+import { Input, Select, Textarea } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  TableCard,
+  Table,
+  THead,
+  TH,
+  TBody,
+  TR,
+  TD,
+  CellStack,
+} from "@/components/ui/table";
 import { cn, initials } from "@/lib/utils";
+import { uploadToS3 } from "@/lib/upload-s3";
 
-type Cargo = "presidente" | "vicepresidente" | "secretario" | "tesorero" | "vocal" | "fiscal" | "suplente";
-type TipoSesion = "ordinaria" | "extraordinaria";
+type Estado = "pendiente" | "en_revision" | "aprobado" | "reemplazado";
 
-const CARGO_META: Record<Cargo, { label: string; tone: React.ComponentProps<typeof Badge>["tone"]; rank: number }> = {
-  presidente:     { label: "Presidente",      tone: "brand",   rank: 1 },
-  vicepresidente: { label: "Vicepresidente",  tone: "primary", rank: 2 },
-  secretario:     { label: "Secretario",      tone: "info",    rank: 3 },
-  tesorero:       { label: "Tesorero",        tone: "success", rank: 4 },
-  fiscal:         { label: "Fiscal",          tone: "warning", rank: 5 },
-  vocal:          { label: "Vocal",           tone: "neutral", rank: 6 },
-  suplente:       { label: "Suplente",        tone: "neutral", rank: 7 },
+const ESTADO_META: Record<
+  Estado,
+  { label: string; tone: React.ComponentProps<typeof Badge>["tone"] }
+> = {
+  pendiente: { label: "Pendiente", tone: "warning" },
+  en_revision: { label: "En revisión", tone: "info" },
+  aprobado: { label: "Aprobado", tone: "success" },
+  reemplazado: { label: "Reemplazado", tone: "neutral" },
 };
 
-function fmtFecha(s: string) {
-  const parts = s.split("-");
-  const y = Number(parts[0] ?? 2026);
-  const m = Number(parts[1] ?? 1);
-  const d = Number(parts[2] ?? 1);
-  return new Date(y, m - 1, d).toLocaleDateString("es-CO", { day: "numeric", month: "long", year: "numeric" });
+const FOLDER_COLORS = [
+  "bg-amber-400/90 text-amber-950",
+  "bg-brand text-brand-foreground",
+  "bg-sky-500/90 text-white",
+  "bg-emerald-500/90 text-white",
+  "bg-violet-500/90 text-white",
+  "bg-rose-400/90 text-white",
+];
+
+function formatSize(bytes: number) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  const u = ["B", "KB", "MB", "GB"];
+  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), u.length - 1);
+  const v = bytes / Math.pow(1024, i);
+  return `${v.toFixed(v >= 100 || i === 0 ? 0 : 1)} ${u[i]}`;
+}
+
+function fmtDate(ts: number) {
+  return new Date(ts).toLocaleDateString("es-CO", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
 }
 
 export default function ConsejoPage() {
   const params = useParams<{ id: string }>();
   const condominioId = params.id as Id<"condominios">;
-  const [tab, setTab] = useState<"miembros" | "sesiones">("miembros");
 
-  const miembros = useQuery(api.consejo.listMiembros, { condominioId });
-  const sesiones = useQuery(api.consejo.listSesiones, { condominioId });
+  const permisos = useQuery(api.consejo.misPermisos, { condominioId });
+  const categorias = useQuery(
+    api.consejo.listCategorias,
+    permisos?.canView ? { condominioId } : "skip",
+  );
+  const [categoriaFiltro, setCategoriaFiltro] = useState<
+    Id<"consejoCategorias"> | ""
+  >("");
+  const [q, setQ] = useState("");
+  const documentos = useQuery(
+    api.consejo.listDocumentos,
+    permisos?.canView
+      ? { condominioId, categoriaId: categoriaFiltro || undefined }
+      : "skip",
+  );
 
-  const [miembroForm, setMiembroForm] = useState(false);
-  const [sesionForm, setSesionForm] = useState(false);
-  const [deleteMiembro, setDeleteMiembro] = useState<Id<"consejoMiembros"> | null>(null);
-  const [deleteSesion, setDeleteSesion] = useState<Id<"consejoSesiones"> | null>(null);
+  const [catModal, setCatModal] = useState<
+    | { mode: "create" }
+    | { mode: "edit"; id: Id<"consejoCategorias">; nombre: string }
+    | null
+  >(null);
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const [detalleId, setDetalleId] = useState<Id<"consejoDocumentos"> | null>(
+    null,
+  );
+  const [miembrosOpen, setMiembrosOpen] = useState(false);
 
-  const activos = miembros?.filter((m) => m.activo).length ?? 0;
-  const sorted = [...(miembros ?? [])].sort((a, b) => {
-    if (a.activo !== b.activo) return a.activo ? -1 : 1;
-    return CARGO_META[a.cargo as Cargo].rank - CARGO_META[b.cargo as Cargo].rank;
-  });
+  const removeCategoria = useMutation(api.consejo.removeCategoria);
+  const totalDocs =
+    categorias?.reduce((n, c) => n + c.documentosCount, 0) ?? 0;
+
+  const filtered = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    const rows = documentos ?? [];
+    if (!needle) return rows;
+    return rows.filter(
+      (d) =>
+        d.titulo.toLowerCase().includes(needle) ||
+        d.categoriaNombre.toLowerCase().includes(needle) ||
+        (d.createdByNombre ?? "").toLowerCase().includes(needle) ||
+        d.fileName.toLowerCase().includes(needle),
+    );
+  }, [documentos, q]);
+
+  const loading =
+    permisos === undefined ||
+    (permisos.canView &&
+      (categorias === undefined || documentos === undefined));
+
+  const categoriaActiva = categorias?.find((c) => c._id === categoriaFiltro);
+  const folderLabel = categoriaActiva?.nombre ?? "Todos los documentos";
+
+  if (permisos && !permisos.canView) {
+    return (
+      <PageContainer>
+        <EmptyState
+          icon={Folder}
+          title="Sin acceso"
+          description="El consejo es para administración, contaduría y junta directiva."
+        />
+      </PageContainer>
+    );
+  }
 
   return (
     <PageContainer>
-      <div className="space-y-6">
+      <div className="space-y-7">
         <PageHeader
-          title="Consejo administrativo"
-          description="Miembros del consejo y actas de sus sesiones"
+          title="Consejo de administración"
+          description="Documentos por categoría y seguimiento para la junta y la comunidad"
           action={
-            tab === "miembros" ? (
-              <Button onClick={() => setMiembroForm(true)}><Plus className="h-4 w-4" />Nuevo miembro</Button>
-            ) : (
-              <Button onClick={() => setSesionForm(true)}><Plus className="h-4 w-4" />Nueva sesión</Button>
-            )
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setMiembrosOpen(true)}
+              >
+                <Users2 className="h-4 w-4" />
+                Miembros del Consejo
+              </Button>
+              {permisos?.canUpload && (
+                <Button size="sm" onClick={() => setUploadOpen(true)}>
+                  <Upload className="h-4 w-4" />
+                  Subir documento
+                </Button>
+              )}
+            </div>
           }
         />
 
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
-          <StatCard icon={Users2} label="Miembros activos" value={activos} tone="primary" />
-          <StatCard icon={Crown} label="Total registrados" value={miembros?.length ?? 0} tone="brand" />
-          <StatCard icon={CalendarClock} label="Sesiones" value={sesiones?.length ?? 0} tone="success" />
+        {/* Toolbar: búsqueda */}
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="relative max-w-md flex-1">
+            <Search className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Buscar documento, categoría o autor…"
+              className="pl-9"
+            />
+          </div>
+          <div className="inline-flex items-center gap-1 rounded-xl border border-border bg-muted/40 p-1">
+            <span className="inline-flex items-center gap-1.5 rounded-lg bg-card px-3 py-1.5 text-xs font-medium text-foreground shadow-sm">
+              <LayoutList className="h-3.5 w-3.5" />
+              Lista
+            </span>
+          </div>
         </div>
 
-        {/* Tabs */}
-        <div className="flex gap-1 rounded-xl border border-border bg-muted/40 p-1">
-          {(["miembros", "sesiones"] as const).map((t) => (
-            <button
-              key={t}
-              onClick={() => setTab(t)}
-              className={cn(
-                "flex-1 rounded-lg px-3 py-2 text-sm font-medium capitalize transition-colors",
-                tab === t ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+        {/* Carpetas / categorías */}
+        <section className="space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold text-foreground">
+              Categorías
+              {(categorias?.length ?? 0) > 0 && (
+                <span className="ml-1.5 font-normal text-muted-foreground">
+                  {categorias!.length}
+                </span>
               )}
-            >
-              {t === "miembros" ? "Miembros" : "Sesiones"}
-            </button>
-          ))}
-        </div>
+            </h2>
+          </div>
 
-        {tab === "miembros" ? (
-          miembros === undefined ? (
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {[...Array(3)].map((_, i) => <Skeleton key={i} className="h-44 rounded-2xl" />)}
-            </div>
-          ) : miembros.length === 0 ? (
-            <EmptyState
-              icon={Users2}
-              title="Sin miembros"
-              description="Registra a los integrantes del consejo administrativo."
-              action={<Button size="sm" onClick={() => setMiembroForm(true)}><Plus className="h-4 w-4" />Nuevo miembro</Button>}
-            />
-          ) : (
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {sorted.map((m) => (
-                <MiembroCard key={m._id} m={m} onDelete={() => setDeleteMiembro(m._id)} />
+          {loading ? (
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <Skeleton key={i} className="h-28 rounded-2xl" />
               ))}
             </div>
-          )
-        ) : (
-          sesiones === undefined ? (
-            <div className="space-y-3">{[...Array(3)].map((_, i) => <Skeleton key={i} className="h-28 rounded-2xl" />)}</div>
-          ) : sesiones.length === 0 ? (
+          ) : (
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+              <button
+                type="button"
+                onClick={() => setCategoriaFiltro("")}
+                className={cn(
+                  "flex flex-col gap-3 rounded-2xl border p-4 text-left transition-colors",
+                  !categoriaFiltro
+                    ? "border-brand/35 bg-brand/[0.06]"
+                    : "border-border bg-card hover:bg-accent/40",
+                )}
+              >
+                <span className="grid h-11 w-11 place-items-center rounded-xl bg-muted text-muted-foreground">
+                  <Folder className="h-5 w-5" />
+                </span>
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium text-foreground">
+                    Todas
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {totalDocs} archivo{totalDocs === 1 ? "" : "s"}
+                  </p>
+                </div>
+              </button>
+
+              {(categorias ?? []).map((c, i) => (
+                <div
+                  key={c._id}
+                  className={cn(
+                    "group relative flex flex-col gap-3 rounded-2xl border p-4 text-left transition-colors",
+                    categoriaFiltro === c._id
+                      ? "border-brand/35 bg-brand/[0.06]"
+                      : "border-border bg-card hover:bg-accent/40",
+                  )}
+                >
+                  <button
+                    type="button"
+                    onClick={() => setCategoriaFiltro(c._id)}
+                    className="absolute inset-0 rounded-2xl"
+                    aria-label={`Abrir ${c.nombre}`}
+                  />
+                  <span
+                    className={cn(
+                      "relative z-[1] grid h-11 w-11 place-items-center rounded-xl",
+                      FOLDER_COLORS[i % FOLDER_COLORS.length],
+                    )}
+                  >
+                    <Folder className="h-5 w-5" />
+                  </span>
+                  <div className="relative z-[1] min-w-0">
+                    <p className="truncate text-sm font-medium text-foreground">
+                      {c.nombre}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {c.documentosCount} archivo
+                      {c.documentosCount === 1 ? "" : "s"}
+                    </p>
+                  </div>
+                  {permisos?.canManageCategorias && (
+                    <div className="relative z-[2] flex gap-0.5 opacity-100 sm:opacity-0 sm:group-hover:opacity-100">
+                      <button
+                        type="button"
+                        className="rounded-lg p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+                        aria-label="Editar categoría"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setCatModal({
+                            mode: "edit",
+                            id: c._id,
+                            nombre: c.nombre,
+                          });
+                        }}
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded-lg p-1.5 text-muted-foreground hover:bg-accent hover:text-destructive"
+                        aria-label="Eliminar categoría"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const msg =
+                            c.documentosCount > 0
+                              ? `¿Eliminar «${c.nombre}» y sus ${c.documentosCount} documento(s)? No se puede deshacer.`
+                              : `¿Eliminar la categoría «${c.nombre}»?`;
+                          if (!confirm(msg)) return;
+                          void removeCategoria({
+                            id: c._id,
+                            force: c.documentosCount > 0,
+                          }).then(() => {
+                            if (categoriaFiltro === c._id) setCategoriaFiltro("");
+                          });
+                        }}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+
+              {permisos?.canManageCategorias && (
+                <button
+                  type="button"
+                  onClick={() => setCatModal({ mode: "create" })}
+                  className="flex flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-border bg-transparent p-4 text-muted-foreground transition-colors hover:border-brand/40 hover:bg-brand/[0.03] hover:text-foreground"
+                >
+                  <span className="grid h-11 w-11 place-items-center rounded-xl border border-dashed border-border">
+                    <FolderPlus className="h-5 w-5" />
+                  </span>
+                  <p className="text-sm font-medium">Nueva categoría</p>
+                </button>
+              )}
+            </div>
+          )}
+        </section>
+
+        {/* Tabla de archivos */}
+        <section className="space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold text-foreground">
+              {folderLabel}
+              <span className="ml-1.5 font-normal text-muted-foreground">
+                {filtered.length}
+              </span>
+            </h2>
+            {permisos?.canUpload && (
+              <Button size="sm" onClick={() => setUploadOpen(true)}>
+                <Plus className="h-4 w-4" />
+                Subir documento
+              </Button>
+            )}
+          </div>
+
+          {loading ? (
+            <Skeleton className="h-56 rounded-2xl" />
+          ) : filtered.length === 0 ? (
             <EmptyState
-              icon={CalendarClock}
-              title="Sin sesiones"
-              description="Registra las actas de las reuniones del consejo."
-              action={<Button size="sm" onClick={() => setSesionForm(true)}><Plus className="h-4 w-4" />Nueva sesión</Button>}
+              icon={FileText}
+              title="Sin documentos"
+              description={
+                q.trim()
+                  ? "Ningún archivo coincide con la búsqueda."
+                  : "Sube el primer documento del consejo para que la junta lo revise y comente."
+              }
+              action={
+                permisos?.canUpload && !q.trim() ? (
+                  <Button size="sm" onClick={() => setUploadOpen(true)}>
+                    <Upload className="h-4 w-4" />
+                    Subir documento
+                  </Button>
+                ) : undefined
+              }
             />
           ) : (
-            <div className="space-y-3">
-              {sesiones.map((s) => (
-                <SesionCard key={s._id} s={s} onDelete={() => setDeleteSesion(s._id)} />
-              ))}
-            </div>
-          )
-        )}
+            <TableCard>
+              <Table>
+                <THead>
+                  <TR>
+                    <TH>Archivo</TH>
+                    <TH>Fecha</TH>
+                    <TH>Subido por</TH>
+                    <TH>Tamaño</TH>
+                    <TH>Estado</TH>
+                    <TH className="text-right">Acciones</TH>
+                  </TR>
+                </THead>
+                <TBody>
+                  {filtered.map((d) => {
+                    const est =
+                      ESTADO_META[d.estado as Estado] ?? ESTADO_META.pendiente;
+                    return (
+                      <TR
+                        key={d._id}
+                        className="cursor-pointer"
+                        onClick={() => setDetalleId(d._id)}
+                      >
+                        <TD>
+                          <div className="flex items-center gap-3">
+                            <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-brand/10 text-brand">
+                              <FileText className="h-4 w-4" />
+                            </span>
+                            <CellStack
+                              primary={d.titulo}
+                              secondary={`${d.categoriaNombre} · v${d.version}${
+                                d.comentariosCount > 0
+                                  ? ` · ${d.comentariosCount} coment.`
+                                  : ""
+                              }`}
+                            />
+                          </div>
+                        </TD>
+                        <TD>
+                          <span className="whitespace-nowrap text-muted-foreground">
+                            {fmtDate(d.createdAt)}
+                          </span>
+                        </TD>
+                        <TD>
+                          <div className="flex items-center gap-2">
+                            <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-muted text-[10px] font-semibold text-muted-foreground">
+                              {initials(d.createdByNombre ?? "?")}
+                            </span>
+                            <span className="truncate text-foreground">
+                              {d.createdByNombre ?? "—"}
+                            </span>
+                          </div>
+                        </TD>
+                        <TD>
+                          <span className="tabular-nums text-muted-foreground">
+                            {formatSize(d.sizeBytes)}
+                          </span>
+                        </TD>
+                        <TD>
+                          <Badge tone={est.tone}>{est.label}</Badge>
+                        </TD>
+                        <TD>
+                          <div
+                            className="flex items-center justify-end gap-0.5"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <a
+                              href={d.fileUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                              aria-label="Abrir"
+                            >
+                              <ExternalLink className="h-4 w-4" />
+                            </a>
+                            <a
+                              href={d.fileUrl}
+                              download={d.fileName}
+                              className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                              aria-label="Descargar"
+                            >
+                              <Download className="h-4 w-4" />
+                            </a>
+                            {d.comentariosCount > 0 && (
+                              <span className="inline-flex items-center gap-1 px-1.5 text-xs text-muted-foreground">
+                                <MessageSquare className="h-3.5 w-3.5" />
+                                {d.comentariosCount}
+                              </span>
+                            )}
+                          </div>
+                        </TD>
+                      </TR>
+                    );
+                  })}
+                </TBody>
+              </Table>
+            </TableCard>
+          )}
+        </section>
       </div>
 
-      {miembroForm && <MiembroForm condominioId={condominioId} onClose={() => setMiembroForm(false)} />}
-      {sesionForm && <SesionForm condominioId={condominioId} onClose={() => setSesionForm(false)} />}
-      {deleteMiembro && <DeleteMiembroDialog id={deleteMiembro} onClose={() => setDeleteMiembro(null)} />}
-      {deleteSesion && <DeleteSesionDialog id={deleteSesion} onClose={() => setDeleteSesion(null)} />}
+      {catModal && (
+        <CategoriaModal
+          condominioId={condominioId}
+          mode={catModal.mode}
+          editId={catModal.mode === "edit" ? catModal.id : undefined}
+          initialNombre={catModal.mode === "edit" ? catModal.nombre : ""}
+          onClose={() => setCatModal(null)}
+        />
+      )}
+      {uploadOpen && (
+        <SubirDocumentoModal
+          condominioId={condominioId}
+          categorias={categorias ?? []}
+          defaultCategoriaId={categoriaFiltro || undefined}
+          onClose={() => setUploadOpen(false)}
+        />
+      )}
+      {detalleId && (
+        <DocumentoDetalleModal
+          id={detalleId}
+          categorias={categorias ?? []}
+          canUpload={Boolean(permisos?.canUpload)}
+          canComment={Boolean(permisos?.canComment)}
+          canAdmin={Boolean(permisos?.canManageCategorias)}
+          onClose={() => setDetalleId(null)}
+        />
+      )}
+      {miembrosOpen && (
+        <MiembrosModal
+          condominioId={condominioId}
+          canAdmin={Boolean(permisos?.canManageCategorias)}
+          onClose={() => setMiembrosOpen(false)}
+        />
+      )}
     </PageContainer>
   );
 }
 
-function MiembroCard({
-  m,
-  onDelete,
+function CategoriaModal({
+  condominioId,
+  mode,
+  editId,
+  initialNombre,
+  onClose,
 }: {
-  m: {
-    _id: Id<"consejoMiembros">;
-    nombre: string; cargo: Cargo; activo: boolean;
-    unidadNumero?: string; telefono?: string; email?: string;
-    periodoInicio?: string; periodoFin?: string;
-  };
-  onDelete: () => void;
+  condominioId: Id<"condominios">;
+  mode: "create" | "edit";
+  editId?: Id<"consejoCategorias">;
+  initialNombre: string;
+  onClose: () => void;
 }) {
-  const toggle = useMutation(api.consejo.toggleMiembro);
-  const meta = CARGO_META[m.cargo];
+  const create = useMutation(api.consejo.createCategoria);
+  const update = useMutation(api.consejo.updateCategoria);
+  const [nombre, setNombre] = useState(initialNombre);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function save() {
+    if (!nombre.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      if (mode === "edit" && editId) {
+        await update({ id: editId, nombre });
+      } else {
+        await create({ condominioId, nombre });
+      }
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error al guardar.");
+      setBusy(false);
+    }
+  }
 
   return (
-    <Card className={cn("group flex flex-col p-5", !m.activo && "opacity-60")}>
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <div className={cn(
-            "flex h-11 w-11 items-center justify-center rounded-full text-sm font-semibold",
-            meta.tone === "brand" && "bg-brand/15 text-brand",
-            meta.tone === "primary" && "bg-primary/10 text-primary",
-            meta.tone === "info" && "bg-sky-500/10 text-sky-600 dark:text-sky-400",
-            meta.tone === "success" && "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
-            meta.tone === "warning" && "bg-amber-500/10 text-amber-600 dark:text-amber-400",
-            meta.tone === "neutral" && "bg-muted text-muted-foreground",
-          )}>
-            {initials(m.nombre)}
-          </div>
-          <div className="min-w-0">
-            <p className="truncate font-semibold text-foreground">{m.nombre}</p>
-            <Badge tone={meta.tone} className="mt-0.5">{m.cargo === "presidente" && <Crown className="h-3 w-3" />}{meta.label}</Badge>
-          </div>
-        </div>
-        <button
-          onClick={onDelete}
-          aria-label="Eliminar miembro"
-          className="shrink-0 rounded-lg p-1.5 text-muted-foreground opacity-0 transition-all group-hover:opacity-100 hover:bg-red-500/10 hover:text-red-600 dark:hover:text-red-400"
-        >
-          <Trash2 className="h-4 w-4" />
-        </button>
+    <Modal
+      open
+      onClose={onClose}
+      title={mode === "edit" ? "Editar categoría" : "Nueva categoría"}
+      description="Organiza los documentos del consejo (ej. Contabilidad, Estrategias)."
+      footer={
+        <>
+          <Button variant="ghost" size="sm" onClick={onClose} disabled={busy}>
+            Cancelar
+          </Button>
+          <Button size="sm" onClick={save} disabled={!nombre.trim() || busy}>
+            {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+            {mode === "edit" ? "Guardar" : "Crear"}
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-3">
+        <Input
+          value={nombre}
+          onChange={(e) => setNombre(e.target.value)}
+          placeholder="Nombre de la categoría"
+          autoFocus
+        />
+        {error && <p className="text-sm text-destructive">{error}</p>}
       </div>
-
-      <div className="mt-3 flex-1 space-y-1.5 text-sm text-muted-foreground">
-        {m.unidadNumero && (
-          <div className="flex items-center gap-2"><Home className="h-3.5 w-3.5 shrink-0" />Unidad {m.unidadNumero}</div>
-        )}
-        {m.telefono && (
-          <div className="flex items-center gap-2"><Phone className="h-3.5 w-3.5 shrink-0" />{m.telefono}</div>
-        )}
-        {m.email && (
-          <div className="flex items-center gap-2"><Mail className="h-3.5 w-3.5 shrink-0" /><span className="truncate">{m.email}</span></div>
-        )}
-        {(m.periodoInicio || m.periodoFin) && (
-          <div className="flex items-center gap-2">
-            <CalendarClock className="h-3.5 w-3.5 shrink-0" />
-            {m.periodoInicio ?? "—"} → {m.periodoFin ?? "—"}
-          </div>
-        )}
-      </div>
-
-      <div className="mt-3 border-t border-border pt-3">
-        <button
-          onClick={() => toggle({ id: m._id })}
-          className={cn(
-            "flex items-center gap-1.5 text-xs font-medium transition-colors",
-            m.activo ? "text-muted-foreground hover:text-red-600" : "text-emerald-600 hover:text-emerald-700",
-          )}
-        >
-          <Power className="h-3.5 w-3.5" />
-          {m.activo ? "Desactivar" : "Reactivar"}
-        </button>
-      </div>
-    </Card>
+    </Modal>
   );
 }
 
-function SesionCard({
-  s,
-  onDelete,
+function SubirDocumentoModal({
+  condominioId,
+  categorias,
+  defaultCategoriaId,
+  onClose,
 }: {
-  s: {
-    _id: Id<"consejoSesiones">;
-    titulo: string; tipo: TipoSesion; fecha: string;
-    asistentes?: number; temas?: string; acuerdos?: string;
-  };
-  onDelete: () => void;
+  condominioId: Id<"condominios">;
+  categorias: { _id: Id<"consejoCategorias">; nombre: string }[];
+  defaultCategoriaId?: Id<"consejoCategorias">;
+  onClose: () => void;
 }) {
+  const create = useMutation(api.consejo.createDocumento);
+  const generateUploadUrl = useAction(api.files.generateUploadUrl);
+  const [categoriaId, setCategoriaId] = useState(
+    defaultCategoriaId ?? categorias[0]?._id ?? "",
+  );
+  const [titulo, setTitulo] = useState("");
+  const [descripcion, setDescripcion] = useState("");
+  const [periodoMes, setPeriodoMes] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const valid = Boolean(categoriaId && titulo.trim() && file);
+
+  async function save() {
+    if (!file || !valid) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const { url, key } = await uploadToS3(
+        generateUploadUrl,
+        file,
+        `condominios/${condominioId}/consejo`,
+      );
+      await create({
+        condominioId,
+        categoriaId: categoriaId as Id<"consejoCategorias">,
+        titulo,
+        descripcion: descripcion || undefined,
+        periodoMes: periodoMes || undefined,
+        fileUrl: url,
+        fileName: file.name,
+        mimeType: file.type || "application/octet-stream",
+        sizeBytes: file.size,
+        s3Key: key,
+      });
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error al subir.");
+      setBusy(false);
+    }
+  }
+
   return (
-    <Card className="group p-5">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          <div className="mb-1.5 flex flex-wrap items-center gap-2">
-            <Badge tone={s.tipo === "extraordinaria" ? "violet" : "neutral"}>
-              {s.tipo === "extraordinaria" ? "Extraordinaria" : "Ordinaria"}
+    <Modal
+      open
+      onClose={() => !busy && onClose()}
+      title="Subir documento"
+      description="El documento queda pendiente para revisión de la junta."
+      className="max-w-lg"
+      footer={
+        <>
+          <Button variant="ghost" size="sm" onClick={onClose} disabled={busy}>
+            Cancelar
+          </Button>
+          <Button size="sm" onClick={save} disabled={!valid || busy}>
+            {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+            Subir
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-3">
+        <div className="space-y-1.5">
+          <label className="text-xs font-medium">Categoría</label>
+          <Select
+            value={categoriaId}
+            onChange={(e) => setCategoriaId(e.target.value)}
+          >
+            {categorias.length === 0 && (
+              <option value="">Crea una categoría primero</option>
+            )}
+            {categorias.map((c) => (
+              <option key={c._id} value={c._id}>
+                {c.nombre}
+              </option>
+            ))}
+          </Select>
+        </div>
+        <div className="space-y-1.5">
+          <label className="text-xs font-medium">Título</label>
+          <Input
+            value={titulo}
+            onChange={(e) => setTitulo(e.target.value)}
+            placeholder="Ej: Informe mes de abril 2026"
+          />
+        </div>
+        <div className="space-y-1.5">
+          <label className="text-xs font-medium">Descripción (opcional)</label>
+          <Textarea
+            value={descripcion}
+            onChange={(e) => setDescripcion(e.target.value)}
+            rows={2}
+          />
+        </div>
+        <div className="space-y-1.5">
+          <label className="text-xs font-medium">Período (opcional)</label>
+          <Input
+            type="month"
+            value={periodoMes}
+            onChange={(e) => setPeriodoMes(e.target.value)}
+          />
+        </div>
+        <div className="space-y-1.5">
+          <label className="text-xs font-medium">Archivo</label>
+          <input
+            type="file"
+            className="block w-full text-sm text-muted-foreground file:mr-3 file:rounded-full file:border-0 file:bg-brand/10 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-brand"
+            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+          />
+          {file && (
+            <p className="text-xs text-muted-foreground">
+              {file.name} · {formatSize(file.size)}
+            </p>
+          )}
+        </div>
+        {error && <p className="text-sm text-destructive">{error}</p>}
+      </div>
+    </Modal>
+  );
+}
+
+function DocumentoDetalleModal({
+  id,
+  categorias,
+  canUpload,
+  canComment,
+  canAdmin,
+  onClose,
+}: {
+  id: Id<"consejoDocumentos">;
+  categorias: { _id: Id<"consejoCategorias">; nombre: string }[];
+  canUpload: boolean;
+  canComment: boolean;
+  canAdmin: boolean;
+  onClose: () => void;
+}) {
+  const doc = useQuery(api.consejo.getDocumento, { id });
+  const addComentario = useMutation(api.consejo.addComentario);
+  const setEstado = useMutation(api.consejo.setEstadoDocumento);
+  const updateDoc = useMutation(api.consejo.updateDocumento);
+  const nuevaVersion = useMutation(api.consejo.nuevaVersion);
+  const remove = useMutation(api.consejo.removeDocumento);
+  const generateUploadUrl = useAction(api.files.generateUploadUrl);
+
+  const [comentario, setComentario] = useState("");
+  const [editing, setEditing] = useState(false);
+  const [titulo, setTitulo] = useState("");
+  const [descripcion, setDescripcion] = useState("");
+  const [periodoMes, setPeriodoMes] = useState("");
+  const [categoriaId, setCategoriaId] = useState("");
+  const [notaVersion, setNotaVersion] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  function startEdit() {
+    if (!doc) return;
+    setTitulo(doc.titulo);
+    setDescripcion(doc.descripcion ?? "");
+    setPeriodoMes(doc.periodoMes ?? "");
+    setCategoriaId(doc.categoriaId);
+    setEditing(true);
+    setError(null);
+  }
+
+  async function guardarMeta() {
+    if (!titulo.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await updateDoc({
+        id,
+        titulo,
+        descripcion,
+        periodoMes,
+        categoriaId: categoriaId as Id<"consejoCategorias">,
+      });
+      setEditing(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudo guardar.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function enviarComentario() {
+    if (!comentario.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await addComentario({ documentoId: id, contenido: comentario });
+      setComentario("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudo comentar.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onNuevaVersion(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file || !doc) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const { url, key } = await uploadToS3(
+        generateUploadUrl,
+        file,
+        `condominios/${doc.condominioId}/consejo`,
+      );
+      await nuevaVersion({
+        id,
+        fileUrl: url,
+        fileName: file.name,
+        mimeType: file.type || "application/octet-stream",
+        sizeBytes: file.size,
+        s3Key: key,
+        nota: notaVersion.trim() || undefined,
+      });
+      setNotaVersion("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Error al versionar.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={doc?.titulo ?? "Documento"}
+      description={
+        doc
+          ? `${doc.categoriaNombre} · versión actual v${doc.version} · ${formatSize(doc.sizeBytes)}`
+          : "Cargando…"
+      }
+      className="max-w-2xl"
+      footer={
+        <Button variant="ghost" size="sm" onClick={onClose}>
+          Cerrar
+        </Button>
+      }
+    >
+      {!doc ? (
+        <div className="flex justify-center py-10">
+          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+        </div>
+      ) : (
+        <div className="space-y-5">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge tone={ESTADO_META[doc.estado as Estado]?.tone ?? "neutral"}>
+              {ESTADO_META[doc.estado as Estado]?.label ?? doc.estado}
             </Badge>
-            <span className="text-xs capitalize text-muted-foreground">{fmtFecha(s.fecha)}</span>
-            {s.asistentes != null && (
-              <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-                <Users2 className="h-3 w-3" />{s.asistentes} asistentes
-              </span>
+            <Badge tone="neutral">v{doc.version}</Badge>
+            <a
+              href={doc.fileUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-sm font-medium text-brand hover:underline"
+            >
+              Ver archivo actual <ExternalLink className="h-3.5 w-3.5" />
+            </a>
+            {canUpload && (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={busy}
+                onClick={startEdit}
+              >
+                <Pencil className="h-3.5 w-3.5" />
+                Editar datos
+              </Button>
+            )}
+            {canAdmin && (
+              <Select
+                value={doc.estado}
+                onChange={(e) =>
+                  void setEstado({
+                    id,
+                    estado: e.target.value as Estado,
+                  })
+                }
+                className="w-36"
+              >
+                <option value="pendiente">Pendiente</option>
+                <option value="en_revision">En revisión</option>
+                <option value="aprobado">Aprobado</option>
+                <option value="reemplazado">Reemplazado</option>
+              </Select>
+            )}
+            {(canAdmin || canUpload) && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-destructive"
+                onClick={() => {
+                  if (
+                    confirm(
+                      "¿Eliminar este documento y todas sus versiones?",
+                    )
+                  ) {
+                    void remove({ id }).then(onClose);
+                  }
+                }}
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
             )}
           </div>
-          <h3 className="font-semibold text-foreground">{s.titulo}</h3>
-        </div>
-        <button
-          onClick={onDelete}
-          aria-label="Eliminar sesión"
-          className="shrink-0 rounded-lg p-1.5 text-muted-foreground opacity-0 transition-all group-hover:opacity-100 hover:bg-red-500/10 hover:text-red-600 dark:hover:text-red-400"
-        >
-          <Trash2 className="h-4 w-4" />
-        </button>
-      </div>
 
-      {(s.temas || s.acuerdos) && (
-        <div className="mt-3 grid gap-3 sm:grid-cols-2">
-          {s.temas && (
-            <div className="rounded-xl bg-muted/50 p-3">
-              <p className="mb-1 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                <FileText className="h-3.5 w-3.5" />Temas tratados
+          {editing ? (
+            <div className="space-y-3 rounded-xl border border-border bg-muted/30 p-3">
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium">Título</label>
+                <Input
+                  value={titulo}
+                  onChange={(e) => setTitulo(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium">Categoría</label>
+                <Select
+                  value={categoriaId}
+                  onChange={(e) => setCategoriaId(e.target.value)}
+                >
+                  {categorias.map((c) => (
+                    <option key={c._id} value={c._id}>
+                      {c.nombre}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium">Descripción</label>
+                <Textarea
+                  value={descripcion}
+                  onChange={(e) => setDescripcion(e.target.value)}
+                  rows={2}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium">Período</label>
+                <Input
+                  type="month"
+                  value={periodoMes}
+                  onChange={(e) => setPeriodoMes(e.target.value)}
+                />
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => setEditing(false)}
+                >
+                  Cancelar
+                </Button>
+                <Button
+                  size="sm"
+                  disabled={busy || !titulo.trim()}
+                  onClick={guardarMeta}
+                >
+                  {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+                  Guardar
+                </Button>
+              </div>
+            </div>
+          ) : (
+            doc.descripcion && (
+              <p className="text-sm whitespace-pre-wrap text-muted-foreground">
+                {doc.descripcion}
               </p>
-              <p className="whitespace-pre-line text-sm text-foreground">{s.temas}</p>
+            )
+          )}
+
+          {canUpload && (
+            <div className="space-y-2 rounded-xl border border-dashed border-border p-3">
+              <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                <Upload className="h-3.5 w-3.5" />
+                Actualizar archivo → v{doc.version + 1}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                La versión actual (v{doc.version}) se archiva y el nuevo archivo
+                pasa a ser la vigente.
+              </p>
+              <Input
+                value={notaVersion}
+                onChange={(e) => setNotaVersion(e.target.value)}
+                placeholder="Nota de cambios (opcional)"
+              />
+              <input
+                ref={fileRef}
+                type="file"
+                className="hidden"
+                onChange={onNuevaVersion}
+              />
+              <Button
+                size="sm"
+                disabled={busy}
+                onClick={() => fileRef.current?.click()}
+              >
+                {busy ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Upload className="h-4 w-4" />
+                )}
+                Subir nueva versión
+              </Button>
             </div>
           )}
-          {s.acuerdos && (
-            <div className="rounded-xl bg-emerald-500/5 p-3">
-              <p className="mb-1 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-emerald-600 dark:text-emerald-400">
-                <FileText className="h-3.5 w-3.5" />Acuerdos
-              </p>
-              <p className="whitespace-pre-line text-sm text-foreground">{s.acuerdos}</p>
+
+          <div>
+            <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              <History className="h-3.5 w-3.5" />
+              Historial de versiones
+            </p>
+            <ul className="space-y-1.5 text-xs">
+              <li className="flex items-center justify-between gap-2 rounded-lg border border-brand/25 bg-brand/[0.04] px-3 py-2">
+                <span className="text-foreground">
+                  <span className="font-semibold">v{doc.version}</span>
+                  {" · "}
+                  {doc.fileName}
+                  {" · "}
+                  {fmtDate(doc.updatedAt)}
+                  <span className="ml-1.5 text-brand">(actual)</span>
+                </span>
+                <a
+                  href={doc.fileUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="font-medium text-brand hover:underline"
+                >
+                  Abrir
+                </a>
+              </li>
+              {doc.versiones.map((v) => (
+                <li
+                  key={v._id}
+                  className="flex items-center justify-between gap-2 rounded-lg border border-border px-3 py-2 text-muted-foreground"
+                >
+                  <span>
+                    <span className="font-medium text-foreground">
+                      v{v.version}
+                    </span>
+                    {" · "}
+                    {v.fileName}
+                    {" · "}
+                    {fmtDate(v.createdAt)}
+                    {v.subidoPorNombre ? ` · ${v.subidoPorNombre}` : ""}
+                  </span>
+                  <a
+                    href={v.fileUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-brand hover:underline"
+                  >
+                    Abrir
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          <div>
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              Comentarios ({doc.comentarios.length})
+            </p>
+            <div className="mb-3 max-h-56 space-y-2 overflow-y-auto">
+              {doc.comentarios.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  Aún no hay comentarios.
+                </p>
+              ) : (
+                doc.comentarios.map((c) => (
+                  <div
+                    key={c._id}
+                    className="rounded-lg border border-border bg-muted/40 px-3 py-2"
+                  >
+                    <p className="text-xs font-medium text-foreground">
+                      {c.autorNombre}{" "}
+                      <span className="font-normal text-muted-foreground">
+                        · {fmtDate(c.createdAt)}
+                      </span>
+                    </p>
+                    <p className="mt-0.5 text-sm text-foreground">{c.contenido}</p>
+                  </div>
+                ))
+              )}
             </div>
-          )}
+            {canComment && (
+              <div className="flex gap-2">
+                <Textarea
+                  value={comentario}
+                  onChange={(e) => setComentario(e.target.value)}
+                  placeholder="Escribe un comentario…"
+                  rows={2}
+                  className="flex-1"
+                />
+                <Button
+                  size="sm"
+                  disabled={busy || !comentario.trim()}
+                  onClick={enviarComentario}
+                >
+                  Enviar
+                </Button>
+              </div>
+            )}
+          </div>
+          {error && <p className="text-sm text-destructive">{error}</p>}
         </div>
       )}
-    </Card>
+    </Modal>
   );
 }
 
-function MiembroForm({ condominioId, onClose }: { condominioId: Id<"condominios">; onClose: () => void }) {
+function MiembrosModal({
+  condominioId,
+  canAdmin,
+  onClose,
+}: {
+  condominioId: Id<"condominios">;
+  canAdmin: boolean;
+  onClose: () => void;
+}) {
+  const miembros = useQuery(api.consejo.listMiembros, { condominioId });
   const create = useMutation(api.consejo.createMiembro);
-  const [nombre, setNombre] = useState("");
-  const [cargo, setCargo] = useState<Cargo>("vocal");
-  const [unidadNumero, setUnidadNumero] = useState("");
-  const [telefono, setTelefono] = useState("");
-  const [email, setEmail] = useState("");
-  const [periodoInicio, setPeriodoInicio] = useState("");
-  const [periodoFin, setPeriodoFin] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const valid = nombre.trim().length > 0;
-
-  async function save() {
-    if (!valid) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await create({
-        condominioId, nombre, cargo,
-        unidadNumero: unidadNumero || undefined,
-        telefono: telefono || undefined,
-        email: email || undefined,
-        periodoInicio: periodoInicio || undefined,
-        periodoFin: periodoFin || undefined,
-      });
-      onClose();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Error al guardar.");
-      setBusy(false);
-    }
-  }
-
-  return (
-    <Modal
-      open onClose={onClose} title="Nuevo miembro del consejo"
-      footer={
-        <>
-          <Button variant="ghost" size="sm" onClick={onClose} disabled={busy}>Cancelar</Button>
-          <Button size="sm" onClick={save} disabled={!valid || busy}>
-            {busy && <Loader2 className="h-4 w-4 animate-spin" />}Guardar
-          </Button>
-        </>
-      }
-    >
-      <div className="space-y-4">
-        <div className="grid grid-cols-2 gap-3">
-          <div className="col-span-2 space-y-1.5">
-            <label className="block text-xs font-medium text-foreground">Nombre completo</label>
-            <Input value={nombre} onChange={(e) => setNombre(e.target.value)} placeholder="Nombre y apellido" />
-          </div>
-          <div className="space-y-1.5">
-            <label className="block text-xs font-medium text-foreground">Cargo</label>
-            <Select value={cargo} onChange={(e) => setCargo(e.target.value as Cargo)}>
-              {(Object.keys(CARGO_META) as Cargo[]).sort((a, b) => CARGO_META[a].rank - CARGO_META[b].rank).map((c) => (
-                <option key={c} value={c}>{CARGO_META[c].label}</option>
-              ))}
-            </Select>
-          </div>
-          <div className="space-y-1.5">
-            <label className="block text-xs font-medium text-foreground">Unidad <span className="text-muted-foreground">(opc.)</span></label>
-            <Input value={unidadNumero} onChange={(e) => setUnidadNumero(e.target.value)} placeholder="Ej. 401" />
-          </div>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div className="space-y-1.5">
-            <label className="block text-xs font-medium text-foreground">Teléfono <span className="text-muted-foreground">(opc.)</span></label>
-            <Input value={telefono} onChange={(e) => setTelefono(e.target.value)} placeholder="300 000 0000" />
-          </div>
-          <div className="space-y-1.5">
-            <label className="block text-xs font-medium text-foreground">Email <span className="text-muted-foreground">(opc.)</span></label>
-            <Input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="correo@ejemplo.com" />
-          </div>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div className="space-y-1.5">
-            <label className="block text-xs font-medium text-foreground">Periodo inicio <span className="text-muted-foreground">(opc.)</span></label>
-            <Input type="date" value={periodoInicio} onChange={(e) => setPeriodoInicio(e.target.value)} />
-          </div>
-          <div className="space-y-1.5">
-            <label className="block text-xs font-medium text-foreground">Periodo fin <span className="text-muted-foreground">(opc.)</span></label>
-            <Input type="date" value={periodoFin} onChange={(e) => setPeriodoFin(e.target.value)} />
-          </div>
-        </div>
-        {error && <p className="text-sm text-destructive">{error}</p>}
-      </div>
-    </Modal>
-  );
-}
-
-function SesionForm({ condominioId, onClose }: { condominioId: Id<"condominios">; onClose: () => void }) {
-  const create = useMutation(api.consejo.createSesion);
-  const [titulo, setTitulo] = useState("");
-  const [tipo, setTipo] = useState<TipoSesion>("ordinaria");
-  const [fecha, setFecha] = useState("");
-  const [asistentes, setAsistentes] = useState("");
-  const [temas, setTemas] = useState("");
-  const [acuerdos, setAcuerdos] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const valid = titulo.trim().length > 0 && fecha.length > 0;
-
-  async function save() {
-    if (!valid) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await create({
-        condominioId, titulo, tipo, fecha,
-        asistentes: asistentes ? Number(asistentes) : undefined,
-        temas: temas || undefined,
-        acuerdos: acuerdos || undefined,
-      });
-      onClose();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Error al guardar.");
-      setBusy(false);
-    }
-  }
-
-  return (
-    <Modal
-      open onClose={onClose} title="Nueva sesión del consejo" description="Registra el acta de la reunión"
-      footer={
-        <>
-          <Button variant="ghost" size="sm" onClick={onClose} disabled={busy}>Cancelar</Button>
-          <Button size="sm" onClick={save} disabled={!valid || busy}>
-            {busy && <Loader2 className="h-4 w-4 animate-spin" />}Guardar
-          </Button>
-        </>
-      }
-    >
-      <div className="space-y-4">
-        <div className="space-y-1.5">
-          <label className="block text-xs font-medium text-foreground">Título</label>
-          <Input value={titulo} onChange={(e) => setTitulo(e.target.value)} placeholder="Ej. Sesión de marzo" />
-        </div>
-        <div className="grid grid-cols-3 gap-3">
-          <div className="space-y-1.5">
-            <label className="block text-xs font-medium text-foreground">Tipo</label>
-            <Select value={tipo} onChange={(e) => setTipo(e.target.value as TipoSesion)}>
-              <option value="ordinaria">Ordinaria</option>
-              <option value="extraordinaria">Extraordinaria</option>
-            </Select>
-          </div>
-          <div className="space-y-1.5">
-            <label className="block text-xs font-medium text-foreground">Fecha</label>
-            <Input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} />
-          </div>
-          <div className="space-y-1.5">
-            <label className="block text-xs font-medium text-foreground">Asistentes</label>
-            <Input type="number" min={0} value={asistentes} onChange={(e) => setAsistentes(e.target.value)} placeholder="0" />
-          </div>
-        </div>
-        <div className="space-y-1.5">
-          <label className="block text-xs font-medium text-foreground">Temas tratados <span className="text-muted-foreground">(opcional)</span></label>
-          <Textarea value={temas} onChange={(e) => setTemas(e.target.value)} rows={3} placeholder="Puntos discutidos…" />
-        </div>
-        <div className="space-y-1.5">
-          <label className="block text-xs font-medium text-foreground">Acuerdos <span className="text-muted-foreground">(opcional)</span></label>
-          <Textarea value={acuerdos} onChange={(e) => setAcuerdos(e.target.value)} rows={3} placeholder="Decisiones tomadas…" />
-        </div>
-        {error && <p className="text-sm text-destructive">{error}</p>}
-      </div>
-    </Modal>
-  );
-}
-
-function DeleteMiembroDialog({ id, onClose }: { id: Id<"consejoMiembros">; onClose: () => void }) {
   const remove = useMutation(api.consejo.removeMiembro);
+  const [nombre, setNombre] = useState("");
+  const [cargo, setCargo] = useState<
+    | "presidente"
+    | "vicepresidente"
+    | "secretario"
+    | "tesorero"
+    | "vocal"
+    | "fiscal"
+    | "suplente"
+  >("vocal");
   const [busy, setBusy] = useState(false);
-  async function confirm() {
-    setBusy(true);
-    try { await remove({ id }); onClose(); } finally { setBusy(false); }
-  }
-  return (
-    <Modal open onClose={onClose} title="Eliminar miembro" className="max-w-sm"
-      footer={
-        <>
-          <Button variant="ghost" size="sm" onClick={onClose} disabled={busy}>Cancelar</Button>
-          <Button variant="destructive" size="sm" onClick={confirm} disabled={busy}>
-            {busy && <Loader2 className="h-4 w-4 animate-spin" />}Eliminar
-          </Button>
-        </>
-      }
-    >
-      <p className="text-sm text-muted-foreground">El miembro se eliminará del consejo permanentemente.</p>
-    </Modal>
-  );
-}
 
-function DeleteSesionDialog({ id, onClose }: { id: Id<"consejoSesiones">; onClose: () => void }) {
-  const remove = useMutation(api.consejo.removeSesion);
-  const [busy, setBusy] = useState(false);
-  async function confirm() {
+  async function add() {
+    if (!nombre.trim()) return;
     setBusy(true);
-    try { await remove({ id }); onClose(); } finally { setBusy(false); }
+    try {
+      await create({ condominioId, nombre, cargo });
+      setNombre("");
+    } finally {
+      setBusy(false);
+    }
   }
+
   return (
-    <Modal open onClose={onClose} title="Eliminar sesión" className="max-w-sm"
+    <Modal
+      open
+      onClose={onClose}
+      title="Miembros del Consejo"
+      description="Catálogo de cargos del consejo de administración."
+      className="max-w-lg"
       footer={
-        <>
-          <Button variant="ghost" size="sm" onClick={onClose} disabled={busy}>Cancelar</Button>
-          <Button variant="destructive" size="sm" onClick={confirm} disabled={busy}>
-            {busy && <Loader2 className="h-4 w-4 animate-spin" />}Eliminar
-          </Button>
-        </>
+        <Button variant="ghost" size="sm" onClick={onClose}>
+          Cerrar
+        </Button>
       }
     >
-      <p className="text-sm text-muted-foreground">El acta de la sesión se eliminará permanentemente.</p>
+      <div className="space-y-4">
+        {(miembros ?? []).length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            Sin miembros registrados.
+          </p>
+        ) : (
+          <ul className="space-y-2">
+            {(miembros ?? []).map((m) => (
+              <li
+                key={m._id}
+                className="flex items-center justify-between rounded-lg border border-border px-3 py-2 text-sm"
+              >
+                <span>
+                  <span className="font-medium">{m.nombre}</span>
+                  <span className="text-muted-foreground"> · {m.cargo}</span>
+                </span>
+                {canAdmin && (
+                  <button
+                    type="button"
+                    onClick={() => void remove({ id: m._id })}
+                    className="text-muted-foreground hover:text-destructive"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+        {canAdmin && (
+          <div className="flex gap-2">
+            <Input
+              value={nombre}
+              onChange={(e) => setNombre(e.target.value)}
+              placeholder="Nombre"
+              className="flex-1"
+            />
+            <Select
+              value={cargo}
+              onChange={(e) => setCargo(e.target.value as typeof cargo)}
+              className="w-36"
+            >
+              <option value="presidente">Presidente</option>
+              <option value="vicepresidente">Vicepresidente</option>
+              <option value="secretario">Secretario</option>
+              <option value="tesorero">Tesorero</option>
+              <option value="vocal">Vocal</option>
+              <option value="fiscal">Fiscal</option>
+              <option value="suplente">Suplente</option>
+            </Select>
+            <Button size="sm" onClick={add} disabled={busy || !nombre.trim()}>
+              Agregar
+            </Button>
+          </div>
+        )}
+      </div>
     </Modal>
   );
 }

@@ -5,15 +5,27 @@ import { useQuery } from "convex/react";
 import { Building2, CheckCircle2, Users, ShieldCheck } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import { homeHrefForRoles } from "@/lib/role-routing";
+import { PageContainer } from "@/components/layout/page-container";
+import { PageHeader } from "@/components/layout/page-header";
+import { Card } from "@/components/ui/card";
+import { StatCard } from "@/components/layout/stat-card";
 
 export default function DashboardHome() {
   const me = useQuery(api.users.me);
 
   if (me === undefined) {
-    return <Page title="Inicio"><p className="text-sm text-zinc-500">Cargando…</p></Page>;
+    return (
+      <PageContainer>
+        <p className="text-sm text-muted-foreground">Cargando…</p>
+      </PageContainer>
+    );
   }
   if (me === null) {
-    return <Page title="Inicio"><p className="text-sm text-zinc-500">Configurando tu perfil…</p></Page>;
+    return (
+      <PageContainer>
+        <p className="text-sm text-muted-foreground">Configurando tu perfil…</p>
+      </PageContainer>
+    );
   }
 
   const isPlatform =
@@ -22,102 +34,61 @@ export default function DashboardHome() {
   return isPlatform ? <PlatformHome name={me.name} /> : <UserHome me={me} />;
 }
 
-function Page({
-  title,
-  children,
-}: {
-  title: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="p-6 lg:p-10">
-      <h1 className="text-2xl font-semibold text-zinc-900 mb-6">{title}</h1>
-      {children}
-    </div>
-  );
-}
-
 function PlatformHome({ name }: { name: string }) {
   const stats = useQuery(api.platform.stats);
 
   return (
-    <Page title="Panel maestro">
-      <p className="text-sm text-zinc-500 -mt-4 mb-6">
-        Hola, {name}. Vista global de la plataforma Vekino.
-      </p>
+    <PageContainer>
+      <div className="space-y-6">
+        <PageHeader
+          title="Panel maestro"
+          description={`Hola, ${name}. Vista global de la plataforma Vekino.`}
+        />
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard
-          icon={Building2}
-          label="Condominios"
-          value={stats?.condominios.total}
-        />
-        <StatCard
-          icon={CheckCircle2}
-          label="Activos"
-          value={stats?.condominios.activos}
-          accent="emerald"
-        />
-        <StatCard
-          icon={Users}
-          label="Usuarios"
-          value={stats?.usuarios.total}
-        />
-        <StatCard
-          icon={ShieldCheck}
-          label="Superadmins"
-          value={stats?.usuarios.superadmins}
-          accent="amber"
-        />
-      </div>
+        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+          <StatCard
+            icon={Building2}
+            tone="brand"
+            label="Condominios"
+            value={stats?.condominios.total ?? "—"}
+            href="/dashboard/condominios"
+          />
+          <StatCard
+            icon={CheckCircle2}
+            tone="success"
+            label="Activos"
+            value={stats?.condominios.activos ?? "—"}
+          />
+          <StatCard
+            icon={Users}
+            tone="neutral"
+            label="Usuarios"
+            value={stats?.usuarios.total ?? "—"}
+          />
+          <StatCard
+            icon={ShieldCheck}
+            tone="warning"
+            label="Superadmins"
+            value={stats?.usuarios.superadmins ?? "—"}
+          />
+        </div>
 
-      <div className="mt-8 grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <QuickLink
-          href="/dashboard/condominios"
-          icon={Building2}
-          title="Gestionar condominios"
-          desc="Crear, activar y editar conjuntos."
-        />
-        <QuickLink
-          href="/dashboard/administradores"
-          icon={Users}
-          title="Administradores"
-          desc="Roles de plataforma y usuarios."
-        />
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <QuickLink
+            href="/dashboard/condominios"
+            icon={Building2}
+            title="Gestionar condominios"
+            desc="Crear, activar y editar conjuntos."
+          />
+          <QuickLink
+            href="/dashboard/administradores"
+            icon={Users}
+            title="Administradores"
+            desc="Roles de plataforma y usuarios."
+          />
+        </div>
       </div>
-    </Page>
-  );
-}
-
-function StatCard({
-  icon: Icon,
-  label,
-  value,
-  accent,
-}: {
-  icon: React.ComponentType<{ className?: string }>;
-  label: string;
-  value: number | undefined;
-  accent?: "emerald" | "amber";
-}) {
-  const accentClass =
-    accent === "emerald"
-      ? "text-emerald-600 bg-emerald-50"
-      : accent === "amber"
-        ? "text-amber-600 bg-amber-50"
-        : "text-primary bg-primary/5";
-  return (
-    <div className="bg-white rounded-2xl ring-1 ring-zinc-100 p-5">
-      <div
-        className={`w-9 h-9 rounded-lg flex items-center justify-center ${accentClass}`}
-      >
-        <Icon className="w-4 h-4" />
-      </div>
-      <p className="text-3xl font-bold text-zinc-900 mt-3">
-        {value ?? "—"}
-      </p>
-      <p className="text-sm text-zinc-500">{label}</p>
-    </div>
+    </PageContainer>
   );
 }
 
@@ -133,19 +104,16 @@ function QuickLink({
   desc: string;
 }) {
   return (
-    <Link
-      href={href}
-      className="group bg-white rounded-2xl ring-1 ring-zinc-100 p-5 hover:ring-primary/30 hover:shadow-md transition-all"
-    >
-      <div className="flex items-center gap-3">
-        <div className="w-10 h-10 rounded-lg bg-primary/5 text-primary flex items-center justify-center group-hover:bg-primary group-hover:text-white transition-colors">
-          <Icon className="w-5 h-5" />
+    <Link href={href} className="block">
+      <Card className="flex items-center gap-3 transition-colors hover:bg-accent/40">
+        <div className="grid h-10.5 w-10.5 place-items-center rounded-[11px] bg-brand/10 text-brand">
+          <Icon className="h-4.5 w-4.5 stroke-[1.75]" />
         </div>
-        <div>
-          <p className="font-semibold text-zinc-900">{title}</p>
-          <p className="text-sm text-zinc-500">{desc}</p>
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-foreground">{title}</p>
+          <p className="text-xs text-muted-foreground">{desc}</p>
         </div>
-      </div>
+      </Card>
     </Link>
   );
 }
@@ -155,49 +123,49 @@ function UserHome({
 }: {
   me: NonNullable<ReturnType<typeof useQuery<typeof api.users.me>>>;
 }) {
-  // Un solo condominio: el shell ya redirige; aquí solo multi-condo o vacío.
   return (
-    <Page title={`Hola, ${me.name}`}>
-      <div className="bg-white rounded-2xl ring-1 ring-zinc-100 p-6 max-w-xl">
-        <p className="text-sm text-zinc-500">{me.email}</p>
-        <div className="mt-6">
-          <div className="flex items-center gap-2 text-zinc-900">
-            <Building2 className="w-4 h-4 text-primary" />
+    <PageContainer>
+      <div className="space-y-6">
+        <PageHeader title={`Hola, ${me.name}`} description={me.email} />
+        <Card className="max-w-xl">
+          <div className="flex items-center gap-2 text-foreground">
+            <Building2 className="h-4 w-4 text-brand" />
             <strong className="text-sm">
               Mis condominios ({me.memberships.length})
             </strong>
           </div>
           {me.memberships.length === 0 ? (
-            <p className="text-sm text-zinc-500 mt-3">
+            <p className="mt-3 text-sm text-muted-foreground">
               Aún no perteneces a ningún condominio.
             </p>
           ) : (
-            <ul className="mt-3 divide-y divide-zinc-100">
+            <ul className="mt-3 divide-y divide-border">
               {me.memberships.map((m) => {
                 const canAdmin = m.roles.some((r) =>
                   ["administrador", "junta_directiva", "contadora"].includes(r),
                 );
                 const esGuardia = !canAdmin && m.roles.includes("guardia");
-                const inner = (
-                  <>
-                    <span className="text-sm text-zinc-800">
-                      {m.condominioName ?? m.condominioId}
-                    </span>
-                    <span className="text-xs text-zinc-500">
-                      {m.roles.join(", ")}
-                    </span>
-                  </>
-                );
                 const href = homeHrefForRoles(m.condominioId, m.roles);
                 return (
                   <li key={m.membershipId}>
                     <Link
                       href={href}
-                      className="flex items-center justify-between py-3 hover:text-primary group"
+                      className="group flex items-center justify-between py-3 hover:text-brand"
                     >
-                      {inner}
-                      <span className="text-xs text-primary opacity-0 group-hover:opacity-100">
-                        {canAdmin ? "Administrar →" : esGuardia ? "Portería →" : "Entrar →"}
+                      <span className="flex flex-col">
+                        <span className="text-sm text-foreground">
+                          {m.condominioName ?? m.condominioId}
+                        </span>
+                        <span className="text-xs text-muted-foreground">
+                          {m.roles.join(", ")}
+                        </span>
+                      </span>
+                      <span className="text-xs text-brand opacity-0 group-hover:opacity-100">
+                        {canAdmin
+                          ? "Administrar →"
+                          : esGuardia
+                            ? "Portería →"
+                            : "Entrar →"}
                       </span>
                     </Link>
                   </li>
@@ -205,8 +173,8 @@ function UserHome({
               })}
             </ul>
           )}
-        </div>
+        </Card>
       </div>
-    </Page>
+    </PageContainer>
   );
 }

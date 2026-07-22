@@ -67,3 +67,19 @@ export function hexToHslChannels(hex: string): string | null {
 
   return `${Math.round(h * 360)} ${Math.round(s * 100)}% ${Math.round(l * 100)}%`;
 }
+
+/**
+ * Texto sobre `--brand`: blanco si el color es oscuro/medio;
+ * casi negro si es muy claro (ej. lima Growin).
+ */
+export function hexToBrandForeground(hex: string): string {
+  const raw = hex.trim().replace(/^#/, "");
+  if (!/^[0-9a-fA-F]{6}$/.test(raw)) return "0 0% 100%";
+
+  const r = parseInt(raw.slice(0, 2), 16) / 255;
+  const g = parseInt(raw.slice(2, 4), 16) / 255;
+  const b = parseInt(raw.slice(4, 6), 16) / 255;
+  // Luminancia relativa (WCAG)
+  const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  return lum > 0.62 ? "120 6% 10%" : "0 0% 100%";
+}

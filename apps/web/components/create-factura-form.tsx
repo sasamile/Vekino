@@ -1,13 +1,14 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation, useQuery, useAction } from "convex/react";
 import { Loader2, Plus, FileText, X } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
 import { Modal } from "@/components/ui/modal";
 import { Button } from "@/components/ui/button";
 import { Input, Select } from "@/components/ui/input";
+import { uploadToS3 } from "@/lib/upload-s3";
 
 function currentPeriodo() {
   const d = new Date();
@@ -55,7 +56,7 @@ export function CreateFacturaForm({
     open ? { condominioId } : "skip",
   );
   const createManual = useMutation(api.facturas.createManual);
-  const generateUploadUrl = useMutation(api.facturas.generateUploadUrl);
+  const generateUploadUrl = useAction(api.files.generateUploadUrl);
 
   const sortedUnidades = useMemo(() => {
     return [...(unidades ?? [])].sort((a, b) =>
@@ -103,17 +104,14 @@ export function CreateFacturaForm({
     setSaving(true);
     setError(null);
     try {
-      let pdfStorageId: Id<"_storage"> | undefined;
+      let pdfUrl: string | undefined;
       if (file) {
-        const uploadUrl = await generateUploadUrl();
-        const res = await fetch(uploadUrl, {
-          method: "POST",
-          headers: { "Content-Type": file.type || "application/octet-stream" },
-          body: file,
-        });
-        if (!res.ok) throw new Error("No se pudo subir el archivo.");
-        const json = (await res.json()) as { storageId: string };
-        pdfStorageId = json.storageId as Id<"_storage">;
+        const uploaded = await uploadToS3(
+          generateUploadUrl,
+          file,
+          `condominios/facturas/${condominioId}`,
+        );
+        pdfUrl = uploaded.url;
       }
 
       const saldo = Number(saldoAFavor) || 0;
@@ -133,7 +131,7 @@ export function CreateFacturaForm({
         valor: valorNum,
         saldoAFavor: saldo,
         totalConDescuento: desc,
-        pdfStorageId,
+        pdfUrl,
       });
       close();
     } catch (err) {

@@ -3,8 +3,12 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useQuery, useMutation } from "convex/react";
-import { Building2, Plus, X, ChevronRight } from "lucide-react";
+import { Building2, X, ChevronRight } from "lucide-react";
 import { api } from "@vekino/backend/api";
+import { PageContainer } from "@/components/layout/page-container";
+import { PageHeader } from "@/components/layout/page-header";
+import { useNuevoQuery } from "@/hooks/use-nuevo-query";
+import { Card } from "@/components/ui/card";
 
 export default function CondominiosPage() {
   const me = useQuery(api.users.me);
@@ -15,71 +19,65 @@ export default function CondominiosPage() {
     isPlatform ? {} : "skip",
   );
   const [showCreate, setShowCreate] = useState(false);
+  useNuevoQuery(() => setShowCreate(true));
 
   if (me === undefined) {
     return (
-      <div className="p-6 lg:p-10 text-sm text-zinc-500">Cargando…</div>
+      <PageContainer>
+        <p className="text-sm text-muted-foreground">Cargando…</p>
+      </PageContainer>
     );
   }
 
   if (!isPlatform) {
     return (
-      <div className="p-6 lg:p-10 text-sm text-zinc-500">
-        No tienes acceso a esta sección.
-      </div>
+      <PageContainer>
+        <p className="text-sm text-muted-foreground">No tienes acceso a esta sección.</p>
+      </PageContainer>
     );
   }
 
   return (
-    <div className="p-6 lg:p-10">
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-semibold text-zinc-900">Condominios</h1>
-          <p className="text-sm text-zinc-500">
-            Gestiona todos los conjuntos de la plataforma.
-          </p>
-        </div>
-        <button
-          onClick={() => setShowCreate(true)}
-          className="inline-flex items-center gap-2 bg-primary text-white text-sm font-semibold px-4 py-2.5 rounded-lg hover:bg-primary/90 transition-colors"
-        >
-          <Plus className="w-4 h-4" />
-          Nuevo condominio
-        </button>
-      </div>
+    <PageContainer>
+      <div className="space-y-6">
+        <PageHeader
+          title="Condominios"
+          description="Gestiona todos los conjuntos de la plataforma."
+        />
 
-      <div className="bg-white rounded-2xl ring-1 ring-zinc-100 overflow-hidden">
-        {condominios === undefined ? (
-          <p className="p-6 text-sm text-zinc-500">Cargando…</p>
-        ) : condominios.length === 0 ? (
-          <div className="p-10 text-center">
-            <Building2 className="w-8 h-8 text-zinc-300 mx-auto mb-2" />
-            <p className="text-sm text-zinc-500">
-              Aún no hay condominios. Crea el primero.
-            </p>
-          </div>
-        ) : (
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-xs text-zinc-500 border-b border-zinc-100">
-                <th className="px-5 py-3 font-medium">Nombre</th>
-                <th className="px-5 py-3 font-medium">Ciudad</th>
-                <th className="px-5 py-3 font-medium">Plan</th>
-                <th className="px-5 py-3 font-medium">Estado</th>
-                <th className="px-5 py-3 font-medium text-right">Acción</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-zinc-50">
-              {condominios.map((c) => (
-                <CondominioRow key={c._id} c={c} />
-              ))}
-            </tbody>
-          </table>
-        )}
+        <Card className="overflow-hidden p-0">
+          {condominios === undefined ? (
+            <p className="p-6 text-sm text-muted-foreground">Cargando…</p>
+          ) : condominios.length === 0 ? (
+            <div className="p-10 text-center">
+              <Building2 className="mx-auto mb-2 h-8 w-8 text-muted-foreground/40" />
+              <p className="text-sm text-muted-foreground">
+                Aún no hay condominios. Crea el primero.
+              </p>
+            </div>
+          ) : (
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border text-left text-xs text-muted-foreground">
+                  <th className="px-5 py-3 font-medium">Nombre</th>
+                  <th className="px-5 py-3 font-medium">Ciudad</th>
+                  <th className="px-5 py-3 font-medium">Plan</th>
+                  <th className="px-5 py-3 font-medium">Estado</th>
+                  <th className="px-5 py-3 text-right font-medium">Acción</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border/60">
+                {condominios.map((c) => (
+                  <CondominioRow key={c._id} c={c} />
+                ))}
+              </tbody>
+            </table>
+          )}
+        </Card>
       </div>
 
       {showCreate && <CreateDialog onClose={() => setShowCreate(false)} />}
-    </div>
+    </PageContainer>
   );
 }
 

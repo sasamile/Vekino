@@ -43,7 +43,7 @@ export default function Avisos() {
               key={a._id}
               className={cn(
                 "p-6",
-                a.fijado && "border-brand/30 bg-brand/[0.03]",
+                a.fijado && "border-brand/30 bg-brand/3",
               )}
             >
               <div className="flex items-start gap-4">
@@ -70,7 +70,7 @@ export default function Avisos() {
                     <div className="mt-4 flex flex-wrap gap-2">
                       {a.archivosItems.map((f) => (
                         <a
-                          key={f.storageId}
+                          key={f.s3Key ?? f.storageId ?? f.url}
                           href={f.url}
                           target="_blank"
                           rel="noopener noreferrer"

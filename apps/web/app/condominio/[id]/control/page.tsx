@@ -87,7 +87,7 @@ export default function ControlGuardiaPage() {
                 onClick={() => setTab(t.key)}
                 className={cn(
                   "flex flex-1 items-center justify-center gap-2 whitespace-nowrap rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
-                  active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent",
+                  active ? "bg-brand text-brand-foreground" : "text-muted-foreground hover:bg-accent",
                 )}
               >
                 <Icon className="h-4 w-4" /> {t.label}

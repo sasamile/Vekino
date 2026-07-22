@@ -142,7 +142,7 @@ export function UploadFacturas({
             totalConDescuento: inv.totalConDescuento,
             fechaEmision: Date.now(),
             fechaVencimiento,
-            estado: "pendiente" as const,
+            estado: inv.totalAPagar < 0 ? ("saldo_a_favor" as const) : ("pendiente" as const),
             pdfUrl: inv.pdfUrl,
           })),
         });

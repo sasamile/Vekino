@@ -50,7 +50,7 @@ export function PortalBottomNav({ base }: { base: string }) {
                 className={cn(
                   "flex h-[3.25rem] min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-md transition-colors",
                   active
-                    ? "bg-primary text-primary-foreground"
+                    ? "bg-brand text-brand-foreground"
                     : "text-muted-foreground",
                 )}
               >

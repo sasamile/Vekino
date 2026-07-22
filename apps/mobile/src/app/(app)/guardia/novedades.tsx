@@ -14,7 +14,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
-import { useMutation, useQuery, Authenticated } from "convex/react";
+import { useMutation, useQuery, useAction, Authenticated } from "convex/react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
 import { useCondominio } from "@/context/condominio-context";
@@ -57,7 +57,7 @@ function Inner() {
     condominioId ? { condominioId } : "skip",
   );
   const reportar = useMutation(api.guardia.reportarNovedad);
-  const generateUploadUrl = useMutation(api.guardia.generateUploadUrl);
+  const generateUploadUrl = useAction(api.files.generateUploadUrl);
 
   const [formOpen, setFormOpen] = useState(false);
   const [titulo, setTitulo] = useState("");
@@ -112,16 +112,23 @@ function Inner() {
     }
     setBusy(true);
     try {
-      let archivoStorageId: Id<"_storage"> | undefined;
+      let archivoUrl: string | undefined;
       if (foto) {
-        archivoStorageId = await uploadLocalFile(generateUploadUrl, foto.uri, foto.mime);
+        const uploaded = await uploadLocalFile(
+          generateUploadUrl,
+          foto.uri,
+          foto.mime,
+          `condominios/guardia/${condominioId}/novedades`,
+          foto.nombre,
+        );
+        archivoUrl = uploaded.url;
       }
       await reportar({
         condominioId,
         titulo: titulo.trim(),
         descripcion: descripcion.trim(),
         prioridad,
-        archivoStorageId,
+        archivoUrl,
         archivoNombre: foto?.nombre,
       });
       setFormOpen(false);

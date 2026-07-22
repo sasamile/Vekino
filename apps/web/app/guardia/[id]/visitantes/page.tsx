@@ -86,7 +86,7 @@ export default function GuardiaVisitantesPage() {
             onClick={() => setTab(key)}
             className={cn(
               "flex flex-1 items-center justify-center gap-2 rounded-lg py-2.5 text-sm font-medium transition-colors",
-              tab === key ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent",
+              tab === key ? "bg-brand text-brand-foreground" : "text-muted-foreground hover:bg-accent",
             )}
           >
             <Icon className="h-4 w-4" /> {label}

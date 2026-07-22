@@ -7,6 +7,7 @@ import {
   hasPlatformRole,
 } from "./model/authz";
 import { displayNameFromUser } from "./model/displayName";
+import { resolveUserImage } from "./model/userImage";
 
 /**
  * PORTAL DEL RESIDENTE / PROPIETARIO
@@ -82,7 +83,7 @@ export const home = query({
       isPlatform,
       userId: user._id as string,
       userName: displayNameFromUser(user),
-      userImage: user.image ?? null,
+      userImage: await resolveUserImage(ctx, user),
       userEmail: user.email,
       myRoles: membership?.roles ?? [],
       membershipId: (membership?._id ?? null) as string | null,

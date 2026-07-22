@@ -9,6 +9,7 @@ import {
   estadoUnidadValidator,
   vinculoUnidadValidator,
 } from "./model/roles";
+import { resolveTipoVehiculo } from "./model/placa";
 
 /**
  * FUNCIONES DE MIGRACIÓN (Fase 2)
@@ -475,6 +476,7 @@ export const bulkFacturas = internalMutation({
           v.literal("pagada"),
           v.literal("vencida"),
           v.literal("abonada"),
+          v.literal("saldo_a_favor"),
         ),
         pdfUrl: v.optional(v.string()),
       }),
@@ -486,16 +488,20 @@ export const bulkFacturas = internalMutation({
     let updated = 0;
 
     for (const f of args.facturas) {
+      // Un totalAPagar negativo es saldo a favor del residente, sin importar
+      // qué estado haya mandado el script de migración.
+      const row = { ...f, estado: f.totalAPagar < 0 ? ("saldo_a_favor" as const) : f.estado };
+
       const existing = await ctx.db
         .query("facturas")
         .withIndex("by_legacyId", (q) => q.eq("legacyId", f.legacyId))
         .unique();
 
       if (existing) {
-        await ctx.db.patch(existing._id, { ...f, updatedAt: now });
+        await ctx.db.patch(existing._id, { ...row, updatedAt: now });
         updated++;
       } else {
-        await ctx.db.insert("facturas", { ...f, createdAt: now, updatedAt: now });
+        await ctx.db.insert("facturas", { ...row, createdAt: now, updatedAt: now });
         inserted++;
       }
     }
@@ -588,12 +594,14 @@ export const bulkVehiculos = internalMutation({
 
     const mapTipo = (
       t: string | undefined,
+      placa: string,
     ): "carro" | "moto" | "bicicleta" | "otro" => {
       const s = (t ?? "").toUpperCase();
-      if (s.includes("MOTO")) return "moto";
       if (s.includes("BICI")) return "bicicleta";
+      if (s.includes("MOTO")) return "moto";
       if (s.includes("CARRO") || s.includes("AUTO") || s.includes("CAMION")) return "carro";
-      return t ? "otro" : "carro";
+      // Inferir por placa (Colombia: carro …123, moto …12A)
+      return resolveTipoVehiculo(placa);
     };
 
     const now = Date.now();
@@ -624,7 +632,7 @@ export const bulkVehiculos = internalMutation({
         condominioId: condominio._id,
         unidadId: unidad._id,
         placa,
-        tipo: mapTipo(veh.tipo),
+        tipo: mapTipo(veh.tipo, placa),
         observaciones: veh.observaciones?.trim() || undefined,
         legacyId: veh.legacyId,
         updatedAt: now,
@@ -635,5 +643,30 @@ export const bulkVehiculos = internalMutation({
     }
 
     return { upserted, skipped };
+  },
+});
+
+/**
+ * Backfill: corrige facturas con totalAPagar negativo (saldo a favor del
+ * residente) que quedaron marcadas "pendiente" antes de existir ese estado.
+ * Idempotente — se puede correr varias veces sin efecto tras la primera.
+ */
+export const fixSaldoAFavorEstado = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const candidatas = await ctx.db
+      .query("facturas")
+      .withIndex("by_estado", (q) => q.eq("estado", "pendiente"))
+      .collect();
+
+    let fixed = 0;
+    const now = Date.now();
+    for (const f of candidatas) {
+      if (f.totalAPagar < 0) {
+        await ctx.db.patch(f._id, { estado: "saldo_a_favor", updatedAt: now });
+        fixed++;
+      }
+    }
+    return { scanned: candidatas.length, fixed };
   },
 });

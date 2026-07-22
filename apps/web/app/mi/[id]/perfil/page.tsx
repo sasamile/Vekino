@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery, useMutation, useAction } from "convex/react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
 import { Mail, Phone, Check, Camera, Loader2, Lock, Trash2 } from "lucide-react";
@@ -16,6 +16,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { initials } from "@/lib/utils";
 import { VINCULO_LABEL } from "@/components/portal/portal-ui";
 import { authClient } from "@/lib/auth-client";
+import { uploadToS3 } from "@/lib/upload-s3";
 
 const ROL_LABEL: Record<string, string> = {
   propietario: "Propietario",
@@ -159,11 +160,20 @@ export default function Perfil() {
 }
 
 function AvatarEditor({ image, name }: { image: string | null; name: string }) {
-  const genUrl = useMutation(api.users.generateAvatarUploadUrl);
+  const generateUploadUrl = useAction(api.files.generateUploadUrl);
   const setAvatar = useMutation(api.users.setMyAvatar);
   const clearAvatar = useMutation(api.users.clearMyAvatar);
   const inputRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
+  const [preview, setPreview] = useState<string | null>(null);
+  const [broken, setBroken] = useState(false);
+
+  const shown = preview ?? (image && !broken ? image : null);
+
+  useEffect(() => {
+    setBroken(false);
+    setPreview(null);
+  }, [image]);
 
   async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -175,19 +185,19 @@ function AvatarEditor({ image, name }: { image: string | null; name: string }) {
       return;
     }
     setBusy(true);
+    const localUrl = URL.createObjectURL(file);
+    setPreview(localUrl);
+    setBroken(false);
     try {
-      const url = await genUrl();
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": file.type },
-        body: file,
-      });
-      if (!res.ok) throw new Error("Error al subir la imagen.");
-      const { storageId } = (await res.json()) as { storageId: Id<"_storage"> };
-      await setAvatar({ storageId });
-    } catch {
-      alert("No se pudo actualizar la foto. Intenta de nuevo.");
+      const { url, key } = await uploadToS3(generateUploadUrl, file, "avatars");
+      await setAvatar({ url, s3Key: key });
+    } catch (err) {
+      setPreview(null);
+      const msg =
+        err instanceof Error ? err.message : "No se pudo actualizar la foto.";
+      alert(msg);
     } finally {
+      URL.revokeObjectURL(localUrl);
       setBusy(false);
     }
   }
@@ -201,9 +211,14 @@ function AvatarEditor({ image, name }: { image: string | null; name: string }) {
         className="group relative flex h-24 w-24 items-center justify-center overflow-hidden rounded-full bg-brand/10 text-2xl font-semibold text-brand"
         aria-label="Cambiar foto de perfil"
       >
-        {image ? (
+        {shown ? (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={image} alt={name} className="h-full w-full object-cover" />
+          <img
+            src={shown}
+            alt={name}
+            onError={() => setBroken(true)}
+            className="h-full w-full object-cover"
+          />
         ) : (
           initials(name)
         )}
@@ -215,17 +230,23 @@ function AvatarEditor({ image, name }: { image: string | null; name: string }) {
           )}
         </span>
       </button>
-      {image && !busy && (
+      {shown && !busy && (
         <button
           type="button"
-          onClick={() => clearAvatar()}
+          onClick={() => void clearAvatar()}
           aria-label="Quitar foto"
           className="absolute -right-1 -top-1 rounded-full border border-border bg-card p-1.5 text-muted-foreground shadow-sm transition-colors hover:text-red-600"
         >
           <Trash2 className="h-3.5 w-3.5" />
         </button>
       )}
-      <input ref={inputRef} type="file" accept="image/*" onChange={onFile} className="hidden" />
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/*"
+        onChange={onFile}
+        className="hidden"
+      />
     </div>
   );
 }

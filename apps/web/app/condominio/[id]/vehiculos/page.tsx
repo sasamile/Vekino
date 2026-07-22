@@ -1,33 +1,73 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { useQuery, useMutation } from "convex/react";
-import { Car, Bike, Plus, Pencil, Trash2, Loader2 } from "lucide-react";
+import { usePaginatedQuery, useQuery, useMutation } from "convex/react";
+import type { FunctionReturnType } from "convex/server";
+import {
+  Car,
+  Bike,
+  Plus,
+  Pencil,
+  Trash2,
+  Loader2,
+  CircleDot,
+  type LucideIcon,
+} from "lucide-react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
 import { PageContainer } from "@/components/layout/page-container";
 import { PageHeader } from "@/components/layout/page-header";
+import { useNuevoQuery } from "@/hooks/use-nuevo-query";
 import { StatCard } from "@/components/layout/stat-card";
 import { SearchInput, Input, Select, Textarea } from "@/components/ui/input";
-import { TableCard, Table, THead, TH, TBody, TR, TD } from "@/components/ui/table";
+import {
+  TableCard,
+  Table,
+  THead,
+  TH,
+  TBody,
+  TR,
+  TD,
+} from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
-import { cn } from "@/lib/utils";
+
+const PAGE_SIZE = 30;
 
 type Tipo = "carro" | "moto" | "bicicleta" | "otro";
 
-const TIPO_LABEL: Record<Tipo, string> = {
-  carro: "Carro", moto: "Moto", bicicleta: "Bicicleta", otro: "Otro",
-};
-const TIPO_TONE: Record<Tipo, React.ComponentProps<typeof Badge>["tone"]> = {
-  carro: "primary", moto: "brand", bicicleta: "success", otro: "neutral",
+const TIPO_META: Record<
+  Tipo,
+  {
+    label: string;
+    tone: React.ComponentProps<typeof Badge>["tone"];
+    icon: LucideIcon;
+  }
+> = {
+  carro: { label: "Carro", tone: "primary", icon: Car },
+  moto: { label: "Moto", tone: "brand", icon: Bike },
+  bicicleta: { label: "Bicicleta", tone: "success", icon: CircleDot },
+  otro: { label: "Otro", tone: "neutral", icon: Car },
 };
 
-type VehicleRow = NonNullable<ReturnType<typeof useQuery<typeof api.vehiculos.listByCondominio>>>[number];
+/** Carro: …123 · Moto: …12A (última letra). */
+function inferTipoFromPlaca(placa: string): "carro" | "moto" | null {
+  const clean = placa.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  if (clean.length < 2) return null;
+  const last = clean[clean.length - 1]!;
+  if (/[A-Z]/.test(last)) return "moto";
+  if (/\d{3}$/.test(clean)) return "carro";
+  if (/\d$/.test(last)) return "carro";
+  return null;
+}
+
+type VehicleRow = FunctionReturnType<
+  typeof api.vehiculos.listPage
+>["page"][number];
 
 interface Draft {
   id?: Id<"vehiculos">;
@@ -40,38 +80,81 @@ interface Draft {
 }
 
 function emptyDraft(): Draft {
-  return { unidadId: "", placa: "", tipo: "carro", marca: "", color: "", observaciones: "" };
+  return {
+    unidadId: "",
+    placa: "",
+    tipo: "carro",
+    marca: "",
+    color: "",
+    observaciones: "",
+  };
+}
+
+function useDebounced(value: string, ms: number) {
+  const [v, setV] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setV(value), ms);
+    return () => clearTimeout(t);
+  }, [value, ms]);
+  return v;
+}
+
+function TipoBadge({ tipo }: { tipo: string }) {
+  const meta = TIPO_META[tipo as Tipo] ?? TIPO_META.otro;
+  const Icon = meta.icon;
+  return (
+    <Badge tone={meta.tone} className="inline-flex items-center gap-1.5">
+      <Icon className="h-3 w-3" aria-hidden />
+      {meta.label}
+    </Badge>
+  );
 }
 
 export default function VehiculosPage() {
   const params = useParams<{ id: string }>();
   const condominioId = params.id as Id<"condominios">;
-  const vehiculos = useQuery(api.vehiculos.listByCondominio, { condominioId });
   const unidades = useQuery(api.unidades.listByCondominio, { condominioId });
+  const counts = useQuery(api.vehiculos.countsByCondominio, { condominioId });
+  const reclassify = useMutation(api.vehiculos.reclassifyByPlaca);
 
   const [search, setSearch] = useState("");
+  const deferredSearch = useDebounced(search, 280);
   const [tipoFiltro, setTipoFiltro] = useState<"" | Tipo>("");
   const [draft, setDraft] = useState<Draft | null>(null);
-  const [deleteTarget, setDeleteTarget] = useState<Id<"vehiculos"> | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Id<"vehiculos"> | null>(
+    null,
+  );
 
-  const term = search.trim().toLowerCase();
-  const filtered = (vehiculos ?? []).filter((v) => {
-    if (tipoFiltro && v.tipo !== tipoFiltro) return false;
-    if (!term) return true;
-    return (
-      v.placa.toLowerCase().includes(term) ||
-      (v.marca ?? "").toLowerCase().includes(term) ||
-      (v.color ?? "").toLowerCase().includes(term) ||
-      v.unidadNumero.toLowerCase().includes(term)
-    );
-  });
+  // Corrige tipos guardados mal (una vez por condo / sesión).
+  useEffect(() => {
+    const key = `vekino.vehiculos.reclassified.${condominioId}`;
+    if (typeof window === "undefined") return;
+    if (sessionStorage.getItem(key)) return;
+    void reclassify({ condominioId })
+      .then(() => sessionStorage.setItem(key, "1"))
+      .catch(() => {});
+  }, [condominioId, reclassify]);
 
-  const total = vehiculos?.length ?? 0;
-  const carros = vehiculos?.filter((v) => v.tipo === "carro").length ?? 0;
-  const motos = vehiculos?.filter((v) => v.tipo === "moto").length ?? 0;
-  const bicis = vehiculos?.filter((v) => v.tipo === "bicicleta").length ?? 0;
+  const { results, status, loadMore } = usePaginatedQuery(
+    api.vehiculos.listPage,
+    {
+      condominioId,
+      q: deferredSearch.trim() || undefined,
+      tipo: tipoFiltro || undefined,
+    },
+    { initialNumItems: PAGE_SIZE },
+  );
 
-  function openNew() { setDraft(emptyDraft()); }
+  const hasFilters = Boolean(deferredSearch.trim() || tipoFiltro);
+  const loading = status === "LoadingFirstPage";
+  const canLoadMore = status === "CanLoadMore";
+  const loadingMore = status === "LoadingMore";
+
+  function openNew() {
+    setDraft(emptyDraft());
+  }
+  useNuevoQuery(openNew);
+
   function openEdit(v: VehicleRow) {
     setDraft({
       id: v._id,
@@ -87,117 +170,170 @@ export default function VehiculosPage() {
   return (
     <PageContainer>
       <div className="space-y-6">
-        <PageHeader
-          title="Vehículos"
-          description="Registro vehicular del conjunto"
-          action={
-            <Button onClick={openNew}>
-              <Plus className="h-4 w-4" aria-hidden />
-              Registrar vehículo
-            </Button>
-          }
-        />
-
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-          <StatCard icon={Car} label="Total vehículos" value={total} tone="neutral" />
-          <StatCard icon={Car} label="Carros" value={carros} tone="primary" />
-          <StatCard icon={Bike} label="Motos" value={motos} tone="brand" />
-          <StatCard icon={Bike} label="Bicicletas" value={bicis} tone="success" />
-        </div>
-
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-sm text-muted-foreground">
-            {vehiculos === undefined ? "Cargando…" : `${filtered.length} vehículo${filtered.length === 1 ? "" : "s"}`}
-          </p>
-          <div className="flex gap-2">
-            <Select value={tipoFiltro} onChange={(e) => setTipoFiltro(e.target.value as "" | Tipo)} className="w-36">
-              <option value="">Todos</option>
-              <option value="carro">Carro</option>
-              <option value="moto">Moto</option>
-              <option value="bicicleta">Bicicleta</option>
-              <option value="otro">Otro</option>
-            </Select>
-            <SearchInput value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Placa, marca, unidad…" className="sm:w-64" />
+        <div className="flex items-center justify-between">
+          <PageHeader
+            title="Vehículos"
+            description="Registro vehicular del conjunto"
+          />
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex gap-2">
+              <Select
+                value={tipoFiltro}
+                onChange={(e) => setTipoFiltro(e.target.value as "" | Tipo)}
+                className="w-36"
+              >
+                <option value="">Todos</option>
+                <option value="carro">Carro</option>
+                <option value="moto">Moto</option>
+                <option value="bicicleta">Bicicleta</option>
+                <option value="otro">Otro</option>
+              </Select>
+              <SearchInput
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Placa, dueño, unidad…"
+                className="sm:w-64"
+              />
+            </div>
           </div>
         </div>
 
-        {vehiculos === undefined ? (
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+          <StatCard
+            icon={Car}
+            label="Total vehículos"
+            value={counts?.total ?? 0}
+            tone="neutral"
+          />
+          <StatCard
+            icon={Car}
+            label="Carros"
+            value={counts?.carro ?? 0}
+            tone="primary"
+          />
+          <StatCard
+            icon={Bike}
+            label="Motos"
+            value={counts?.moto ?? 0}
+            tone="brand"
+          />
+          <StatCard
+            icon={CircleDot}
+            label="Bicicletas"
+            value={counts?.bicicleta ?? 0}
+            tone="success"
+          />
+        </div>
+
+        {loading ? (
           <Skeleton className="h-64 rounded-2xl" />
-        ) : filtered.length === 0 ? (
+        ) : results.length === 0 ? (
           <EmptyState
             icon={Car}
-            title={search || tipoFiltro ? "Sin resultados" : "Sin vehículos registrados"}
-            description={search || tipoFiltro ? "Ningún vehículo coincide con el filtro." : "Registra los vehículos de los residentes."}
+            title={hasFilters ? "Sin resultados" : "Sin vehículos registrados"}
+            description={
+              hasFilters
+                ? "Ningún vehículo coincide con el filtro."
+                : "Registra los vehículos de los residentes."
+            }
             action={
-              search || tipoFiltro ? (
-                <Button variant="outline" size="sm" onClick={() => { setSearch(""); setTipoFiltro(""); }}>Limpiar</Button>
+              hasFilters ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setSearch("");
+                    setTipoFiltro("");
+                  }}
+                >
+                  Limpiar
+                </Button>
               ) : (
-                <Button size="sm" onClick={openNew}><Plus className="h-4 w-4" />Registrar</Button>
+                <Button size="sm" onClick={openNew}>
+                  <Plus className="h-4 w-4" />
+                  Registrar
+                </Button>
               )
             }
           />
         ) : (
-          <TableCard>
-            <Table>
-              <THead>
-                <TR>
-                  <TH>Placa</TH>
-                  <TH>Tipo</TH>
-                  <TH>Marca / Color</TH>
-                  <TH>Unidad</TH>
-                  <TH></TH>
-                </TR>
-              </THead>
-              <TBody>
-                {filtered.map((v) => (
-                  <TR key={v._id}>
-                    <TD>
-                      <span className="font-mono text-sm font-semibold tracking-wider">{v.placa}</span>
-                    </TD>
-                    <TD>
-                      <Badge tone={TIPO_TONE[v.tipo as Tipo] ?? "neutral"}>{TIPO_LABEL[v.tipo as Tipo]}</Badge>
-                    </TD>
-                    <TD>
-                      <div className="flex items-center gap-2 text-sm">
-                        {v.color && (
-                          <span
-                            className="h-3 w-3 rounded-full border border-border"
-                            style={{ background: v.color }}
-                            title={v.color}
-                          />
-                        )}
-                        <span className="text-foreground">{v.marca ?? "—"}</span>
-                        {v.color && <span className="text-muted-foreground">· {v.color}</span>}
-                      </div>
-                    </TD>
-                    <TD>
-                      <span className="rounded-md bg-muted px-2 py-0.5 text-xs font-medium text-foreground">
-                        {v.unidadNumero}
-                      </span>
-                    </TD>
-                    <TD>
-                      <div className="flex items-center justify-end gap-1">
-                        <button
-                          onClick={() => openEdit(v)}
-                          className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                          aria-label="Editar"
-                        >
-                          <Pencil className="h-4 w-4" />
-                        </button>
-                        <button
-                          onClick={() => setDeleteTarget(v._id)}
-                          className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-red-500/10 hover:text-red-600 dark:hover:text-red-400"
-                          aria-label="Eliminar"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </div>
-                    </TD>
+          <>
+            <TableCard>
+              <Table>
+                <THead>
+                  <TR>
+                    <TH>Placa</TH>
+                    <TH>Tipo</TH>
+                    <TH>Dueño</TH>
+                    <TH>Unidad</TH>
+                    <TH></TH>
                   </TR>
-                ))}
-              </TBody>
-            </Table>
-          </TableCard>
+                </THead>
+                <TBody>
+                  {results.map((v) => (
+                    <TR key={v._id}>
+                      <TD>
+                        <span className="font-mono text-sm font-semibold tracking-wider">
+                          {v.placa}
+                        </span>
+                      </TD>
+                      <TD>
+                        <TipoBadge tipo={v.tipo} />
+                      </TD>
+                      <TD>
+                        <span className="text-sm text-foreground">
+                          {v.duenoNombre ?? "—"}
+                        </span>
+                      </TD>
+                      <TD>
+                        <span className="rounded-md bg-muted px-2 py-0.5 text-xs font-medium text-foreground">
+                          {v.unidadNumero}
+                        </span>
+                      </TD>
+                      <TD>
+                        <div className="flex items-center justify-end gap-1">
+                          <button
+                            onClick={() => openEdit(v)}
+                            className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                            aria-label="Editar"
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </button>
+                          <button
+                            onClick={() => setDeleteTarget(v._id)}
+                            className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-red-500/10 hover:text-red-600 dark:hover:text-red-400"
+                            aria-label="Eliminar"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </TD>
+                    </TR>
+                  ))}
+                </TBody>
+              </Table>
+            </TableCard>
+
+            {canLoadMore || loadingMore ? (
+              <div className="flex justify-center">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={loadingMore}
+                  onClick={() => loadMore(PAGE_SIZE)}
+                >
+                  {loadingMore ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                      Cargando…
+                    </>
+                  ) : (
+                    "Cargar más"
+                  )}
+                </Button>
+              </div>
+            ) : null}
+          </>
         )}
       </div>
 
@@ -235,11 +371,22 @@ function VehicleForm({
   const [form, setForm] = useState(draft);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [tipoManual, setTipoManual] = useState(
+    draft.tipo === "bicicleta" || draft.tipo === "otro",
+  );
 
   const valid = form.unidadId.length > 0 && form.placa.trim().length > 0;
+  const inferred = inferTipoFromPlaca(form.placa);
 
   function set<K extends keyof Draft>(key: K, val: Draft[K]) {
-    setForm((p) => ({ ...p, [key]: val }));
+    setForm((p) => {
+      const next = { ...p, [key]: val };
+      if (key === "placa" && !tipoManual) {
+        const inferredTipo = inferTipoFromPlaca(String(val));
+        if (inferredTipo) next.tipo = inferredTipo;
+      }
+      return next;
+    });
   }
 
   async function save() {
@@ -247,12 +394,15 @@ function VehicleForm({
     setBusy(true);
     setError(null);
     try {
+      const tipo = tipoManual
+        ? form.tipo
+        : (inferTipoFromPlaca(form.placa) ?? form.tipo);
       if (editing && draft.id) {
         await update({
           id: draft.id,
           unidadId: form.unidadId as Id<"unidades">,
           placa: form.placa,
-          tipo: form.tipo,
+          tipo,
           marca: form.marca || undefined,
           color: form.color || undefined,
           observaciones: form.observaciones || undefined,
@@ -262,7 +412,7 @@ function VehicleForm({
           condominioId,
           unidadId: form.unidadId as Id<"unidades">,
           placa: form.placa,
-          tipo: form.tipo,
+          tipo,
           marca: form.marca || undefined,
           color: form.color || undefined,
           observaciones: form.observaciones || undefined,
@@ -275,17 +425,21 @@ function VehicleForm({
     }
   }
 
-  const unidadesOrdenadas = [...unidades].sort((a, b) => a.numero.localeCompare(b.numero, "es", { numeric: true }));
+  const unidadesOrdenadas = [...unidades].sort((a, b) =>
+    a.numero.localeCompare(b.numero, "es", { numeric: true }),
+  );
 
   return (
     <Modal
       open
       onClose={onClose}
       title={editing ? "Editar vehículo" : "Registrar vehículo"}
-      description="Datos del vehículo del residente"
+      description="La placa define si es carro (…123) o moto (…12A)"
       footer={
         <>
-          <Button variant="ghost" size="sm" onClick={onClose} disabled={busy}>Cancelar</Button>
+          <Button variant="ghost" size="sm" onClick={onClose} disabled={busy}>
+            Cancelar
+          </Button>
           <Button size="sm" onClick={save} disabled={!valid || busy}>
             {busy && <Loader2 className="h-4 w-4 animate-spin" />}
             {editing ? "Guardar cambios" : "Registrar"}
@@ -295,76 +449,150 @@ function VehicleForm({
     >
       <div className="space-y-4">
         <div className="space-y-1.5">
-          <label className="block text-xs font-medium text-foreground">Unidad</label>
-          <Select value={form.unidadId} onChange={(e) => set("unidadId", e.target.value)}>
+          <label className="block text-xs font-medium text-foreground">
+            Unidad
+          </label>
+          <Select
+            value={form.unidadId}
+            onChange={(e) => set("unidadId", e.target.value)}
+          >
             <option value="">Seleccionar unidad</option>
             {unidadesOrdenadas.map((u) => (
-              <option key={u._id} value={u._id}>Unidad {u.numero}</option>
+              <option key={u._id} value={u._id}>
+                Unidad {u.numero}
+              </option>
             ))}
           </Select>
         </div>
+
         <div className="grid grid-cols-2 gap-3">
           <div className="space-y-1.5">
-            <label className="block text-xs font-medium text-foreground">Placa</label>
+            <label className="block text-xs font-medium text-foreground">
+              Placa
+            </label>
             <Input
               value={form.placa}
               onChange={(e) => set("placa", e.target.value.toUpperCase())}
-              placeholder="ABC-123"
-              maxLength={10}
-              className="font-mono tracking-wider"
+              placeholder="ABC123 o ABC12D"
+              className="font-mono uppercase tracking-wider"
             />
           </div>
           <div className="space-y-1.5">
-            <label className="block text-xs font-medium text-foreground">Tipo</label>
-            <Select value={form.tipo} onChange={(e) => set("tipo", e.target.value as Tipo)}>
+            <label className="block text-xs font-medium text-foreground">
+              Tipo
+            </label>
+            <Select
+              value={form.tipo}
+              onChange={(e) => {
+                const t = e.target.value as Tipo;
+                setTipoManual(
+                  t === "bicicleta" ||
+                    t === "otro" ||
+                    (inferred != null && t !== inferred),
+                );
+                set("tipo", t);
+              }}
+            >
               <option value="carro">Carro</option>
               <option value="moto">Moto</option>
               <option value="bicicleta">Bicicleta</option>
               <option value="otro">Otro</option>
             </Select>
+            {inferred && !tipoManual ? (
+              <p className="text-[11px] text-muted-foreground">
+                Detectado por placa: {TIPO_META[inferred].label}
+              </p>
+            ) : null}
           </div>
         </div>
+
         <div className="grid grid-cols-2 gap-3">
           <div className="space-y-1.5">
-            <label className="block text-xs font-medium text-foreground">Marca / Referencia</label>
-            <Input value={form.marca} onChange={(e) => set("marca", e.target.value)} placeholder="Ej. Toyota Corolla" />
+            <label className="block text-xs font-medium text-foreground">
+              Marca
+            </label>
+            <Input
+              value={form.marca}
+              onChange={(e) => set("marca", e.target.value)}
+              placeholder="Opcional"
+            />
           </div>
           <div className="space-y-1.5">
-            <label className="block text-xs font-medium text-foreground">Color</label>
-            <Input value={form.color} onChange={(e) => set("color", e.target.value)} placeholder="Ej. Blanco" />
+            <label className="block text-xs font-medium text-foreground">
+              Color
+            </label>
+            <Input
+              value={form.color}
+              onChange={(e) => set("color", e.target.value)}
+              placeholder="Opcional"
+            />
           </div>
         </div>
+
         <div className="space-y-1.5">
-          <label className="block text-xs font-medium text-foreground">Observaciones</label>
-          <Textarea value={form.observaciones} onChange={(e) => set("observaciones", e.target.value)} placeholder="Información adicional…" rows={2} />
+          <label className="block text-xs font-medium text-foreground">
+            Observaciones
+          </label>
+          <Textarea
+            value={form.observaciones}
+            onChange={(e) => set("observaciones", e.target.value)}
+            placeholder="Opcional"
+            rows={2}
+          />
         </div>
-        {error && <p className="text-sm text-destructive">{error}</p>}
+
+        {error ? <p className="text-sm text-red-600">{error}</p> : null}
       </div>
     </Modal>
   );
 }
 
-function DeleteDialog({ id, onClose }: { id: Id<"vehiculos">; onClose: () => void }) {
+function DeleteDialog({
+  id,
+  onClose,
+}: {
+  id: Id<"vehiculos">;
+  onClose: () => void;
+}) {
   const remove = useMutation(api.vehiculos.remove);
   const [busy, setBusy] = useState(false);
 
   async function confirm() {
     setBusy(true);
-    try { await remove({ id }); onClose(); } finally { setBusy(false); }
+    try {
+      await remove({ id });
+      onClose();
+    } catch {
+      setBusy(false);
+    }
   }
 
   return (
-    <Modal open onClose={onClose} title="Eliminar vehículo" className="max-w-sm"
+    <Modal
+      open
+      onClose={() => !busy && onClose()}
+      title="Eliminar vehículo"
+      description="¿Quitar este vehículo del registro?"
       footer={
         <>
-          <Button variant="ghost" size="sm" onClick={onClose} disabled={busy}>Cancelar</Button>
-          <Button variant="destructive" size="sm" onClick={confirm} disabled={busy}>
-            {busy && <Loader2 className="h-4 w-4 animate-spin" />}Eliminar
+          <Button variant="ghost" size="sm" onClick={onClose} disabled={busy}>
+            Cancelar
+          </Button>
+          <Button
+            variant="destructive"
+            size="sm"
+            onClick={confirm}
+            disabled={busy}
+          >
+            {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+            Eliminar
           </Button>
         </>
       }
     >
-      <p className="text-sm text-muted-foreground">El vehículo se eliminará del registro del conjunto.</p>
+      <p className="text-sm text-muted-foreground">
+        Esta acción no se puede deshacer.
+      </p>
     </Modal>
   );
 }

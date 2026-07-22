@@ -75,6 +75,10 @@ export default defineSchema({
     email: v.string(),
     emailVerified: v.boolean(),
     image: v.optional(v.string()),
+    /** Avatar en Convex Storage; la URL se resuelve al leer (no caduca). */
+    imageStorageId: v.optional(v.id("_storage")),
+    /** Object key en S3 del avatar actual (para borrar al reemplazar). */
+    imageS3Key: v.optional(v.string()),
 
     firstName: v.optional(v.string()),
     lastName: v.optional(v.string()),
@@ -197,7 +201,13 @@ export default defineSchema({
     // Fechas
     fechaEmision: v.number(), // timestamp
     fechaVencimiento: v.number(), // timestamp (día 15 del siguiente mes)
-    estado: v.union(v.literal("pendiente"), v.literal("pagada"), v.literal("vencida"), v.literal("abonada")),
+    estado: v.union(
+      v.literal("pendiente"),
+      v.literal("pagada"),
+      v.literal("vencida"),
+      v.literal("abonada"),
+      v.literal("saldo_a_favor"),
+    ),
 
     // Archivos
     pdfUrl: v.optional(v.string()),
@@ -363,6 +373,38 @@ export default defineSchema({
   zonasComunes: defineTable({
     condominioId: v.id("condominios"),
     nombre: v.string(),
+    /** Catálogo: piscina, salón, etc. */
+    tipo: v.optional(
+      v.union(
+        v.literal("salon_social"),
+        v.literal("zona_bbq"),
+        v.literal("sauna"),
+        v.literal("casa_eventos"),
+        v.literal("gimnasio"),
+        v.literal("piscina"),
+        v.literal("cancha_deportiva"),
+        v.literal("parqueadero"),
+        v.literal("otro"),
+      ),
+    ),
+    /** Modalidad de reserva. */
+    unidadTiempo: v.optional(
+      v.union(v.literal("hora"), v.literal("dia"), v.literal("mes")),
+    ),
+    precioPorHora: v.optional(v.number()),
+    precioPorDia: v.optional(v.number()),
+    precioPorMes: v.optional(v.number()),
+    /** 0=Domingo … 6=Sábado */
+    horariosPorDia: v.optional(
+      v.array(
+        v.object({
+          dia: v.number(),
+          horaInicio: v.string(),
+          horaFin: v.string(),
+        }),
+      ),
+    ),
+    requiereAprobacion: v.optional(v.boolean()),
     capacidad: v.optional(v.number()),
     descripcion: v.optional(v.string()),
     activa: v.boolean(),
@@ -436,7 +478,9 @@ export default defineSchema({
       v.literal("financiero"),
       v.literal("otro")
     ),
-    storageId: v.id("_storage"),
+    storageId: v.optional(v.id("_storage")), // legacy Convex Storage
+    url: v.optional(v.string()), // S3 public URL
+    s3Key: v.optional(v.string()),
     mimeType: v.string(),
     tamanio: v.number(),
     autorNombre: v.string(),
@@ -473,9 +517,11 @@ export default defineSchema({
     ),
     fijado: v.boolean(),
 
-    // Archivos adjuntos (imágenes, PDF, documentos)
+    // Archivos adjuntos (imágenes, PDF, documentos) — S3 preferido
     archivos: v.optional(v.array(v.object({
-      storageId: v.id("_storage"),
+      storageId: v.optional(v.id("_storage")), // legacy
+      url: v.optional(v.string()),
+      s3Key: v.optional(v.string()),
       mimeType: v.string(),
       nombre: v.string(),
     }))),
@@ -518,7 +564,8 @@ export default defineSchema({
       )
     ),
     descripcion: v.optional(v.string()),
-    actaStorageId: v.optional(v.id("_storage")),
+    actaStorageId: v.optional(v.id("_storage")), // legacy
+    actaUrl: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
@@ -564,7 +611,8 @@ export default defineSchema({
     representanteNombre: v.string(),
     apoderadoDocumento: v.optional(v.string()),
     codigoAcceso: v.string(), // código que usa el apoderado para ingresar y votar
-    documentoStorageId: v.optional(v.id("_storage")), // PDF/foto del poder firmado
+    documentoStorageId: v.optional(v.id("_storage")), // legacy
+    documentoUrl: v.optional(v.string()),
     validado: v.boolean(),
     createdAt: v.number(),
     updatedAt: v.number(),
@@ -660,7 +708,77 @@ export default defineSchema({
     .index("by_estado", ["condominioId", "estado"]),
 
   // ─────────────────────────────────────────────────────────────
-  // Consejo administrativo — miembros
+  // Consejo administrativo — documentos por categoría (versión + comentarios)
+  // ─────────────────────────────────────────────────────────────
+  consejoCategorias: defineTable({
+    condominioId: v.id("condominios"),
+    nombre: v.string(),
+    slug: v.string(),
+    iconKey: v.optional(v.string()),
+    colorKey: v.optional(v.string()),
+    orden: v.number(),
+    activo: v.boolean(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_condominio", ["condominioId"])
+    .index("by_condominio_slug", ["condominioId", "slug"]),
+
+  consejoDocumentos: defineTable({
+    condominioId: v.id("condominios"),
+    categoriaId: v.id("consejoCategorias"),
+    titulo: v.string(),
+    descripcion: v.optional(v.string()),
+    periodoMes: v.optional(v.string()), // "2026-04"
+    fileUrl: v.string(),
+    fileName: v.string(),
+    mimeType: v.string(),
+    sizeBytes: v.number(),
+    s3Key: v.optional(v.string()),
+    version: v.number(),
+    estado: v.union(
+      v.literal("pendiente"),
+      v.literal("en_revision"),
+      v.literal("aprobado"),
+      v.literal("reemplazado"),
+    ),
+    createdByUserId: v.optional(v.id("users")),
+    createdByNombre: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_condominio", ["condominioId"])
+    .index("by_categoria", ["categoriaId"]),
+
+  consejoDocumentoVersiones: defineTable({
+    condominioId: v.id("condominios"),
+    documentoId: v.id("consejoDocumentos"),
+    version: v.number(),
+    fileUrl: v.string(),
+    fileName: v.string(),
+    mimeType: v.string(),
+    sizeBytes: v.number(),
+    s3Key: v.optional(v.string()),
+    subidoPorUserId: v.optional(v.id("users")),
+    subidoPorNombre: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index("by_documento", ["documentoId"]),
+
+  consejoDocumentoComentarios: defineTable({
+    condominioId: v.id("condominios"),
+    documentoId: v.id("consejoDocumentos"),
+    userId: v.id("users"),
+    autorNombre: v.string(),
+    contenido: v.string(),
+    activo: v.boolean(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_documento", ["documentoId"]),
+
+  // ─────────────────────────────────────────────────────────────
+  // Consejo administrativo — miembros (catálogo de cargos)
   // ─────────────────────────────────────────────────────────────
   consejoMiembros: defineTable({
     condominioId: v.id("condominios"),
@@ -721,9 +839,11 @@ export default defineSchema({
     ),
     descripcion: v.optional(v.string()),
     estado: v.union(v.literal("recibido"), v.literal("entregado")),
-    // Evidencia fotográfica (llegada y entrega).
-    fotoStorageId: v.optional(v.id("_storage")),
-    fotoEntregaStorageId: v.optional(v.id("_storage")),
+    // Evidencia fotográfica (llegada y entrega). Preferir URL S3.
+    fotoStorageId: v.optional(v.id("_storage")), // legacy
+    fotoUrl: v.optional(v.string()),
+    fotoEntregaStorageId: v.optional(v.id("_storage")), // legacy
+    fotoEntregaUrl: v.optional(v.string()),
     observacionesEntrega: v.optional(v.string()),
     recibidoPorNombre: v.string(),              // guardia que recibió
     entregadoPorNombre: v.optional(v.string()), // guardia que entregó
@@ -805,7 +925,7 @@ export default defineSchema({
     zonaId: v.optional(v.id("guardiaRondaZonas")),
     zona: v.string(), // nombre denormalizado
     novedad: v.optional(v.string()),
-    fotos: v.array(v.id("_storage")),
+    fotos: v.array(v.string()), // URLs S3 (o storageId legacy como string)
     createdAt: v.number(),
   })
     .index("by_turno", ["turnoId"])
@@ -844,7 +964,8 @@ export default defineSchema({
     titulo: v.string(),
     descripcion: v.string(),
     prioridad: v.union(v.literal("baja"), v.literal("media"), v.literal("alta")),
-    archivoStorageId: v.optional(v.id("_storage")),
+    archivoStorageId: v.optional(v.id("_storage")), // legacy
+    archivoUrl: v.optional(v.string()),
     archivoNombre: v.optional(v.string()),
     reportadoPorUserId: v.id("users"),
     reportadoPorNombre: v.string(),
@@ -861,14 +982,16 @@ export default defineSchema({
     reservaId: v.id("reservas"),
     monto: v.number(),
     observacionesIngreso: v.optional(v.string()),
-    fotoIngresoStorageId: v.optional(v.id("_storage")),
+    fotoIngresoStorageId: v.optional(v.id("_storage")), // legacy
+    fotoIngresoUrl: v.optional(v.string()),
     estado: v.union(
       v.literal("registrado"),
       v.literal("devuelto"),
       v.literal("no_devuelto")
     ),
     observacionesSalida: v.optional(v.string()),
-    fotoSalidaStorageId: v.optional(v.id("_storage")),
+    fotoSalidaStorageId: v.optional(v.id("_storage")), // legacy
+    fotoSalidaUrl: v.optional(v.string()),
     recibidoPorNombre: v.string(),
     resueltoPorNombre: v.optional(v.string()),
     fechaRegistro: v.number(),

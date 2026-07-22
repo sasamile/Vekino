@@ -13,7 +13,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
-import { useQuery, useMutation, Authenticated } from "convex/react";
+import { useQuery, useMutation, useAction, Authenticated } from "convex/react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
 import { getDocumentPicker } from "@/lib/document-picker";
@@ -246,7 +246,7 @@ function CrearAvisoSheet({
   condominioId: Id<"condominios">;
 }) {
   const create = useMutation(api.comunicados.create);
-  const generateUploadUrl = useMutation(api.comunicados.generateUploadUrl);
+  const generateUploadUrl = useAction(api.files.generateUploadUrl);
   const [titulo, setTitulo] = useState("");
   const [cuerpo, setCuerpo] = useState("");
   const [audiencia, setAudiencia] = useState<Audiencia>("todos");
@@ -323,22 +323,27 @@ function CrearAvisoSheet({
   }
 
   async function uploadOne(file: PendingFile): Promise<{
-    storageId: Id<"_storage">;
+    url: string;
+    s3Key: string;
     mimeType: string;
     nombre: string;
   }> {
-    const uploadUrl = await generateUploadUrl();
+    const { uploadUrl, publicUrl, key } = await generateUploadUrl({
+      folder: `condominios/comunicados/${condominioId}`,
+      contentType: file.mimeType,
+      fileName: file.nombre,
+    });
     const blobRes = await fetch(file.uri);
     const blob = await blobRes.blob();
     const upload = await fetch(uploadUrl, {
-      method: "POST",
+      method: "PUT",
       headers: { "Content-Type": file.mimeType },
       body: blob,
     });
     if (!upload.ok) throw new Error(`No se pudo subir "${file.nombre}".`);
-    const { storageId } = (await upload.json()) as { storageId: string };
     return {
-      storageId: storageId as Id<"_storage">,
+      url: publicUrl,
+      s3Key: key,
       mimeType: file.mimeType,
       nombre: file.nombre,
     };

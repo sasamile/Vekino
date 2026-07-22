@@ -10,6 +10,8 @@ import {
   requireCondominioRole,
 } from "./model/authz";
 import { tipoDocumentoValidator } from "./model/roles";
+import { resolveUserImage } from "./model/userImage";
+import { scheduleDeleteS3Keys, s3KeyFromPublicUrl } from "./model/s3";
 
 /**
  * Estado de sesión + perfil + membresías del usuario actual.
@@ -47,7 +49,7 @@ export const me = query({
       id: user._id,
       name: user.name,
       email: user.email,
-      image: user.image,
+      image: await resolveUserImage(ctx, user),
       firstName: user.firstName,
       lastName: user.lastName,
       telefono: user.telefono,
@@ -126,33 +128,75 @@ export const updateMyProfile = mutation({
   },
 });
 
-/** URL firmada para subir avatar (Convex Storage). */
+/** URL firmada para subir avatar — @deprecated usar api.files.generateUploadUrl (S3). */
 export const generateAvatarUploadUrl = mutation({
   args: {},
-  handler: async (ctx) => {
-    await requireAppUser(ctx);
-    return await ctx.storage.generateUploadUrl();
+  handler: async () => {
+    throw new Error(
+      "Las subidas van a S3. Usa api.files.generateUploadUrl (action).",
+    );
   },
 });
 
-/** Guarda el avatar subido y persiste la URL en el perfil. */
+/** Guarda el avatar (URL S3 preferida; storageId legacy). Borra la foto anterior de S3. */
 export const setMyAvatar = mutation({
-  args: { storageId: v.id("_storage") },
+  args: {
+    storageId: v.optional(v.id("_storage")),
+    url: v.optional(v.string()),
+    s3Key: v.optional(v.string()),
+  },
   handler: async (ctx, args) => {
     const user = await requireAppUser(ctx);
-    const url = await ctx.storage.getUrl(args.storageId);
-    if (!url) throw new Error("No se pudo obtener la URL del avatar.");
-    await ctx.db.patch(user._id, { image: url, updatedAt: Date.now() });
-    return { image: url };
+    let image = args.url?.trim();
+    if (!image && args.storageId) {
+      image = (await ctx.storage.getUrl(args.storageId)) ?? undefined;
+    }
+    if (!image) throw new Error("No se pudo obtener la URL del avatar.");
+
+    const newKey =
+      args.s3Key?.trim() || s3KeyFromPublicUrl(image) || undefined;
+    const oldKey =
+      user.imageS3Key?.trim() || s3KeyFromPublicUrl(user.image) || undefined;
+
+    if (oldKey && oldKey !== newKey) {
+      try {
+        await scheduleDeleteS3Keys(ctx, [oldKey]);
+      } catch {
+        /* no bloquear el cambio de avatar si falla el borrado async */
+      }
+    }
+    if (user.imageStorageId && user.imageStorageId !== args.storageId) {
+      await ctx.storage.delete(user.imageStorageId).catch(() => {});
+    }
+
+    await ctx.db.patch(user._id, {
+      image,
+      // Con S3 limpiamos el storage legacy para que resolveUserImage no lo priorice.
+      imageStorageId: args.storageId ?? undefined,
+      imageS3Key: newKey,
+      updatedAt: Date.now(),
+    });
+    return { image };
   },
 });
 
-/** Quita el avatar del perfil. */
+/** Quita el avatar del perfil y borra el objeto en S3. */
 export const clearMyAvatar = mutation({
   args: {},
   handler: async (ctx) => {
     const user = await requireAppUser(ctx);
-    await ctx.db.patch(user._id, { image: undefined, updatedAt: Date.now() });
+    const oldKey =
+      user.imageS3Key?.trim() || s3KeyFromPublicUrl(user.image) || undefined;
+    if (oldKey) await scheduleDeleteS3Keys(ctx, [oldKey]);
+    if (user.imageStorageId) {
+      await ctx.storage.delete(user.imageStorageId).catch(() => {});
+    }
+    await ctx.db.patch(user._id, {
+      image: undefined,
+      imageStorageId: undefined,
+      imageS3Key: undefined,
+      updatedAt: Date.now(),
+    });
   },
 });
 
@@ -181,13 +225,15 @@ export const listPlatformStaff = query({
       .query("users")
       .withIndex("by_platformRole", (q) => q.eq("platformRole", "admin"))
       .collect();
-    return [...supers, ...admins].map((u) => ({
-      _id: u._id,
-      name: u.name,
-      email: u.email,
-      image: u.image ?? null,
-      platformRole: u.platformRole ?? null,
-    }));
+    return await Promise.all(
+      [...supers, ...admins].map(async (u) => ({
+        _id: u._id,
+        name: u.name,
+        email: u.email,
+        image: await resolveUserImage(ctx, u),
+        platformRole: u.platformRole ?? null,
+      })),
+    );
   },
 });
 
@@ -421,5 +467,105 @@ export const createPlatformAdmin = action({
     });
 
     return { ok: true as const, userId: profile.userId, existed: profile.existed };
+  },
+});
+
+/**
+ * Crea un residente del condominio (perfil + membresía + contraseña + unidades).
+ */
+export const createCondoMember = action({
+  args: {
+    condominioId: v.id("condominios"),
+    email: v.string(),
+    name: v.string(),
+    password: v.string(),
+    telefono: v.optional(v.string()),
+    roles: v.array(
+      v.union(
+        v.literal("administrador"),
+        v.literal("propietario"),
+        v.literal("apoderado"),
+        v.literal("arrendatario"),
+        v.literal("residente"),
+        v.literal("contadora"),
+        v.literal("guardia"),
+        v.literal("junta_directiva"),
+        v.literal("representante_asamblea"),
+      ),
+    ),
+    unidadIds: v.optional(v.array(v.id("unidades"))),
+  },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{ ok: true; userId: Id<"users">; membershipId: Id<"memberships">; existed: boolean }> => {
+    const password = args.password.trim();
+    if (password.length < 8) {
+      throw new Error("La contraseña debe tener al menos 8 caracteres.");
+    }
+
+    const profile: {
+      userId: Id<"users">;
+      membershipId: Id<"memberships">;
+      email: string;
+      name: string;
+      existed: boolean;
+    } = await ctx.runMutation(api.memberships.upsertCondoMemberProfile, {
+      condominioId: args.condominioId,
+      email: args.email,
+      name: args.name,
+      telefono: args.telefono,
+      roles: args.roles,
+      unidadIds: args.unidadIds,
+    });
+
+    const auth = createAuth(ctx);
+    const authCtx = await auth.$context;
+    const ia = authCtx.internalAdapter;
+    const hashed = await authCtx.password.hash(password);
+
+    const found = await ia.findUserByEmail(profile.email);
+    let authUserId: string;
+
+    if (!found) {
+      const created = await ia.createUser({
+        email: profile.email,
+        name: profile.name,
+        emailVerified: false,
+      });
+      authUserId = created.id;
+      await ia.createAccount({
+        userId: created.id,
+        providerId: "credential",
+        accountId: created.id,
+        password: hashed,
+      });
+    } else {
+      authUserId = found.user.id;
+      const accounts = await ia.findAccounts(found.user.id);
+      const credential = accounts.find((a) => a.providerId === "credential");
+      if (!credential) {
+        await ia.createAccount({
+          userId: found.user.id,
+          providerId: "credential",
+          accountId: found.user.id,
+          password: hashed,
+        });
+      } else {
+        await ia.updatePassword(found.user.id, hashed);
+      }
+    }
+
+    await ctx.runMutation(api.users.linkAuthId, {
+      userId: profile.userId,
+      authId: authUserId,
+    });
+
+    return {
+      ok: true as const,
+      userId: profile.userId,
+      membershipId: profile.membershipId,
+      existed: profile.existed,
+    };
   },
 });

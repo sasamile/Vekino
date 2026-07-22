@@ -1,67 +1,91 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery, useMutation, usePaginatedQuery } from "convex/react";
 import {
   FileText, ExternalLink, TrendingUp, Clock, CheckCircle2, AlertTriangle,
   RefreshCcw, Loader2, PiggyBank,
 } from "lucide-react";
 import { api } from "@vekino/backend/api";
-import type { Id } from "@vekino/backend/dataModel";
+import type { Doc, Id } from "@vekino/backend/dataModel";
 import { UploadFacturas } from "@/components/upload-facturas";
 import { CreateFacturaForm } from "@/components/create-factura-form";
 import { PageContainer } from "@/components/layout/page-container";
 import { PageHeader } from "@/components/layout/page-header";
+import { useTopbarActions } from "@/components/layout/admin-topbar-context";
+import { PeriodoSelect, formatPeriodoLabel } from "@/components/layout/periodo-select";
 import { StatCard } from "@/components/layout/stat-card";
 import { SearchInput, Select } from "@/components/ui/input";
-import { TableCard, Table, THead, TH, TBody, TR, TD } from "@/components/ui/table";
+import { TableCard, Table, THead, TH, TBody, TR, TD, CellStack } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
+import { usePersistedPeriodo } from "@/hooks/use-persisted-periodo";
 import { cop } from "@/lib/utils";
 
-const MESES = [
-  "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
-  "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
-];
-
-function periodoLabel(p: string) {
-  const [y, m] = p.split("-");
-  const mi = Number(m) - 1;
-  return `${MESES[mi] ?? m} ${y}`;
-}
+const PAGE_SIZE = 30;
 
 const ESTADO_TONE: Record<string, React.ComponentProps<typeof Badge>["tone"]> = {
   pendiente: "warning",
   pagada: "success",
   vencida: "destructive",
   abonada: "info",
+  saldo_a_favor: "violet",
 };
 const ESTADO_LABEL: Record<string, string> = {
   pendiente: "Pendiente",
   pagada: "Pagada",
   vencida: "Vencida",
   abonada: "Abonada",
+  saldo_a_favor: "Saldo a favor",
 };
+
+type Factura = Doc<"facturas">;
+
+function useDebounced(value: string, ms: number) {
+  const [v, setV] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setV(value), ms);
+    return () => clearTimeout(t);
+  }, [value, ms]);
+  return v;
+}
 
 export default function FinanzasPage() {
   const params = useParams<{ id: string }>();
   const condominioId = params.id as Id<"condominios">;
   const condominioData = useQuery(api.condominios.adminHome, { condominioId });
   const periodos = useQuery(api.facturas.listPeriodos, { condominioId });
-  const [selectedPeriodo, setSelectedPeriodo] = useState<string | null>(null);
+  const { periodo, setPeriodo } = usePersistedPeriodo(condominioId, periodos);
   const [uploadKey, setUploadKey] = useState(0);
 
-  const periodo = selectedPeriodo ?? periodos?.[0] ?? "2026-03";
-  const resumen = useQuery(api.facturas.resumenPeriodo, { condominioId, periodo });
-  const facturas = useQuery(api.facturas.listByPeriodo, { condominioId, periodo });
+  const periodoActivo = periodo ?? periodos?.[0] ?? "2026-03";
+  const resumen = useQuery(api.facturas.resumenPeriodo, { condominioId, periodo: periodoActivo });
 
   const [search, setSearch] = useState("");
-  const [filtroEstado, setFiltroEstado] = useState<"" | "pendiente" | "pagada" | "vencida" | "abonada">("");
-  const [detalleFactura, setDetalleFactura] = useState<string | null>(null);
+  const deferredSearch = useDebounced(search, 280);
+  const [filtroEstado, setFiltroEstado] = useState<
+    "" | "pendiente" | "pagada" | "vencida" | "abonada" | "saldo_a_favor"
+  >("");
+  const [facturaDetalle, setFacturaDetalle] = useState<Factura | null>(null);
+
+  const { results: facturas, status, loadMore } = usePaginatedQuery(
+    api.facturas.listPage,
+    {
+      condominioId,
+      periodo: periodoActivo,
+      q: deferredSearch.trim() || undefined,
+      estado: filtroEstado || undefined,
+    },
+    { initialNumItems: PAGE_SIZE },
+  );
+
+  const loading = status === "LoadingFirstPage";
+  const canLoadMore = status === "CanLoadMore";
+  const loadingMore = status === "LoadingMore";
 
   const reconciliar = useMutation(api.facturas.reconciliar);
   const [conciliando, setConciliando] = useState(false);
@@ -85,22 +109,51 @@ export default function FinanzasPage() {
     }
   }
 
-  const term = search.trim().toLowerCase();
-  const filtered = (facturas ?? []).filter((f) => {
-    if (filtroEstado && f.estado !== filtroEstado) return false;
-    if (!term) return true;
-    return (
-      f.residenteNombre.toLowerCase().includes(term) ||
-      (f.apto ?? "").includes(term) ||
-      f.numeroFactura.toLowerCase().includes(term)
-    );
-  });
+  const hasFilters = Boolean(deferredSearch.trim() || filtroEstado);
+  const totalLabel = resumen?.total;
 
-  const facturaDetalle = detalleFactura
-    ? facturas?.find((f) => f._id === detalleFactura)
-    : null;
-
-  const hasFilters = Boolean(term || filtroEstado);
+  useTopbarActions(
+    <>
+      <Button variant="outline" onClick={handleReconciliar} disabled={conciliando}>
+        {conciliando ? (
+          <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+        ) : (
+          <RefreshCcw className="h-4 w-4" aria-hidden />
+        )}
+        Conciliar
+      </Button>
+      <CreateFacturaForm
+        condominioId={condominioId}
+        defaultPeriodo={periodoActivo}
+      />
+      {condominioData?.allowed && condominioData.condominio.legacyId && (
+        <UploadFacturas
+          key={uploadKey}
+          condominioId={condominioId}
+          condominioLegacyId={condominioData.condominio.legacyId}
+          currentPeriodo={periodoActivo}
+          onDone={() => setUploadKey((k) => k + 1)}
+        />
+      )}
+      <PeriodoSelect
+        value={periodoActivo}
+        options={periodos ?? []}
+        onChange={(p) => {
+          setPeriodo(p);
+          setFacturaDetalle(null);
+        }}
+      />
+    </>,
+    [
+      conciliando,
+      condominioId,
+      periodoActivo,
+      uploadKey,
+      condominioData?.allowed,
+      condominioData?.condominio?.legacyId,
+      (periodos ?? []).join("|"),
+    ],
+  );
 
   return (
     <PageContainer>
@@ -108,43 +161,6 @@ export default function FinanzasPage() {
         <PageHeader
           title="Finanzas"
           description="Cuentas de cobro y estado de cartera"
-          action={
-            <>
-              <Button variant="outline" onClick={handleReconciliar} disabled={conciliando}>
-                {conciliando ? (
-                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
-                ) : (
-                  <RefreshCcw className="h-4 w-4" aria-hidden />
-                )}
-                Conciliar
-              </Button>
-              <CreateFacturaForm
-                condominioId={condominioId}
-                defaultPeriodo={periodo}
-              />
-              {condominioData?.allowed && condominioData.condominio.legacyId && (
-                <UploadFacturas
-                  key={uploadKey}
-                  condominioId={condominioId}
-                  condominioLegacyId={condominioData.condominio.legacyId}
-                  currentPeriodo={periodo}
-                  onDone={() => setUploadKey((k) => k + 1)}
-                />
-              )}
-              <Select
-                value={periodo}
-                onChange={(e) => {
-                  setSelectedPeriodo(e.target.value);
-                  setDetalleFactura(null);
-                }}
-                className="w-40"
-              >
-                {(periodos ?? [periodo]).map((p) => (
-                  <option key={p} value={p}>{periodoLabel(p)}</option>
-                ))}
-              </Select>
-            </>
-          }
         />
 
         {conciliacionMsg && (
@@ -162,7 +178,7 @@ export default function FinanzasPage() {
 
         {/* KPIs */}
         {resumen ? (
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
             <StatCard icon={TrendingUp} label="Total cartera" value={cop(resumen.sumaTotalAPagar)} hint="Facturado en el período" />
             <StatCard icon={Clock} label="Pendientes" value={resumen.pendientes} hint={`de ${resumen.total} facturas`} tone="warning" />
             <StatCard icon={CheckCircle2} label="Pagadas" value={resumen.pagadas} hint={cop(resumen.sumaPagado)} tone="success" />
@@ -170,7 +186,7 @@ export default function FinanzasPage() {
             <StatCard icon={AlertTriangle} label="Vencidas" value={resumen.vencidas} hint="Con mora" tone="destructive" />
           </div>
         ) : (
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
             {Array.from({ length: 5 }).map((_, i) => (
               <Skeleton key={i} className="h-32 rounded-2xl" />
             ))}
@@ -180,9 +196,11 @@ export default function FinanzasPage() {
         {/* Toolbar */}
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <p className="text-sm text-muted-foreground">
-            {facturas === undefined
+            {loading
               ? "Cargando…"
-              : `${filtered.length} de ${facturas.length} facturas`}
+              : totalLabel != null
+                ? `${facturas.length} de ${totalLabel} facturas`
+                : `${facturas.length} facturas`}
           </p>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
             <Select
@@ -195,6 +213,7 @@ export default function FinanzasPage() {
               <option value="pagada">Pagada</option>
               <option value="abonada">Abonada</option>
               <option value="vencida">Vencida</option>
+              <option value="saldo_a_favor">Saldo a favor</option>
             </Select>
             <SearchInput
               value={search}
@@ -206,9 +225,9 @@ export default function FinanzasPage() {
         </div>
 
         {/* Tabla */}
-        {facturas === undefined ? (
+        {loading ? (
           <TableSkeleton />
-        ) : filtered.length === 0 ? (
+        ) : facturas.length === 0 ? (
           <EmptyState
             icon={FileText}
             title={hasFilters ? "Sin resultados" : "Sin facturas"}
@@ -233,64 +252,93 @@ export default function FinanzasPage() {
             }
           />
         ) : (
-          <TableCard>
-            <Table>
-              <THead>
-                <tr>
-                  <TH className="hidden md:table-cell">Factura</TH>
-                  <TH>Residente</TH>
-                  <TH>Estado</TH>
-                  <TH className="text-right">Total</TH>
-                  <TH className="text-right">Acciones</TH>
-                </tr>
-              </THead>
-              <TBody>
-                {filtered.map((f) => (
-                  <TR key={f._id}>
-                    <TD className="hidden font-mono text-xs text-muted-foreground md:table-cell">
-                      {f.numeroFactura}
-                    </TD>
-                    <TD>
-                      <p className="font-medium text-foreground">{f.residenteNombre}</p>
-                      <p className="text-xs text-muted-foreground">Apto {f.apto ?? "—"}</p>
-                    </TD>
-                    <TD>
-                      <Badge tone={ESTADO_TONE[f.estado] ?? "neutral"}>
-                        {ESTADO_LABEL[f.estado] ?? f.estado}
-                      </Badge>
-                    </TD>
-                    <TD className="text-right font-semibold tabular-nums text-foreground">
-                      {cop(f.totalAPagar)}
-                    </TD>
-                    <TD className="text-right">
-                      <div className="flex items-center justify-end gap-1">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() =>
-                            setDetalleFactura(f._id === detalleFactura ? null : f._id)
-                          }
-                        >
-                          Ver detalle
-                        </Button>
-                        {f.pdfUrl && (
-                          <a
-                            href={f.pdfUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            aria-label="Abrir PDF"
-                            className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          <>
+            <TableCard>
+              <Table>
+                <THead>
+                  <tr>
+                    <TH className="hidden md:table-cell">Factura</TH>
+                    <TH>Residente</TH>
+                    <TH>Estado</TH>
+                    <TH className="text-right">Total</TH>
+                    <TH className="text-right">Acciones</TH>
+                  </tr>
+                </THead>
+                <TBody>
+                  {facturas.map((f) => (
+                    <TR key={f._id}>
+                      <TD className="hidden md:table-cell">
+                        <CellStack
+                          primary={f.numeroFactura}
+                          secondary={`ID ${f.numeroInterno}`}
+                        />
+                      </TD>
+                      <TD>
+                        <CellStack
+                          primary={f.residenteNombre}
+                          secondary={f.apto ? `Apto ${f.apto}` : "Sin unidad"}
+                        />
+                      </TD>
+                      <TD>
+                        <Badge tone={ESTADO_TONE[f.estado] ?? "neutral"}>
+                          {ESTADO_LABEL[f.estado] ?? f.estado}
+                        </Badge>
+                      </TD>
+                      <TD className="text-right font-medium tabular-nums text-foreground">
+                        {cop(f.totalAPagar)}
+                      </TD>
+                      <TD className="text-right">
+                        <div className="flex items-center justify-end gap-1">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() =>
+                              setFacturaDetalle(
+                                facturaDetalle?._id === f._id ? null : f,
+                              )
+                            }
                           >
-                            <ExternalLink className="h-4 w-4" />
-                          </a>
-                        )}
-                      </div>
-                    </TD>
-                  </TR>
-                ))}
-              </TBody>
-            </Table>
-          </TableCard>
+                            Ver detalle
+                          </Button>
+                          {f.pdfUrl && (
+                            <a
+                              href={f.pdfUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              aria-label="Abrir PDF"
+                              className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                            >
+                              <ExternalLink className="h-4 w-4" />
+                            </a>
+                          )}
+                        </div>
+                      </TD>
+                    </TR>
+                  ))}
+                </TBody>
+              </Table>
+            </TableCard>
+
+            {canLoadMore || loadingMore ? (
+              <div className="flex justify-center">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={loadingMore}
+                  onClick={() => loadMore(PAGE_SIZE)}
+                >
+                  {loadingMore ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                      Cargando…
+                    </>
+                  ) : (
+                    "Cargar más"
+                  )}
+                </Button>
+              </div>
+            ) : null}
+          </>
         )}
       </div>
 
@@ -298,9 +346,9 @@ export default function FinanzasPage() {
       {facturaDetalle && (
         <Modal
           open
-          onClose={() => setDetalleFactura(null)}
+          onClose={() => setFacturaDetalle(null)}
           title={facturaDetalle.residenteNombre}
-          description={`${facturaDetalle.numeroFactura} · Apto ${facturaDetalle.apto ?? "—"} · ${periodoLabel(facturaDetalle.periodo)}`}
+          description={`${facturaDetalle.numeroFactura} · Apto ${facturaDetalle.apto ?? "—"} · ${formatPeriodoLabel(facturaDetalle.periodo)}`}
           footer={
             <>
               {facturaDetalle.pdfUrl && (
@@ -311,7 +359,7 @@ export default function FinanzasPage() {
                   </a>
                 </Button>
               )}
-              <Button size="sm" onClick={() => setDetalleFactura(null)}>Cerrar</Button>
+              <Button size="sm" onClick={() => setFacturaDetalle(null)}>Cerrar</Button>
             </>
           }
         >
@@ -323,7 +371,7 @@ export default function FinanzasPage() {
           <div className="overflow-hidden rounded-xl border border-border">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-border bg-muted/40 text-left text-xs text-muted-foreground">
+                <tr className="border-b border-border bg-brand/[0.07] text-left text-xs text-muted-foreground">
                   <th className="px-4 py-2 font-medium">Concepto</th>
                   <th className="px-4 py-2 text-right font-medium">Ant.</th>
                   <th className="px-4 py-2 text-right font-medium">Actual</th>
@@ -332,7 +380,10 @@ export default function FinanzasPage() {
               </thead>
               <tbody className="divide-y divide-border">
                 {facturaDetalle.lineas.map((l) => (
-                  <tr key={l.codigo} className={l.total > 0 ? "" : "text-muted-foreground/60"}>
+                  <tr
+                    key={l.codigo}
+                    className={`even:bg-brand/[0.035] ${l.total > 0 ? "" : "text-muted-foreground/60"}`}
+                  >
                     <td className="px-4 py-2">{l.concepto}</td>
                     <td className="px-4 py-2 text-right tabular-nums">{l.saldoAnterior > 0 ? cop(l.saldoAnterior) : "—"}</td>
                     <td className="px-4 py-2 text-right tabular-nums">{l.actual > 0 ? cop(l.actual) : "—"}</td>

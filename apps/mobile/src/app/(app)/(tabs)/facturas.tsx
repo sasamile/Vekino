@@ -34,13 +34,14 @@ import { cop, fmtPeriodo } from "@/lib/utils";
 import { C } from "@/lib/theme";
 import { AuthUI } from "@/lib/auth-ui";
 
-type Estado = "pendiente" | "pagada" | "vencida" | "abonada";
+type Estado = "pendiente" | "pagada" | "vencida" | "abonada" | "saldo_a_favor";
 
-const ESTADO_TONE: Record<Estado, "yellow" | "green" | "red" | "neutral"> = {
+const ESTADO_TONE: Record<Estado, "yellow" | "green" | "red" | "neutral" | "blue"> = {
   pendiente: "yellow",
   pagada:    "green",
   vencida:   "red",
   abonada:   "neutral",
+  saldo_a_favor: "blue",
 };
 
 const ESTADO_LABEL: Record<Estado, string> = {
@@ -48,6 +49,7 @@ const ESTADO_LABEL: Record<Estado, string> = {
   pagada:    "Pagada",
   vencida:   "Vencida",
   abonada:   "Abonada",
+  saldo_a_favor: "Saldo a favor",
 };
 
 type FacturaRow = {
@@ -256,7 +258,7 @@ function AdminFacturasView({ condominioId }: { condominioId: Id<"condominios"> }
           style={{ marginBottom: 16 }}
           contentContainerStyle={{ gap: 8, paddingVertical: 2 }}
         >
-          {(["", "pendiente", "pagada", "vencida"] as const).map((e) => {
+          {(["", "pendiente", "pagada", "vencida", "saldo_a_favor"] as const).map((e) => {
             const active = estadoFiltro === e;
             return (
               <Pressable key={e} onPress={() => setEstadoFiltro(e)} style={chipStyle(active)}>
@@ -367,7 +369,7 @@ function ResidentFacturasView({ condominioId }: { condominioId: Id<"condominios"
           style={{ marginBottom: 20 }}
           contentContainerStyle={{ gap: 8, paddingVertical: 2 }}
         >
-          {(["", "pendiente", "pagada", "vencida"] as const).map((e) => {
+          {(["", "pendiente", "pagada", "vencida", "saldo_a_favor"] as const).map((e) => {
             const active = estadoFiltro === e;
             return (
               <Pressable key={e} onPress={() => setEstadoFiltro(e)} style={chipStyle(active)}>
@@ -486,7 +488,7 @@ function CrearFacturaSheet({
   defaultPeriodo?: string;
 }) {
   const createManual = useMutation(api.facturas.createManual);
-  const generateUploadUrl = useMutation(api.facturas.generateUploadUrl);
+  const generateUploadUrl = useAction(api.files.generateUploadUrl);
   const unidades = useQuery(
     api.unidades.listDetailed,
     visible ? { condominioId } : "skip",
@@ -593,19 +595,22 @@ function CrearFacturaSheet({
     setSaving(true);
     setError(null);
     try {
-      let pdfStorageId: Id<"_storage"> | undefined;
+      let pdfUrl: string | undefined;
       if (adjunto) {
-        const uploadUrl = await generateUploadUrl();
+        const { uploadUrl, publicUrl } = await generateUploadUrl({
+          folder: `condominios/facturas/${condominioId}`,
+          contentType: adjunto.mimeType,
+          fileName: adjunto.nombre,
+        });
         const blobRes = await fetch(adjunto.uri);
         const blob = await blobRes.blob();
         const upload = await fetch(uploadUrl, {
-          method: "POST",
+          method: "PUT",
           headers: { "Content-Type": adjunto.mimeType },
           body: blob,
         });
         if (!upload.ok) throw new Error("No se pudo subir el archivo.");
-        const { storageId } = (await upload.json()) as { storageId: string };
-        pdfStorageId = storageId as Id<"_storage">;
+        pdfUrl = publicUrl;
       }
 
       const saldo = Number(saldoAFavor.replace(/[^\d.]/g, "")) || 0;
@@ -626,7 +631,7 @@ function CrearFacturaSheet({
         valor: valorNum,
         saldoAFavor: saldo,
         totalConDescuento: desc,
-        pdfStorageId,
+        pdfUrl,
       });
       reset();
       onClose();

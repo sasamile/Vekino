@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef } from "react";
-import { useMutation } from "convex/react";
+import { useMutation, useAction } from "convex/react";
 import { Loader2, Pin, Paperclip, File as FileIcon, X } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
@@ -9,12 +9,14 @@ import { Modal } from "@/components/ui/modal";
 import { Button } from "@/components/ui/button";
 import { Input, Textarea, Select } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { uploadToS3 } from "@/lib/upload-s3";
 
 export type Audiencia = "todos" | "propietario" | "arrendatario" | "residente" | "junta_directiva" | "guardia";
 export type Prioridad = "normal" | "importante" | "urgente";
 
 export interface ArchivoItem {
-  storageId: string;
+  storageId?: string;
+  s3Key?: string;
   mimeType: string;
   nombre: string;
   url: string;
@@ -98,7 +100,7 @@ export function ComunicadoForm({
 }) {
   const create = useMutation(api.comunicados.create);
   const update = useMutation(api.comunicados.update);
-  const generateUploadUrl = useMutation(api.comunicados.generateUploadUrl);
+  const generateUploadUrl = useAction(api.files.generateUploadUrl);
   const editing = Boolean(initial?.id);
 
   const [titulo, setTitulo] = useState(initial?.titulo ?? "");
@@ -156,19 +158,21 @@ export function ComunicadoForm({
     setBusy(true);
     setError(null);
     try {
-      // Subir nuevos archivos a Convex File Storage
-      const nuevosItems: { storageId: Id<"_storage">; mimeType: string; nombre: string }[] = [];
+      const nuevosItems: {
+        url: string;
+        s3Key: string;
+        mimeType: string;
+        nombre: string;
+      }[] = [];
       for (const file of nuevosArchivos) {
-        const uploadUrl = await generateUploadUrl();
-        const res = await fetch(uploadUrl, {
-          method: "POST",
-          headers: { "Content-Type": file.type },
-          body: file,
-        });
-        if (!res.ok) throw new Error(`Error al subir "${file.name}".`);
-        const { storageId } = (await res.json()) as { storageId: string };
+        const { url, key } = await uploadToS3(
+          generateUploadUrl,
+          file,
+          `condominios/comunicados/${condominioId}`,
+        );
         nuevosItems.push({
-          storageId: storageId as Id<"_storage">,
+          url,
+          s3Key: key,
           mimeType: file.type,
           nombre: file.name,
         });
@@ -176,7 +180,9 @@ export function ComunicadoForm({
 
       const archivosFinales = [
         ...archivosExistentes.map((a) => ({
-          storageId: a.storageId as Id<"_storage">,
+          storageId: a.storageId as Id<"_storage"> | undefined,
+          url: a.url || undefined,
+          s3Key: a.s3Key,
           mimeType: a.mimeType,
           nombre: a.nombre,
         })),
@@ -305,7 +311,7 @@ export function ComunicadoForm({
             <div className="flex flex-wrap gap-2">
               {archivosExistentes.map((a, i) => (
                 <ArchivoPreview
-                  key={a.storageId}
+                  key={a.s3Key ?? a.storageId ?? a.url}
                   url={a.url}
                   nombre={a.nombre}
                   mimeType={a.mimeType}

@@ -12,6 +12,8 @@ import { Modal } from "@/components/ui/modal";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/input";
+import { PageContainer } from "@/components/layout/page-container";
+import { PageHeader } from "@/components/layout/page-header";
 import { cn } from "@/lib/utils";
 
 type Ticket = Doc<"soporteTickets">;
@@ -48,17 +50,13 @@ export default function PlatformSoportePage() {
   const [selected, setSelected] = useState<Ticket | null>(null);
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6 px-4 py-8 sm:px-6">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
-            <LifeBuoy className="h-6 w-6" /> Soporte
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            Tickets de ayuda de toda la plataforma
-          </p>
-        </div>
-        <div className="flex gap-1 rounded-xl bg-muted p-1">
+    <PageContainer>
+      <div className="mx-auto max-w-5xl space-y-6">
+        <PageHeader
+          title="Soporte"
+          description="Tickets de ayuda de toda la plataforma"
+        />
+        <div className="flex gap-1 rounded-xl bg-muted p-1 w-fit">
           {(
             [
               [true, "Abiertos"],
@@ -79,49 +77,49 @@ export default function PlatformSoportePage() {
             </button>
           ))}
         </div>
-      </div>
 
-      {tickets === undefined ? (
-        <div className="space-y-3">
-          {[1, 2, 3].map((i) => (
-            <Skeleton key={i} className="h-24 rounded-2xl" />
-          ))}
-        </div>
-      ) : tickets.length === 0 ? (
-        <EmptyState
-          icon={LifeBuoy}
-          title="Sin tickets"
-          description="Las solicitudes desde la app móvil aparecen aquí."
-        />
-      ) : (
-        <div className="space-y-3">
-          {tickets.map((t) => {
-            const est = ESTADO[t.estado];
-            return (
-              <Card
-                key={t._id}
-                className="cursor-pointer p-4 transition-colors hover:bg-accent/40"
-                onClick={() => setSelected(t)}
-              >
-                <div className="flex flex-wrap items-center gap-2">
-                  <p className="font-semibold">{t.asunto}</p>
-                  <Badge tone={est.tone}>{est.label}</Badge>
-                  <Badge tone="neutral">{CAT[t.categoria]}</Badge>
-                </div>
-                <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">{t.mensaje}</p>
-                <p className="mt-2 text-xs text-muted-foreground">
-                  {t.userNombre} · {t.condominioNombre ?? "Sin condo"} · {fmt(t.createdAt)}
-                </p>
-              </Card>
-            );
-          })}
-        </div>
-      )}
+        {tickets === undefined ? (
+          <div className="space-y-3">
+            {[1, 2, 3].map((i) => (
+              <Skeleton key={i} className="h-24 rounded-2xl" />
+            ))}
+          </div>
+        ) : tickets.length === 0 ? (
+          <EmptyState
+            icon={LifeBuoy}
+            title="Sin tickets"
+            description="Las solicitudes desde la app móvil aparecen aquí."
+          />
+        ) : (
+          <div className="space-y-3">
+            {tickets.map((t) => {
+              const est = ESTADO[t.estado];
+              return (
+                <Card
+                  key={t._id}
+                  className="cursor-pointer p-4 transition-colors hover:bg-accent/40"
+                  onClick={() => setSelected(t)}
+                >
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="font-semibold">{t.asunto}</p>
+                    <Badge tone={est.tone}>{est.label}</Badge>
+                    <Badge tone="neutral">{CAT[t.categoria]}</Badge>
+                  </div>
+                  <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">{t.mensaje}</p>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    {t.userNombre} · {t.condominioNombre ?? "Sin condo"} · {fmt(t.createdAt)}
+                  </p>
+                </Card>
+              );
+            })}
+          </div>
+        )}
+      </div>
 
       {selected ? (
         <ResponderModal ticket={selected} onClose={() => setSelected(null)} />
       ) : null}
-    </div>
+    </PageContainer>
   );
 }
 

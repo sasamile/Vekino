@@ -12,7 +12,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
-import { useQuery, useMutation, Authenticated } from "convex/react";
+import { useQuery, useMutation, useAction, Authenticated } from "convex/react";
 import { api } from "@vekino/backend/api";
 import * as ImagePicker from "expo-image-picker";
 import { ScreenBackground, GlassBadge } from "@/components/ui/glass";
@@ -23,6 +23,7 @@ import { authClient } from "@/lib/auth-client";
 import { AuthUI } from "@/lib/auth-ui";
 import { C } from "@/lib/theme";
 import type { Id } from "@vekino/backend/dataModel";
+import { uploadLocalFile } from "@/lib/guardia-upload";
 
 const ROL_LABEL: Record<string, string> = {
   administrador: "Administrador",
@@ -61,7 +62,7 @@ function PerfilContent() {
   const me = useQuery(api.users.me);
   const pushStatus = useQuery(api.notifications.myStatus);
   const { condominioId, selectCondominio } = useCondominio();
-  const generateUploadUrl = useMutation(api.users.generateAvatarUploadUrl);
+  const generateUploadUrl = useAction(api.files.generateUploadUrl);
   const setMyAvatar = useMutation(api.users.setMyAvatar);
   const clearMyAvatar = useMutation(api.users.clearMyAvatar);
   const [uploading, setUploading] = useState(false);
@@ -101,17 +102,14 @@ function PerfilContent() {
     const asset = result.assets[0];
     setUploading(true);
     try {
-      const uploadUrl = await generateUploadUrl({});
-      const res = await fetch(asset.uri);
-      const blob = await res.blob();
-      const upload = await fetch(uploadUrl, {
-        method: "POST",
-        headers: { "Content-Type": asset.mimeType ?? "image/jpeg" },
-        body: blob,
-      });
-      if (!upload.ok) throw new Error("Error al subir la imagen.");
-      const { storageId } = (await upload.json()) as { storageId: string };
-      await setMyAvatar({ storageId: storageId as never });
+      const { url, key } = await uploadLocalFile(
+        generateUploadUrl,
+        asset.uri,
+        asset.mimeType ?? "image/jpeg",
+        "avatars",
+        asset.fileName ?? "avatar.jpg",
+      );
+      await setMyAvatar({ url, s3Key: key });
     } catch (e) {
       Alert.alert(
         "No se pudo subir",

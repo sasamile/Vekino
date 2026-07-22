@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery, useMutation, useAction } from "convex/react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
 import {
@@ -26,6 +26,7 @@ import {
   descargarPoderesZIP,
 } from "@/lib/asamblea-auditoria";
 import { VotacionEnVivoTab, DetalleVotosTab } from "./votacion-en-vivo";
+import { uploadToS3 } from "@/lib/upload-s3";
 
 type Estado = "programada" | "en_curso" | "finalizada" | "cancelada";
 const ESTADO_META: Record<Estado, { label: string; tone: React.ComponentProps<typeof Badge>["tone"] }> = {
@@ -117,7 +118,7 @@ export default function AsambleaAdmin() {
               className={cn(
                 "inline-flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-lg px-2 py-2.5 text-sm font-medium transition-colors",
                 active
-                  ? "bg-primary text-primary-foreground"
+                  ? "bg-brand text-brand-foreground"
                   : "text-muted-foreground hover:bg-accent hover:text-foreground",
               )}
             >
@@ -684,7 +685,7 @@ function PoderesTab({ asambleaId }: { asambleaId: Id<"asambleas"> }) {
   const responder = useMutation(api.asambleas.responderPoder);
   const revocar = useMutation(api.asambleas.revocarPoder);
   const otorgar = useMutation(api.asambleas.otorgarPoder);
-  const generarUrl = useMutation(api.asambleas.generateUploadUrl);
+  const generateUploadUrl = useAction(api.files.generateUploadUrl);
   const [unidadId, setUnidadId] = useState("");
   const [modo, setModo] = useState<"propietario" | "externo">("propietario");
   const [rep, setRep] = useState<{ _id: Id<"users">; name: string } | null>(null);
@@ -745,22 +746,19 @@ function PoderesTab({ asambleaId }: { asambleaId: Id<"asambleas"> }) {
     setError(null);
     setOkMsg(null);
     try {
-      let documentoStorageId: Id<"_storage"> | undefined;
+      let documentoUrl: string | undefined;
       if (file) {
-        const url = await generarUrl({});
-        const res = await fetch(url, {
-          method: "POST",
-          headers: { "Content-Type": file.type || "application/octet-stream" },
-          body: file,
-        });
-        if (!res.ok) throw new Error("No se pudo subir el documento.");
-        const json = (await res.json()) as { storageId: Id<"_storage"> };
-        documentoStorageId = json.storageId;
+        const uploaded = await uploadToS3(
+          generateUploadUrl,
+          file,
+          `condominios/asambleas/${a?.condominioId ?? "unknown"}/poderes`,
+        );
+        documentoUrl = uploaded.url;
       }
       const r = await otorgar({
         asambleaId,
         unidadId: unidadId as Id<"unidades">,
-        documentoStorageId,
+        documentoUrl,
         ...(modo === "propietario"
           ? { representanteUserId: rep!._id }
           : {

@@ -14,7 +14,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
-import { useMutation, useQuery, Authenticated } from "convex/react";
+import { useMutation, useQuery, useAction, Authenticated } from "convex/react";
 import { api } from "@vekino/backend/api";
 import type { Doc, Id } from "@vekino/backend/dataModel";
 import { useCondominio } from "@/context/condominio-context";
@@ -597,7 +597,7 @@ function RondaModal({
 }) {
   const zonas = useQuery(api.guardia.listRondaZonas, { condominioId });
   const registrar = useMutation(api.guardia.registrarRonda);
-  const generateUploadUrl = useMutation(api.guardia.generateUploadUrl);
+  const generateUploadUrl = useAction(api.files.generateUploadUrl);
 
   const [zonaId, setZonaId] = useState<Id<"guardiaRondaZonas"> | null>(null);
   const [zonaLibre, setZonaLibre] = useState("");
@@ -636,16 +636,22 @@ function RondaModal({
     }
     setBusy(true);
     try {
-      const storageIds: Id<"_storage">[] = [];
+      const fotoUrls: string[] = [];
       for (const f of fotos) {
-        storageIds.push(await uploadLocalFile(generateUploadUrl, f.uri, f.mime));
+        const { url } = await uploadLocalFile(
+          generateUploadUrl,
+          f.uri,
+          f.mime,
+          `condominios/guardia/${condominioId}/rondas`,
+        );
+        fotoUrls.push(url);
       }
       await registrar({
         condominioId,
         zonaId: zonaId ?? undefined,
         zonaNombre: zonaId ? undefined : zonaLibre.trim(),
         novedad: novedad || undefined,
-        fotos: storageIds,
+        fotos: fotoUrls,
       });
       onClose();
     } catch (e) {

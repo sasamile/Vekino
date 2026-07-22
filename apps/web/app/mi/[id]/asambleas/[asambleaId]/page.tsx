@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery, useMutation, useAction } from "convex/react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
 import {
@@ -17,6 +17,7 @@ import { Badge } from "@/components/ui/badge";
 import { Spinner } from "@/components/ui/spinner";
 import { fechaISO } from "@/components/portal/portal-ui";
 import { cn } from "@/lib/utils";
+import { uploadToS3 } from "@/lib/upload-s3";
 
 function qrUrl(data: string) {
   return `https://api.qrserver.com/v1/create-qr-code/?size=220x220&margin=10&data=${encodeURIComponent(data)}`;
@@ -102,7 +103,7 @@ export default function AsambleaSala() {
           return (
             <button key={t.key} onClick={() => setTab(t.key)}
               className={cn("flex flex-1 items-center justify-center gap-2 rounded-lg py-2.5 text-sm font-medium transition-colors",
-                active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent hover:text-foreground")}>
+                active ? "bg-brand text-brand-foreground" : "text-muted-foreground hover:bg-accent hover:text-foreground")}>
               <Icon className="h-4 w-4" /> {t.label}
             </button>
           );
@@ -375,7 +376,7 @@ function PoderesSection({
   const otorgar = useMutation(api.asambleas.otorgarPoder);
   const revocar = useMutation(api.asambleas.revocarPoder);
   const responder = useMutation(api.asambleas.responderPoder);
-  const generarUrl = useMutation(api.asambleas.generateUploadUrl);
+  const generateUploadUrl = useAction(api.files.generateUploadUrl);
 
   const unidades = home && home.allowed ? home.unidades : [];
   const [modo, setModo] = useState<"propietario" | "externo">("propietario");
@@ -407,16 +408,16 @@ function PoderesSection({
     if (!file) return setError("Adjunta el documento del poder firmado (PDF o foto).");
     setBusy(true); setError(null);
     try {
-      // Sube el documento del poder a Convex Storage.
-      const url = await generarUrl();
-      const up = await fetch(url, { method: "POST", headers: { "Content-Type": file.type }, body: file });
-      if (!up.ok) throw new Error("No se pudo subir el documento.");
-      const { storageId } = (await up.json()) as { storageId: Id<"_storage"> };
+      const { url: documentoUrl } = await uploadToS3(
+        generateUploadUrl,
+        file,
+        `condominios/asambleas/${condominioId}/poderes`,
+      );
 
       const r = await otorgar({
         asambleaId,
         unidadId: unidadId as Id<"unidades">,
-        documentoStorageId: storageId,
+        documentoUrl,
         ...(modo === "propietario" ? { representanteUserId: rep!._id } : { apoderadoNombre: nombre, apoderadoDocumento: documento.trim() || undefined }),
       });
       setNuevo(r);

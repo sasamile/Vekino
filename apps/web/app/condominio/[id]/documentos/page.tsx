@@ -2,7 +2,8 @@
 
 import { useState, useRef } from "react";
 import { useParams } from "next/navigation";
-import { useQuery, useMutation } from "convex/react";
+import { usePaginatedQuery, useQuery, useMutation, useAction } from "convex/react";
+import type { FunctionReturnType } from "convex/server";
 import {
   FolderOpen, Plus, Trash2, Loader2, Download,
   FileText, FileImage, FileSpreadsheet, File,
@@ -12,6 +13,7 @@ import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
 import { PageContainer } from "@/components/layout/page-container";
 import { PageHeader } from "@/components/layout/page-header";
+import { useNuevoQuery } from "@/hooks/use-nuevo-query";
 import { StatCard } from "@/components/layout/stat-card";
 import { Select, Input, Textarea } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
@@ -20,8 +22,10 @@ import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
-import { cn } from "@/lib/utils";
 import type { LucideIcon } from "lucide-react";
+import { uploadToS3 } from "@/lib/upload-s3";
+
+const PAGE_SIZE = 30;
 
 type Categoria = "reglamento" | "acta" | "contrato" | "comunicado" | "financiero" | "otro";
 
@@ -53,23 +57,31 @@ function fmtFecha(ts: number) {
 
 const MAX_SIZE = 50 * 1024 * 1024; // 50 MB
 
-type DocRow = NonNullable<ReturnType<typeof useQuery<typeof api.documentos.listByCondominio>>>[number];
+type DocRow = FunctionReturnType<typeof api.documentos.listPage>["page"][number];
 
 export default function DocumentosPage() {
   const params = useParams<{ id: string }>();
   const condominioId = params.id as Id<"condominios">;
-  const documentos = useQuery(api.documentos.listByCondominio, { condominioId });
 
   const [catFiltro, setCatFiltro] = useState<"" | Categoria>("");
   const [formOpen, setFormOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Id<"documentos"> | null>(null);
+  useNuevoQuery(() => setFormOpen(true));
 
-  const filtered = (documentos ?? []).filter((d) => !catFiltro || d.categoria === catFiltro);
+  const counts = useQuery(api.documentos.countsByCondominio, { condominioId });
+  const { results, status, loadMore } = usePaginatedQuery(
+    api.documentos.listPage,
+    {
+      condominioId,
+      categoria: catFiltro || undefined,
+    },
+    { initialNumItems: PAGE_SIZE },
+  );
 
-  const total = documentos?.length ?? 0;
-  const reglamentos = documentos?.filter((d) => d.categoria === "reglamento").length ?? 0;
-  const actas = documentos?.filter((d) => d.categoria === "acta").length ?? 0;
-  const financieros = documentos?.filter((d) => d.categoria === "financiero").length ?? 0;
+  const loading = status === "LoadingFirstPage";
+  const canLoadMore = status === "CanLoadMore";
+  const loadingMore = status === "LoadingMore";
+  const documentos = results;
 
   return (
     <PageContainer>
@@ -77,24 +89,18 @@ export default function DocumentosPage() {
         <PageHeader
           title="Documentos"
           description="Repositorio de documentos del conjunto"
-          action={
-            <Button onClick={() => setFormOpen(true)}>
-              <Plus className="h-4 w-4" aria-hidden />
-              Subir documento
-            </Button>
-          }
         />
 
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-          <StatCard icon={FolderOpen} label="Total documentos" value={total} tone="neutral" />
-          <StatCard icon={FileText} label="Reglamentos" value={reglamentos} tone="primary" />
-          <StatCard icon={FileText} label="Actas" value={actas} tone="brand" />
-          <StatCard icon={FileSpreadsheet} label="Financieros" value={financieros} tone="success" />
+          <StatCard icon={FolderOpen} label="Total documentos" value={counts?.total ?? 0} tone="neutral" />
+          <StatCard icon={FileText} label="Reglamentos" value={counts?.reglamento ?? 0} tone="primary" />
+          <StatCard icon={FileText} label="Actas" value={counts?.acta ?? 0} tone="brand" />
+          <StatCard icon={FileSpreadsheet} label="Financieros" value={counts?.financiero ?? 0} tone="success" />
         </div>
 
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <p className="text-sm text-muted-foreground">
-            {documentos === undefined ? "Cargando…" : `${filtered.length} documento${filtered.length === 1 ? "" : "s"}`}
+            {loading ? "Cargando…" : `${documentos.length} documento${documentos.length === 1 ? "" : "s"}`}
           </p>
           <Select value={catFiltro} onChange={(e) => setCatFiltro(e.target.value as "" | Categoria)} className="sm:w-44">
             <option value="">Todas las categorías</option>
@@ -104,11 +110,11 @@ export default function DocumentosPage() {
           </Select>
         </div>
 
-        {documentos === undefined ? (
+        {loading ? (
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {[...Array(6)].map((_, i) => <Skeleton key={i} className="h-32 rounded-2xl" />)}
           </div>
-        ) : filtered.length === 0 ? (
+        ) : documentos.length === 0 ? (
           <EmptyState
             icon={FolderOpen}
             title={catFiltro ? "Sin resultados" : "Sin documentos"}
@@ -124,9 +130,30 @@ export default function DocumentosPage() {
             }
           />
         ) : (
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {filtered.map((d) => <DocCard key={d._id} doc={d} onDelete={() => setDeleteTarget(d._id)} />)}
-          </div>
+          <>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {documentos.map((d) => <DocCard key={d._id} doc={d} onDelete={() => setDeleteTarget(d._id)} />)}
+            </div>
+            {canLoadMore || loadingMore ? (
+              <div className="flex justify-center">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={loadingMore}
+                  onClick={() => loadMore(PAGE_SIZE)}
+                >
+                  {loadingMore ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                      Cargando…
+                    </>
+                  ) : (
+                    "Cargar más"
+                  )}
+                </Button>
+              </div>
+            ) : null}
+          </>
         )}
       </div>
 
@@ -188,7 +215,7 @@ function DocCard({ doc, onDelete }: { doc: DocRow; onDelete: () => void }) {
 }
 
 function UploadForm({ condominioId, onClose }: { condominioId: Id<"condominios">; onClose: () => void }) {
-  const generateUploadUrl = useMutation(api.documentos.generateUploadUrl);
+  const generateUploadUrl = useAction(api.files.generateUploadUrl);
   const create = useMutation(api.documentos.create);
 
   const [nombre, setNombre] = useState("");
@@ -214,19 +241,17 @@ function UploadForm({ condominioId, onClose }: { condominioId: Id<"condominios">
     setBusy(true);
     setError(null);
     try {
-      const uploadUrl = await generateUploadUrl();
-      const res = await fetch(uploadUrl, {
-        method: "POST",
-        headers: { "Content-Type": file.type },
-        body: file,
-      });
-      if (!res.ok) throw new Error("Error al subir el archivo.");
-      const { storageId } = (await res.json()) as { storageId: string };
+      const { url, key } = await uploadToS3(
+        generateUploadUrl,
+        file,
+        `condominios/documentos/${condominioId}`,
+      );
       await create({
         condominioId,
         nombre: nombre.trim(),
         categoria,
-        storageId: storageId as Id<"_storage">,
+        url,
+        s3Key: key,
         mimeType: file.type,
         tamanio: file.size,
         descripcion: descripcion || undefined,
@@ -255,7 +280,6 @@ function UploadForm({ condominioId, onClose }: { condominioId: Id<"condominios">
       }
     >
       <div className="space-y-4">
-        {/* Zona de archivo */}
         <div>
           <input
             ref={fileRef}

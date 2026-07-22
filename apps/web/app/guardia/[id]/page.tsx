@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery, useMutation, useAction } from "convex/react";
 import {
   BookOpenCheck, PlayCircle, StopCircle, Footprints, PenLine, Loader2,
   UserCheck, Package, AlertTriangle, Search, Plus, Trash2, Camera,
@@ -17,6 +17,7 @@ import { Modal } from "@/components/ui/modal";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Input, Select, Textarea } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { uploadToS3 } from "@/lib/upload-s3";
 
 type Modulo = Doc<"minutaEventos">["modulo"];
 
@@ -38,17 +39,18 @@ function fmtFechaHora(ts: number) {
   return hoy ? `Hoy ${hora}` : d.toLocaleDateString("es-CO", { day: "numeric", month: "short" }) + ` ${hora}`;
 }
 
-/** Sube archivos a Convex Storage y devuelve los storageIds. */
-async function subirFotos(generarUrl: () => Promise<string>, files: File[]): Promise<Id<"_storage">[]> {
-  const ids: Id<"_storage">[] = [];
+/** Sube archivos a S3 y devuelve las URLs públicas. */
+async function subirFotos(
+  generateUploadUrl: Parameters<typeof uploadToS3>[0],
+  files: File[],
+  folder: string,
+): Promise<string[]> {
+  const urls: string[] = [];
   for (const file of files) {
-    const url = await generarUrl();
-    const res = await fetch(url, { method: "POST", headers: { "Content-Type": file.type }, body: file });
-    if (!res.ok) throw new Error("No se pudo subir la foto.");
-    const { storageId } = (await res.json()) as { storageId: Id<"_storage"> };
-    ids.push(storageId);
+    const { url } = await uploadToS3(generateUploadUrl, file, folder);
+    urls.push(url);
   }
-  return ids;
+  return urls;
 }
 
 export default function GuardiaMinutaHome() {
@@ -499,7 +501,7 @@ function CerrarTurnoModal({
 function RondaModal({ condominioId, onClose }: { condominioId: Id<"condominios">; onClose: () => void }) {
   const zonas = useQuery(api.guardia.listRondaZonas, { condominioId });
   const registrar = useMutation(api.guardia.registrarRonda);
-  const generarUrl = useMutation(api.guardia.generateUploadUrl);
+  const generateUploadUrl = useAction(api.files.generateUploadUrl);
 
   const [zonaId, setZonaId] = useState("");
   const [zonaNombre, setZonaNombre] = useState("");
@@ -515,7 +517,11 @@ function RondaModal({ condominioId, onClose }: { condominioId: Id<"condominios">
     if (!valido) return;
     setBusy(true); setError(null);
     try {
-      const fotos = await subirFotos(() => generarUrl({}), files.slice(0, 5));
+      const fotos = await subirFotos(
+        generateUploadUrl,
+        files.slice(0, 5),
+        `condominios/guardia/${condominioId}/rondas`,
+      );
       await registrar({
         condominioId,
         zonaId: zonaId ? (zonaId as Id<"guardiaRondaZonas">) : undefined,

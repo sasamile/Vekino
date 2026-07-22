@@ -2,8 +2,12 @@
 
 import { useState } from "react";
 import { useQuery, useMutation } from "convex/react";
-import { ShieldCheck, UserPlus, Search, X } from "lucide-react";
+import { ShieldCheck, Search, X } from "lucide-react";
 import { api } from "@vekino/backend/api";
+import { PageContainer } from "@/components/layout/page-container";
+import { PageHeader } from "@/components/layout/page-header";
+import { useNuevoQuery } from "@/hooks/use-nuevo-query";
+import { Card } from "@/components/ui/card";
 
 type PlatformRole = "superadmin" | "admin" | null;
 
@@ -16,73 +20,64 @@ export default function AdministradoresPage() {
     isPlatform ? {} : "skip",
   );
   const [showAdd, setShowAdd] = useState(false);
+  useNuevoQuery(() => setShowAdd(true));
 
   if (me === undefined) {
     return (
-      <div className="p-6 lg:p-10 text-sm text-zinc-500">Cargando…</div>
+      <PageContainer>
+        <p className="text-sm text-muted-foreground">Cargando…</p>
+      </PageContainer>
     );
   }
 
   if (!isPlatform) {
     return (
-      <div className="p-6 lg:p-10 text-sm text-zinc-500">
-        No tienes acceso a esta sección.
-      </div>
+      <PageContainer>
+        <p className="text-sm text-muted-foreground">No tienes acceso a esta sección.</p>
+      </PageContainer>
     );
   }
 
   return (
-    <div className="p-6 lg:p-10">
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-semibold text-zinc-900">
-            Administradores
-          </h1>
-          <p className="text-sm text-zinc-500">
-            Staff con acceso a la plataforma (superadmin / admin). Los residentes
-            se gestionan dentro de cada condominio.
-          </p>
-        </div>
-        <button
-          onClick={() => setShowAdd(true)}
-          className="inline-flex items-center gap-2 bg-primary text-white text-sm font-semibold px-4 py-2.5 rounded-lg hover:bg-primary/90 transition-colors"
-        >
-          <UserPlus className="w-4 h-4" />
-          Agregar administrador
-        </button>
-      </div>
+    <PageContainer>
+      <div className="space-y-6">
+        <PageHeader
+          title="Administradores"
+          description="Staff con acceso a la plataforma (superadmin / admin). Los residentes se gestionan dentro de cada condominio."
+        />
 
-      <div className="bg-white rounded-2xl ring-1 ring-zinc-100 overflow-hidden">
-        {staff === undefined ? (
-          <p className="p-6 text-sm text-zinc-500">Cargando…</p>
-        ) : staff.length === 0 ? (
-          <div className="p-10 text-center">
-            <ShieldCheck className="w-8 h-8 text-zinc-300 mx-auto mb-2" />
-            <p className="text-sm text-zinc-500">
-              No hay administradores de plataforma.
-            </p>
-          </div>
-        ) : (
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-xs text-zinc-500 border-b border-zinc-100">
-                <th className="px-5 py-3 font-medium">Usuario</th>
-                <th className="px-5 py-3 font-medium">Correo</th>
-                <th className="px-5 py-3 font-medium">Rol</th>
-                <th className="px-5 py-3 font-medium text-right">Cambiar</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-zinc-50">
-              {staff.map((u) => (
-                <StaffRow key={u._id} u={u} />
-              ))}
-            </tbody>
-          </table>
-        )}
+        <Card className="overflow-hidden p-0">
+          {staff === undefined ? (
+            <p className="p-6 text-sm text-muted-foreground">Cargando…</p>
+          ) : staff.length === 0 ? (
+            <div className="p-10 text-center">
+              <ShieldCheck className="mx-auto mb-2 h-8 w-8 text-muted-foreground/40" />
+              <p className="text-sm text-muted-foreground">
+                No hay administradores de plataforma.
+              </p>
+            </div>
+          ) : (
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border text-left text-xs text-muted-foreground">
+                  <th className="px-5 py-3 font-medium">Usuario</th>
+                  <th className="px-5 py-3 font-medium">Correo</th>
+                  <th className="px-5 py-3 font-medium">Rol</th>
+                  <th className="px-5 py-3 text-right font-medium">Cambiar</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border/60">
+                {staff.map((u) => (
+                  <StaffRow key={u._id} u={u} />
+                ))}
+              </tbody>
+            </table>
+          )}
+        </Card>
       </div>
 
       {showAdd && <AddAdminDialog onClose={() => setShowAdd(false)} />}
-    </div>
+    </PageContainer>
   );
 }
 

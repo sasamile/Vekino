@@ -12,6 +12,7 @@ import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
 import { PageContainer } from "@/components/layout/page-container";
 import { PageHeader } from "@/components/layout/page-header";
+import { useNuevoQuery } from "@/hooks/use-nuevo-query";
 import { StatCard } from "@/components/layout/stat-card";
 import { Select, Input, Textarea } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
@@ -51,6 +52,7 @@ export default function AsambleaPage() {
   const asambleas = useQuery(api.asambleas.listByCondominio, { condominioId });
 
   const [formOpen, setFormOpen] = useState(false);
+  useNuevoQuery(() => setFormOpen(true));
   const [votacionesFor, setVotacionesFor] = useState<{ id: Id<"asambleas">; titulo: string } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Id<"asambleas"> | null>(null);
 
@@ -65,12 +67,6 @@ export default function AsambleaPage() {
         <PageHeader
           title="Asamblea"
           description="Convocatorias, quórum y votaciones de propietarios"
-          action={
-            <Button onClick={() => setFormOpen(true)}>
-              <Plus className="h-4 w-4" aria-hidden />
-              Nueva asamblea
-            </Button>
-          }
         />
 
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">

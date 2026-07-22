@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useParams } from "next/navigation";
-import { useQuery, useMutation } from "convex/react";
+import { usePaginatedQuery, useQuery, useMutation } from "convex/react";
 import {
   MessageSquareWarning, Plus, Trash2, Loader2, Send,
   FileQuestion, Frown, AlertOctagon, Lightbulb, Heart, Clock,
@@ -21,6 +21,8 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import type { LucideIcon } from "lucide-react";
+
+const PAGE_SIZE = 30;
 
 type Tipo = "peticion" | "queja" | "reclamo" | "sugerencia" | "felicitacion";
 type Estado = "abierto" | "en_gestion" | "resuelto" | "cerrado";
@@ -49,6 +51,23 @@ const PRIORIDAD_META: Record<Prioridad, { label: string; tone: React.ComponentPr
 
 const ESTADO_ORDER: Estado[] = ["abierto", "en_gestion", "resuelto", "cerrado"];
 
+type PqrsRow = {
+  _id: Id<"pqrs">;
+  radicado: string;
+  tipo: Tipo;
+  asunto: string;
+  descripcion: string;
+  solicitanteNombre: string;
+  unidadNumero?: string;
+  estado: Estado;
+  prioridad: Prioridad;
+  respuesta?: string;
+  respondidoPor?: string;
+  createdAt: number;
+  updatedAt: number;
+  mensajes?: { autorNombre: string; esAdmin: boolean; texto: string; createdAt: number }[];
+};
+
 function fmtFechaCorta(ts: number) {
   const d = new Date(ts);
   const today = new Date();
@@ -61,25 +80,29 @@ function fmtFechaCorta(ts: number) {
 export default function PqrsPage() {
   const params = useParams<{ id: string }>();
   const condominioId = params.id as Id<"condominios">;
-  const items = useQuery(api.pqrs.listByCondominio, { condominioId });
 
   const [estadoFiltro, setEstadoFiltro] = useState<"" | Estado>("");
   const [tipoFiltro, setTipoFiltro] = useState<"" | Tipo>("");
   const [formOpen, setFormOpen] = useState(false);
-  const [detalle, setDetalle] = useState<Id<"pqrs"> | null>(null);
+  const [detalleId, setDetalleId] = useState<Id<"pqrs"> | null>(null);
 
-  const filtered = (items ?? []).filter((p) => {
-    if (estadoFiltro && p.estado !== estadoFiltro) return false;
-    if (tipoFiltro && p.tipo !== tipoFiltro) return false;
-    return true;
-  });
+  const counts = useQuery(api.pqrs.countsByCondominio, { condominioId });
+  const { results, status, loadMore } = usePaginatedQuery(
+    api.pqrs.listPage,
+    {
+      condominioId,
+      estado: estadoFiltro || undefined,
+      tipo: tipoFiltro || undefined,
+    },
+    { initialNumItems: PAGE_SIZE },
+  );
+  const selected = useQuery(api.pqrs.get, detalleId ? { id: detalleId } : "skip");
 
-  const total = items?.length ?? 0;
-  const abiertos = items?.filter((p) => p.estado === "abierto").length ?? 0;
-  const enGestion = items?.filter((p) => p.estado === "en_gestion").length ?? 0;
-  const resueltos = items?.filter((p) => p.estado === "resuelto" || p.estado === "cerrado").length ?? 0;
-
-  const selected = detalle ? (items ?? []).find((p) => p._id === detalle) ?? null : null;
+  const loading = status === "LoadingFirstPage";
+  const canLoadMore = status === "CanLoadMore";
+  const loadingMore = status === "LoadingMore";
+  const items = results as PqrsRow[];
+  const hasFilters = Boolean(estadoFiltro || tipoFiltro);
 
   return (
     <PageContainer>
@@ -96,15 +119,15 @@ export default function PqrsPage() {
         />
 
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-          <StatCard icon={MessageSquareWarning} label="Total" value={total} tone="neutral" />
-          <StatCard icon={Clock} label="Abiertos" value={abiertos} tone="primary" />
-          <StatCard icon={Loader2} label="En gestión" value={enGestion} tone="warning" />
-          <StatCard icon={Heart} label="Resueltos" value={resueltos} tone="success" />
+          <StatCard icon={MessageSquareWarning} label="Total" value={counts?.total ?? 0} tone="neutral" />
+          <StatCard icon={Clock} label="Abiertos" value={counts?.abierto ?? 0} tone="primary" />
+          <StatCard icon={Loader2} label="En gestión" value={counts?.en_gestion ?? 0} tone="warning" />
+          <StatCard icon={Heart} label="Resueltos" value={counts?.resuelto ?? 0} tone="success" />
         </div>
 
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <p className="text-sm text-muted-foreground">
-            {items === undefined ? "Cargando…" : `${filtered.length} registro${filtered.length === 1 ? "" : "s"}`}
+            {loading ? "Cargando…" : `${items.length} registro${items.length === 1 ? "" : "s"}`}
           </p>
           <div className="flex gap-2">
             <Select value={tipoFiltro} onChange={(e) => setTipoFiltro(e.target.value as "" | Tipo)} className="w-40">
@@ -122,17 +145,17 @@ export default function PqrsPage() {
           </div>
         </div>
 
-        {items === undefined ? (
+        {loading ? (
           <div className="space-y-3">
             {[...Array(4)].map((_, i) => <Skeleton key={i} className="h-20 rounded-2xl" />)}
           </div>
-        ) : filtered.length === 0 ? (
+        ) : items.length === 0 ? (
           <EmptyState
             icon={MessageSquareWarning}
-            title={estadoFiltro || tipoFiltro ? "Sin resultados" : "Sin PQRS"}
-            description={estadoFiltro || tipoFiltro ? "Ningún registro coincide con los filtros." : "Radica la primera petición, queja, reclamo o sugerencia."}
+            title={hasFilters ? "Sin resultados" : "Sin PQRS"}
+            description={hasFilters ? "Ningún registro coincide con los filtros." : "Radica la primera petición, queja, reclamo o sugerencia."}
             action={
-              estadoFiltro || tipoFiltro ? (
+              hasFilters ? (
                 <Button variant="outline" size="sm" onClick={() => { setEstadoFiltro(""); setTipoFiltro(""); }}>Limpiar filtros</Button>
               ) : (
                 <Button size="sm" onClick={() => setFormOpen(true)}><Plus className="h-4 w-4" />Radicar PQRS</Button>
@@ -140,55 +163,92 @@ export default function PqrsPage() {
             }
           />
         ) : (
-          <div className="space-y-2.5">
-            {filtered.map((p) => {
-              const tipoMeta = TIPO_META[p.tipo as Tipo] ?? TIPO_META.peticion;
-              const Icon = tipoMeta.icon;
-              return (
-                <Card
-                  key={p._id}
-                  className="group cursor-pointer p-4 transition-colors hover:border-border/60"
-                  onClick={() => setDetalle(p._id)}
-                >
-                  <div className="flex items-start gap-3">
-                    <span className={cn(
-                      "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg",
-                      tipoMeta.tone === "destructive" && "bg-red-500/10 text-red-600 dark:text-red-400",
-                      tipoMeta.tone === "warning" && "bg-amber-500/10 text-amber-600 dark:text-amber-400",
-                      tipoMeta.tone === "info" && "bg-sky-500/10 text-sky-600 dark:text-sky-400",
-                      tipoMeta.tone === "primary" && "bg-primary/10 text-primary",
-                      tipoMeta.tone === "success" && "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
-                    )}>
-                      <Icon className="h-4 w-4" />
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <div className="mb-1 flex flex-wrap items-center gap-2">
-                        <span className="font-mono text-xs text-muted-foreground">{p.radicado}</span>
-                        <Badge tone={ESTADO_META[p.estado as Estado].tone}>{ESTADO_META[p.estado as Estado].label}</Badge>
-                        {p.prioridad === "alta" && <Badge tone="destructive">Prioridad alta</Badge>}
+          <>
+            <div className="space-y-2.5">
+              {items.map((p) => {
+                const tipoMeta = TIPO_META[p.tipo as Tipo] ?? TIPO_META.peticion;
+                const Icon = tipoMeta.icon;
+                return (
+                  <Card
+                    key={p._id}
+                    className="group cursor-pointer p-4 transition-colors hover:border-border/60"
+                    onClick={() => setDetalleId(p._id)}
+                  >
+                    <div className="flex items-start gap-3">
+                      <span className={cn(
+                        "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg",
+                        tipoMeta.tone === "destructive" && "bg-red-500/10 text-red-600 dark:text-red-400",
+                        tipoMeta.tone === "warning" && "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+                        tipoMeta.tone === "info" && "bg-sky-500/10 text-sky-600 dark:text-sky-400",
+                        tipoMeta.tone === "primary" && "bg-primary/10 text-primary",
+                        tipoMeta.tone === "success" && "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+                      )}>
+                        <Icon className="h-4 w-4" />
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <div className="mb-1 flex flex-wrap items-center gap-2">
+                          <span className="font-mono text-xs text-muted-foreground">{p.radicado}</span>
+                          <Badge tone={ESTADO_META[p.estado as Estado].tone}>{ESTADO_META[p.estado as Estado].label}</Badge>
+                          {p.prioridad === "alta" && <Badge tone="destructive">Prioridad alta</Badge>}
+                        </div>
+                        <p className="truncate text-sm font-medium text-foreground">{p.asunto}</p>
+                        <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">{p.descripcion}</p>
+                        <div className="mt-1.5 flex items-center gap-1.5 text-xs text-muted-foreground">
+                          <span>{p.solicitanteNombre}</span>
+                          {p.unidadNumero && <><span>·</span><span>Unidad {p.unidadNumero}</span></>}
+                          <span>·</span>
+                          <span>{fmtFechaCorta(p.createdAt)}</span>
+                        </div>
                       </div>
-                      <p className="truncate text-sm font-medium text-foreground">{p.asunto}</p>
-                      <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">{p.descripcion}</p>
-                      <div className="mt-1.5 flex items-center gap-1.5 text-xs text-muted-foreground">
-                        <span>{p.solicitanteNombre}</span>
-                        {p.unidadNumero && <><span>·</span><span>Unidad {p.unidadNumero}</span></>}
-                        <span>·</span>
-                        <span>{fmtFechaCorta(p.createdAt)}</span>
-                      </div>
+                      {(p.mensajes?.some((m) => m.esAdmin) || p.respuesta) && (
+                        <Badge tone="success" className="shrink-0"><Send className="h-3 w-3" />Respondido</Badge>
+                      )}
                     </div>
-                    {(p.mensajes?.some((m) => m.esAdmin) || p.respuesta) && (
-                      <Badge tone="success" className="shrink-0"><Send className="h-3 w-3" />Respondido</Badge>
-                    )}
-                  </div>
-                </Card>
-              );
-            })}
-          </div>
+                  </Card>
+                );
+              })}
+            </div>
+            {canLoadMore || loadingMore ? (
+              <div className="flex justify-center">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={loadingMore}
+                  onClick={() => loadMore(PAGE_SIZE)}
+                >
+                  {loadingMore ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                      Cargando…
+                    </>
+                  ) : (
+                    "Cargar más"
+                  )}
+                </Button>
+              </div>
+            ) : null}
+          </>
         )}
       </div>
 
       {formOpen && <PqrsForm condominioId={condominioId} onClose={() => setFormOpen(false)} />}
-      {selected && <PqrsDetalle p={selected} onClose={() => setDetalle(null)} />}
+      {detalleId && selected && (
+        <PqrsDetalle p={selected as PqrsRow} onClose={() => setDetalleId(null)} />
+      )}
+      {detalleId && selected === undefined && (
+        <Modal open onClose={() => setDetalleId(null)} title="Cargando…" className="max-w-sm">
+          <div className="flex justify-center py-6">
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          </div>
+        </Modal>
+      )}
+      {detalleId && selected === null && (
+        <Modal open onClose={() => setDetalleId(null)} title="No encontrado" className="max-w-sm"
+          footer={<Button variant="ghost" size="sm" onClick={() => setDetalleId(null)}>Cerrar</Button>}
+        >
+          <p className="text-sm text-muted-foreground">Este PQRS ya no existe.</p>
+        </Modal>
+      )}
     </PageContainer>
   );
 }
@@ -274,13 +334,7 @@ function PqrsDetalle({
   p,
   onClose,
 }: {
-  p: {
-    _id: Id<"pqrs">;
-    radicado: string; tipo: Tipo; asunto: string; descripcion: string;
-    solicitanteNombre: string; unidadNumero?: string; estado: Estado; prioridad: Prioridad;
-    respuesta?: string; respondidoPor?: string; createdAt: number; updatedAt: number;
-    mensajes?: { autorNombre: string; esAdmin: boolean; texto: string; createdAt: number }[];
-  };
+  p: PqrsRow;
   onClose: () => void;
 }) {
   const setEstado = useMutation(api.pqrs.setEstado);
@@ -360,7 +414,6 @@ function PqrsDetalle({
           </p>
         </div>
 
-        {/* Controles de gestión */}
         <div className="grid grid-cols-2 gap-3 rounded-xl border border-border bg-muted/30 p-3">
           <div className="space-y-1.5">
             <label className="block text-xs font-medium text-foreground">Estado</label>
@@ -378,7 +431,6 @@ function PqrsDetalle({
           </div>
         </div>
 
-        {/* Conversación */}
         <div className="space-y-2">
           <label className="block text-xs font-medium text-foreground">Conversación</label>
           {hilo.length > 0 ? (

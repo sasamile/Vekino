@@ -14,7 +14,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
-import { useMutation, useQuery, Authenticated } from "convex/react";
+import { useMutation, useQuery, useAction, Authenticated } from "convex/react";
 import { api } from "@vekino/backend/api";
 import type { Doc, Id } from "@vekino/backend/dataModel";
 import { useCondominio } from "@/context/condominio-context";
@@ -65,7 +65,7 @@ function Inner() {
   );
   const recibir = useMutation(api.guardia.recibirPaquete);
   const entregar = useMutation(api.guardia.entregarPaquete);
-  const generateUploadUrl = useMutation(api.guardia.generateUploadUrl);
+  const generateUploadUrl = useAction(api.files.generateUploadUrl);
 
   const [tab, setTab] = useState<"recibido" | "entregado">("recibido");
   const [buscar, setBuscar] = useState("");
@@ -149,9 +149,15 @@ function Inner() {
     }
     setBusy(true);
     try {
-      let fotoStorageId: Id<"_storage"> | undefined;
-      if (foto) {
-        fotoStorageId = await uploadLocalFile(generateUploadUrl, foto.uri, foto.mime);
+      let fotoUrl: string | undefined;
+      if (foto && condominioId) {
+        const uploaded = await uploadLocalFile(
+          generateUploadUrl,
+          foto.uri,
+          foto.mime,
+          `condominios/guardia/${condominioId}/paquetes`,
+        );
+        fotoUrl = uploaded.url;
       }
       await recibir({
         condominioId,
@@ -160,7 +166,7 @@ function Inner() {
         remitente: remitente || undefined,
         destinatario: destinatario || undefined,
         descripcion: descripcion || undefined,
-        fotoStorageId,
+        fotoUrl,
       });
       setNuevoOpen(false);
       resetNuevo();
@@ -175,19 +181,21 @@ function Inner() {
     if (!entregarPaq) return;
     setBusy(true);
     try {
-      let fotoEntregaStorageId: Id<"_storage"> | undefined;
+      let fotoEntregaUrl: string | undefined;
       if (fotoEntrega) {
-        fotoEntregaStorageId = await uploadLocalFile(
+        const uploaded = await uploadLocalFile(
           generateUploadUrl,
           fotoEntrega.uri,
           fotoEntrega.mime,
+          `condominios/guardia/${entregarPaq.condominioId}/paquetes`,
         );
+        fotoEntregaUrl = uploaded.url;
       }
       await entregar({
         id: entregarPaq._id,
         entregadoA: entregadoA || undefined,
         observaciones: obsEntrega || undefined,
-        fotoEntregaStorageId,
+        fotoEntregaUrl,
       });
       setEntregarPaq(null);
       setEntregadoA("");

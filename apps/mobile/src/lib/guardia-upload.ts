@@ -1,20 +1,31 @@
-import type { Id } from "@vekino/backend/dataModel";
-
-/** Sube un archivo local a Convex Storage y devuelve el storageId. */
+/**
+ * Sube un archivo local a S3 vía URL firmada (PUT).
+ * `generateUploadUrl` debe ser la action `api.files.generateUploadUrl`.
+ */
 export async function uploadLocalFile(
-  generateUploadUrl: () => Promise<string>,
+  generateUploadUrl: (args: {
+    folder: string;
+    contentType: string;
+    fileName?: string;
+  }) => Promise<{ uploadUrl: string; key: string; publicUrl: string }>,
   uri: string,
   mimeType: string,
-): Promise<Id<"_storage">> {
-  const uploadUrl = await generateUploadUrl();
+  folder: string,
+  fileName?: string,
+): Promise<{ url: string; key: string }> {
+  const contentType = mimeType || "application/octet-stream";
+  const { uploadUrl, publicUrl, key } = await generateUploadUrl({
+    folder,
+    contentType,
+    fileName,
+  });
   const blobRes = await fetch(uri);
   const blob = await blobRes.blob();
   const upload = await fetch(uploadUrl, {
-    method: "POST",
-    headers: { "Content-Type": mimeType },
+    method: "PUT",
+    headers: { "Content-Type": contentType },
     body: blob,
   });
-  if (!upload.ok) throw new Error("No se pudo subir el archivo.");
-  const { storageId } = (await upload.json()) as { storageId: string };
-  return storageId as Id<"_storage">;
+  if (!upload.ok) throw new Error(`No se pudo subir el archivo (${upload.status}).`);
+  return { url: publicUrl, key };
 }

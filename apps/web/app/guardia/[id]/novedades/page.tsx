@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useParams } from "next/navigation";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery, useMutation, useAction } from "convex/react";
 import {
   AlertTriangle, Plus, Loader2, Paperclip, FileText,
 } from "lucide-react";
@@ -15,6 +15,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Input, Select, Textarea } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { uploadToS3 } from "@/lib/upload-s3";
 
 type Prioridad = "baja" | "media" | "alta";
 
@@ -96,7 +97,7 @@ export default function GuardiaNovedadesPage() {
 
 function NovedadModal({ condominioId, onClose }: { condominioId: Id<"condominios">; onClose: () => void }) {
   const reportar = useMutation(api.guardia.reportarNovedad);
-  const generarUrl = useMutation(api.guardia.generateUploadUrl);
+  const generateUploadUrl = useAction(api.files.generateUploadUrl);
   const [titulo, setTitulo] = useState("");
   const [prioridad, setPrioridad] = useState<Prioridad>("media");
   const [descripcion, setDescripcion] = useState("");
@@ -110,17 +111,19 @@ function NovedadModal({ condominioId, onClose }: { condominioId: Id<"condominios
     if (!valido) return;
     setBusy(true); setError(null);
     try {
-      let archivoStorageId: Id<"_storage"> | undefined;
+      let archivoUrl: string | undefined;
       if (archivo) {
         if (archivo.size > 20 * 1024 * 1024) throw new Error("El adjunto no puede superar 20 MB.");
-        const url = await generarUrl({});
-        const res = await fetch(url, { method: "POST", headers: { "Content-Type": archivo.type }, body: archivo });
-        if (!res.ok) throw new Error("No se pudo subir el adjunto.");
-        archivoStorageId = ((await res.json()) as { storageId: Id<"_storage"> }).storageId;
+        const uploaded = await uploadToS3(
+          generateUploadUrl,
+          archivo,
+          `condominios/guardia/${condominioId}/novedades`,
+        );
+        archivoUrl = uploaded.url;
       }
       await reportar({
         condominioId, titulo, descripcion, prioridad,
-        archivoStorageId, archivoNombre: archivo?.name,
+        archivoUrl, archivoNombre: archivo?.name,
       });
       onClose();
     } catch (e) {

@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useParams } from "next/navigation";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery, useMutation, useAction } from "convex/react";
 import {
   Package, Plus, Loader2, Check, Search, PackageCheck, Camera, Eye, Image as ImageIcon,
 } from "lucide-react";
@@ -16,6 +16,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Input, Select } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { uploadToS3 } from "@/lib/upload-s3";
 
 type Paq = Doc<"paquetes"> & { fotoUrl: string | null; fotoEntregaUrl: string | null };
 type TipoPaq = Doc<"paquetes">["tipo"];
@@ -27,14 +28,6 @@ const TIPO_LABEL: Record<TipoPaq, string> = {
 function fmtHora(ts?: number) {
   if (!ts) return "—";
   return new Date(ts).toLocaleString("es-CO", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
-}
-
-async function subirFoto(generarUrl: () => Promise<string>, file: File): Promise<Id<"_storage">> {
-  const url = await generarUrl();
-  const res = await fetch(url, { method: "POST", headers: { "Content-Type": file.type }, body: file });
-  if (!res.ok) throw new Error("No se pudo subir la foto.");
-  const { storageId } = (await res.json()) as { storageId: Id<"_storage"> };
-  return storageId;
 }
 
 export default function GuardiaPaqueteriaPage() {
@@ -148,7 +141,7 @@ export default function GuardiaPaqueteriaPage() {
 
 function RecibirModal({ condominioId, onClose }: { condominioId: Id<"condominios">; onClose: () => void }) {
   const recibir = useMutation(api.guardia.recibirPaquete);
-  const generarUrl = useMutation(api.guardia.generateUploadUrl);
+  const generateUploadUrl = useAction(api.files.generateUploadUrl);
   const [unidadNumero, setUnidadNumero] = useState("");
   const [tipo, setTipo] = useState<TipoPaq>("paquete");
   const [remitente, setRemitente] = useState("");
@@ -164,13 +157,21 @@ function RecibirModal({ condominioId, onClose }: { condominioId: Id<"condominios
     if (!valid) return;
     setBusy(true); setError(null);
     try {
-      const fotoStorageId = foto ? await subirFoto(() => generarUrl({}), foto) : undefined;
+      let fotoUrl: string | undefined;
+      if (foto) {
+        const uploaded = await uploadToS3(
+          generateUploadUrl,
+          foto,
+          `condominios/guardia/${condominioId}/paquetes`,
+        );
+        fotoUrl = uploaded.url;
+      }
       await recibir({
         condominioId, unidadNumero, tipo,
         remitente: remitente || undefined,
         destinatario: destinatario || undefined,
         descripcion: descripcion || undefined,
-        fotoStorageId,
+        fotoUrl,
       });
       onClose();
     } catch (e) {
@@ -232,7 +233,7 @@ function RecibirModal({ condominioId, onClose }: { condominioId: Id<"condominios
 
 function EntregarModal({ paquete, onClose }: { paquete: Paq; onClose: () => void }) {
   const entregar = useMutation(api.guardia.entregarPaquete);
-  const generarUrl = useMutation(api.guardia.generateUploadUrl);
+  const generateUploadUrl = useAction(api.files.generateUploadUrl);
   const [entregadoA, setEntregadoA] = useState("");
   const [observaciones, setObservaciones] = useState("");
   const [foto, setFoto] = useState<File | null>(null);
@@ -242,12 +243,20 @@ function EntregarModal({ paquete, onClose }: { paquete: Paq; onClose: () => void
   async function confirm() {
     setBusy(true); setError(null);
     try {
-      const fotoEntregaStorageId = foto ? await subirFoto(() => generarUrl({}), foto) : undefined;
+      let fotoEntregaUrl: string | undefined;
+      if (foto) {
+        const uploaded = await uploadToS3(
+          generateUploadUrl,
+          foto,
+          `condominios/guardia/${paquete.condominioId}/paquetes`,
+        );
+        fotoEntregaUrl = uploaded.url;
+      }
       await entregar({
         id: paquete._id,
         entregadoA: entregadoA || undefined,
         observaciones: observaciones || undefined,
-        fotoEntregaStorageId,
+        fotoEntregaUrl,
       });
       onClose();
     } catch (e) {

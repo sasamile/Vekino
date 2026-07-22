@@ -1,4 +1,5 @@
 import { v } from "convex/values";
+import { paginationOptsValidator } from "convex/server";
 import { query, mutation } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { requireCondominioRole } from "./model/authz";
@@ -29,6 +30,72 @@ export const listByCondominio = query({
       .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
       .order("desc")
       .collect();
+  },
+});
+
+export const countsByCondominio = query({
+  args: { condominioId: v.id("condominios") },
+  handler: async (ctx, args) => {
+    await requireCondominioRole(ctx, args.condominioId, []);
+    const rows = await ctx.db
+      .query("pqrs")
+      .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
+      .take(2000);
+    return {
+      total: rows.length,
+      abierto: rows.filter((p) => p.estado === "abierto").length,
+      en_gestion: rows.filter((p) => p.estado === "en_gestion").length,
+      resuelto: rows.filter((p) => p.estado === "resuelto" || p.estado === "cerrado").length,
+    };
+  },
+});
+
+export const listPage = query({
+  args: {
+    condominioId: v.id("condominios"),
+    paginationOpts: paginationOptsValidator,
+    estado: v.optional(estadoValidator),
+    tipo: v.optional(tipoValidator),
+  },
+  handler: async (ctx, args) => {
+    await requireCondominioRole(ctx, args.condominioId, []);
+    const estado = args.estado;
+    const tipo = args.tipo;
+
+    if (estado || tipo) {
+      const scan = await ctx.db
+        .query("pqrs")
+        .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
+        .order("desc")
+        .take(250);
+      const filtered = scan.filter((p) => {
+        if (estado && p.estado !== estado) return false;
+        if (tipo && p.tipo !== tipo) return false;
+        return true;
+      });
+      const limit = Math.min(args.paginationOpts.numItems || 30, 60);
+      return {
+        page: filtered.slice(0, limit),
+        isDone: true,
+        continueCursor: "",
+      };
+    }
+
+    return await ctx.db
+      .query("pqrs")
+      .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
+      .order("desc")
+      .paginate(args.paginationOpts);
+  },
+});
+
+export const get = query({
+  args: { id: v.id("pqrs") },
+  handler: async (ctx, args) => {
+    const row = await ctx.db.get(args.id);
+    if (!row) return null;
+    await requireCondominioRole(ctx, row.condominioId, []);
+    return row;
   },
 });
 

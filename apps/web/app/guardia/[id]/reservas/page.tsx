@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useParams } from "next/navigation";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery, useMutation, useAction } from "convex/react";
 import {
   CalendarCheck, Clock, Home, Loader2, LogIn, LogOut, Wallet, Camera, ShieldAlert,
 } from "lucide-react";
@@ -16,16 +16,9 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Input, Textarea } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { uploadToS3 } from "@/lib/upload-s3";
 
 type Reserva = Doc<"reservas"> & { deposito: Doc<"guardiaReservaDepositos"> | null };
-
-async function subirFoto(generarUrl: () => Promise<string>, file: File): Promise<Id<"_storage">> {
-  const url = await generarUrl();
-  const res = await fetch(url, { method: "POST", headers: { "Content-Type": file.type }, body: file });
-  if (!res.ok) throw new Error("No se pudo subir la foto.");
-  const { storageId } = (await res.json()) as { storageId: Id<"_storage"> };
-  return storageId;
-}
 
 function fmtFecha(fecha: string) {
   const [y, m, d] = fecha.split("-").map(Number);
@@ -160,7 +153,7 @@ function ReservaCard({
 /* ───────── Registrar depósito (+ valida ingreso) ───────── */
 function DepositoModal({ reserva, onClose }: { reserva: Reserva; onClose: () => void }) {
   const registrar = useMutation(api.guardia.registrarDepositoReserva);
-  const generarUrl = useMutation(api.guardia.generateUploadUrl);
+  const generateUploadUrl = useAction(api.files.generateUploadUrl);
   const [monto, setMonto] = useState("");
   const [observaciones, setObservaciones] = useState("");
   const [foto, setFoto] = useState<File | null>(null);
@@ -174,8 +167,16 @@ function DepositoModal({ reserva, onClose }: { reserva: Reserva; onClose: () => 
     if (!valido) return;
     setBusy(true); setError(null);
     try {
-      const fotoStorageId = foto ? await subirFoto(() => generarUrl({}), foto) : undefined;
-      await registrar({ reservaId: reserva._id, monto: montoNum, observaciones: observaciones || undefined, fotoStorageId });
+      let fotoUrl: string | undefined;
+      if (foto) {
+        const uploaded = await uploadToS3(
+          generateUploadUrl,
+          foto,
+          `condominios/guardia/${reserva.condominioId}/depositos`,
+        );
+        fotoUrl = uploaded.url;
+      }
+      await registrar({ reservaId: reserva._id, monto: montoNum, observaciones: observaciones || undefined, fotoUrl });
       onClose();
     } catch (e) {
       setError(e instanceof Error ? e.message : "No se pudo registrar.");
@@ -223,7 +224,7 @@ function ResolverModal({
   reserva, deposito, onClose,
 }: { reserva: Reserva; deposito: Doc<"guardiaReservaDepositos">; onClose: () => void }) {
   const resolver = useMutation(api.guardia.resolverDepositoReserva);
-  const generarUrl = useMutation(api.guardia.generateUploadUrl);
+  const generateUploadUrl = useAction(api.files.generateUploadUrl);
   const [devuelto, setDevuelto] = useState(true);
   const [observaciones, setObservaciones] = useState("");
   const [foto, setFoto] = useState<File | null>(null);
@@ -236,8 +237,16 @@ function ResolverModal({
     if (!valido) return;
     setBusy(true); setError(null);
     try {
-      const fotoStorageId = foto ? await subirFoto(() => generarUrl({}), foto) : undefined;
-      await resolver({ depositoId: deposito._id, devuelto, observaciones: observaciones || undefined, fotoStorageId });
+      let fotoUrl: string | undefined;
+      if (foto) {
+        const uploaded = await uploadToS3(
+          generateUploadUrl,
+          foto,
+          `condominios/guardia/${reserva.condominioId}/depositos`,
+        );
+        fotoUrl = uploaded.url;
+      }
+      await resolver({ depositoId: deposito._id, devuelto, observaciones: observaciones || undefined, fotoUrl });
       onClose();
     } catch (e) {
       setError(e instanceof Error ? e.message : "No se pudo resolver.");

@@ -1,27 +1,28 @@
 import {
-  LayoutDashboard,
-  Users,
-  Building2,
-  Car,
-  ShieldCheck,
-  CalendarCheck,
-  Wallet,
-  MessageSquare,
-  FileText,
-  BarChart3,
-  Gavel,
-  MessageSquareWarning,
-  Users2,
-  History,
+  House,
+  UsersRound,
+  DoorOpen,
+  CarFront,
+  CalendarDays,
+  CircleDollarSign,
+  Megaphone,
+  Inbox,
   LifeBuoy,
+  FolderOpen,
+  ChartColumn,
+  Landmark,
+  Users,
+  Clock3,
   type LucideIcon,
 } from "lucide-react";
 
 export interface NavItem {
   label: string;
-  segment: string; // ruta relativa al base del condominio ("" = inicio)
+  segment: string;
   icon: LucideIcon;
   ready: boolean;
+  /** Sinónimos / palabras para el acceso rápido */
+  keywords?: string[];
 }
 
 export interface NavGroup {
@@ -33,70 +34,141 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     title: null,
     items: [
-      { label: "Dashboard", segment: "", icon: LayoutDashboard, ready: true },
+      {
+        label: "Panel",
+        segment: "",
+        icon: House,
+        ready: true,
+        keywords: ["inicio", "home", "dashboard", "resumen", "admin"],
+      },
     ],
   },
   {
     title: "Comunidad",
     items: [
-      { label: "Residentes", segment: "residentes", icon: Users, ready: true },
-      { label: "Unidades", segment: "unidades", icon: Building2, ready: true },
-      { label: "Vehículos", segment: "vehiculos", icon: Car, ready: true },
+      {
+        label: "Residentes",
+        segment: "residentes",
+        icon: UsersRound,
+        ready: true,
+        keywords: ["usuarios", "miembros", "personas", "propietarios", "inquilinos"],
+      },
+      {
+        label: "Unidades",
+        segment: "unidades",
+        icon: DoorOpen,
+        ready: true,
+        keywords: ["aptos", "apartamentos", "inmuebles", "torres", "casas"],
+      },
+      {
+        label: "Vehículos",
+        segment: "vehiculos",
+        icon: CarFront,
+        ready: true,
+        keywords: ["carros", "motos", "placas", "parqueo", "bicicletas"],
+      },
     ],
   },
   {
     title: "Operación",
     items: [
-      { label: "Control", segment: "control", icon: ShieldCheck, ready: true },
-      { label: "Reservas", segment: "reservas", icon: CalendarCheck, ready: true },
-      { label: "Finanzas", segment: "finanzas", icon: Wallet, ready: true },
+      {
+        label: "Reservas",
+        segment: "reservas",
+        icon: CalendarDays,
+        ready: true,
+        keywords: ["zonas", "salon", "bbq", "piscina", "cancha", "agenda"],
+      },
+      {
+        label: "Finanzas",
+        segment: "finanzas",
+        icon: CircleDollarSign,
+        ready: true,
+        keywords: ["facturas", "cartera", "pagos", "cobros", "cuotas", "mora", "recaudo"],
+      },
     ],
   },
   {
     title: "Gestión",
     items: [
-      { label: "Comunicación", segment: "comunicacion", icon: MessageSquare, ready: true },
-      { label: "PQRS", segment: "pqrs", icon: MessageSquareWarning, ready: true },
-      { label: "Soporte", segment: "soporte", icon: LifeBuoy, ready: true },
-      { label: "Documentos", segment: "documentos", icon: FileText, ready: true },
-      { label: "Reportes", segment: "reportes", icon: BarChart3, ready: true },
+      {
+        label: "Comunicación",
+        segment: "comunicacion",
+        icon: Megaphone,
+        ready: true,
+        keywords: ["avisos", "comunicados", "anuncios", "noticias"],
+      },
+      {
+        label: "PQRS",
+        segment: "pqrs",
+        icon: Inbox,
+        ready: true,
+        keywords: ["peticiones", "quejas", "reclamos", "sugerencias", "tickets"],
+      },
+      {
+        label: "Soporte",
+        segment: "soporte",
+        icon: LifeBuoy,
+        ready: true,
+        keywords: ["ayuda", "tickets", "vekino"],
+      },
+      {
+        label: "Documentos",
+        segment: "documentos",
+        icon: FolderOpen,
+        ready: true,
+        keywords: ["docs", "archivos", "pdf", "actas", "reglamento", "repositorio"],
+      },
+      {
+        label: "Reportes",
+        segment: "reportes",
+        icon: ChartColumn,
+        ready: true,
+        keywords: ["estadisticas", "exportar", "graficas", "analisis"],
+      },
     ],
   },
   {
     title: "Gobernanza",
     items: [
-      { label: "Asamblea", segment: "asamblea", icon: Gavel, ready: true },
-      { label: "Consejo", segment: "consejo", icon: Users2, ready: true },
-      { label: "Historial", segment: "historial", icon: History, ready: true },
+      {
+        label: "Asamblea",
+        segment: "asamblea",
+        icon: Landmark,
+        ready: true,
+        keywords: ["votaciones", "quorum", "poderes", "convocatoria"],
+      },
+      {
+        label: "Consejo",
+        segment: "consejo",
+        icon: Users,
+        ready: true,
+        keywords: ["junta", "directiva", "consejeros", "documentos", "actas", "comentarios"],
+      },
+      {
+        label: "Historial",
+        segment: "historial",
+        icon: Clock3,
+        ready: true,
+        keywords: ["auditoria", "actividad", "log", "eventos"],
+      },
     ],
   },
 ];
 
-/**
- * Segmentos visibles por rol operativo. `administrador` (y staff de plataforma)
- * ven todo. Los demás roles ven un subconjunto acorde a su función.
- * "" = Dashboard (inicio del condominio).
- */
 const ROLE_SEGMENTS: Record<string, string[]> = {
-  // Finanzas / cartera: solo lo económico.
   contadora: ["", "finanzas", "reportes", "documentos"],
-  // Consejo / junta: gobernanza y supervisión de la comunidad (sin finanzas).
   junta_directiva: [
-    "", "residentes", "unidades", "vehiculos", "control", "reservas",
+    "", "residentes", "unidades", "vehiculos", "reservas",
     "comunicacion", "pqrs", "soporte", "documentos", "reportes", "asamblea", "consejo", "historial",
   ],
-  // Vocero de asamblea: gobernanza y documentos.
   representante_asamblea: ["", "asamblea", "consejo", "documentos", "historial"],
 };
 
-/**
- * Grupos de navegación visibles para los roles dados. Administrador o staff de
- * plataforma → todo. Sin rol reconocido → solo el Dashboard (fallback seguro).
- */
 export function visibleNavGroups(roles: string[], isPlatform: boolean): NavGroup[] {
   if (isPlatform || roles.includes("administrador")) return NAV_GROUPS;
 
-  const allowed = new Set<string>([""]); // Dashboard siempre visible
+  const allowed = new Set<string>([""]);
   for (const r of roles) {
     for (const seg of ROLE_SEGMENTS[r] ?? []) allowed.add(seg);
   }

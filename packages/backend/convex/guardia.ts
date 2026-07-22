@@ -10,6 +10,7 @@ import {
 import { logMinuta, turnoAbierto } from "./model/minuta";
 import { esVisitanteVigente, ventanaHoyBogota } from "./model/visitantes";
 import { displayNameFromUser } from "./model/displayName";
+import { resolveMediaUrl, resolveMediaUrlList } from "./model/files";
 
 /** Roles que pueden operar la portería. */
 const GUARD_ROLES = ["guardia", "administrador", "junta_directiva"] as const;
@@ -44,13 +45,13 @@ const checklistItemValidator = v.object({
   observacion: v.optional(v.string()),
 });
 
-/** URL de subida para evidencias fotográficas (rondas, paquetes, depósitos). */
+/** URL de subida — @deprecated usar api.files.generateUploadUrl (S3). */
 export const generateUploadUrl = mutation({
   args: {},
-  handler: async (ctx) => {
-    const user = await getCurrentAppUser(ctx);
-    if (!user) throw new Error("No autenticado.");
-    return await ctx.storage.generateUploadUrl();
+  handler: async () => {
+    throw new Error(
+      "Las subidas van a S3. Usa api.files.generateUploadUrl (action).",
+    );
   },
 });
 
@@ -308,9 +309,9 @@ export const getTurno = query({
     const rondas = await Promise.all(
       rondasRaw.map(async (r) => ({
         ...r,
-        fotoUrls: (
-          await Promise.all(r.fotos.map((f) => ctx.storage.getUrl(f)))
-        ).filter((u): u is string => u !== null),
+        fotoUrls: (await resolveMediaUrlList(ctx, r.fotos)).filter(
+          (u): u is string => u !== null,
+        ),
       })),
     );
 
@@ -338,7 +339,7 @@ export const registrarRonda = mutation({
     zonaId: v.optional(v.id("guardiaRondaZonas")),
     zonaNombre: v.optional(v.string()),
     novedad: v.optional(v.string()),
-    fotos: v.array(v.id("_storage")),
+    fotos: v.array(v.string()), // URLs S3 (o storageId legacy como string)
   },
   handler: async (ctx, args) => {
     const { user } = await requireCondominioRole(ctx, args.condominioId, [...GUARD_ROLES]);
@@ -743,10 +744,16 @@ export const listPaquetes = query({
     return await Promise.all(
       paquetes.map(async (p) => ({
         ...p,
-        fotoUrl: p.fotoStorageId ? await ctx.storage.getUrl(p.fotoStorageId) : null,
-        fotoEntregaUrl: p.fotoEntregaStorageId
-          ? await ctx.storage.getUrl(p.fotoEntregaStorageId)
-          : null,
+        fotoUrl:
+          (await resolveMediaUrl(ctx, {
+            url: p.fotoUrl,
+            storageId: p.fotoStorageId,
+          })) || null,
+        fotoEntregaUrl:
+          (await resolveMediaUrl(ctx, {
+            url: p.fotoEntregaUrl,
+            storageId: p.fotoEntregaStorageId,
+          })) || null,
       })),
     );
   },
@@ -762,6 +769,7 @@ export const recibirPaquete = mutation({
     destinatario: v.optional(v.string()),
     descripcion: v.optional(v.string()),
     fotoStorageId: v.optional(v.id("_storage")),
+    fotoUrl: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const { user } = await requireCondominioRole(ctx, args.condominioId, [...GUARD_ROLES]);
@@ -776,6 +784,7 @@ export const recibirPaquete = mutation({
       destinatario: args.destinatario?.trim() || undefined,
       descripcion: args.descripcion?.trim() || undefined,
       fotoStorageId: args.fotoStorageId,
+      fotoUrl: args.fotoUrl,
       estado: "recibido",
       recibidoPorNombre: user.name,
       fechaRecibido: now,
@@ -801,6 +810,7 @@ export const entregarPaquete = mutation({
     entregadoA: v.optional(v.string()),
     observaciones: v.optional(v.string()),
     fotoEntregaStorageId: v.optional(v.id("_storage")),
+    fotoEntregaUrl: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const p = await ctx.db.get(args.id);
@@ -813,6 +823,7 @@ export const entregarPaquete = mutation({
       entregadoANombre: args.entregadoA?.trim() || undefined,
       observacionesEntrega: args.observaciones?.trim() || undefined,
       fotoEntregaStorageId: args.fotoEntregaStorageId,
+      fotoEntregaUrl: args.fotoEntregaUrl,
       fechaEntregado: Date.now(),
     });
     await logMinuta(ctx, {
@@ -897,6 +908,7 @@ export const registrarDepositoReserva = mutation({
     monto: v.number(),
     observaciones: v.optional(v.string()),
     fotoStorageId: v.optional(v.id("_storage")),
+    fotoUrl: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const r = await ctx.db.get(args.reservaId);
@@ -917,6 +929,7 @@ export const registrarDepositoReserva = mutation({
       monto: args.monto,
       observacionesIngreso: args.observaciones?.trim() || undefined,
       fotoIngresoStorageId: args.fotoStorageId,
+      fotoIngresoUrl: args.fotoUrl,
       estado: "registrado",
       recibidoPorNombre: user.name,
       fechaRegistro: now,
@@ -976,13 +989,14 @@ export const resolverDepositoReserva = mutation({
     devuelto: v.boolean(),
     observaciones: v.optional(v.string()),
     fotoStorageId: v.optional(v.id("_storage")),
+    fotoUrl: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const dep = await ctx.db.get(args.depositoId);
     if (!dep) throw new Error("Depósito no encontrado.");
     const { user } = await requireCondominioRole(ctx, dep.condominioId, [...GUARD_ROLES]);
     if (dep.estado !== "registrado") throw new Error("El depósito ya fue resuelto.");
-    if (!args.devuelto && (!args.observaciones?.trim() || !args.fotoStorageId)) {
+    if (!args.devuelto && (!args.observaciones?.trim() || (!args.fotoStorageId && !args.fotoUrl))) {
       throw new Error("Si el depósito NO se devuelve, las observaciones y la foto de evidencia son obligatorias.");
     }
 
@@ -992,6 +1006,7 @@ export const resolverDepositoReserva = mutation({
       estado: args.devuelto ? "devuelto" : "no_devuelto",
       observacionesSalida: args.observaciones?.trim() || undefined,
       fotoSalidaStorageId: args.fotoStorageId,
+      fotoSalidaUrl: args.fotoUrl,
       resueltoPorNombre: user.name,
       fechaResolucion: now,
     });
@@ -1027,7 +1042,11 @@ export const listNovedadReportes = query({
     return await Promise.all(
       reportes.map(async (n) => ({
         ...n,
-        archivoUrl: n.archivoStorageId ? await ctx.storage.getUrl(n.archivoStorageId) : null,
+        archivoUrl:
+          (await resolveMediaUrl(ctx, {
+            url: n.archivoUrl,
+            storageId: n.archivoStorageId,
+          })) || null,
       })),
     );
   },
@@ -1040,6 +1059,7 @@ export const reportarNovedad = mutation({
     descripcion: v.string(),
     prioridad: v.union(v.literal("baja"), v.literal("media"), v.literal("alta")),
     archivoStorageId: v.optional(v.id("_storage")),
+    archivoUrl: v.optional(v.string()),
     archivoNombre: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -1057,6 +1077,7 @@ export const reportarNovedad = mutation({
       descripcion,
       prioridad: args.prioridad,
       archivoStorageId: args.archivoStorageId,
+      archivoUrl: args.archivoUrl,
       archivoNombre: args.archivoNombre?.trim() || undefined,
       reportadoPorUserId: user._id,
       reportadoPorNombre: user.name,
@@ -1100,7 +1121,7 @@ export const listAvisos = query({
           (c.archivos ?? []).map(async (a) => ({
             nombre: a.nombre,
             mimeType: a.mimeType,
-            url: await ctx.storage.getUrl(a.storageId),
+            url: await resolveMediaUrl(ctx, a),
           })),
         ),
       })),

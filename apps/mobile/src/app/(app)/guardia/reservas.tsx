@@ -13,7 +13,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
-import { useMutation, useQuery, Authenticated } from "convex/react";
+import { useMutation, useQuery, useAction, Authenticated } from "convex/react";
 import { api } from "@vekino/backend/api";
 import type { Doc, Id } from "@vekino/backend/dataModel";
 import { useCondominio } from "@/context/condominio-context";
@@ -47,7 +47,7 @@ function Inner() {
   const validarSalida = useMutation(api.guardia.validarSalidaReserva);
   const registrarDeposito = useMutation(api.guardia.registrarDepositoReserva);
   const resolverDeposito = useMutation(api.guardia.resolverDepositoReserva);
-  const generateUploadUrl = useMutation(api.guardia.generateUploadUrl);
+  const generateUploadUrl = useAction(api.files.generateUploadUrl);
 
   const [filtro, setFiltro] = useState<"hoy" | "todas">("hoy");
   const [depositoReserva, setDepositoReserva] = useState<ReservaRow | null>(null);
@@ -133,15 +133,21 @@ function Inner() {
     }
     setBusy(true);
     try {
-      let fotoStorageId: Id<"_storage"> | undefined;
+      let fotoUrl: string | undefined;
       if (foto) {
-        fotoStorageId = await uploadLocalFile(generateUploadUrl, foto.uri, foto.mime);
+        const uploaded = await uploadLocalFile(
+          generateUploadUrl,
+          foto.uri,
+          foto.mime,
+          `condominios/guardia/${depositoReserva.condominioId}/depositos`,
+        );
+        fotoUrl = uploaded.url;
       }
       await registrarDeposito({
         reservaId: depositoReserva._id,
         monto: montoNum,
         observaciones: obs || undefined,
-        fotoStorageId,
+        fotoUrl,
       });
       setDepositoReserva(null);
       setMonto("");
@@ -165,15 +171,21 @@ function Inner() {
     }
     setBusy(true);
     try {
-      let fotoStorageId: Id<"_storage"> | undefined;
+      let fotoUrl: string | undefined;
       if (foto) {
-        fotoStorageId = await uploadLocalFile(generateUploadUrl, foto.uri, foto.mime);
+        const uploaded = await uploadLocalFile(
+          generateUploadUrl,
+          foto.uri,
+          foto.mime,
+          `condominios/guardia/${resolverDep.condominioId}/depositos`,
+        );
+        fotoUrl = uploaded.url;
       }
       await resolverDeposito({
         depositoId: resolverDep.deposito._id,
         devuelto,
         observaciones: obs || undefined,
-        fotoStorageId,
+        fotoUrl,
       });
       setResolverDep(null);
       setObs("");

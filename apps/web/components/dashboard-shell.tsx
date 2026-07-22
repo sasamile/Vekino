@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect } from "react";
-import Image from "next/image";
+import { Suspense, useEffect } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import {
   Authenticated,
@@ -11,36 +11,25 @@ import {
   useQuery,
   useMutation,
 } from "convex/react";
-import {
-  LayoutDashboard,
-  Building2,
-  ShieldCheck,
-  LogOut,
-  Users,
-  LifeBuoy,
-} from "lucide-react";
+import { LayoutDashboard, LogOut } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import { authClient } from "@/lib/auth-client";
 import { homeHrefForRoles } from "@/lib/role-routing";
-
-type NavItem = {
-  href: string;
-  label: string;
-  icon: React.ComponentType<{ className?: string }>;
-};
-
-const PLATFORM_NAV: NavItem[] = [
-  { href: "/dashboard", label: "Inicio", icon: LayoutDashboard },
-  { href: "/dashboard/condominios", label: "Condominios", icon: Building2 },
-  { href: "/dashboard/administradores", label: "Administradores", icon: Users },
-  { href: "/dashboard/soporte", label: "Soporte", icon: LifeBuoy },
-];
+import {
+  PlatformSidebar,
+  PlatformMobileNav,
+} from "@/components/layout/platform-sidebar";
+import { AdminTopbar } from "@/components/layout/admin-topbar";
+import { AdminTopbarProvider } from "@/components/layout/admin-topbar-context";
+import { Spinner } from "@/components/ui/spinner";
 
 export function DashboardShell({ children }: { children: React.ReactNode }) {
   return (
-    <div className="min-h-screen bg-zinc-50">
+    <div className="h-dvh overflow-hidden bg-background">
       <AuthLoading>
-        <FullscreenMsg>Cargando…</FullscreenMsg>
+        <Fullscreen>
+          <Spinner className="h-5 w-5" />
+        </Fullscreen>
       </AuthLoading>
       <Unauthenticated>
         <Redirect to="/" />
@@ -52,9 +41,9 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   );
 }
 
-function FullscreenMsg({ children }: { children: React.ReactNode }) {
+function Fullscreen({ children }: { children: React.ReactNode }) {
   return (
-    <div className="min-h-screen flex items-center justify-center text-sm text-zinc-500">
+    <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
       {children}
     </div>
   );
@@ -65,7 +54,11 @@ function Redirect({ to }: { to: string }) {
   useEffect(() => {
     router.replace(to);
   }, [router, to]);
-  return <FullscreenMsg>Entrando…</FullscreenMsg>;
+  return (
+    <Fullscreen>
+      <Spinner className="h-5 w-5" />
+    </Fullscreen>
+  );
 }
 
 function Shell({ children }: { children: React.ReactNode }) {
@@ -78,50 +71,71 @@ function Shell({ children }: { children: React.ReactNode }) {
   }, [ensureProfile]);
 
   if (me === undefined || me === null) {
-    return <FullscreenMsg>Cargando…</FullscreenMsg>;
+    return (
+      <Fullscreen>
+        <Spinner className="h-5 w-5" />
+      </Fullscreen>
+    );
   }
 
   const isPlatform =
     me.platformRole === "superadmin" || me.platformRole === "admin";
 
-  // Un solo condominio: entrar directo, sin panel de plataforma. Los roles
-  // administrativos van al área de administración; el resto (propietario,
-  // arrendatario, residente…) va a su portal personal.
   if (!isPlatform && me.memberships.length === 1 && me.memberships[0]) {
     const m = me.memberships[0];
     return <Redirect to={homeHrefForRoles(m.condominioId, m.roles)} />;
   }
 
-  // Rutas solo de plataforma.
   if (
     !isPlatform &&
     (pathname.startsWith("/dashboard/condominios") ||
-      pathname.startsWith("/dashboard/administradores"))
+      pathname.startsWith("/dashboard/administradores") ||
+      pathname.startsWith("/dashboard/soporte"))
   ) {
     return <Redirect to="/dashboard" />;
   }
 
   if (!isPlatform) {
-    return (
-      <div className="min-h-screen">
-        <MinimalSidebar me={me} />
-        <main className="ml-64 min-h-screen min-w-0">{children}</main>
-      </div>
-    );
+    return <UserMultiCondoShell me={me}>{children}</UserMultiCondoShell>;
   }
 
   return (
-    <div className="min-h-screen">
-      <Sidebar nav={PLATFORM_NAV} me={me} />
-      <main className="ml-64 min-h-screen min-w-0">{children}</main>
+    <div className="font-admin flex h-dvh flex-col overflow-hidden bg-background lg:p-3.5">
+      <div className="flex min-h-0 w-full flex-1 overflow-hidden bg-card lg:rounded-[18px] lg:border lg:border-border lg:shadow-soft">
+        <aside className="hidden w-60 shrink-0 flex-col overflow-hidden border-r border-border lg:flex">
+          <PlatformSidebar
+            userName={me.name}
+            userEmail={me.email}
+            userImage={me.image}
+            platformRole={me.platformRole}
+          />
+        </aside>
+
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+          <PlatformMobileNav
+            userName={me.name}
+            userEmail={me.email}
+            userImage={me.image}
+            platformRole={me.platformRole}
+          />
+          <AdminTopbarProvider>
+            <AdminTopbar base="/dashboard" variant="platform" />
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+              <Suspense fallback={null}>{children}</Suspense>
+            </div>
+          </AdminTopbarProvider>
+        </div>
+      </div>
     </div>
   );
 }
 
-function MinimalSidebar({
+function UserMultiCondoShell({
   me,
+  children,
 }: {
   me: NonNullable<ReturnType<typeof useQuery<typeof api.users.me>>>;
+  children: React.ReactNode;
 }) {
   const router = useRouter();
 
@@ -131,111 +145,48 @@ function MinimalSidebar({
   }
 
   return (
-    <aside className="fixed inset-y-0 left-0 z-40 flex w-64 flex-col border-r border-zinc-200 bg-white">
-      <div className="border-b border-zinc-100 px-5 py-4">
-        <Image
-          src="/logos/logo-vekino.svg"
-          alt="Vekino"
-          width={120}
-          height={40}
-          className="h-8 w-auto"
-        />
-      </div>
-      <nav className="flex-1 px-3 py-3">
-        <Link
-          href="/dashboard"
-          className="flex items-center gap-3 rounded-lg bg-zinc-100 px-3 py-2 text-sm font-medium text-zinc-900"
-        >
-          <LayoutDashboard className="h-4 w-4 text-zinc-500" />
-          Mis condominios
-        </Link>
-      </nav>
-      <div className="border-t border-zinc-100 p-3">
-        <div className="px-3 py-2">
-          <p className="truncate text-sm font-medium text-zinc-900">{me.name}</p>
-          <p className="truncate text-xs text-zinc-500">{me.email}</p>
+    <div className="font-admin flex h-dvh flex-col overflow-hidden bg-background lg:p-3.5">
+      <div className="flex min-h-0 w-full flex-1 overflow-hidden bg-card lg:rounded-[18px] lg:border lg:border-border lg:shadow-soft">
+        <aside className="hidden w-60 shrink-0 flex-col border-r border-border bg-card lg:flex">
+          <div className="flex h-full flex-col gap-3 px-3 py-3.5">
+            <div className="px-1.5 py-1">
+              <Image
+                src="/logos/logo-vekino.svg"
+                alt="Vekino"
+                width={112}
+                height={36}
+                className="h-7 w-auto dark:brightness-0 dark:invert"
+              />
+            </div>
+            <nav className="flex-1">
+              <Link
+                href="/dashboard"
+                className="flex h-8 items-center gap-2.5 rounded-lg bg-accent px-2.5 text-[13px] font-normal text-foreground"
+              >
+                <LayoutDashboard className="h-3.75 w-3.75 stroke-2 text-brand" />
+                Mis condominios
+              </Link>
+            </nav>
+            <div className="border-t border-border/70 pt-2.5">
+              <div className="px-1.5 py-1">
+                <p className="truncate text-[12.5px] text-foreground">{me.name}</p>
+                <p className="truncate text-[10.5px] text-muted-foreground">{me.email}</p>
+              </div>
+              <button
+                type="button"
+                onClick={signOut}
+                className="mt-1 flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-red-600 hover:bg-red-500/10 dark:text-red-400"
+              >
+                <LogOut className="h-3.5 w-3.5" />
+                Cerrar sesión
+              </button>
+            </div>
+          </div>
+        </aside>
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+          {children}
         </div>
-        <button
-          onClick={signOut}
-          className="mt-1 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-zinc-500 transition-colors hover:bg-zinc-50 hover:text-zinc-900"
-        >
-          <LogOut className="h-4 w-4" />
-          Cerrar sesión
-        </button>
       </div>
-    </aside>
-  );
-}
-
-function Sidebar({
-  nav,
-  me,
-}: {
-  nav: NavItem[];
-  me: NonNullable<ReturnType<typeof useQuery<typeof api.users.me>>>;
-}) {
-  const pathname = usePathname();
-  const router = useRouter();
-
-  async function signOut() {
-    await authClient.signOut();
-    router.replace("/");
-  }
-
-  return (
-    <aside className="fixed inset-y-0 left-0 z-40 flex w-64 flex-col bg-primary text-white">
-      <div className="p-5">
-        <Image
-          src="/logos/logo-vekino.svg"
-          alt="Vekino"
-          width={130}
-          height={44}
-          className="h-auto w-32 brightness-0 invert"
-        />
-      </div>
-
-      <nav className="flex-1 space-y-0.5 px-3">
-        {nav.map((item) => {
-          const active =
-            pathname === item.href ||
-            (item.href !== "/dashboard" && pathname.startsWith(item.href));
-          const Icon = item.icon;
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors duration-150 ${
-                active
-                  ? "bg-white/15 font-medium text-white"
-                  : "text-white/65 hover:bg-white/10 hover:text-white"
-              }`}
-            >
-              <Icon className="h-4 w-4" />
-              {item.label}
-            </Link>
-          );
-        })}
-      </nav>
-
-      <div className="border-t border-white/10 p-3">
-        <div className="px-3 py-2">
-          <p className="truncate text-sm font-medium">{me.name}</p>
-          <p className="truncate text-xs text-white/50">{me.email}</p>
-          {me.platformRole && (
-            <span className="mt-2 inline-flex items-center gap-1 rounded-md bg-white/10 px-2 py-0.5 text-[11px] font-medium text-white/80">
-              <ShieldCheck className="h-3 w-3" />
-              {me.platformRole === "superadmin" ? "Superadmin" : "Admin"}
-            </span>
-          )}
-        </div>
-        <button
-          onClick={signOut}
-          className="mt-1 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-white/65 transition-colors duration-150 hover:bg-white/10 hover:text-white"
-        >
-          <LogOut className="h-4 w-4" />
-          Cerrar sesión
-        </button>
-      </div>
-    </aside>
+    </div>
   );
 }

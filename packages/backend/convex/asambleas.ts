@@ -8,6 +8,7 @@ import {
   getCurrentAppUser,
   getMembership,
 } from "./model/authz";
+import { resolveMediaUrl } from "./model/files";
 
 const WRITE_ROLES = ["administrador", "junta_directiva", "representante_asamblea"] as const;
 
@@ -660,7 +661,8 @@ export const otorgarPoder = mutation({
   args: {
     asambleaId: v.id("asambleas"),
     unidadId: v.id("unidades"),
-    documentoStorageId: v.optional(v.id("_storage")), // PDF/foto del poder firmado
+    documentoStorageId: v.optional(v.id("_storage")), // PDF/foto del poder firmado (legacy)
+    documentoUrl: v.optional(v.string()),
     // Modo A: seleccionar un propietario existente del conjunto.
     representanteUserId: v.optional(v.id("users")),
     // Modo B: persona externa (por nombre/documento).
@@ -782,6 +784,7 @@ export const otorgarPoder = mutation({
       apoderadoDocumento: documento,
       codigoAcceso: codigo,
       documentoStorageId: args.documentoStorageId,
+      documentoUrl: args.documentoUrl,
       // Vecino del conjunto: debe aceptar el poder. Externo: válido con el código.
       // Registro por administración queda validado de una vez.
       validado: esWriter ? true : !representanteUserId,
@@ -879,12 +882,13 @@ export const revocarPoder = mutation({
   },
 });
 
-/** URL firmada para subir el documento del poder (Convex Storage). */
+/** URL firmada — @deprecated usar api.files.generateUploadUrl (S3). */
 export const generateUploadUrl = mutation({
   args: {},
-  handler: async (ctx) => {
-    await requireAppUser(ctx);
-    return await ctx.storage.generateUploadUrl();
+  handler: async () => {
+    throw new Error(
+      "Las subidas van a S3. Usa api.files.generateUploadUrl (action).",
+    );
   },
 });
 
@@ -903,7 +907,11 @@ export const poderesRecibidos = query({
     return await Promise.all(
       poderes.map(async (p) => ({
         ...p,
-        documentoUrl: p.documentoStorageId ? await ctx.storage.getUrl(p.documentoStorageId) : null,
+        documentoUrl:
+          (await resolveMediaUrl(ctx, {
+            url: p.documentoUrl,
+            storageId: p.documentoStorageId,
+          })) || null,
       })),
     );
   },
@@ -924,7 +932,11 @@ export const poderesOtorgados = query({
     return await Promise.all(
       poderes.map(async (p) => ({
         ...p,
-        documentoUrl: p.documentoStorageId ? await ctx.storage.getUrl(p.documentoStorageId) : null,
+        documentoUrl:
+          (await resolveMediaUrl(ctx, {
+            url: p.documentoUrl,
+            storageId: p.documentoStorageId,
+          })) || null,
       })),
     );
   },
@@ -962,9 +974,11 @@ export const listPoderes = query({
         const esPropietario = p.representanteUserId
           ? propietariosUserIds.has(p.representanteUserId as string)
           : false;
-        const documentoUrl = p.documentoStorageId
-          ? await ctx.storage.getUrl(p.documentoStorageId)
-          : null;
+        const documentoUrl =
+          (await resolveMediaUrl(ctx, {
+            url: p.documentoUrl,
+            storageId: p.documentoStorageId,
+          })) || null;
         return {
           ...p,
           documentoUrl,
@@ -1016,9 +1030,11 @@ export const paqueteAuditoria = query({
           const esPropietario = p.representanteUserId
             ? propietariosUserIds.has(p.representanteUserId as string)
             : false;
-          const documentoUrl = p.documentoStorageId
-            ? await ctx.storage.getUrl(p.documentoStorageId)
-            : null;
+          const documentoUrl =
+            (await resolveMediaUrl(ctx, {
+              url: p.documentoUrl,
+              storageId: p.documentoStorageId,
+            })) || null;
           return {
             unidadNumero: p.unidadNumero,
             coeficiente: p.coeficiente ?? null,
@@ -1030,7 +1046,7 @@ export const paqueteAuditoria = query({
             representanteTipo: esPropietario
               ? ("propietario" as const)
               : ("externo" as const),
-            tieneDocumento: !!p.documentoStorageId,
+            tieneDocumento: !!(documentoUrl || p.documentoStorageId),
             documentoUrl,
             createdAt: p.createdAt,
           };

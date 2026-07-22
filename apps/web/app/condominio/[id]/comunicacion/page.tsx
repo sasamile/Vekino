@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { useQuery, useMutation } from "convex/react";
+import { usePaginatedQuery, useMutation } from "convex/react";
 import {
   MessageSquare, Plus, Pin, PinOff, Pencil, Trash2, Loader2,
   File as FileIcon, ImageIcon,
@@ -11,6 +11,7 @@ import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
 import { PageContainer } from "@/components/layout/page-container";
 import { PageHeader } from "@/components/layout/page-header";
+import { useNuevoQuery } from "@/hooks/use-nuevo-query";
 import { SearchInput, Select } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -20,6 +21,8 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ComunicadoForm, type ComunicadoDraft } from "@/components/comunicacion/comunicado-form";
 import { initials, cn } from "@/lib/utils";
+
+const PAGE_SIZE = 30;
 
 const AUDIENCIA_LABEL: Record<string, string> = {
   todos: "Todos", propietario: "Propietarios", arrendatario: "Arrendatarios",
@@ -32,6 +35,15 @@ const PRIORIDAD_TONE: Record<string, React.ComponentProps<typeof Badge>["tone"]>
   normal: "neutral", importante: "warning", urgente: "destructive",
 };
 
+function useDebounced(value: string, ms: number) {
+  const [v, setV] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setV(value), ms);
+    return () => clearTimeout(t);
+  }, [value, ms]);
+  return v;
+}
+
 function fmtFecha(ts: number) {
   const d = new Date(ts);
   const diff = Date.now() - ts;
@@ -41,43 +53,64 @@ function fmtFecha(ts: number) {
   return d.toLocaleDateString("es-CO", { day: "numeric", month: "short", year: "numeric" });
 }
 
-type ComunicadoRow = NonNullable<ReturnType<typeof useQuery<typeof api.comunicados.listByCondominio>>>[number];
+type ComunicadoRow = {
+  _id: Id<"comunicados">;
+  titulo: string;
+  cuerpo: string;
+  audiencia: string;
+  prioridad: string;
+  fijado: boolean;
+  autorNombre: string;
+  createdAt: number;
+  archivosItems?: {
+    storageId?: string;
+    s3Key?: string;
+    mimeType: string;
+    nombre: string;
+    url: string;
+  }[];
+};
 
 export default function ComunicacionPage() {
   const params = useParams<{ id: string }>();
   const condominioId = params.id as Id<"condominios">;
-  const comunicados = useQuery(api.comunicados.listByCondominio, { condominioId });
 
   const [search, setSearch] = useState("");
+  const deferredQ = useDebounced(search, 280);
   const [prioridad, setPrioridad] = useState<"" | "normal" | "importante" | "urgente">("");
   const [formOpen, setFormOpen] = useState(false);
   const [editDraft, setEditDraft] = useState<ComunicadoDraft | null>(null);
   const [deleteId, setDeleteId] = useState<Id<"comunicados"> | null>(null);
 
-  const term = search.trim().toLowerCase();
-  const filtered = (comunicados ?? []).filter((c) => {
-    if (prioridad && c.prioridad !== prioridad) return false;
-    if (!term) return true;
-    return (
-      c.titulo.toLowerCase().includes(term) ||
-      c.cuerpo.toLowerCase().includes(term) ||
-      c.autorNombre.toLowerCase().includes(term)
-    );
-  });
+  const { results, status, loadMore } = usePaginatedQuery(
+    api.comunicados.listPage,
+    {
+      condominioId,
+      q: deferredQ.trim() || undefined,
+      prioridad: prioridad || undefined,
+    },
+    { initialNumItems: PAGE_SIZE },
+  );
 
-  const hasFilters = Boolean(term || prioridad);
+  const hasFilters = Boolean(deferredQ.trim() || prioridad);
+  const loading = status === "LoadingFirstPage";
+  const canLoadMore = status === "CanLoadMore";
+  const loadingMore = status === "LoadingMore";
+  const comunicados = results as ComunicadoRow[];
 
   function openNew() {
     setEditDraft(null);
     setFormOpen(true);
   }
+  useNuevoQuery(openNew);
+
   function openEdit(c: ComunicadoRow) {
     setEditDraft({
       id: c._id,
       titulo: c.titulo,
       cuerpo: c.cuerpo,
-      audiencia: c.audiencia,
-      prioridad: c.prioridad,
+      audiencia: c.audiencia as ComunicadoDraft["audiencia"],
+      prioridad: c.prioridad as ComunicadoDraft["prioridad"],
       fijado: c.fijado,
       archivosItems: c.archivosItems,
     });
@@ -90,19 +123,13 @@ export default function ComunicacionPage() {
         <PageHeader
           title="Comunicación"
           description="Avisos y comunicados para los residentes"
-          action={
-            <Button onClick={openNew}>
-              <Plus className="h-4 w-4" aria-hidden />
-              Nuevo comunicado
-            </Button>
-          }
         />
 
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <p className="text-sm text-muted-foreground">
-            {comunicados === undefined
+            {loading
               ? "Cargando…"
-              : `${filtered.length} comunicado${filtered.length === 1 ? "" : "s"}`}
+              : `${comunicados.length} comunicado${comunicados.length === 1 ? "" : "s"}`}
           </p>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
             <Select
@@ -124,13 +151,13 @@ export default function ComunicacionPage() {
           </div>
         </div>
 
-        {comunicados === undefined ? (
+        {loading ? (
           <div className="space-y-3">
             {Array.from({ length: 3 }).map((_, i) => (
               <Skeleton key={i} className="h-32 rounded-2xl" />
             ))}
           </div>
-        ) : filtered.length === 0 ? (
+        ) : comunicados.length === 0 ? (
           <EmptyState
             icon={MessageSquare}
             title={hasFilters ? "Sin resultados" : "Aún no hay comunicados"}
@@ -153,16 +180,37 @@ export default function ComunicacionPage() {
             }
           />
         ) : (
-          <div className="space-y-3">
-            {filtered.map((c) => (
-              <ComunicadoCard
-                key={c._id}
-                c={c}
-                onEdit={() => openEdit(c)}
-                onDelete={() => setDeleteId(c._id)}
-              />
-            ))}
-          </div>
+          <>
+            <div className="space-y-3">
+              {comunicados.map((c) => (
+                <ComunicadoCard
+                  key={c._id}
+                  c={c}
+                  onEdit={() => openEdit(c)}
+                  onDelete={() => setDeleteId(c._id)}
+                />
+              ))}
+            </div>
+            {canLoadMore || loadingMore ? (
+              <div className="flex justify-center">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={loadingMore}
+                  onClick={() => loadMore(PAGE_SIZE)}
+                >
+                  {loadingMore ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                      Cargando…
+                    </>
+                  ) : (
+                    "Cargar más"
+                  )}
+                </Button>
+              </div>
+            ) : null}
+          </>
         )}
       </div>
 
@@ -205,7 +253,6 @@ function ComunicadoCard({
           c.fijado && "ring-1 ring-brand/20",
         )}
       >
-        {/* Barra de prioridad */}
         <span
           className={cn(
             "absolute inset-y-0 left-0 w-1",
@@ -232,7 +279,6 @@ function ComunicadoCard({
             </div>
             <p className="whitespace-pre-line text-sm text-muted-foreground">{c.cuerpo}</p>
 
-            {/* Imágenes adjuntas */}
             {imagenes.length > 0 && (
               <div className="mt-3 flex flex-wrap gap-2">
                 {imagenes.map((img, i) => (
@@ -252,7 +298,6 @@ function ComunicadoCard({
               </div>
             )}
 
-            {/* Documentos adjuntos */}
             {documentos.length > 0 && (
               <div className="mt-3 flex flex-wrap gap-2">
                 {documentos.map((doc, i) => (
@@ -289,7 +334,6 @@ function ComunicadoCard({
             </div>
           </div>
 
-          {/* Acciones */}
           <div className="flex shrink-0 items-center gap-1">
             <button
               onClick={() => togglePin({ id: c._id })}
@@ -317,7 +361,6 @@ function ComunicadoCard({
         </div>
       </Card>
 
-      {/* Lightbox de imagen */}
       {lightbox && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"

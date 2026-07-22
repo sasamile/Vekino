@@ -3,6 +3,7 @@ import { paginationOptsValidator } from "convex/server";
 import { query, mutation } from "./_generated/server";
 import { requireCondominioRole } from "./model/authz";
 import { tipoUnidadValidator, estadoUnidadValidator } from "./model/roles";
+import { resolveUserImage } from "./model/userImage";
 
 export const listByCondominio = query({
   args: { condominioId: v.id("condominios") },
@@ -86,6 +87,7 @@ export const listPage = query({
       _id: any;
       numero: string;
       torre?: string;
+      bloque?: string;
       tipo: string;
       estado: string;
       coeficiente?: number;
@@ -101,6 +103,7 @@ export const listPage = query({
           return {
             name: user?.name ?? null,
             email: user?.email ?? null,
+            image: await resolveUserImage(ctx, user),
             vinculo: l.vinculo,
           };
         }),
@@ -109,6 +112,7 @@ export const listPage = query({
         _id: u._id,
         numero: u.numero,
         torre: u.torre ?? null,
+        bloque: u.bloque ?? null,
         tipo: u.tipo,
         estado: u.estado,
         coeficiente: u.coeficiente ?? null,
@@ -190,6 +194,7 @@ export const update = mutation({
     unidadId: v.id("unidades"),
     numero: v.optional(v.string()),
     torre: v.optional(v.string()),
+    bloque: v.optional(v.string()),
     tipo: v.optional(tipoUnidadValidator),
     estado: v.optional(estadoUnidadValidator),
     coeficiente: v.optional(v.number()),
@@ -209,11 +214,35 @@ export const update = mutation({
       const torre = args.torre.trim();
       patch.torre = torre || undefined;
     }
+    if (args.bloque !== undefined) {
+      const bloque = args.bloque.trim();
+      patch.bloque = bloque || undefined;
+    }
     if (args.tipo !== undefined) patch.tipo = args.tipo;
     if (args.estado !== undefined) patch.estado = args.estado;
     if (args.coeficiente !== undefined) patch.coeficiente = args.coeficiente;
 
     await ctx.db.patch(args.unidadId, patch);
     return args.unidadId;
+  },
+});
+
+/** Elimina una unidad y sus vínculos a residentes. */
+export const remove = mutation({
+  args: { unidadId: v.id("unidades") },
+  handler: async (ctx, args) => {
+    const unidad = await ctx.db.get(args.unidadId);
+    if (!unidad) throw new Error("Unidad no encontrada.");
+    await requireCondominioRole(ctx, unidad.condominioId, ["administrador"]);
+
+    const links = await ctx.db
+      .query("usuarioUnidad")
+      .withIndex("by_unidad", (q) => q.eq("unidadId", args.unidadId))
+      .collect();
+    for (const link of links) {
+      await ctx.db.delete(link._id);
+    }
+
+    await ctx.db.delete(args.unidadId);
   },
 });

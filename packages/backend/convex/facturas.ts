@@ -2,6 +2,7 @@ import { mutation, query, internalMutation } from "./_generated/server";
 import type { MutationCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { v } from "convex/values";
+import { paginationOptsValidator } from "convex/server";
 import { requireCondominioRole } from "./model/authz";
 
 const MESES_ES = [
@@ -89,7 +90,8 @@ async function conciliarCadenaUnidad(
     const deuda = saldoAnteriorDe(siguiente);
 
     let estado: Doc<"facturas">["estado"];
-    if (deuda <= TOLERANCIA_PAGO) estado = "pagada";
+    if (anterior.totalAPagar < 0 && deuda <= TOLERANCIA_PAGO) estado = "saldo_a_favor";
+    else if (deuda <= TOLERANCIA_PAGO) estado = "pagada";
     else if (deuda < anterior.totalAPagar - TOLERANCIA_PAGO) estado = "abonada";
     else estado = "vencida";
 
@@ -133,7 +135,8 @@ export const upsertFactura = mutation({
       v.literal("pendiente"),
       v.literal("pagada"),
       v.literal("vencida"),
-      v.literal("abonada")
+      v.literal("abonada"),
+      v.literal("saldo_a_favor")
     ),
 
     pdfUrl: v.optional(v.string()),
@@ -141,6 +144,9 @@ export const upsertFactura = mutation({
   },
   handler: async (ctx, args) => {
     const now = Date.now();
+    // Un totalAPagar negativo es saldo a favor del residente, sin importar
+    // qué estado haya calculado el caller (que suele mandar "pendiente" a ciegas).
+    const estado = args.totalAPagar < 0 ? "saldo_a_favor" : args.estado;
 
     // Busca factura existente por (condominioId, unidadId, periodo)
     const existing = await ctx.db
@@ -166,7 +172,7 @@ export const upsertFactura = mutation({
         totalConDescuento: args.totalConDescuento,
         fechaEmision: args.fechaEmision,
         fechaVencimiento: args.fechaVencimiento,
-        estado: args.estado,
+        estado,
         pdfUrl: args.pdfUrl,
         membershipId: args.membershipId,
         updatedAt: now,
@@ -192,7 +198,7 @@ export const upsertFactura = mutation({
       totalConDescuento: args.totalConDescuento,
       fechaEmision: args.fechaEmision,
       fechaVencimiento: args.fechaVencimiento,
-      estado: args.estado,
+      estado,
       pdfUrl: args.pdfUrl,
       legacyId: args.legacyId,
       createdAt: now,
@@ -225,6 +231,86 @@ export const listByPeriodo = query({
   },
 });
 
+/** Facturas recientes de un período (home). Sin .collect() completo. */
+export const listRecentByPeriodo = query({
+  args: {
+    condominioId: v.id("condominios"),
+    periodo: v.string(),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const limit = Math.min(Math.max(args.limit ?? 5, 1), 20);
+    const rows = await ctx.db
+      .query("facturas")
+      .withIndex("by_condominio_periodo", (q) =>
+        q.eq("condominioId", args.condominioId).eq("periodo", args.periodo),
+      )
+      .order("desc")
+      .take(limit);
+    return rows;
+  },
+});
+
+/**
+ * Página de facturas por período. Sin filtros: paginación real.
+ * Con `q` o `estado`: escanea un lote acotado (máx. 250).
+ */
+export const listPage = query({
+  args: {
+    condominioId: v.id("condominios"),
+    periodo: v.string(),
+    paginationOpts: paginationOptsValidator,
+    q: v.optional(v.string()),
+    estado: v.optional(
+      v.union(
+        v.literal("pendiente"),
+        v.literal("pagada"),
+        v.literal("vencida"),
+        v.literal("abonada"),
+        v.literal("saldo_a_favor"),
+      ),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const needle = args.q?.trim().toLowerCase() ?? "";
+    const estado = args.estado;
+
+    if (needle || estado) {
+      const scan = await ctx.db
+        .query("facturas")
+        .withIndex("by_condominio_periodo", (q) =>
+          q.eq("condominioId", args.condominioId).eq("periodo", args.periodo),
+        )
+        .order("desc")
+        .take(250);
+      const filtered = scan.filter((f) => {
+        if (estado && f.estado !== estado) return false;
+        if (!needle) return true;
+        return (
+          f.residenteNombre.toLowerCase().includes(needle) ||
+          (f.apto ?? "").toLowerCase().includes(needle) ||
+          f.numeroFactura.toLowerCase().includes(needle) ||
+          f.numeroInterno.toLowerCase().includes(needle)
+        );
+      });
+      const limit = Math.min(args.paginationOpts.numItems || 30, 60);
+      return {
+        page: filtered.slice(0, limit),
+        isDone: true,
+        continueCursor: "",
+      };
+    }
+
+    return await ctx.db
+      .query("facturas")
+      .withIndex("by_condominio_periodo", (q) =>
+        q.eq("condominioId", args.condominioId).eq("periodo", args.periodo),
+      )
+      .order("desc")
+      .paginate(args.paginationOpts);
+  },
+});
+
 /**
  * Resumen de un período: total recaudado, pendientes, suma total a pagar
  */
@@ -246,12 +332,22 @@ export const resumenPeriodo = query({
     const pendientes = rows.filter((r) => r.estado === "pendiente").length;
     const vencidas = rows.filter((r) => r.estado === "vencida").length;
     const abonadas = rows.filter((r) => r.estado === "abonada").length;
+    const saldoAFavorCount = rows.filter((r) => r.estado === "saldo_a_favor").length;
     const sumaTotalAPagar = rows.reduce((s, r) => s + r.totalAPagar, 0);
     const sumaPagado = rows
       .filter((r) => r.estado === "pagada")
       .reduce((s, r) => s + r.totalAPagar, 0);
 
-    return { total, pagadas, pendientes, vencidas, abonadas, sumaTotalAPagar, sumaPagado };
+    return {
+      total,
+      pagadas,
+      pendientes,
+      vencidas,
+      abonadas,
+      saldoAFavorCount,
+      sumaTotalAPagar,
+      sumaPagado,
+    };
   },
 });
 
@@ -365,7 +461,13 @@ const facturaInputValidator = v.object({
   totalConDescuento: v.optional(v.number()),
   fechaEmision: v.number(),
   fechaVencimiento: v.number(),
-  estado: v.union(v.literal("pendiente"), v.literal("pagada"), v.literal("vencida"), v.literal("abonada")),
+  estado: v.union(
+    v.literal("pendiente"),
+    v.literal("pagada"),
+    v.literal("vencida"),
+    v.literal("abonada"),
+    v.literal("saldo_a_favor"),
+  ),
   pdfUrl: v.optional(v.string()),
   legacyId: v.optional(v.string()),
 });
@@ -421,7 +523,10 @@ export const bulkUpsert = mutation({
           unidadesAfectadas.set(f.unidadId, f.condominioId);
         }
       } else {
-        await ctx.db.insert("facturas", { ...f, createdAt: now, updatedAt: now });
+        // Un totalAPagar negativo es saldo a favor del residente, sin importar
+        // qué estado haya mandado el caller (la UI de subida manda "pendiente" a ciegas).
+        const estado = f.totalAPagar < 0 ? "saldo_a_favor" : f.estado;
+        await ctx.db.insert("facturas", { ...f, estado, createdAt: now, updatedAt: now });
         inserted++;
         unidadesAfectadas.set(f.unidadId, f.condominioId);
       }
@@ -477,11 +582,13 @@ export const reconciliar = mutation({
   },
 });
 
-/** URL de subida para adjunto (PDF/imagen) de una factura manual. */
+/** URL de subida para adjunto — @deprecated usar api.files.generateUploadUrl (S3). */
 export const generateUploadUrl = mutation({
   args: {},
-  handler: async (ctx) => {
-    return await ctx.storage.generateUploadUrl();
+  handler: async () => {
+    throw new Error(
+      "Las subidas van a S3. Usa api.files.generateUploadUrl (action).",
+    );
   },
 });
 
@@ -499,6 +606,7 @@ export const createManual = mutation({
     saldoAFavor: v.optional(v.number()),
     totalConDescuento: v.optional(v.number()),
     pdfStorageId: v.optional(v.id("_storage")),
+    pdfUrl: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     await requireCondominioRole(ctx, args.condominioId, [
@@ -565,8 +673,8 @@ export const createManual = mutation({
     const numeroFactura = `FAC-${args.periodo}-${unidad.numero}-${consecutivo}`;
     const numeroInterno = consecutivo;
 
-    let pdfUrl: string | undefined;
-    if (args.pdfStorageId) {
+    let pdfUrl = args.pdfUrl;
+    if (!pdfUrl && args.pdfStorageId) {
       pdfUrl = (await ctx.storage.getUrl(args.pdfStorageId)) ?? undefined;
     }
 

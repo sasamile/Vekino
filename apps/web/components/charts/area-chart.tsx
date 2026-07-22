@@ -9,13 +9,13 @@ export interface AreaPoint {
 }
 
 /**
- * Area chart SVG con curva suave + gradiente y tooltip al pasar el cursor.
- * Escala al ancho del contenedor vía viewBox. Theme-aware.
+ * Area chart SVG con curva suave + gradiente y tooltip al hover.
+ * Labels del eje X fuera del SVG (evita recortes por stretch).
  */
 export function AreaChart({
   data,
   color = "hsl(var(--brand))",
-  height = 220,
+  height = 200,
   format = (n) => String(n),
   className,
 }: {
@@ -30,9 +30,9 @@ export function AreaChart({
 
   const W = 640;
   const H = height;
-  const padX = 16;
-  const padTop = 24;
-  const padBottom = 32;
+  const padX = 44;
+  const padTop = 16;
+  const padBottom = 8;
 
   const n = data.length;
   const max = Math.max(1, ...data.map((d) => d.value));
@@ -43,23 +43,26 @@ export function AreaChart({
   const y = (v: number) => padTop + innerH - (v / max) * innerH;
 
   const points = data.map((d, i) => ({ x: x(i), y: y(d.value), ...d }));
-
-  // Curva suave (Catmull-Rom → Bézier)
-  const linePath = smoothPath(points.map((p) => [p.x, p.y]));
+  const linePath = smoothPath(points.map((p) => [p.x, p.y] as [number, number]));
   const areaPath =
     points.length > 0
       ? `${linePath} L ${points[points.length - 1]!.x} ${padTop + innerH} L ${points[0]!.x} ${padTop + innerH} Z`
       : "";
 
   const active = hover != null ? points[hover] : null;
+  const yTicks = [0, 0.5, 1].map((f) => ({
+    f,
+    value: max * (1 - f),
+    y: padTop + innerH * f,
+  }));
 
   return (
     <div className={cn("w-full", className)}>
       <svg
         viewBox={`0 0 ${W} ${H}`}
-        className="w-full"
-        style={{ height }}
-        preserveAspectRatio="none"
+        className="h-auto w-full"
+        style={{ maxHeight: height }}
+        preserveAspectRatio="xMidYMid meet"
         onMouseLeave={() => setHover(null)}
         onMouseMove={(e) => {
           const rect = e.currentTarget.getBoundingClientRect();
@@ -78,23 +81,32 @@ export function AreaChart({
       >
         <defs>
           <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={color} stopOpacity={0.25} />
+            <stop offset="0%" stopColor={color} stopOpacity={0.28} />
             <stop offset="100%" stopColor={color} stopOpacity={0} />
           </linearGradient>
         </defs>
 
-        {/* Líneas guía horizontales */}
-        {[0.25, 0.5, 0.75, 1].map((f) => (
-          <line
-            key={f}
-            x1={padX}
-            x2={W - padX}
-            y1={padTop + innerH * f}
-            y2={padTop + innerH * f}
-            stroke="hsl(var(--border))"
-            strokeWidth={1}
-            strokeDasharray="3 4"
-          />
+        {yTicks.map((t) => (
+          <g key={t.f}>
+            <line
+              x1={padX}
+              x2={W - padX}
+              y1={t.y}
+              y2={t.y}
+              stroke="hsl(var(--border))"
+              strokeWidth={1}
+              strokeDasharray="3 4"
+            />
+            <text
+              x={padX - 8}
+              y={t.y + 3}
+              textAnchor="end"
+              fill="hsl(var(--muted-foreground))"
+              style={{ fontSize: 10 }}
+            >
+              {compact(t.value)}
+            </text>
+          </g>
         ))}
 
         {areaPath && <path d={areaPath} fill={`url(#${gradId})`} />}
@@ -110,38 +122,57 @@ export function AreaChart({
           />
         )}
 
-        {/* Guía + punto activo */}
-        {active && (
-          <>
-            <line
-              x1={active.x}
-              x2={active.x}
-              y1={padTop}
-              y2={padTop + innerH}
-              stroke="hsl(var(--border))"
-              strokeWidth={1}
-            />
-            <circle cx={active.x} cy={active.y} r={5} fill={color} stroke="hsl(var(--card))" strokeWidth={2.5} />
-          </>
-        )}
-
-        {/* Etiquetas eje X */}
         {points.map((p, i) => (
-          <text
+          <circle
             key={i}
-            x={p.x}
-            y={H - 10}
-            textAnchor="middle"
-            className="fill-muted-foreground"
-            style={{ fontSize: 11 }}
-          >
-            {p.label}
-          </text>
+            cx={p.x}
+            cy={p.y}
+            r={hover === i ? 5 : 3}
+            fill={color}
+            stroke="hsl(var(--card))"
+            strokeWidth={2}
+            opacity={hover == null || hover === i ? 1 : 0.35}
+          />
         ))}
+
+        {active && (
+          <line
+            x1={active.x}
+            x2={active.x}
+            y1={padTop}
+            y2={padTop + innerH}
+            stroke="hsl(var(--border))"
+            strokeWidth={1}
+          />
+        )}
       </svg>
 
+      {/* Labels X fuera del SVG — no se cortan */}
+      <div
+        className="mt-2 grid gap-1"
+        style={{
+          gridTemplateColumns: `repeat(${Math.max(n, 1)}, minmax(0, 1fr))`,
+          paddingLeft: `${(padX / W) * 100}%`,
+          paddingRight: `${(padX / W) * 100}%`,
+        }}
+      >
+        {data.map((d, i) => (
+          <span
+            key={i}
+            className={cn(
+              "truncate text-center text-[11px] tabular-nums",
+              hover === i
+                ? "font-medium text-foreground"
+                : "text-muted-foreground",
+            )}
+          >
+            {d.label}
+          </span>
+        ))}
+      </div>
+
       {active && (
-        <div className="mt-1 flex items-center justify-center gap-2 text-xs">
+        <div className="mt-3 flex items-center justify-center gap-2 rounded-lg bg-muted/50 px-3 py-2 text-xs">
           <span className="font-medium text-foreground">{active.label}</span>
           <span className="text-muted-foreground">·</span>
           <span className="font-semibold tabular-nums text-foreground">
@@ -153,7 +184,13 @@ export function AreaChart({
   );
 }
 
-/** Catmull-Rom → curva Bézier suave. Recibe puntos [x,y]. */
+function compact(n: number) {
+  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(0)}k`;
+  return String(Math.round(n));
+}
+
 function smoothPath(pts: [number, number][]): string {
   if (pts.length === 0) return "";
   if (pts.length === 1) return `M ${pts[0]![0]} ${pts[0]![1]}`;
