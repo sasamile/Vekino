@@ -1112,98 +1112,62 @@ function MiembrosModal({
   onClose: () => void;
 }) {
   const miembros = useQuery(api.consejo.listMiembros, { condominioId });
-  const create = useMutation(api.consejo.createMiembro);
-  const remove = useMutation(api.consejo.removeMiembro);
-  const [nombre, setNombre] = useState("");
-  const [cargo, setCargo] = useState<
-    | "presidente"
-    | "vicepresidente"
-    | "secretario"
-    | "tesorero"
-    | "vocal"
-    | "fiscal"
-    | "suplente"
-  >("vocal");
-  const [busy, setBusy] = useState(false);
-
-  async function add() {
-    if (!nombre.trim()) return;
-    setBusy(true);
-    try {
-      await create({ condominioId, nombre, cargo });
-      setNombre("");
-    } finally {
-      setBusy(false);
-    }
-  }
 
   return (
     <Modal
       open
       onClose={onClose}
       title="Miembros del Consejo"
-      description="Catálogo de cargos del consejo de administración."
+      description="Quienes tienen el rol Junta directiva en este condominio."
       className="max-w-lg"
       footer={
-        <Button variant="ghost" size="sm" onClick={onClose}>
-          Cerrar
-        </Button>
+        <div className="flex w-full items-center justify-between gap-2">
+          {canAdmin && (
+            <a
+              href={`/condominio/${condominioId}/residentes`}
+              className="text-sm font-medium text-brand hover:underline"
+            >
+              Gestionar en Residentes
+            </a>
+          )}
+          <Button variant="ghost" size="sm" onClick={onClose} className="ml-auto">
+            Cerrar
+          </Button>
+        </div>
       }
     >
-      <div className="space-y-4">
-        {(miembros ?? []).length === 0 ? (
+      <div className="space-y-3">
+        {miembros === undefined ? (
+          <div className="flex justify-center py-8">
+            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+          </div>
+        ) : miembros.length === 0 ? (
           <p className="text-sm text-muted-foreground">
-            Sin miembros registrados.
+            Nadie tiene el rol Junta directiva aún. Asígnalo desde Residentes.
           </p>
         ) : (
           <ul className="space-y-2">
-            {(miembros ?? []).map((m) => (
+            {miembros.map((m) => (
               <li
-                key={m._id}
-                className="flex items-center justify-between rounded-lg border border-border px-3 py-2 text-sm"
+                key={m.membershipId}
+                className="flex items-start gap-3 rounded-lg border border-border px-3 py-2.5"
               >
-                <span>
-                  <span className="font-medium">{m.nombre}</span>
-                  <span className="text-muted-foreground"> · {m.cargo}</span>
+                <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-muted text-[11px] font-semibold text-muted-foreground">
+                  {initials(m.nombre)}
                 </span>
-                {canAdmin && (
-                  <button
-                    type="button"
-                    onClick={() => void remove({ id: m._id })}
-                    className="text-muted-foreground hover:text-destructive"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
-                )}
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium text-foreground">
+                    {m.nombre}
+                  </p>
+                  <p className="truncate text-xs text-muted-foreground">
+                    {[m.email, m.unidades.join(", ")].filter(Boolean).join(" · ") ||
+                      "Sin unidad"}
+                  </p>
+                </div>
+                <Badge tone="neutral">Junta</Badge>
               </li>
             ))}
           </ul>
-        )}
-        {canAdmin && (
-          <div className="flex gap-2">
-            <Input
-              value={nombre}
-              onChange={(e) => setNombre(e.target.value)}
-              placeholder="Nombre"
-              className="flex-1"
-            />
-            <Select
-              value={cargo}
-              onChange={(e) => setCargo(e.target.value as typeof cargo)}
-              className="w-36"
-            >
-              <option value="presidente">Presidente</option>
-              <option value="vicepresidente">Vicepresidente</option>
-              <option value="secretario">Secretario</option>
-              <option value="tesorero">Tesorero</option>
-              <option value="vocal">Vocal</option>
-              <option value="fiscal">Fiscal</option>
-              <option value="suplente">Suplente</option>
-            </Select>
-            <Button size="sm" onClick={add} disabled={busy || !nombre.trim()}>
-              Agregar
-            </Button>
-          </div>
         )}
       </div>
     </Modal>
