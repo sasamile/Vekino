@@ -5,7 +5,7 @@ import { useParams } from "next/navigation";
 import { useQuery, useMutation, usePaginatedQuery } from "convex/react";
 import {
   FileText, ExternalLink, TrendingUp, Clock, CheckCircle2, AlertTriangle,
-  RefreshCcw, Loader2, PiggyBank,
+  RefreshCcw, Loader2, PiggyBank, Wallet,
 } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import type { Doc, Id } from "@vekino/backend/dataModel";
