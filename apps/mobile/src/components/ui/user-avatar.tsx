@@ -1,7 +1,7 @@
 import { View, Text, Image, StyleSheet } from "react-native";
 import { initials } from "@/lib/utils";
 import { AuthUI } from "@/lib/auth-ui";
-import { C } from "@/lib/theme";
+import { SoftUI } from "@/lib/soft-ui";
 
 export function UserAvatar({
   name,
@@ -13,15 +13,19 @@ export function UserAvatar({
   size?: number;
 }) {
   const radius = size / 2;
-  if (image) {
+  const uri = typeof image === "string" && image.trim().length > 0 ? image.trim() : null;
+
+  if (uri) {
     return (
       <Image
-        source={{ uri: image }}
+        source={{ uri }}
         style={{ width: size, height: size, borderRadius: radius }}
         resizeMode="cover"
+        accessibilityLabel={`Avatar de ${name}`}
       />
     );
   }
+
   return (
     <View
       style={[
@@ -32,8 +36,14 @@ export function UserAvatar({
           borderRadius: radius,
         },
       ]}
+      accessibilityLabel={`Avatar de ${name}`}
     >
-      <Text style={[styles.initials, { fontSize: size * 0.32 }]}>
+      <Text
+        style={[
+          styles.initials,
+          { fontSize: Math.max(12, size * 0.34) },
+        ]}
+      >
         {initials(name)}
       </Text>
     </View>
@@ -42,12 +52,12 @@ export function UserAvatar({
 
 const styles = StyleSheet.create({
   fallback: {
-    backgroundColor: C.bgSubtle,
+    backgroundColor: SoftUI.infoSoft,
     alignItems: "center",
     justifyContent: "center",
   },
   initials: {
-    fontFamily: AuthUI.font.semibold,
-    color: AuthUI.text,
+    fontFamily: AuthUI.font.bold,
+    color: SoftUI.blue,
   },
 });

@@ -5,12 +5,12 @@ import { Ionicons } from "@expo/vector-icons";
 import { useQuery } from "convex/react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
-import { CondominioHeader } from "@/components/ui/condominio-header";
+import { SoftHomeHeader } from "@/components/ui/soft-home-header";
 import { GlassCard, GlassBadge } from "@/components/ui/glass";
 import { Tap } from "@/components/ui/tap";
-import { WavingHand } from "@/components/ui/waving-hand";
 import { AuthUI } from "@/lib/auth-ui";
 import { C } from "@/lib/theme";
+import { SoftUI } from "@/lib/soft-ui";
 
 type Ionicon = React.ComponentProps<typeof Ionicons>["name"];
 
@@ -37,6 +37,7 @@ function startOfTodayBogotaMs() {
 export function GuardiaHome({
   displayName,
   saludo,
+  avatarUrl,
   condominioId,
 }: {
   displayName: string;
@@ -58,6 +59,7 @@ export function GuardiaHome({
   });
   const avisos = useQuery(api.guardia.listAvisos, { condominioId });
   const novedades = useQuery(api.guardia.listNovedadReportes, { condominioId });
+  const condo = useQuery(api.condominios.get, { condominioId });
 
   const adentro = (visitantes ?? []).filter((v) => v.estado === "activo").length;
   const porAprobar = (visitantes ?? []).filter(
@@ -102,20 +104,19 @@ export function GuardiaHome({
   }
 
   return (
-    <SafeAreaView style={{ flex: 1 }} edges={["top"]}>
+    <View style={{ flex: 1 }}>
+      <SoftHomeHeader
+        saludo={saludo}
+        displayName={displayName}
+        avatarUrl={avatarUrl}
+        badgeLabel={condo?.name ?? "Portería"}
+      />
       <ScrollView
         style={{ flex: 1 }}
         contentContainerStyle={styles.scroll}
         showsVerticalScrollIndicator={false}
       >
-        <CondominioHeader condominioId={condominioId} title="Portería" />
-
         <View style={styles.greetingRow}>
-          <Text style={styles.greeting}>
-            {saludo}, <Text style={styles.greetingName}>{displayName}</Text>
-          </Text>
-          <WavingHand size={22} />
-          <View style={{ flex: 1 }} />
           <GlassBadge
             label={turno ? "Turno abierto" : "Sin turno"}
             tone={turno ? "blue" : "neutral"}
@@ -311,7 +312,7 @@ export function GuardiaHome({
           Los módulos de portería están en la pestaña Más.
         </Text>
       </ScrollView>
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -343,107 +344,105 @@ function KpiTile({
 }
 
 const styles = StyleSheet.create({
-  scroll: { paddingHorizontal: 16, paddingBottom: 130 },
+  scroll: { paddingHorizontal: SoftUI.padH, paddingBottom: 140 },
   greetingRow: {
-    marginTop: 8,
-    marginBottom: 14,
+    marginTop: SoftUI.space.sm,
+    marginBottom: SoftUI.space.base,
     flexDirection: "row",
     alignItems: "center",
     flexWrap: "wrap",
-    gap: 8,
+    gap: SoftUI.space.sm,
   },
   greeting: {
-    fontSize: 20,
+    fontSize: SoftUI.type.section.size - 1,
     fontFamily: AuthUI.font.medium,
-    color: AuthUI.textMuted,
+    color: SoftUI.textSecondary,
   },
   greetingName: {
-    fontSize: 20,
+    fontSize: SoftUI.type.section.size - 1,
     fontFamily: AuthUI.font.semibold,
-    color: AuthUI.text,
+    color: SoftUI.text,
   },
   turnoCard: {
-    padding: 14,
+    padding: SoftUI.space.base,
     flexDirection: "row",
     alignItems: "center",
-    gap: 12,
-    marginBottom: 18,
-    borderColor: "#86EFAC",
-    backgroundColor: "#F0FDF4",
+    gap: SoftUI.space.md,
+    marginBottom: SoftUI.space.lg,
+    borderWidth: 0,
+    backgroundColor: SoftUI.successSoft,
   },
   turnoOpenCard: {
-    padding: 14,
+    padding: SoftUI.space.base,
     flexDirection: "row",
     alignItems: "center",
-    gap: 12,
-    marginBottom: 18,
+    gap: SoftUI.space.md,
+    marginBottom: SoftUI.space.lg,
   },
   liveDot: {
     width: 10,
     height: 10,
-    borderRadius: 5,
-    backgroundColor: "#22C55E",
+    borderRadius: SoftUI.radius.chip,
+    backgroundColor: SoftUI.success,
   },
   sectionTitle: {
-    fontSize: 13,
+    fontSize: SoftUI.type.section.size - 3,
     fontFamily: AuthUI.font.semibold,
-    color: AuthUI.textMuted,
-    textTransform: "uppercase",
-    letterSpacing: 0.4,
-    marginBottom: 10,
-    marginTop: 4,
+    color: SoftUI.text,
+    marginBottom: SoftUI.space.md,
+    marginTop: SoftUI.space.xs,
   },
   kpiGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 10,
-    marginBottom: 18,
+    gap: SoftUI.space.md,
+    marginBottom: SoftUI.space.lg,
   },
   kpiTap: { width: "47.5%" },
   kpiCard: {
-    padding: 14,
-    gap: 4,
-    minHeight: 108,
+    padding: SoftUI.space.base,
+    gap: SoftUI.space.xs,
+    minHeight: 112,
   },
   kpiValue: {
-    fontSize: 26,
+    fontSize: SoftUI.type.hero.size,
     fontFamily: AuthUI.font.semibold,
-    color: AuthUI.text,
-    marginTop: 4,
+    color: SoftUI.text,
+    marginTop: SoftUI.space.xs,
   },
   kpiLabel: {
-    fontSize: 14,
+    fontSize: SoftUI.type.caption.size + 1,
     fontFamily: AuthUI.font.semibold,
-    color: AuthUI.text,
+    color: SoftUI.text,
   },
   kpiHint: {
-    fontSize: 11,
-    color: AuthUI.textMuted,
+    fontSize: SoftUI.type.chip.size - 1,
+    color: SoftUI.textSecondary,
     fontFamily: AuthUI.font.regular,
   },
   listCard: {
-    padding: 12,
+    padding: SoftUI.space.md,
     flexDirection: "row",
     alignItems: "center",
-    gap: 10,
+    gap: SoftUI.space.md,
   },
   listIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    backgroundColor: C.bgSubtle,
+    width: 40,
+    height: 40,
+    borderRadius: SoftUI.radius.chip,
+    backgroundColor: SoftUI.infoSoft,
     alignItems: "center",
     justifyContent: "center",
   },
   listTitle: {
-    fontSize: 14,
+    fontSize: SoftUI.type.caption.size + 1,
     fontFamily: AuthUI.font.semibold,
-    color: AuthUI.text,
+    color: SoftUI.text,
   },
   listMeta: {
-    fontSize: 12,
-    color: AuthUI.textMuted,
-    lineHeight: 16,
+    fontSize: SoftUI.type.chip.size,
+    color: SoftUI.textSecondary,
+    lineHeight: SoftUI.type.caption.line,
   },
   badgeRow: {
     flexDirection: "row",

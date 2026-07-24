@@ -1,46 +1,48 @@
+import { SoftUI, softShadow } from "@/lib/soft-ui";
+
 /**
- * Tokens estilo shadcn — zinc + un accent de marca.
- * Separación por borde, sin sombras.
+ * Tokens de producto — Soft UI sky-blue.
+ * Alias `C` para pantallas legacy; preferir SoftUI en código nuevo.
  */
 export const C = {
-  bg: "#ffffff",
-  bgSubtle: "#f4f4f5", // zinc-100
-  card: "#ffffff",
-  cardAlt: "#fafafa", // zinc-50
+  bg: SoftUI.bg,
+  bgSubtle: SoftUI.bgSecondary,
+  card: SoftUI.card,
+  cardAlt: SoftUI.field,
 
-  text: "#09090b", // zinc-950
-  textSoft: "#3f3f46", // zinc-700
-  textMuted: "#71717a", // zinc-500
+  text: SoftUI.text,
+  textSoft: SoftUI.textSecondary,
+  textMuted: SoftUI.textSecondary,
 
-  border: "#e4e4e7", // zinc-200
-  borderSoft: "#f4f4f5", // zinc-100
-  shadow: "#09090b",
+  border: SoftUI.divider,
+  borderSoft: SoftUI.bgSecondary,
+  shadow: "rgba(20, 30, 45, 1)",
 
-  brand: "#f26a3a",
-  brandDark: "#e05520",
-  brandSoft: "#fff7ed",
-  brandSoftBorder: "#ffedd5",
-  navy: "#042046",
+  brand: SoftUI.blue,
+  brandDark: SoftUI.gradientStart,
+  brandSoft: SoftUI.infoSoft,
+  brandSoftBorder: SoftUI.blueLight,
+  navy: SoftUI.deep,
 
-  success: "#16a34a",
-  successSoft: "#f0fdf4",
-  warning: "#ca8a04",
-  warningSoft: "#fefce8",
-  danger: "#dc2626",
-  dangerSoft: "#fef2f2",
-  info: "#2563eb",
-  infoSoft: "#eff6ff",
+  success: SoftUI.success,
+  successSoft: SoftUI.successSoft,
+  warning: SoftUI.warning,
+  warningSoft: SoftUI.warningSoft,
+  danger: SoftUI.danger,
+  dangerSoft: SoftUI.dangerSoft,
+  info: SoftUI.blue,
+  infoSoft: SoftUI.infoSoft,
 } as const;
 
-/** shadcn: sin sombra en superficies estáticas */
-export const cardShadow = {
-  shadowColor: "transparent",
-  shadowOffset: { width: 0, height: 0 },
-  shadowOpacity: 0,
-  shadowRadius: 0,
-  elevation: 0,
+/** Soft UI: sombra discreta en tarjetas. */
+export const cardShadow = softShadow;
+
+export const cardShadowSoft = softShadow;
+
+export const cardShadowLg = {
+  shadowColor: "rgba(20, 30, 45, 1)",
+  shadowOffset: { width: 0, height: 10 },
+  shadowOpacity: 0.1,
+  shadowRadius: 28,
+  elevation: 6,
 } as const;
-
-export const cardShadowSoft = cardShadow;
-
-export const cardShadowLg = cardShadow;

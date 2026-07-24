@@ -518,19 +518,60 @@ export const addComentario = mutation({
   },
 });
 
-// ─── Miembros (catálogo de cargos, opcional) ──────────────────
+// ─── Miembros (usuarios con rol junta_directiva) ──────────────
 
 export const listMiembros = query({
   args: { condominioId: v.id("condominios") },
   handler: async (ctx, args) => {
     await requireConsejoAccess(ctx, args.condominioId, VIEW_ROLES);
-    return await ctx.db
-      .query("consejoMiembros")
-      .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
+    const memberships = await ctx.db
+      .query("memberships")
+      .withIndex("by_condominio", (q) =>
+        q.eq("condominioId", args.condominioId),
+      )
       .collect();
+
+    const junta = memberships.filter(
+      (m) => m.isActive && m.roles.includes("junta_directiva"),
+    );
+
+    const rows = await Promise.all(
+      junta.map(async (m) => {
+        const user = await ctx.db.get(m.userId);
+        const links = await ctx.db
+          .query("usuarioUnidad")
+          .withIndex("by_membership", (q) => q.eq("membershipId", m._id))
+          .collect();
+        const unidades = (
+          await Promise.all(
+            links.map(async (link) => {
+              const u = await ctx.db.get(link.unidadId);
+              if (!u) return null;
+              const label = [u.torre ?? u.bloque, u.numero]
+                .filter(Boolean)
+                .join(" ");
+              return label || u.numero;
+            }),
+          )
+        ).filter((x): x is string => Boolean(x));
+
+        return {
+          membershipId: m._id,
+          userId: m.userId,
+          nombre: user ? displayNameFromUser(user) : "—",
+          email: user?.email ?? null,
+          telefono: user?.telefono ?? null,
+          unidades,
+          roles: m.roles,
+        };
+      }),
+    );
+
+    return rows.sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
   },
 });
 
+/** @deprecated Catálogo manual; preferir rol junta_directiva en Residentes. */
 export const createMiembro = mutation({
   args: {
     condominioId: v.id("condominios"),

@@ -31,7 +31,7 @@ type Factura = {
   _id: Id<"facturas">;
   numeroFactura: string;
   periodoLabel: string;
-  estado: "pendiente" | "pagada" | "vencida" | "abonada";
+  estado: "pendiente" | "pagada" | "vencida" | "abonada" | "saldo_a_favor";
   totalAPagar: number;
   totalConDescuento?: number;
   saldoAFavor: number;

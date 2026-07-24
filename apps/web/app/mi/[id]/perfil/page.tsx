@@ -1,11 +1,20 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useQuery, useMutation, useAction } from "convex/react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
-import { Mail, Phone, Check, Camera, Loader2, Lock, Trash2 } from "lucide-react";
+import {
+  Mail,
+  Phone,
+  Check,
+  Camera,
+  Loader2,
+  Lock,
+  Trash2,
+  AlertTriangle,
+} from "lucide-react";
 import { PageContainer } from "@/components/layout/page-container";
 import { PageHeader } from "@/components/layout/page-header";
 import { Card } from "@/components/ui/card";
@@ -155,6 +164,9 @@ export default function Perfil() {
         <Mail className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" />
         <p>¿Necesitas cambiar tu correo? Comunícate con la administración de tu conjunto.</p>
       </Card>
+
+      {/* Eliminar cuenta */}
+      <EliminarCuenta />
     </PageContainer>
   );
 }
@@ -248,6 +260,103 @@ function AvatarEditor({ image, name }: { image: string | null; name: string }) {
         className="hidden"
       />
     </div>
+  );
+}
+
+/**
+ * Eliminación de cuenta (App Store Guideline 5.1.1). La cuenta se elimina de
+ * verdad —la persona ya no puede iniciar sesión— y sus datos personales se
+ * borran; el historial de cobros del inmueble lo conserva la administración por
+ * obligación contable. Requiere escribir ELIMINAR para evitar accidentes.
+ */
+function EliminarCuenta() {
+  const router = useRouter();
+  const deleteMyAccount = useAction(api.users.deleteMyAccount);
+  const [open, setOpen] = useState(false);
+  const [texto, setTexto] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const confirmado = texto.trim().toUpperCase() === "ELIMINAR";
+
+  async function eliminar() {
+    if (!confirmado || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await deleteMyAccount({});
+      await authClient.signOut().catch(() => {});
+      router.replace("/");
+    } catch (e) {
+      setBusy(false);
+      setError(
+        e instanceof Error ? e.message : "No se pudo eliminar la cuenta.",
+      );
+    }
+  }
+
+  return (
+    <Card className="border-destructive/40 p-6">
+      <h2 className="mb-2 flex items-center gap-2 text-base font-semibold text-destructive">
+        <AlertTriangle className="h-4 w-4" />
+        Eliminar cuenta
+      </h2>
+      <p className="text-sm text-muted-foreground">
+        Tu cuenta se eliminará de forma permanente y no podrás volver a iniciar
+        sesión. Se borrarán tus datos personales (nombre, correo, teléfono,
+        documento y foto). La administración conserva el historial de cobros de
+        tu inmueble por obligación contable.
+      </p>
+
+      {!open ? (
+        <Button
+          variant="outline"
+          className="mt-4 border-destructive/50 text-destructive hover:bg-destructive/10"
+          onClick={() => setOpen(true)}
+        >
+          Eliminar mi cuenta
+        </Button>
+      ) : (
+        <div className="mt-4 space-y-3">
+          <label className="block text-sm font-medium text-foreground">
+            Para confirmar, escribe <span className="font-bold">ELIMINAR</span>
+          </label>
+          <Input
+            value={texto}
+            onChange={(e) => setTexto(e.target.value)}
+            placeholder="ELIMINAR"
+            autoComplete="off"
+            className="max-w-xs"
+          />
+          {error && <p className="text-sm text-destructive">{error}</p>}
+          <div className="flex items-center gap-3">
+            <Button
+              variant="outline"
+              className="border-destructive/50 text-destructive hover:bg-destructive/10 disabled:opacity-50"
+              disabled={!confirmado || busy}
+              onClick={() => void eliminar()}
+            >
+              {busy ? (
+                <Spinner className="h-4 w-4" />
+              ) : (
+                "Eliminar cuenta definitivamente"
+              )}
+            </Button>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setOpen(false);
+                setTexto("");
+                setError(null);
+              }}
+              disabled={busy}
+            >
+              Cancelar
+            </Button>
+          </div>
+        </div>
+      )}
+    </Card>
   );
 }
 

@@ -8,18 +8,25 @@ import {
   Pressable,
   Image,
   Alert,
+  StyleSheet,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useQuery, useMutation, Authenticated } from "convex/react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
 import { useCondominio } from "@/context/condominio-context";
-import { Section } from "@/components/ui/section";
-import { GlassCard, GlassBadge } from "@/components/ui/glass";
+import { SoftHomeHeader } from "@/components/ui/soft-home-header";
+import {
+  ScreenBackground,
+  GlassCard,
+  GlassBadge,
+  GlassSection,
+  GlassButton,
+} from "@/components/ui/glass";
 import { BottomSheet } from "@/components/ui/bottom-sheet";
 import { Tap } from "@/components/ui/tap";
-import { C } from "@/lib/theme";
 import { AuthUI } from "@/lib/auth-ui";
+import { SoftUI, softShadow } from "@/lib/soft-ui";
 
 type TipoDoc = "CC" | "CE" | "NIT" | "PASAPORTE" | "OTRO";
 type TipoVis = "visitante" | "empresa" | "domicilio";
@@ -53,20 +60,52 @@ const ESTADO_TONE: Record<string, "yellow" | "green" | "neutral" | "blue" | "red
   rechazado: "red",
 };
 
+const ESTADO_ICON: Record<
+  string,
+  { name: React.ComponentProps<typeof Ionicons>["name"]; bg: string; fg: string }
+> = {
+  pendiente: { name: "qr-code-outline", bg: SoftUI.warningSoft, fg: "#B8860B" },
+  esperando_aprobacion: {
+    name: "call-outline",
+    bg: SoftUI.infoSoft,
+    fg: SoftUI.blue,
+  },
+  activo: {
+    name: "checkmark-circle-outline",
+    bg: SoftUI.successSoft,
+    fg: SoftUI.success,
+  },
+  finalizado: {
+    name: "person-outline",
+    bg: SoftUI.bgSecondary,
+    fg: SoftUI.textSecondary,
+  },
+  rechazado: {
+    name: "close-circle-outline",
+    bg: SoftUI.dangerSoft,
+    fg: SoftUI.danger,
+  },
+};
+
 function qrUrl(id: string) {
   return `https://api.qrserver.com/v1/create-qr-code/?size=240x240&margin=8&data=${encodeURIComponent(id)}`;
 }
 
 export default function VisitantesScreen() {
   return (
-    <Authenticated>
-      <Inner />
-    </Authenticated>
+    <View style={{ flex: 1 }}>
+      <ScreenBackground>
+        <Authenticated>
+          <Inner />
+        </Authenticated>
+      </ScreenBackground>
+    </View>
   );
 }
 
 function Inner() {
-  const { condominioId } = useCondominio();
+  const me = useQuery(api.users.me);
+  const { condominioId, condominioName } = useCondominio();
   const home = useQuery(
     api.portal.home,
     condominioId ? { condominioId } : "skip",
@@ -80,110 +119,100 @@ function Inner() {
 
   const unidades = home && home.allowed ? home.unidades : [];
 
+  const hora = new Date().getHours();
+  const saludo =
+    hora < 12 ? "Buenos días" : hora < 18 ? "Buenas tardes" : "Buenas noches";
+
   return (
-    <>
-      <Section
-        title="Visitantes"
-        right={
-          condominioId ? (
-            <View
-              style={{
-                flexDirection: "row",
-                alignItems: "center",
-                gap: 4,
-                backgroundColor: "#0E0E0F",
-                paddingHorizontal: 12,
-                paddingVertical: 9,
-                borderRadius: 12,
-              }}
-              onTouchEnd={() => setShowForm(true)}
-            >
-              <Ionicons name="add" size={16} color="#fff" />
-              <Text style={{ color: "#fff", fontSize: 13, fontWeight: "700" }}>
-                Autorizar
-              </Text>
-            </View>
-          ) : undefined
-        }
+    <View style={{ flex: 1 }}>
+      <SoftHomeHeader
+        saludo={saludo}
+        displayName={me?.name ?? "Residente"}
+        avatarUrl={me?.image}
+        badgeLabel={condominioName ?? "Visitantes"}
+      />
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={styles.scroll}
+        showsVerticalScrollIndicator={false}
       >
-        {data === undefined ? (
-          <ActivityIndicator color={C.textSoft} style={{ marginTop: 30 }} />
-        ) : data.length === 0 ? (
-          <GlassCard style={{ padding: 40, alignItems: "center", gap: 12 }}>
-            <Ionicons name="person-add-outline" size={32} color={C.textMuted} />
-            <Text style={{ color: C.textMuted, fontSize: 14, textAlign: "center" }}>
-              Sin visitantes autorizados
-            </Text>
-            <Tap style={styles.emptyCta} onPress={() => setShowForm(true)}>
-              <Text style={styles.emptyCtaText}>Autorizar visitante</Text>
+        {condominioId ? (
+          <View style={styles.actionRow}>
+            <Tap style={styles.autorizarBtn} onPress={() => setShowForm(true)}>
+              <Ionicons name="add" size={18} color={SoftUI.white} />
+              <Text style={styles.autorizarBtnText}>Autorizar</Text>
             </Tap>
-          </GlassCard>
-        ) : (
-          <View style={{ gap: 10 }}>
-            <Text style={{ color: C.textMuted, fontSize: 13, marginBottom: 2 }}>
-              {data.length} autorización{data.length === 1 ? "" : "es"}
-            </Text>
-            {data.map((v) => {
-              const esWalkIn = v.estado === "esperando_aprobacion";
-              return (
-              <GlassCard key={v._id} style={{ padding: 16 }}>
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
-                  <View
-                    style={{
-                      width: 46,
-                      height: 46,
-                      borderRadius: 12,
-                      backgroundColor: C.bgSubtle,
-                      alignItems: "center",
-                      justifyContent: "center",
-                    }}
-                  >
-                    <Ionicons
-                      name={esWalkIn ? "call-outline" : "person-outline"}
-                      size={20}
-                      color={C.textSoft}
-                    />
-                  </View>
-                  <View style={{ flex: 1, gap: 3 }}>
-                    <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                      <Text
-                        style={{ color: C.text, fontSize: 15, fontWeight: "700", flex: 1 }}
-                        numberOfLines={1}
-                      >
-                        {v.nombre}
-                      </Text>
-                      <GlassBadge
-                        label={ESTADO_LABEL[v.estado] ?? v.estado}
-                        tone={ESTADO_TONE[v.estado] ?? "neutral"}
-                      />
-                    </View>
-                    <Text style={{ color: C.textMuted, fontSize: 12 }}>
-                      {v.tipoDocumento} {v.documento}
-                      {v.placa ? ` · ${v.placa}` : ""}
-                    </Text>
-                    <Text style={{ color: C.textMuted, fontSize: 11 }}>
-                      {esWalkIn
-                        ? "Portería pide que lo dejes entrar"
-                        : `${v.unidadNumero ? `Unidad ${v.unidadNumero} · ` : ""}Válido solo el día de la visita`}
-                    </Text>
-                  </View>
-                </View>
-                {esWalkIn ? (
-                  <WalkInButtons id={v._id} />
-                ) : v.estado === "pendiente" ? (
-                  <View style={{ flexDirection: "row", gap: 8, marginTop: 12 }}>
-                    <Tap style={styles.secondaryBtn} onPress={() => setQrId(v._id)}>
-                      <Ionicons name="qr-code-outline" size={16} color={C.text} />
-                      <Text style={styles.secondaryBtnText}>Ver QR</Text>
-                    </Tap>
-                  </View>
-                ) : null}
-              </GlassCard>
-              );
-            })}
           </View>
-        )}
-      </Section>
+        ) : null}
+
+        <GlassSection
+          title={
+            data === undefined
+              ? "Visitantes"
+              : `${data.length} autorización${data.length === 1 ? "" : "es"}`
+          }
+        >
+          {data === undefined ? (
+            <ActivityIndicator color={SoftUI.blue} style={{ marginTop: SoftUI.space.xl }} />
+          ) : data.length === 0 ? (
+            <GlassCard style={styles.emptyCard}>
+              <Ionicons name="person-add-outline" size={32} color={SoftUI.textSecondary} />
+              <Text style={styles.emptyText}>Sin visitantes autorizados</Text>
+              {condominioId ? (
+                <Tap style={styles.emptyCta} onPress={() => setShowForm(true)}>
+                  <Text style={styles.emptyCtaText}>Autorizar visitante</Text>
+                </Tap>
+              ) : null}
+            </GlassCard>
+          ) : (
+            <View style={{ gap: SoftUI.space.md }}>
+              {data.map((v) => {
+                const esWalkIn = v.estado === "esperando_aprobacion";
+                const iconMeta = ESTADO_ICON[v.estado] ?? ESTADO_ICON.finalizado;
+                return (
+                  <GlassCard key={v._id} style={styles.visitorCard}>
+                    <View style={styles.visitorRow}>
+                      <View style={[styles.visitorIcon, { backgroundColor: iconMeta.bg }]}>
+                        <Ionicons name={iconMeta.name} size={22} color={iconMeta.fg} />
+                      </View>
+                      <View style={styles.visitorBody}>
+                        <View style={styles.visitorTitleRow}>
+                          <Text style={styles.visitorName} numberOfLines={1}>
+                            {v.nombre}
+                          </Text>
+                          <GlassBadge
+                            label={ESTADO_LABEL[v.estado] ?? v.estado}
+                            tone={ESTADO_TONE[v.estado] ?? "neutral"}
+                          />
+                        </View>
+                        <Text style={styles.visitorMeta}>
+                          {v.tipoDocumento} {v.documento}
+                          {v.placa ? ` · ${v.placa}` : ""}
+                        </Text>
+                        <Text style={styles.visitorHint}>
+                          {esWalkIn
+                            ? "Portería pide que lo dejes entrar"
+                            : `${v.unidadNumero ? `Unidad ${v.unidadNumero} · ` : ""}Válido solo el día de la visita`}
+                        </Text>
+                      </View>
+                    </View>
+                    {esWalkIn ? (
+                      <WalkInButtons id={v._id} />
+                    ) : v.estado === "pendiente" ? (
+                      <View style={styles.actionsRow}>
+                        <Tap style={styles.secondaryBtn} onPress={() => setQrId(v._id)}>
+                          <Ionicons name="qr-code-outline" size={16} color={SoftUI.blue} />
+                          <Text style={styles.secondaryBtnText}>Ver QR</Text>
+                        </Tap>
+                      </View>
+                    ) : null}
+                  </GlassCard>
+                );
+              })}
+            </View>
+          )}
+        </GlassSection>
+      </ScrollView>
 
       {condominioId ? (
         <CrearVisitanteSheet
@@ -204,24 +233,20 @@ function Inner() {
 
       <BottomSheet visible={qrId !== null} onClose={() => setQrId(null)} maxHeight="70%">
         {qrId ? (
-          <View style={{ padding: 24, paddingBottom: 40, alignItems: "center", gap: 14 }}>
-            <Text style={{ color: C.text, fontSize: 18, fontWeight: "700" }}>
-              Código QR
-            </Text>
-            <Text style={{ color: C.textMuted, fontSize: 13, textAlign: "center" }}>
+          <View style={styles.qrSheet}>
+            <Text style={styles.sheetTitle}>Código QR</Text>
+            <Text style={styles.qrHint}>
               Válido solo el día de la visita. Muéstralo en portería.
             </Text>
             <Image
               source={{ uri: qrUrl(qrId) }}
-              style={{ width: 220, height: 220, borderRadius: 12, backgroundColor: "#fff" }}
+              style={styles.qrImage}
             />
-            <Tap style={styles.footerPrimaryFull} onPress={() => setQrId(null)}>
-              <Text style={{ color: "#fff", fontSize: 15, fontWeight: "700" }}>Cerrar</Text>
-            </Tap>
+            <GlassButton label="Cerrar" onPress={() => setQrId(null)} />
           </View>
         ) : null}
       </BottomSheet>
-    </>
+    </View>
   );
 }
 
@@ -241,30 +266,32 @@ function WalkInButtons({ id }: { id: Id<"visitantes"> }) {
   }
 
   return (
-    <View style={{ flexDirection: "row", gap: 8, marginTop: 12 }}>
+    <View style={styles.actionsRow}>
       <Tap
         style={[styles.secondaryBtn, { flex: 1 }]}
         onPress={() => go(false)}
         disabled={busy}
       >
         {busy ? (
-          <ActivityIndicator size="small" color={C.textMuted} />
+          <ActivityIndicator size="small" color={SoftUI.textSecondary} />
         ) : (
           <>
-            <Ionicons name="close" size={16} color={C.danger} />
-            <Text style={[styles.secondaryBtnText, { color: C.danger }]}>Rechazar</Text>
+            <Ionicons name="close" size={16} color={SoftUI.danger} />
+            <Text style={[styles.secondaryBtnText, { color: SoftUI.danger }]}>
+              Rechazar
+            </Text>
           </>
         )}
       </Tap>
       <Tap
-        style={[styles.footerPrimaryFull, { flex: 1, marginTop: 0, height: 40 }]}
+        style={[styles.primaryBtnSm, { flex: 1 }]}
         onPress={() => go(true)}
         disabled={busy}
       >
         {busy ? (
-          <ActivityIndicator size="small" color="#fff" />
+          <ActivityIndicator size="small" color={SoftUI.white} />
         ) : (
-          <Text style={{ color: "#fff", fontSize: 13, fontWeight: "700" }}>Aceptar</Text>
+          <Text style={styles.primaryBtnSmText}>Aceptar</Text>
         )}
       </Tap>
     </View>
@@ -343,21 +370,19 @@ function CrearVisitanteSheet({
   return (
     <BottomSheet visible={visible} onClose={onClose} maxHeight="92%">
       <ScrollView
-        contentContainerStyle={{ padding: 24, paddingBottom: 36 }}
+        contentContainerStyle={styles.sheetScroll}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        <Text style={{ color: C.text, fontSize: 20, fontWeight: "700", marginBottom: 8 }}>
-          Autorizar visitante
-        </Text>
-        <Text style={{ color: C.textMuted, fontSize: 13, marginBottom: 20 }}>
+        <Text style={styles.sheetTitle}>Autorizar visitante</Text>
+        <Text style={styles.sheetSubtitle}>
           El QR solo sirve el día de hoy. Si no llega, se elimina automáticamente.
         </Text>
 
         {unidades.length > 1 ? (
           <>
             <Text style={styles.label}>Unidad</Text>
-            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>
+            <View style={styles.chipRow}>
               {unidades.map((u) => {
                 const active = u._id === unidadId;
                 const label = u.torre ? `${u.numero} ${u.torre}` : u.numero;
@@ -365,9 +390,9 @@ function CrearVisitanteSheet({
                   <Pressable
                     key={u._id}
                     onPress={() => setUnidadId(u._id)}
-                    style={chip(active)}
+                    style={[styles.chip, active && styles.chipActive]}
                   >
-                    <Text style={{ color: active ? "#fff" : C.textSoft, fontSize: 13, fontWeight: "600" }}>
+                    <Text style={[styles.chipText, active && styles.chipTextActive]}>
                       {label}
                     </Text>
                   </Pressable>
@@ -382,17 +407,21 @@ function CrearVisitanteSheet({
           value={nombre}
           onChangeText={setNombre}
           placeholder="Nombre completo"
-          placeholderTextColor={C.textMuted}
+          placeholderTextColor={SoftUI.textDisabled}
           style={styles.input}
         />
 
-        <Text style={[styles.label, { marginTop: 14 }]}>Documento *</Text>
-        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
+        <Text style={[styles.label, { marginTop: SoftUI.space.base }]}>Documento *</Text>
+        <View style={styles.chipRow}>
           {TIPO_DOC.map((t) => {
             const active = tipoDocumento === t.value;
             return (
-              <Pressable key={t.value} onPress={() => setTipoDocumento(t.value)} style={chip(active)}>
-                <Text style={{ color: active ? "#fff" : C.textSoft, fontSize: 12, fontWeight: "600" }}>
+              <Pressable
+                key={t.value}
+                onPress={() => setTipoDocumento(t.value)}
+                style={[styles.chip, active && styles.chipActive]}
+              >
+                <Text style={[styles.chipText, active && styles.chipTextActive]}>
                   {t.label}
                 </Text>
               </Pressable>
@@ -403,18 +432,22 @@ function CrearVisitanteSheet({
           value={documento}
           onChangeText={setDocumento}
           placeholder="Número de documento"
-          placeholderTextColor={C.textMuted}
+          placeholderTextColor={SoftUI.textDisabled}
           keyboardType="default"
           style={styles.input}
         />
 
-        <Text style={[styles.label, { marginTop: 14 }]}>Tipo de visita</Text>
-        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>
+        <Text style={[styles.label, { marginTop: SoftUI.space.base }]}>Tipo de visita</Text>
+        <View style={[styles.chipRow, { marginBottom: SoftUI.space.base }]}>
           {TIPO_VIS.map((t) => {
             const active = tipo === t.value;
             return (
-              <Pressable key={t.value} onPress={() => setTipo(t.value)} style={chip(active)}>
-                <Text style={{ color: active ? "#fff" : C.textSoft, fontSize: 13, fontWeight: "600" }}>
+              <Pressable
+                key={t.value}
+                onPress={() => setTipo(t.value)}
+                style={[styles.chip, active && styles.chipActive]}
+              >
+                <Text style={[styles.chipText, active && styles.chipTextActive]}>
                   {t.label}
                 </Text>
               </Pressable>
@@ -427,16 +460,14 @@ function CrearVisitanteSheet({
           value={placa}
           onChangeText={setPlaca}
           placeholder="ABC123"
-          placeholderTextColor={C.textMuted}
+          placeholderTextColor={SoftUI.textDisabled}
           autoCapitalize="characters"
           style={styles.input}
         />
 
-        {error ? (
-          <Text style={{ color: C.danger, fontSize: 13, marginTop: 10 }}>{error}</Text>
-        ) : null}
+        {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
-        <View style={{ flexDirection: "row", gap: 10, marginTop: 24 }}>
+        <View style={styles.footerRow}>
           <Tap
             style={[styles.footerBtn, styles.footerCancel]}
             onPress={() => {
@@ -445,7 +476,7 @@ function CrearVisitanteSheet({
             }}
             disabled={saving}
           >
-            <Text style={{ color: C.text, fontSize: 15, fontWeight: "600" }}>Cancelar</Text>
+            <Text style={styles.footerCancelText}>Cancelar</Text>
           </Tap>
           <Tap
             style={[styles.footerBtn, styles.footerPrimary]}
@@ -453,9 +484,9 @@ function CrearVisitanteSheet({
             disabled={saving}
           >
             {saving ? (
-              <ActivityIndicator color="#fff" />
+              <ActivityIndicator color={SoftUI.white} />
             ) : (
-              <Text style={{ color: "#fff", fontSize: 15, fontWeight: "700" }}>Autorizar</Text>
+              <Text style={styles.footerPrimaryText}>Autorizar</Text>
             )}
           </Tap>
         </View>
@@ -464,84 +495,241 @@ function CrearVisitanteSheet({
   );
 }
 
-function chip(active: boolean) {
-  return {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: active ? C.text : C.border,
-    backgroundColor: active ? C.text : C.card,
-  };
-}
-
-const styles = {
-  label: {
-    color: C.text,
-    fontSize: 13,
-    fontWeight: "500" as const,
-    marginBottom: 8,
+const styles = StyleSheet.create({
+  scroll: {
+    paddingBottom: 150,
+    paddingHorizontal: SoftUI.padH,
+    paddingTop: SoftUI.space.md,
   },
-  input: {
-    borderWidth: 1,
-    borderColor: C.border,
-    backgroundColor: C.card,
-    borderRadius: 14,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 15,
-    color: C.text,
+  actionRow: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    marginBottom: SoftUI.space.base,
+  },
+  autorizarBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: SoftUI.space.xs,
+    backgroundColor: SoftUI.blue,
+    paddingHorizontal: SoftUI.space.base,
+    paddingVertical: SoftUI.space.sm + 2,
+    borderRadius: SoftUI.radius.chip,
+    minHeight: SoftUI.touch,
+  },
+  autorizarBtnText: {
+    color: SoftUI.white,
+    fontSize: SoftUI.type.chip.size,
+    fontFamily: AuthUI.font.semibold,
+  },
+  emptyCard: {
+    padding: SoftUI.space.xxl,
+    alignItems: "center",
+    gap: SoftUI.space.md,
+  },
+  emptyText: {
+    color: SoftUI.textSecondary,
+    fontSize: SoftUI.type.caption.size + 1,
+    fontFamily: AuthUI.font.regular,
+    textAlign: "center",
   },
   emptyCta: {
-    marginTop: 4,
-    backgroundColor: "#0E0E0F",
-    paddingHorizontal: 16,
-    paddingVertical: 11,
-    borderRadius: 12,
+    marginTop: SoftUI.space.xs,
+    backgroundColor: SoftUI.blue,
+    paddingHorizontal: SoftUI.space.base,
+    paddingVertical: SoftUI.space.md,
+    borderRadius: SoftUI.radius.chip,
   },
   emptyCtaText: {
-    color: "#fff",
-    fontSize: 14,
+    color: SoftUI.white,
+    fontSize: SoftUI.type.caption.size + 1,
     fontFamily: AuthUI.font.semibold,
+  },
+  visitorCard: {
+    padding: SoftUI.space.base,
+  },
+  visitorRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: SoftUI.space.md,
+  },
+  visitorIcon: {
+    width: SoftUI.iconBtn,
+    height: SoftUI.iconBtn,
+    borderRadius: SoftUI.radius.chip,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  visitorBody: {
+    flex: 1,
+    minWidth: 0,
+    gap: SoftUI.space.xs,
+  },
+  visitorTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: SoftUI.space.sm,
+  },
+  visitorName: {
+    color: SoftUI.text,
+    fontSize: SoftUI.type.body.size,
+    fontFamily: AuthUI.font.semibold,
+    flex: 1,
+  },
+  visitorMeta: {
+    color: SoftUI.textSecondary,
+    fontSize: SoftUI.type.chip.size,
+    fontFamily: AuthUI.font.regular,
+  },
+  visitorHint: {
+    color: SoftUI.textSecondary,
+    fontSize: SoftUI.type.chip.size - 1,
+    fontFamily: AuthUI.font.regular,
+  },
+  actionsRow: {
+    flexDirection: "row",
+    gap: SoftUI.space.sm,
+    marginTop: SoftUI.space.md,
   },
   secondaryBtn: {
-    flexDirection: "row" as const,
-    alignItems: "center" as const,
-    gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 9,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: C.border,
-    backgroundColor: "#fff",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: SoftUI.space.xs,
+    paddingHorizontal: SoftUI.space.md,
+    paddingVertical: SoftUI.space.sm + 1,
+    borderRadius: SoftUI.radius.chip,
+    backgroundColor: SoftUI.card,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: SoftUI.divider,
+    minHeight: SoftUI.touch - 4,
   },
   secondaryBtnText: {
-    color: C.text,
-    fontSize: 13,
+    color: SoftUI.blue,
+    fontSize: SoftUI.type.chip.size + 1,
     fontFamily: AuthUI.font.semibold,
+  },
+  primaryBtnSm: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: SoftUI.space.md,
+    paddingVertical: SoftUI.space.sm + 1,
+    borderRadius: SoftUI.radius.chip,
+    backgroundColor: SoftUI.blue,
+    minHeight: SoftUI.touch - 4,
+  },
+  primaryBtnSmText: {
+    color: SoftUI.white,
+    fontSize: SoftUI.type.chip.size + 1,
+    fontFamily: AuthUI.font.bold,
+  },
+  qrSheet: {
+    padding: SoftUI.padH,
+    paddingBottom: SoftUI.space.section,
+    alignItems: "center",
+    gap: SoftUI.space.md,
+  },
+  qrHint: {
+    color: SoftUI.textSecondary,
+    fontSize: SoftUI.type.caption.size,
+    fontFamily: AuthUI.font.regular,
+    textAlign: "center",
+  },
+  qrImage: {
+    width: 220,
+    height: 220,
+    borderRadius: SoftUI.radius.cardSm,
+    backgroundColor: SoftUI.white,
+  },
+  sheetScroll: {
+    padding: SoftUI.padH,
+    paddingBottom: SoftUI.space.xxl,
+  },
+  sheetTitle: {
+    color: SoftUI.text,
+    fontSize: SoftUI.type.section.size,
+    fontFamily: AuthUI.font.bold,
+    marginBottom: SoftUI.space.sm,
+  },
+  sheetSubtitle: {
+    color: SoftUI.textSecondary,
+    fontSize: SoftUI.type.caption.size,
+    fontFamily: AuthUI.font.regular,
+    marginBottom: SoftUI.space.lg,
+  },
+  label: {
+    color: SoftUI.text,
+    fontSize: SoftUI.type.caption.size,
+    fontFamily: AuthUI.font.semibold,
+    marginBottom: SoftUI.space.sm,
+  },
+  input: {
+    backgroundColor: SoftUI.field,
+    borderRadius: SoftUI.radius.field,
+    paddingHorizontal: SoftUI.space.base,
+    paddingVertical: SoftUI.space.md,
+    fontSize: SoftUI.type.body.size,
+    color: SoftUI.text,
+    fontFamily: AuthUI.font.regular,
+    minHeight: SoftUI.fieldH,
+  },
+  chipRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: SoftUI.space.sm,
+    marginBottom: SoftUI.space.md,
+  },
+  chip: {
+    paddingHorizontal: SoftUI.space.base,
+    paddingVertical: SoftUI.space.sm,
+    borderRadius: SoftUI.radius.chip,
+    backgroundColor: SoftUI.card,
+    ...softShadow,
+  },
+  chipActive: {
+    backgroundColor: SoftUI.blue,
+  },
+  chipText: {
+    color: SoftUI.textSecondary,
+    fontSize: SoftUI.type.chip.size,
+    fontFamily: AuthUI.font.semibold,
+  },
+  chipTextActive: {
+    color: SoftUI.white,
+  },
+  errorText: {
+    color: SoftUI.danger,
+    fontSize: SoftUI.type.caption.size,
+    fontFamily: AuthUI.font.medium,
+    marginTop: SoftUI.space.sm,
+  },
+  footerRow: {
+    flexDirection: "row",
+    gap: SoftUI.space.sm,
+    marginTop: SoftUI.space.xl,
   },
   footerBtn: {
     flex: 1,
-    alignItems: "center" as const,
-    justifyContent: "center" as const,
-    paddingVertical: 14,
-    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: SoftUI.space.base,
+    borderRadius: SoftUI.radius.button,
+    minHeight: SoftUI.buttonH - 4,
   },
   footerCancel: {
-    borderWidth: 1,
-    borderColor: C.border,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: SoftUI.card,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: SoftUI.divider,
+  },
+  footerCancelText: {
+    color: SoftUI.text,
+    fontSize: SoftUI.type.body.size,
+    fontFamily: AuthUI.font.semibold,
   },
   footerPrimary: {
-    backgroundColor: "#0E0E0F",
+    backgroundColor: SoftUI.blue,
   },
-  footerPrimaryFull: {
-    marginTop: 8,
-    alignSelf: "stretch" as const,
-    alignItems: "center" as const,
-    justifyContent: "center" as const,
-    paddingVertical: 14,
-    borderRadius: 14,
-    backgroundColor: "#0E0E0F",
+  footerPrimaryText: {
+    color: SoftUI.white,
+    fontSize: SoftUI.type.body.size,
+    fontFamily: AuthUI.font.bold,
   },
-};
+});

@@ -37,3 +37,38 @@ export function fmtFechaCorta(ts: number): string {
   if (diffDays < 7) return `Hace ${diffDays} días`;
   return d.toLocaleDateString("es-CO", { day: "numeric", month: "short" });
 }
+
+/** Convierte NOMBRES EN MAYÚSCULAS a Title Case; deja el resto igual. */
+export function formatDisplayName(name: string): string {
+  const t = name.trim();
+  if (!t) return t;
+  if (t === t.toUpperCase() && /[A-ZÁÉÍÓÚÑ]/.test(t)) {
+    return t
+      .toLowerCase()
+      .split(/\s+/)
+      .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+      .join(" ");
+  }
+  return t;
+}
+
+/** Nombre para saludo: first+last o name, con mayúsculas normalizadas. */
+export function greetingName(me: {
+  firstName?: string | null;
+  lastName?: string | null;
+  name?: string | null;
+}): string {
+  const structured = [me.firstName, me.lastName]
+    .map((p) => p?.trim())
+    .filter(Boolean)
+    .join(" ");
+  const full = (me.name ?? "").trim();
+  const words = (s: string) => s.split(/\s+/).filter(Boolean).length;
+  const pick =
+    words(structured) >= 2
+      ? structured
+      : words(full) >= 2
+        ? full
+        : structured || full;
+  return formatDisplayName(pick);
+}

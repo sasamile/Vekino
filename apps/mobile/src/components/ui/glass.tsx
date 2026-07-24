@@ -12,16 +12,16 @@ import {
 } from "react-native";
 import * as Haptics from "expo-haptics";
 import { useSegments } from "expo-router";
+import { LinearGradient } from "expo-linear-gradient";
 import { PastelShell } from "@/components/ui/pastel-shell";
 import { AuthUI } from "@/lib/auth-ui";
-import { C } from "@/lib/theme";
+import { SoftUI, softShadow, floatShadow } from "@/lib/soft-ui";
 import { useCondominio } from "@/context/condominio-context";
 
-/** Fondo de producto = mist + glow del condominio activo. */
+/** Fondo de producto = mist Soft UI + glow del condominio activo. */
 export function ScreenBackground({ children }: { children: React.ReactNode }) {
   const { theme, condominioId } = useCondominio();
   const segments = useSegments();
-  // Blurs inferiores solo con el tab bar visible
   const bottomGlows = (segments as string[]).includes("(tabs)");
 
   return (
@@ -46,7 +46,7 @@ interface GlassCardProps {
   shine?: boolean;
 }
 
-/** Superficie suave tipo glass — sin BlurView anidado (rompe botones). */
+/** Tarjeta Soft UI — blanca, radio amplio, sombra suave. */
 export function GlassCard({ children, style }: GlassCardProps) {
   return <View style={[styles.card, style]}>{children}</View>;
 }
@@ -73,7 +73,13 @@ export function GlassPressable({
         if (haptic) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
         onPress?.();
       }}
-      style={({ pressed }) => [style, { opacity: disabled ? 0.5 : pressed ? 0.7 : 1 }]}
+      style={({ pressed }) => [
+        style,
+        {
+          opacity: disabled ? 0.5 : 1,
+          transform: [{ scale: pressed && !disabled ? 0.97 : 1 }],
+        },
+      ]}
     >
       {children}
     </Pressable>
@@ -91,7 +97,7 @@ interface GlassButtonProps {
   style?: ViewStyle;
 }
 
-const BUTTON_HEIGHT = { sm: 36, md: 44, lg: 52 };
+const BUTTON_HEIGHT = { sm: 40, md: SoftUI.buttonH - 4, lg: SoftUI.buttonH };
 const BUTTON_FONT = { sm: 13, md: 15, lg: 16 };
 
 export function GlassButton({
@@ -109,10 +115,63 @@ export function GlassButton({
   const isPrimary = variant === "primary";
   const isGhost = variant === "ghost";
 
+  const content = loading ? (
+    <ActivityIndicator color={isPrimary ? "#fff" : SoftUI.blue} size="small" />
+  ) : (
+    <>
+      {icon}
+      <Text
+        style={{
+          color: isPrimary ? SoftUI.white : SoftUI.blue,
+          fontSize: fs,
+          fontFamily: AuthUI.font.semibold,
+        }}
+      >
+        {label}
+      </Text>
+    </>
+  );
+
+  if (isPrimary) {
+    return (
+      <View
+        onTouchEnd={() => {
+          if (disabled || loading) return;
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+          onPress?.();
+        }}
+        style={[
+          {
+            height: h,
+            borderRadius: SoftUI.radius.button,
+            overflow: "hidden",
+            opacity: disabled ? 0.5 : 1,
+            width: "100%",
+          },
+          style,
+        ]}
+      >
+        <LinearGradient
+          colors={[SoftUI.gradientStart, SoftUI.gradientEnd]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={{
+            flex: 1,
+            alignItems: "center",
+            justifyContent: "center",
+            flexDirection: "row",
+            gap: 8,
+            paddingHorizontal: 16,
+          }}
+        >
+          {content}
+        </LinearGradient>
+      </View>
+    );
+  }
+
   return (
     <View
-      // View + onTouchEnd: Pressable + NativeWind a veces no pinta el fondo
-      // (botón negro invisible → solo se ve “Cerrar”).
       onTouchEnd={() => {
         if (disabled || loading) return;
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -121,37 +180,22 @@ export function GlassButton({
       style={[
         {
           height: h,
-          borderRadius: 14,
+          borderRadius: SoftUI.radius.button,
           alignItems: "center",
           justifyContent: "center",
           flexDirection: "row",
           gap: 8,
           paddingHorizontal: 16,
           opacity: disabled ? 0.5 : 1,
-          backgroundColor: isPrimary ? "#0E0E0F" : isGhost ? "transparent" : "#FFFFFF",
-          borderWidth: isPrimary || isGhost ? 0 : StyleSheet.hairlineWidth * 2,
-          borderColor: "#D4D2D8",
+          backgroundColor: isGhost ? "transparent" : SoftUI.white,
+          borderWidth: isGhost ? 0 : StyleSheet.hairlineWidth * 2,
+          borderColor: SoftUI.divider,
           width: "100%",
         },
         style,
       ]}
     >
-      {loading ? (
-        <ActivityIndicator color={isPrimary ? "#fff" : AuthUI.text} size="small" />
-      ) : (
-        <>
-          {icon}
-          <Text
-            style={{
-              color: isPrimary ? "#fff" : AuthUI.text,
-              fontSize: fs,
-              fontFamily: AuthUI.font.semibold,
-            }}
-          >
-            {label}
-          </Text>
-        </>
-      )}
+      {content}
     </View>
   );
 }
@@ -162,12 +206,12 @@ interface GlassBadgeProps {
 }
 
 const BADGE_COLORS: Record<string, { bg: string; text: string }> = {
-  orange: { bg: C.brandSoft, text: C.brand },
-  green: { bg: C.successSoft, text: C.success },
-  red: { bg: C.dangerSoft, text: C.danger },
-  yellow: { bg: C.warningSoft, text: C.warning },
-  blue: { bg: C.infoSoft, text: C.info },
-  neutral: { bg: "rgba(14,14,15,0.05)", text: AuthUI.textSecondary },
+  orange: { bg: SoftUI.infoSoft, text: SoftUI.blue },
+  green: { bg: SoftUI.successSoft, text: SoftUI.success },
+  red: { bg: SoftUI.dangerSoft, text: SoftUI.danger },
+  yellow: { bg: SoftUI.warningSoft, text: "#B8860B" },
+  blue: { bg: SoftUI.infoSoft, text: SoftUI.blue },
+  neutral: { bg: SoftUI.bgSecondary, text: SoftUI.textSecondary },
 };
 
 export function GlassBadge({ label, tone = "neutral" }: GlassBadgeProps) {
@@ -176,13 +220,21 @@ export function GlassBadge({ label, tone = "neutral" }: GlassBadgeProps) {
     <View
       style={{
         backgroundColor: c.bg,
-        borderRadius: 8,
-        paddingHorizontal: 8,
-        paddingVertical: 3,
+        borderRadius: SoftUI.radius.chip,
+        paddingHorizontal: 12,
+        paddingVertical: 5,
         alignSelf: "flex-start",
       }}
     >
-      <Text style={{ color: c.text, fontSize: 12, fontFamily: AuthUI.font.medium }}>{label}</Text>
+      <Text
+        style={{
+          color: c.text,
+          fontSize: SoftUI.type.chip.size,
+          fontFamily: AuthUI.font.semibold,
+        }}
+      >
+        {label}
+      </Text>
     </View>
   );
 }
@@ -194,26 +246,41 @@ interface GlassInputProps extends TextInputProps {
   rightAction?: React.ReactNode;
 }
 
-export function GlassInput({ label, error, leftIcon, rightAction, style, ...props }: GlassInputProps) {
+export function GlassInput({
+  label,
+  error,
+  leftIcon,
+  rightAction,
+  style,
+  ...props
+}: GlassInputProps) {
   return (
     <View style={{ gap: 6 }}>
       {label && (
-        <Text style={{ color: AuthUI.text, fontSize: 14, fontFamily: AuthUI.font.semibold }}>
+        <Text
+          style={{
+            color: SoftUI.text,
+            fontSize: 14,
+            fontFamily: AuthUI.font.semibold,
+          }}
+        >
           {label}
         </Text>
       )}
       <View style={[styles.inputContainer, error ? styles.inputError : null]}>
-        {leftIcon && <View style={{ paddingLeft: 12, paddingRight: 4 }}>{leftIcon}</View>}
+        {leftIcon && (
+          <View style={{ paddingLeft: 12, paddingRight: 4 }}>{leftIcon}</View>
+        )}
         <TextInput
-          placeholderTextColor={AuthUI.placeholder}
+          placeholderTextColor={SoftUI.textDisabled}
           style={[
             {
               flex: 1,
-              color: AuthUI.text,
+              color: SoftUI.text,
               fontSize: 15,
               fontFamily: AuthUI.font.regular,
-              paddingVertical: 12,
-              paddingHorizontal: leftIcon ? 4 : 14,
+              paddingVertical: 14,
+              paddingHorizontal: leftIcon ? 4 : 16,
             },
             style as TextStyle,
           ]}
@@ -222,7 +289,15 @@ export function GlassInput({ label, error, leftIcon, rightAction, style, ...prop
         {rightAction && <View style={{ paddingRight: 10 }}>{rightAction}</View>}
       </View>
       {error && (
-        <Text style={{ color: C.danger, fontSize: 12, fontFamily: AuthUI.font.regular }}>{error}</Text>
+        <Text
+          style={{
+            color: SoftUI.danger,
+            fontSize: 12,
+            fontFamily: AuthUI.font.regular,
+          }}
+        >
+          {error}
+        </Text>
       )}
     </View>
   );
@@ -238,9 +313,22 @@ export function GlassSection({
   children: React.ReactNode;
 }) {
   return (
-    <View style={{ gap: 12 }}>
-      <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-        <Text style={{ color: AuthUI.text, fontSize: 17, fontFamily: AuthUI.font.semibold }}>
+    <View style={{ gap: 14 }}>
+      <View
+        style={{
+          flexDirection: "row",
+          alignItems: "center",
+          justifyContent: "space-between",
+        }}
+      >
+        <Text
+          style={{
+            color: SoftUI.text,
+            fontSize: SoftUI.type.section.size,
+            lineHeight: SoftUI.type.section.line,
+            fontFamily: AuthUI.font.semibold,
+          }}
+        >
           {title}
         </Text>
         {action}
@@ -250,24 +338,45 @@ export function GlassSection({
   );
 }
 
+/** CTA con gradiente azul Soft UI (tarjeta de acción principal). */
+export function SoftGradientCard({
+  children,
+  style,
+}: {
+  children: React.ReactNode;
+  style?: ViewStyle;
+}) {
+  return (
+    <View style={[{ borderRadius: SoftUI.radius.card, overflow: "hidden", ...floatShadow }, style]}>
+      <LinearGradient
+        colors={[SoftUI.gradientStart, SoftUI.gradientEnd]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={{ padding: SoftUI.space.lg, minHeight: 132 }}
+      >
+        {children}
+      </LinearGradient>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   card: {
-    borderRadius: 18,
-    backgroundColor: "#FFFFFF",
-    borderWidth: 1,
-    borderColor: "rgba(216,214,220,0.9)",
+    borderRadius: SoftUI.radius.card,
+    backgroundColor: SoftUI.card,
     overflow: "hidden",
+    ...softShadow,
   },
   inputContainer: {
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: AuthUI.border,
-    backgroundColor: "rgba(255,255,255,0.92)",
+    borderRadius: SoftUI.radius.field,
+    borderWidth: 0,
+    backgroundColor: SoftUI.field,
     flexDirection: "row",
     alignItems: "center",
-    minHeight: 48,
+    minHeight: SoftUI.fieldH,
   },
   inputError: {
-    borderColor: C.danger,
+    borderWidth: 1,
+    borderColor: SoftUI.danger,
   },
 });

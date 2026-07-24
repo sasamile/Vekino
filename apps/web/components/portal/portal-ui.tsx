@@ -21,7 +21,12 @@ export function fechaISO(iso: string): string {
   }).format(new Date(y, m - 1, d));
 }
 
-export type FacturaEstado = "pendiente" | "pagada" | "vencida" | "abonada";
+export type FacturaEstado =
+  | "pendiente"
+  | "pagada"
+  | "vencida"
+  | "abonada"
+  | "saldo_a_favor";
 
 export const ESTADO_FACTURA: Record<
   FacturaEstado,
@@ -31,6 +36,11 @@ export const ESTADO_FACTURA: Record<
   pendiente: { label: "Pendiente", tone: "warning", icon: Clock },
   vencida: { label: "Vencida", tone: "destructive", icon: AlertTriangle },
   abonada: { label: "Abono parcial", tone: "info", icon: CircleDollarSign },
+  saldo_a_favor: {
+    label: "Saldo a favor",
+    tone: "info",
+    icon: CircleDollarSign,
+  },
 };
 
 export const VINCULO_LABEL: Record<string, string> = {

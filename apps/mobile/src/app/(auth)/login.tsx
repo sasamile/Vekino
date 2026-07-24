@@ -16,10 +16,14 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
+import * as AppleAuthentication from "expo-apple-authentication";
 import { authClient } from "@/lib/auth-client";
 import { PastelShell } from "@/components/ui/pastel-shell";
 import { GoogleLogo } from "@/components/ui/google-logo";
+import { VekinoLogo } from "@/components/ui/vekino-logo";
+import { AuthPrimaryButton } from "@/components/ui/auth-primary-button";
 import { AuthUI } from "@/lib/auth-ui";
+import { SoftUI, softShadow } from "@/lib/soft-ui";
 import { useAuthFonts } from "@/lib/use-auth-fonts";
 import { storageGet, storageRemove, storageSet } from "@/lib/storage";
 import { Toast } from "@/components/ui/toast";
@@ -41,6 +45,7 @@ export default function LoginScreen() {
     password?: string;
   }>({});
   const [loading, setLoading] = useState(false);
+  const [appleAvailable, setAppleAvailable] = useState(false);
 
   useEffect(() => {
     storageGet(REMEMBER_KEY).then((v) => {
@@ -49,6 +54,13 @@ export default function LoginScreen() {
         setRemember(true);
       }
     });
+  }, []);
+
+  useEffect(() => {
+    if (Platform.OS !== "ios") return;
+    AppleAuthentication.isAvailableAsync()
+      .then(setAppleAvailable)
+      .catch(() => setAppleAvailable(false));
   }, []);
 
   function showError(msg: string) {
@@ -111,8 +123,6 @@ export default function LoginScreen() {
           authErrorEs(authError.message, "No se pudo iniciar con Google"),
         );
       }
-      // Si el usuario cierra el modal de Google, signIn.social resuelve sin
-      // error (solo devolvió la URL OAuth). No entrar sin sesión real.
       const { data: session } = await authClient.getSession();
       if (!session?.user) return;
       router.replace("/(app)" as never);
@@ -121,6 +131,68 @@ export default function LoginScreen() {
         authErrorEs(
           e instanceof Error ? e.message : null,
           "No se pudo iniciar con Google. Inténtalo de nuevo.",
+        ),
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function signInWithApple() {
+    if (loading) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const credential = await AppleAuthentication.signInAsync({
+        requestedScopes: [
+          AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
+          AppleAuthentication.AppleAuthenticationScope.EMAIL,
+        ],
+      });
+      const token = credential.identityToken;
+      if (!token) {
+        throw new Error("Apple no devolvió el token de identidad.");
+      }
+      const fullName = credential.fullName;
+      const hasName = !!(fullName?.givenName || fullName?.familyName);
+      const { error: authError } = await authClient.signIn.social({
+        provider: "apple",
+        idToken: {
+          token,
+          ...(hasName
+            ? {
+                user: {
+                  name: {
+                    firstName: fullName?.givenName ?? "",
+                    lastName: fullName?.familyName ?? "",
+                  },
+                  ...(credential.email ? { email: credential.email } : {}),
+                },
+              }
+            : {}),
+        },
+      });
+      if (authError) {
+        throw new Error(
+          authErrorEs(authError.message, "No se pudo iniciar con Apple"),
+        );
+      }
+      const { data: session } = await authClient.getSession();
+      if (!session?.user) return;
+      router.replace("/(app)" as never);
+    } catch (e) {
+      if (
+        e &&
+        typeof e === "object" &&
+        "code" in e &&
+        (e as { code?: string }).code === "ERR_REQUEST_CANCELED"
+      ) {
+        return;
+      }
+      showError(
+        authErrorEs(
+          e instanceof Error ? e.message : null,
+          "No se pudo iniciar con Apple. Inténtalo de nuevo.",
         ),
       );
     } finally {
@@ -150,12 +222,19 @@ export default function LoginScreen() {
             keyboardDismissMode="on-drag"
             showsVerticalScrollIndicator={false}
           >
-            <View style={{ marginTop: 28 }}>
-              <Text style={styles.title}>Iniciar sesión</Text>
-              <Text style={styles.subtitle}>Qué bueno verte de nuevo</Text>
+            <View style={styles.brand}>
+              <View style={styles.logoMark}>
+                <VekinoLogo size={34} color={SoftUI.white} />
+              </View>
+              <Text style={styles.brandName}>Vekino</Text>
             </View>
 
-            <Text style={[styles.label, { marginTop: 44 }]}>Correo</Text>
+            <Text style={styles.title}>Iniciar sesión</Text>
+            <Text style={styles.subtitle}>Qué bueno verte de nuevo</Text>
+
+            <Text style={[styles.label, { marginTop: SoftUI.space.xxl }]}>
+              Correo
+            </Text>
             <View style={styles.field}>
               <TextInput
                 value={email}
@@ -176,7 +255,9 @@ export default function LoginScreen() {
               <Text style={styles.fieldErr}>{fieldError.email}</Text>
             ) : null}
 
-            <Text style={[styles.label, { marginTop: 27 }]}>Contraseña</Text>
+            <Text style={[styles.label, { marginTop: SoftUI.space.lg }]}>
+              Contraseña
+            </Text>
             <View style={styles.field}>
               <TextInput
                 ref={passwordRef}
@@ -200,7 +281,7 @@ export default function LoginScreen() {
                 <Ionicons
                   name={showPassword ? "eye-outline" : "eye-off-outline"}
                   size={22}
-                  color={AuthUI.placeholder}
+                  color={SoftUI.textDisabled}
                 />
               </Pressable>
             </View>
@@ -229,26 +310,36 @@ export default function LoginScreen() {
               </Text>
             </View>
 
-            <View
-              style={[styles.primaryBtn, { opacity: loading ? 0.7 : 1 }]}
-              onTouchEnd={() => {
-                if (loading) return;
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                signIn();
-              }}
-            >
-              {loading ? (
-                <ActivityIndicator color="#fff" />
-              ) : (
-                <Text style={styles.primaryLabel}>Ingresar</Text>
-              )}
+            <View style={styles.primaryWrap}>
+              <AuthPrimaryButton
+                label="Ingresar"
+                loading={loading}
+                onPress={signIn}
+              />
             </View>
 
             <Text style={styles.orCentered}>o continúa con</Text>
 
-            {/* Botón Google: full-width + borde fino (como la referencia) */}
+            {appleAvailable ? (
+              <AppleAuthentication.AppleAuthenticationButton
+                buttonType={
+                  AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN
+                }
+                buttonStyle={
+                  AppleAuthentication.AppleAuthenticationButtonStyle.BLACK
+                }
+                cornerRadius={SoftUI.radius.button}
+                style={styles.appleBtn}
+                onPress={() => {
+                  if (loading) return;
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  void signInWithApple();
+                }}
+              />
+            ) : null}
+
             <Pressable
-              style={[styles.googleBtn, { opacity: loading ? 0.7 : 1 }]}
+              style={[styles.secondaryBtn, { opacity: loading ? 0.7 : 1 }]}
               disabled={loading}
               onPress={() => {
                 Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -256,11 +347,11 @@ export default function LoginScreen() {
               }}
             >
               {loading ? (
-                <ActivityIndicator color="#0E0E0F" />
+                <ActivityIndicator color={SoftUI.text} />
               ) : (
                 <>
                   <GoogleLogo size={20} />
-                  <Text style={styles.googleLabel}>Continuar con Google</Text>
+                  <Text style={styles.secondaryLabel}>Continuar con Google</Text>
                 </>
               )}
             </Pressable>
@@ -270,13 +361,14 @@ export default function LoginScreen() {
                 Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                 router.push("/(auth)/codigo-asamblea" as never);
               }}
-              style={styles.codigoLink}
+              style={styles.secondaryBtn}
             >
-              <Ionicons name="key-outline" size={18} color={AuthUI.text} />
-              <Text style={styles.codigoLinkText}>
+              <Ionicons name="key-outline" size={18} color={SoftUI.text} />
+              <Text style={styles.secondaryLabel}>
                 Iniciar con código para asamblea
               </Text>
             </Pressable>
+
             <Text style={styles.legal}>
               Al continuar aceptas los{" "}
               <Text style={styles.legalLink}>Términos de servicio</Text>
@@ -293,58 +385,83 @@ export default function LoginScreen() {
 const styles = StyleSheet.create({
   scroll: {
     flexGrow: 1,
-    paddingHorizontal: AuthUI.padH,
-    paddingBottom: 24,
+    paddingHorizontal: SoftUI.padH,
+    paddingBottom: SoftUI.space.xl,
+  },
+  brand: {
+    marginTop: SoftUI.space.lg,
+    marginBottom: SoftUI.space.xl,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: SoftUI.space.sm,
+  },
+  logoMark: {
+    width: SoftUI.iconBtn,
+    height: SoftUI.iconBtn,
+    borderRadius: SoftUI.radius.icon,
+    backgroundColor: SoftUI.blue,
+    alignItems: "center",
+    justifyContent: "center",
+    ...softShadow,
+  },
+  brandName: {
+    fontFamily: AuthUI.font.bold,
+    fontSize: SoftUI.type.section.size,
+    lineHeight: SoftUI.type.section.line,
+    color: SoftUI.text,
+    letterSpacing: -0.3,
   },
   title: {
     fontFamily: AuthUI.font.bold,
-    fontSize: 32,
-    lineHeight: 38,
-    color: AuthUI.text,
+    fontSize: SoftUI.type.hero.size,
+    lineHeight: SoftUI.type.hero.line,
+    color: SoftUI.text,
+    letterSpacing: -0.4,
   },
   subtitle: {
     fontFamily: AuthUI.font.regular,
-    fontSize: 17,
-    color: "#171719",
-    marginTop: 6,
+    fontSize: SoftUI.type.body.size,
+    lineHeight: SoftUI.type.body.line,
+    color: SoftUI.textSecondary,
+    marginTop: SoftUI.space.xs,
   },
   label: {
     fontFamily: AuthUI.font.semibold,
-    fontSize: 17,
-    color: AuthUI.text,
+    fontSize: SoftUI.type.body.size,
+    color: SoftUI.text,
   },
   field: {
-    marginTop: 10,
-    height: AuthUI.fieldH,
-    borderRadius: AuthUI.radiusField,
+    marginTop: SoftUI.space.sm,
+    height: SoftUI.fieldH,
+    borderRadius: SoftUI.radius.field,
     borderWidth: 1,
-    borderColor: AuthUI.border,
-    backgroundColor: "rgba(255,255,255,0.92)",
+    borderColor: SoftUI.divider,
+    backgroundColor: SoftUI.field,
     justifyContent: "center",
-    paddingHorizontal: 18,
+    paddingHorizontal: SoftUI.space.base,
   },
   input: {
     fontFamily: AuthUI.font.regular,
-    fontSize: 16,
+    fontSize: SoftUI.type.body.size,
     letterSpacing: 0,
-    color: AuthUI.text,
+    color: SoftUI.text,
     paddingVertical: 0,
-    height: AuthUI.fieldH - 2,
+    height: SoftUI.fieldH - 2,
   },
   eye: {
     position: "absolute",
-    right: 18,
-    height: AuthUI.fieldH,
+    right: SoftUI.space.base,
+    height: SoftUI.fieldH,
     justifyContent: "center",
   },
   fieldErr: {
     fontFamily: AuthUI.font.regular,
-    fontSize: 13,
-    color: "#dc2626",
-    marginTop: 6,
+    fontSize: SoftUI.type.caption.size,
+    color: SoftUI.danger,
+    marginTop: SoftUI.space.xs,
   },
   rowOptions: {
-    marginTop: 18,
+    marginTop: SoftUI.space.base,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
@@ -352,101 +469,78 @@ const styles = StyleSheet.create({
   remember: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 9,
+    gap: SoftUI.space.sm,
   },
   checkbox: {
     width: 20,
     height: 20,
-    borderRadius: 4,
+    borderRadius: 6,
     borderWidth: 1,
-    borderColor: AuthUI.border,
-    backgroundColor: AuthUI.white,
+    borderColor: SoftUI.divider,
+    backgroundColor: SoftUI.white,
     alignItems: "center",
     justifyContent: "center",
   },
   checkboxOn: {
-    backgroundColor: AuthUI.purple,
-    borderColor: AuthUI.purple,
+    backgroundColor: SoftUI.blue,
+    borderColor: SoftUI.blue,
   },
   rememberLabel: {
     fontFamily: AuthUI.font.regular,
-    fontSize: 15,
-    color: AuthUI.text,
+    fontSize: SoftUI.type.caption.size + 1,
+    color: SoftUI.text,
   },
   forgot: {
-    fontFamily: AuthUI.font.regular,
-    fontSize: 15,
-    color: AuthUI.text,
+    fontFamily: AuthUI.font.medium,
+    fontSize: SoftUI.type.caption.size + 1,
+    color: SoftUI.blue,
   },
-  primaryBtn: {
-    marginTop: 44,
-    height: AuthUI.btnH,
-    borderRadius: AuthUI.radiusBtn,
-    backgroundColor: "#0E0E0F",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  primaryLabel: {
-    fontFamily: AuthUI.font.semibold,
-    fontSize: 19,
-    color: "#FFFFFF",
+  primaryWrap: {
+    marginTop: SoftUI.space.xxl,
   },
   orCentered: {
-    marginTop: 40,
-    marginBottom: 16,
+    marginTop: SoftUI.space.xxl,
+    marginBottom: SoftUI.space.base,
     textAlign: "center",
     fontFamily: AuthUI.font.regular,
-    fontSize: 14,
-    color: AuthUI.textMuted,
+    fontSize: SoftUI.type.caption.size,
+    color: SoftUI.textSecondary,
   },
-  googleBtn: {
+  appleBtn: {
     alignSelf: "stretch",
-    height: 56,
-    borderRadius: 14,
+    height: SoftUI.buttonH,
+    marginBottom: SoftUI.space.md,
+  },
+  secondaryBtn: {
+    alignSelf: "stretch",
+    height: SoftUI.buttonH,
+    borderRadius: SoftUI.radius.button,
     borderWidth: StyleSheet.hairlineWidth * 2,
-    borderColor: "#D4D2D8",
-    backgroundColor: "#FFFFFF",
+    borderColor: SoftUI.divider,
+    backgroundColor: SoftUI.white,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: 20,
+    paddingHorizontal: SoftUI.space.lg,
+    marginBottom: SoftUI.space.md,
   },
-  googleLabel: {
-    marginLeft: 12,
+  secondaryLabel: {
+    marginLeft: SoftUI.space.md,
     fontFamily: AuthUI.font.medium,
-    fontSize: 16,
-    color: "#0E0E0F",
+    fontSize: SoftUI.type.body.size,
+    color: SoftUI.text,
   },
   legal: {
-    marginTop: 28,
-    marginBottom: 8,
+    marginTop: SoftUI.space.lg,
+    marginBottom: SoftUI.space.sm,
     textAlign: "center",
     fontFamily: AuthUI.font.regular,
-    fontSize: 13,
-    lineHeight: 20,
-    color: AuthUI.textMuted,
+    fontSize: SoftUI.type.caption.size,
+    lineHeight: SoftUI.type.caption.line + 2,
+    color: SoftUI.textSecondary,
   },
   legalLink: {
     fontFamily: AuthUI.font.semibold,
-    color: "#3A393E",
-  },
-  codigoLink: {
-    marginTop: 20,
-    marginBottom: 12,
-    alignSelf: "stretch",
-    height: 52,
-    borderRadius: 14,
-    borderWidth: StyleSheet.hairlineWidth * 2,
-    borderColor: "#D4D2D8",
-    backgroundColor: "#FFFFFF",
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-  },
-  codigoLinkText: {
-    fontFamily: AuthUI.font.medium,
-    fontSize: 15,
-    color: "#0E0E0F",
+    color: SoftUI.text,
   },
 });

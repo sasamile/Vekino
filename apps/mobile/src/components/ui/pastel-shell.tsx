@@ -27,11 +27,11 @@ export function PastelShell({
   const { width, height } = useWindowDimensions();
   const navGlowH = 124;
   const navGlowW = Math.min(300, width * 0.68);
-  const bg = tone === "mist" ? "#F1F0F4" : "#FFFFFF";
+  const bg = tone === "mist" ? "#F5F6F8" : "#FFFFFF";
 
-  const left = glows?.left ?? "#F4C4E0";
-  const right = glows?.right ?? "#A8D4F5";
-  const top = glows?.top ?? "#DDD4FA";
+  const left = glows?.left ?? "#8FD6FF";
+  const right = glows?.right ?? "#B8E4FF";
+  const top = glows?.top ?? "#E8F6FF";
 
   return (
     <View style={[styles.root, { backgroundColor: bg }]}>

@@ -6,10 +6,19 @@ module.exports = {
     extend: {
       colors: {
         primary: {
-          DEFAULT: "#042046",
+          DEFAULT: "#249DF2",
           foreground: "#ffffff",
         },
-        brand: "#F26A3A", // naranja del isotipo Vekino
+        brand: "#249DF2",
+        sky: {
+          DEFAULT: "#43B2FA",
+          light: "#8FD6FF",
+        },
+        soft: {
+          bg: "#F5F6F8",
+          card: "#FFFFFF",
+          muted: "#6D7178",
+        },
       },
     },
   },

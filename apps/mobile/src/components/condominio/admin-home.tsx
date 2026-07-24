@@ -1,23 +1,23 @@
 import { View, Text, ScrollView, ActivityIndicator, StyleSheet } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useQuery } from "convex/react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
-import { CondominioHeader } from "@/components/ui/condominio-header";
+import { SoftHomeHeader } from "@/components/ui/soft-home-header";
 import { MiniBarChart } from "@/components/ui/mini-bar-chart";
 import { GlassBadge } from "@/components/ui/glass";
 import { Tap } from "@/components/ui/tap";
-import { WavingHand } from "@/components/ui/waving-hand";
 import { cop, fmtPeriodo } from "@/lib/utils";
 import { AuthUI } from "@/lib/auth-ui";
+import { SoftUI, softShadow } from "@/lib/soft-ui";
 
-/** Home admin condominio — mismo estilo pastel que el panel. */
+/** Home admin condominio — Soft UI + liquid glass header. */
 export function AdminCondominioHome({
   firstName,
   saludo,
+  avatarUrl,
   condominioId,
   condominioName,
   isSuperadmin,
@@ -51,7 +51,13 @@ export function AdminCondominioHome({
   const loadingResumen = !!periodo && resumen === undefined;
 
   return (
-    <SafeAreaView style={{ flex: 1 }} edges={["top"]}>
+    <View style={{ flex: 1 }}>
+      <SoftHomeHeader
+        saludo={saludo}
+        displayName={firstName}
+        avatarUrl={avatarUrl}
+        badgeLabel={condominioName ?? "Admin"}
+      />
       <ScrollView
         style={{ flex: 1 }}
         contentContainerStyle={styles.scroll}
@@ -70,14 +76,7 @@ export function AdminCondominioHome({
           </View>
         )}
 
-        <CondominioHeader condominioId={condominioId} title="Resumen" />
-
-        <View style={styles.greetingRow}>
-          <Text style={styles.greeting}>
-            {saludo}, <Text style={styles.greetingName}>{firstName}</Text>
-          </Text>
-          <WavingHand size={18} />
-        </View>
+        <Text style={styles.pageTitle}>Resumen</Text>
 
         <View style={styles.kpiCard}>
           <View style={styles.kpiHalf}>
@@ -153,7 +152,7 @@ export function AdminCondominioHome({
                   <View style={styles.rowBody}>
                     <View style={styles.avisoTitleRow}>
                       {c.fijado ? (
-                        <Ionicons name="pin" size={12} color={AuthUI.purple} style={{ marginRight: 6 }} />
+                        <Ionicons name="pin" size={12} color={SoftUI.blue} style={{ marginRight: 6 }} />
                       ) : null}
                       <Text style={styles.avisoTitle} numberOfLines={1}>
                         {c.titulo}
@@ -175,7 +174,7 @@ export function AdminCondominioHome({
           </View>
         </View>
       </ScrollView>
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -190,7 +189,7 @@ function MetaChip({
 }) {
   return (
     <View style={styles.metaChip}>
-      <Text style={[styles.metaValue, accent && { color: AuthUI.purple }]}>{value}</Text>
+      <Text style={[styles.metaValue, accent && { color: SoftUI.blue }]}>{value}</Text>
       <Text style={styles.metaLabel}>{label}</Text>
     </View>
   );
@@ -199,7 +198,7 @@ function MetaChip({
 const styles = StyleSheet.create({
   scroll: {
     paddingBottom: 150,
-    paddingHorizontal: AuthUI.padH - 7,
+    paddingHorizontal: SoftUI.padH,
   },
   backLink: {
     marginTop: 8,
@@ -207,39 +206,47 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     alignSelf: "flex-start",
+    minHeight: SoftUI.touch,
   },
   backText: {
-    color: AuthUI.textSecondary,
-    fontSize: 14,
+    color: SoftUI.textSecondary,
+    fontSize: SoftUI.type.caption.size,
     fontFamily: AuthUI.font.medium,
     marginLeft: 2,
   },
   greetingRow: {
-    marginTop: 4,
-    marginBottom: 20,
+    marginTop: SoftUI.space.xs,
+    marginBottom: SoftUI.space.lg,
     flexDirection: "row",
     alignItems: "center",
     flexWrap: "wrap",
-    gap: 6,
+    gap: SoftUI.space.sm,
   },
   greeting: {
-    color: AuthUI.textMuted,
-    fontSize: 15,
+    color: SoftUI.textSecondary,
+    fontSize: SoftUI.type.body.size,
     fontFamily: AuthUI.font.regular,
   },
   greetingName: {
-    color: AuthUI.text,
+    color: SoftUI.text,
     fontFamily: AuthUI.font.semibold,
+  },
+  pageTitle: {
+    color: SoftUI.text,
+    fontSize: SoftUI.type.hero.size,
+    lineHeight: SoftUI.type.hero.line,
+    fontFamily: AuthUI.font.bold,
+    marginBottom: SoftUI.space.base,
+    marginTop: SoftUI.space.sm,
   },
   kpiCard: {
     flexDirection: "row",
-    backgroundColor: "#FFFFFF",
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: "#D8D6DC",
-    paddingVertical: 18,
-    paddingHorizontal: 16,
-    marginBottom: 12,
+    backgroundColor: SoftUI.card,
+    borderRadius: SoftUI.radius.card,
+    paddingVertical: SoftUI.space.lg,
+    paddingHorizontal: SoftUI.space.base,
+    marginBottom: SoftUI.space.md,
+    ...softShadow,
   },
   kpiHalf: {
     flexGrow: 1,
@@ -248,126 +255,125 @@ const styles = StyleSheet.create({
   },
   kpiVLine: {
     width: StyleSheet.hairlineWidth,
-    backgroundColor: "rgba(14,14,15,0.1)",
-    marginHorizontal: 14,
+    backgroundColor: SoftUI.divider,
+    marginHorizontal: SoftUI.space.md,
   },
   kpiLabel: {
-    color: AuthUI.textMuted,
-    fontSize: 12,
+    color: SoftUI.textSecondary,
+    fontSize: SoftUI.type.chip.size,
     fontFamily: AuthUI.font.medium,
-    marginBottom: 6,
+    marginBottom: SoftUI.space.sm,
   },
   kpiValue: {
-    color: AuthUI.text,
-    fontSize: 20,
+    color: SoftUI.text,
+    fontSize: SoftUI.type.section.size,
     fontFamily: AuthUI.font.bold,
   },
   kpiHint: {
-    color: AuthUI.textMuted,
-    fontSize: 12,
+    color: SoftUI.textSecondary,
+    fontSize: SoftUI.type.chip.size,
     fontFamily: AuthUI.font.regular,
-    marginTop: 4,
+    marginTop: SoftUI.space.xs,
   },
   kpiSkeleton: {
     height: 24,
     width: "70%",
-    borderRadius: 6,
-    backgroundColor: "rgba(14,14,15,0.06)",
+    borderRadius: SoftUI.radius.icon,
+    backgroundColor: SoftUI.bgSecondary,
   },
   metaRow: {
     flexDirection: "row",
-    marginBottom: 28,
+    marginBottom: SoftUI.space.xxl,
+    marginHorizontal: -4,
   },
   metaChip: {
     flexGrow: 1,
     flexShrink: 1,
     flexBasis: 0,
-    backgroundColor: "#FFFFFF",
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: "#D8D6DC",
-    paddingVertical: 12,
-    paddingHorizontal: 8,
+    backgroundColor: SoftUI.card,
+    borderRadius: SoftUI.radius.cardSm,
+    paddingVertical: SoftUI.space.md,
+    paddingHorizontal: SoftUI.space.sm,
     alignItems: "center",
     marginHorizontal: 4,
+    ...softShadow,
   },
   metaValue: {
-    color: AuthUI.text,
-    fontSize: 16,
+    color: SoftUI.text,
+    fontSize: SoftUI.type.body.size + 1,
     fontFamily: AuthUI.font.semibold,
   },
   metaLabel: {
-    color: AuthUI.textMuted,
-    fontSize: 11,
+    color: SoftUI.textSecondary,
+    fontSize: SoftUI.type.chip.size - 1,
     fontFamily: AuthUI.font.regular,
     marginTop: 2,
   },
   block: {
-    marginBottom: 24,
+    marginBottom: SoftUI.space.xl,
   },
   blockHead: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    marginBottom: 12,
+    marginBottom: SoftUI.space.md,
   },
   blockTitle: {
-    color: AuthUI.text,
-    fontSize: 18,
+    color: SoftUI.text,
+    fontSize: SoftUI.type.section.size,
+    lineHeight: SoftUI.type.section.line,
     fontFamily: AuthUI.font.semibold,
   },
   link: {
-    color: AuthUI.purple,
-    fontSize: 14,
+    color: SoftUI.blue,
+    fontSize: SoftUI.type.caption.size,
     fontFamily: AuthUI.font.semibold,
   },
   surface: {
-    backgroundColor: "#FFFFFF",
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: "#D8D6DC",
+    backgroundColor: SoftUI.card,
+    borderRadius: SoftUI.radius.card,
     overflow: "hidden",
-    marginTop: 12,
+    marginTop: SoftUI.space.md,
+    ...softShadow,
   },
   listGap: {
-    gap: 10,
-    marginTop: 12,
+    gap: SoftUI.space.md,
+    marginTop: SoftUI.space.md,
   },
   rowBody: {
     flexGrow: 1,
     flexShrink: 1,
     flexBasis: 0,
-    marginLeft: 12,
-    marginRight: 8,
+    marginLeft: SoftUI.space.md,
+    marginRight: SoftUI.space.sm,
   },
   avisoRow: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#FFFFFF",
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: "#D8D6DC",
-    paddingHorizontal: 14,
-    paddingVertical: 14,
+    backgroundColor: SoftUI.card,
+    borderRadius: SoftUI.radius.cardSm,
+    paddingHorizontal: SoftUI.space.base,
+    paddingVertical: SoftUI.space.base,
     width: "100%",
+    ...softShadow,
   },
   avisoTitleRow: {
     flexDirection: "row",
     alignItems: "center",
   },
   avisoTitle: {
-    color: AuthUI.text,
-    fontSize: 14,
+    color: SoftUI.text,
+    fontSize: SoftUI.type.caption.size + 1,
     fontFamily: AuthUI.font.semibold,
     flexShrink: 1,
   },
   empty: {
-    paddingVertical: 28,
+    paddingVertical: SoftUI.space.xxl,
     alignItems: "center",
   },
   emptyText: {
-    color: AuthUI.textMuted,
-    fontSize: 14,
+    color: SoftUI.textSecondary,
+    fontSize: SoftUI.type.caption.size + 1,
     fontFamily: AuthUI.font.regular,
   },
 });

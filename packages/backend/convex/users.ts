@@ -1,6 +1,6 @@
 import { v } from "convex/values";
-import { query, mutation, action } from "./_generated/server";
-import { api } from "./_generated/api";
+import { query, mutation, action, internalMutation } from "./_generated/server";
+import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { authComponent, createAuth } from "./auth";
 import {
@@ -197,6 +197,137 @@ export const clearMyAvatar = mutation({
       imageS3Key: undefined,
       updatedAt: Date.now(),
     });
+  },
+});
+
+/**
+ * Anonimiza el perfil del usuario y corta su acceso, CONSERVANDO el historial
+ * del condominio (facturas, pagos, asambleas siguen atados a la unidad).
+ *
+ * Qué hace:
+ * - Perfil `users`: se anonimiza (nombre/correo/teléfono/documento/foto) y queda
+ *   `active: false` con `authId` vacío → ya no resuelve como usuario logueado.
+ *   NO se borra la fila para no romper las referencias del historial.
+ * - Membresías: se desactivan (no se borran) → la unidad conserva su historia.
+ * - Tokens push: se borran → deja de recibir notificaciones.
+ * - Avatar: se borra el archivo real de S3 / storage.
+ *
+ * El borrado REAL de la cuenta (identidad Better Auth) lo hace `deleteMyAccount`.
+ * Interno: lo invoca esa action pasando el authId ya resuelto.
+ */
+export const anonymizeUserRecords = internalMutation({
+  args: { authId: v.string() },
+  handler: async (ctx, args) => {
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_authId", (q) => q.eq("authId", args.authId))
+      .unique();
+    if (!user) return { email: null as string | null, done: false };
+
+    const now = Date.now();
+
+    // Membresías: desactivar, no borrar (conserva el historial de la unidad).
+    const memberships = await ctx.db
+      .query("memberships")
+      .withIndex("by_user", (q) => q.eq("userId", user._id))
+      .collect();
+    for (const m of memberships) {
+      if (m.isActive) {
+        await ctx.db.patch(m._id, { isActive: false, updatedAt: now });
+      }
+    }
+
+    // Tokens de notificaciones push: sí se borran.
+    const tokens = await ctx.db
+      .query("pushTokens")
+      .withIndex("by_user", (q) => q.eq("userId", user._id))
+      .collect();
+    for (const t of tokens) await ctx.db.delete(t._id);
+
+    // Avatar (S3 + storage legacy): se borra el archivo real.
+    const s3Key =
+      user.imageS3Key?.trim() || s3KeyFromPublicUrl(user.image) || undefined;
+    if (s3Key) {
+      try {
+        await scheduleDeleteS3Keys(ctx, [s3Key]);
+      } catch {
+        /* no bloquear el borrado si falla la limpieza async del avatar */
+      }
+    }
+    if (user.imageStorageId) {
+      await ctx.storage.delete(user.imageStorageId).catch(() => {});
+    }
+
+    const email = user.email;
+
+    // Anonimiza los datos personales. El correo tumba debe ser ÚNICO: el índice
+    // by_email se consulta con .unique() en varios sitios y correos repetidos
+    // (p.ej. "") harían fallar esas consultas.
+    await ctx.db.patch(user._id, {
+      authId: undefined,
+      name: "Usuario eliminado",
+      email: `eliminado-${user._id}@cuenta-eliminada.invalid`,
+      emailVerified: false,
+      firstName: undefined,
+      lastName: undefined,
+      telefono: undefined,
+      tipoDocumento: undefined,
+      numeroDocumento: undefined,
+      image: undefined,
+      imageStorageId: undefined,
+      imageS3Key: undefined,
+      active: false,
+      updatedAt: now,
+    });
+
+    return { email, done: true };
+  },
+});
+
+/**
+ * Elimina la cuenta del usuario autenticado (Guideline 5.1.1 de Apple).
+ *
+ * 1) Anonimiza el perfil y corta el acceso (`anonymizeUserRecords`), dejando
+ *    intacto el historial del condominio (facturas/pagos atados a la unidad).
+ * 2) Elimina la identidad en Better Auth (sesiones + cuentas + usuario): esto es
+ *    lo que hace que la cuenta quede REALMENTE eliminada y la persona no pueda
+ *    volver a iniciar sesión — que es lo que exige Apple (desactivar no basta).
+ *
+ * Es irreversible: el admin tendría que crear una cuenta nueva.
+ */
+export const deleteMyAccount = action({
+  args: {},
+  handler: async (ctx): Promise<{ ok: true }> => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("No autenticado.");
+
+    const result: { email: string | null; done: boolean } =
+      await ctx.runMutation(internal.users.anonymizeUserRecords, {
+        authId: identity.subject,
+      });
+
+    const auth = createAuth(ctx);
+    const authCtx = await auth.$context;
+    const ia = authCtx.internalAdapter;
+
+    // La identidad de Better Auth: el subject del JWT es su user id. Como
+    // respaldo, se busca por email (patrón probado en authMigrate).
+    const deleteAuthUser = async (authUserId: string) => {
+      await ia.deleteUserSessions(authUserId);
+      await ia.deleteAccounts(authUserId);
+      await ia.deleteUser(authUserId);
+    };
+
+    try {
+      await deleteAuthUser(identity.subject);
+    } catch {
+      if (result.email) {
+        const found = await ia.findUserByEmail(result.email);
+        if (found) await deleteAuthUser(found.user.id);
+      }
+    }
+
+    return { ok: true as const };
   },
 });
 

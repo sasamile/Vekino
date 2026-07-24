@@ -9,8 +9,8 @@ import {
   TextInput,
   Alert,
   Linking,
+  StyleSheet,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import { useQuery, useMutation, useAction, Authenticated } from "convex/react";
@@ -19,7 +19,7 @@ import type { Id } from "@vekino/backend/dataModel";
 import { getDocumentPicker } from "@/lib/document-picker";
 import { useCondominio } from "@/context/condominio-context";
 import { NoCondominioScreen } from "@/components/ui/no-condominio";
-import { CondominioHeader } from "@/components/ui/condominio-header";
+import { SoftHomeHeader } from "@/components/ui/soft-home-header";
 import { BottomSheet } from "@/components/ui/bottom-sheet";
 import {
   ScreenBackground,
@@ -31,24 +31,38 @@ import {
 } from "@/components/ui/glass";
 import { Tap } from "@/components/ui/tap";
 import { fmtFechaCorta, initials } from "@/lib/utils";
-import { C } from "@/lib/theme";
 import { AuthUI } from "@/lib/auth-ui";
+import { SoftUI, softShadow } from "@/lib/soft-ui";
 
 const PRIORIDAD_TONE: Record<string, "red" | "yellow" | "neutral"> = {
-  urgente: "red", importante: "yellow", normal: "neutral",
+  urgente: "red",
+  importante: "yellow",
+  normal: "neutral",
 };
 const PRIORIDAD_LABEL: Record<string, string> = {
-  urgente: "Urgente", importante: "Importante", normal: "Normal",
+  urgente: "Urgente",
+  importante: "Importante",
+  normal: "Normal",
 };
 const AUDIENCIA_LABEL: Record<string, string> = {
-  todos: "Todos", propietario: "Propietarios", arrendatario: "Arrendatarios",
-  residente: "Residentes", junta_directiva: "Junta directiva",
+  todos: "Todos",
+  propietario: "Propietarios",
+  arrendatario: "Arrendatarios",
+  residente: "Residentes",
+  junta_directiva: "Junta directiva",
 };
 
-type Audiencia = "todos" | "propietario" | "arrendatario" | "residente" | "junta_directiva";
+type Audiencia =
+  | "todos"
+  | "propietario"
+  | "arrendatario"
+  | "residente"
+  | "junta_directiva";
 type Prioridad = "normal" | "importante" | "urgente";
 
-type ComunicadoRow = NonNullable<ReturnType<typeof useQuery<typeof api.comunicados.listByCondominio>>>[number];
+type ComunicadoRow = NonNullable<
+  ReturnType<typeof useQuery<typeof api.comunicados.listByCondominio>>
+>[number];
 
 type PendingFile = {
   key: string;
@@ -58,6 +72,7 @@ type PendingFile = {
 };
 
 const MAX_ARCHIVOS = 5;
+
 export default function ComunicadosScreen() {
   return (
     <View style={{ flex: 1 }}>
@@ -71,8 +86,13 @@ export default function ComunicadosScreen() {
 }
 
 function ComunicadosContent() {
-  const { condominioId, isSuperadmin, canManage } = useCondominio();
-  const comunicados = useQuery(api.comunicados.listByCondominio, condominioId ? { condominioId } : "skip");
+  const me = useQuery(api.users.me);
+  const { condominioId, condominioName, isSuperadmin, canManage } =
+    useCondominio();
+  const comunicados = useQuery(
+    api.comunicados.listByCondominio,
+    condominioId ? { condominioId } : "skip",
+  );
   const [selected, setSelected] = useState<ComunicadoRow | null>(null);
   const [lightbox, setLightbox] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
@@ -82,63 +102,75 @@ function ComunicadosContent() {
   const fijados = (comunicados ?? []).filter((c) => c.fijado);
   const normales = (comunicados ?? []).filter((c) => !c.fijado);
 
+  const hora = new Date().getHours();
+  const saludo =
+    hora < 12 ? "Buenos días" : hora < 18 ? "Buenas tardes" : "Buenas noches";
+
   return (
-    <SafeAreaView style={{ flex: 1 }} edges={["top"]}>
+    <View style={{ flex: 1 }}>
+      <SoftHomeHeader
+        saludo={saludo}
+        displayName={me?.name ?? "Residente"}
+        avatarUrl={me?.image}
+        badgeLabel={condominioName ?? "Avisos"}
+      />
       <ScrollView
         style={{ flex: 1 }}
-        contentContainerStyle={{ paddingBottom: 130, paddingHorizontal: 16 }}
+        contentContainerStyle={styles.scroll}
         showsVerticalScrollIndicator={false}
       >
-        <CondominioHeader
-          condominioId={condominioId}
-          title="Avisos"
-          right={
-            canManage ? (
-              <View
-                style={{
-                  flexDirection: "row",
-                  alignItems: "center",
-                  gap: 4,
-                  backgroundColor: "#0E0E0F",
-                  paddingHorizontal: 12,
-                  paddingVertical: 9,
-                  borderRadius: 12,
-                }}
-                onTouchEnd={() => setShowForm(true)}
-              >
-                <Ionicons name="add" size={16} color="#fff" />
-                <Text style={{ color: "#fff", fontSize: 13, fontWeight: "700" }}>Nuevo</Text>
-              </View>
-            ) : undefined
-          }
-        />
+        {canManage ? (
+          <View style={styles.toolbar}>
+            <Tap style={styles.nuevaBtn} onPress={() => setShowForm(true)}>
+              <Ionicons name="add" size={18} color={SoftUI.white} />
+              <Text style={styles.nuevaBtnText}>Nuevo</Text>
+            </Tap>
+          </View>
+        ) : null}
 
         {comunicados === undefined ? (
-          <ActivityIndicator color={C.textSoft} style={{ marginTop: 40 }} />
+          <ActivityIndicator
+            color={SoftUI.blue}
+            style={{ marginTop: SoftUI.space.xxl }}
+          />
         ) : (comunicados ?? []).length === 0 ? (
-          <GlassCard style={{ padding: 48, alignItems: "center", gap: 12, marginTop: 20 }}>
-            <Ionicons name="megaphone-outline" size={36} color={C.textMuted} />
-            <Text style={{ color: C.textMuted, fontSize: 15, textAlign: "center" }}>
-              Sin comunicados publicados
-            </Text>
+          <GlassCard style={styles.emptyCard}>
+            <Ionicons
+              name="megaphone-outline"
+              size={32}
+              color={SoftUI.textSecondary}
+            />
+            <Text style={styles.emptyText}>Sin comunicados publicados</Text>
           </GlassCard>
         ) : (
-          <View style={{ gap: 24 }}>
+          <View style={{ gap: SoftUI.space.xl }}>
             {fijados.length > 0 && (
               <GlassSection title="Fijados">
-                <View style={{ gap: 10 }}>
+                <View style={{ gap: SoftUI.space.md }}>
                   {fijados.map((c) => (
-                    <ComunicadoCard key={c._id} c={c} onPress={() => setSelected(c)} onImagePress={setLightbox} />
+                    <ComunicadoCard
+                      key={c._id}
+                      c={c}
+                      onPress={() => setSelected(c)}
+                      onImagePress={setLightbox}
+                    />
                   ))}
                 </View>
               </GlassSection>
             )}
 
             {normales.length > 0 && (
-              <GlassSection title={`${normales.length} comunicado${normales.length === 1 ? "" : "s"}`}>
-                <View style={{ gap: 10 }}>
+              <GlassSection
+                title={`${normales.length} comunicado${normales.length === 1 ? "" : "s"}`}
+              >
+                <View style={{ gap: SoftUI.space.md }}>
                   {normales.map((c) => (
-                    <ComunicadoCard key={c._id} c={c} onPress={() => setSelected(c)} onImagePress={setLightbox} />
+                    <ComunicadoCard
+                      key={c._id}
+                      c={c}
+                      onPress={() => setSelected(c)}
+                      onImagePress={setLightbox}
+                    />
                   ))}
                 </View>
               </GlassSection>
@@ -147,34 +179,60 @@ function ComunicadosContent() {
         )}
       </ScrollView>
 
-      {/* Detalle */}
-      <BottomSheet visible={selected !== null} onClose={() => setSelected(null)} maxHeight="85%">
+      <BottomSheet
+        visible={selected !== null}
+        onClose={() => setSelected(null)}
+        maxHeight="85%"
+      >
         {selected && (
-          <ScrollView contentContainerStyle={{ padding: 24, paddingBottom: 48 }}>
-            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>
+          <ScrollView
+            contentContainerStyle={{
+              padding: SoftUI.padH,
+              paddingBottom: SoftUI.space.xxl,
+            }}
+          >
+            <View
+              style={{
+                flexDirection: "row",
+                flexWrap: "wrap",
+                gap: SoftUI.space.sm,
+                marginBottom: SoftUI.space.md,
+              }}
+            >
               {selected.fijado && <GlassBadge label="Fijado" tone="orange" />}
               {selected.prioridad !== "normal" && (
-                <GlassBadge label={PRIORIDAD_LABEL[selected.prioridad]} tone={PRIORIDAD_TONE[selected.prioridad]} />
+                <GlassBadge
+                  label={PRIORIDAD_LABEL[selected.prioridad]}
+                  tone={PRIORIDAD_TONE[selected.prioridad]}
+                />
               )}
-              <GlassBadge label={AUDIENCIA_LABEL[selected.audiencia] ?? selected.audiencia} tone="blue" />
+              <GlassBadge
+                label={
+                  AUDIENCIA_LABEL[selected.audiencia] ?? selected.audiencia
+                }
+                tone="blue"
+              />
             </View>
-            <Text style={{ color: C.text, fontSize: 20, fontWeight: "700", marginBottom: 10, letterSpacing: -0.4 }}>
-              {selected.titulo}
-            </Text>
-            <Text style={{ color: C.textSoft, fontSize: 15, lineHeight: 22, marginBottom: 20 }}>
-              {selected.cuerpo}
-            </Text>
+            <Text style={styles.detailTitle}>{selected.titulo}</Text>
+            <Text style={styles.detailBody}>{selected.cuerpo}</Text>
             {(selected.archivosItems ?? []).length > 0 && (
-              <View style={{ gap: 10, marginBottom: 20 }}>
+              <View style={{ gap: SoftUI.space.md, marginBottom: SoftUI.space.lg }}>
                 <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                  <View style={{ flexDirection: "row", gap: 10 }}>
+                  <View style={{ flexDirection: "row", gap: SoftUI.space.md }}>
                     {(selected.archivosItems ?? [])
                       .filter((a) => a.mimeType.startsWith("image/"))
                       .map((a, i) => (
-                        <Pressable key={`img-${i}`} onPress={() => setLightbox(a.url)}>
+                        <Pressable
+                          key={`img-${i}`}
+                          onPress={() => setLightbox(a.url)}
+                        >
                           <Image
                             source={{ uri: a.url }}
-                            style={{ width: 160, height: 120, borderRadius: 14 }}
+                            style={{
+                              width: 160,
+                              height: 120,
+                              borderRadius: SoftUI.radius.cardSm,
+                            }}
                           />
                         </Pressable>
                       ))}
@@ -185,33 +243,47 @@ function ComunicadosContent() {
                   .map((a, i) => (
                     <Tap
                       key={`doc-${i}`}
-                      style={styles_attachRow}
+                      style={styles.attachRow}
                       onPress={() => {
                         if (a.url) Linking.openURL(a.url);
                       }}
                     >
-                      <View style={styles_attachIcon}>
+                      <View style={styles.attachIcon}>
                         <Ionicons
-                          name={a.mimeType.includes("pdf") ? "document-text" : "attach"}
+                          name={
+                            a.mimeType.includes("pdf")
+                              ? "document-text"
+                              : "attach"
+                          }
                           size={18}
-                          color={AuthUI.text}
+                          color={SoftUI.blue}
                         />
                       </View>
-                      <Text style={styles_attachName} numberOfLines={1}>
+                      <Text style={styles.attachName} numberOfLines={1}>
                         {a.nombre || "Archivo"}
                       </Text>
-                      <Ionicons name="open-outline" size={16} color={AuthUI.textMuted} />
+                      <Ionicons
+                        name="open-outline"
+                        size={16}
+                        color={SoftUI.textSecondary}
+                      />
                     </Tap>
                   ))}
               </View>
             )}
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-              <View style={{ width: 28, height: 28, borderRadius: 14, backgroundColor: C.bgSubtle, alignItems: "center", justifyContent: "center" }}>
-                <Text style={{ color: C.textSoft, fontSize: 10, fontWeight: "700" }}>
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                gap: SoftUI.space.sm,
+              }}
+            >
+              <View style={styles.authorAvatar}>
+                <Text style={styles.authorInitials}>
                   {initials(selected.autorNombre)}
                 </Text>
               </View>
-              <Text style={{ color: C.textMuted, fontSize: 13 }}>
+              <Text style={styles.metaText}>
                 {selected.autorNombre} · {fmtFechaCorta(selected.createdAt)}
               </Text>
             </View>
@@ -219,20 +291,39 @@ function ComunicadosContent() {
         )}
       </BottomSheet>
 
-      {/* Crear aviso */}
       {condominioId && (
-        <CrearAvisoSheet visible={showForm} onClose={() => setShowForm(false)} condominioId={condominioId} />
+        <CrearAvisoSheet
+          visible={showForm}
+          onClose={() => setShowForm(false)}
+          condominioId={condominioId}
+        />
       )}
 
-      {/* Lightbox */}
-      <BottomSheet visible={lightbox !== null} onClose={() => setLightbox(null)} maxHeight="80%">
+      <BottomSheet
+        visible={lightbox !== null}
+        onClose={() => setLightbox(null)}
+        maxHeight="80%"
+      >
         {lightbox && (
-          <View style={{ padding: 16, paddingBottom: 40 }}>
-            <Image source={{ uri: lightbox }} style={{ width: "100%", height: 360, borderRadius: 16 }} resizeMode="contain" />
+          <View
+            style={{
+              padding: SoftUI.padH,
+              paddingBottom: SoftUI.space.xxl,
+            }}
+          >
+            <Image
+              source={{ uri: lightbox }}
+              style={{
+                width: "100%",
+                height: 360,
+                borderRadius: SoftUI.radius.cardSm,
+              }}
+              resizeMode="contain"
+            />
           </View>
         )}
       </BottomSheet>
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -277,7 +368,10 @@ function CrearAvisoSheet({
     }
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!perm.granted) {
-      Alert.alert("Permiso necesario", "Activa el acceso a fotos para adjuntar imágenes.");
+      Alert.alert(
+        "Permiso necesario",
+        "Activa el acceso a fotos para adjuntar imágenes.",
+      );
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -382,66 +476,89 @@ function CrearAvisoSheet({
   return (
     <BottomSheet visible={visible} onClose={onClose} maxHeight="92%">
       <ScrollView
-        contentContainerStyle={{ padding: 24, paddingBottom: 36 }}
+        contentContainerStyle={{
+          padding: SoftUI.padH,
+          paddingBottom: SoftUI.space.xxl,
+        }}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        <Text style={{ color: C.text, fontSize: 20, fontWeight: "700", marginBottom: 20, letterSpacing: -0.4 }}>
-          Nuevo aviso
-        </Text>
+        <Text style={styles.sheetTitle}>Nuevo aviso</Text>
 
-        <Text style={styles_label}>Título</Text>
+        <Text style={styles.label}>Título</Text>
         <TextInput
           value={titulo}
           onChangeText={setTitulo}
           placeholder="Corte de agua programado"
-          placeholderTextColor={C.textMuted}
-          style={inputStyle}
+          placeholderTextColor={SoftUI.textDisabled}
+          style={styles.input}
         />
 
-        <Text style={[styles_label, { marginTop: 14 }]}>Mensaje</Text>
+        <Text style={[styles.label, { marginTop: SoftUI.space.base }]}>
+          Mensaje
+        </Text>
         <TextInput
           value={cuerpo}
           onChangeText={setCuerpo}
           placeholder="Escribe el comunicado…"
-          placeholderTextColor={C.textMuted}
+          placeholderTextColor={SoftUI.textDisabled}
           multiline
-          style={[inputStyle, { minHeight: 100, textAlignVertical: "top" }]}
+          style={[styles.input, { minHeight: 100, textAlignVertical: "top" }]}
         />
 
-        <Text style={[styles_label, { marginTop: 14 }]}>Adjuntos</Text>
-        <Text style={{ color: C.textMuted, fontSize: 12, marginBottom: 10 }}>
+        <Text style={[styles.label, { marginTop: SoftUI.space.base }]}>
+          Adjuntos
+        </Text>
+        <Text style={styles.hintMuted}>
           Imagen o PDF (máx. {MAX_ARCHIVOS})
         </Text>
-        <View style={{ flexDirection: "row", gap: 10, marginBottom: 12 }}>
-          <Tap style={styles_attachBtn} onPress={pickImage} disabled={saving}>
-            <Ionicons name="image-outline" size={18} color={AuthUI.text} />
-            <Text style={styles_attachBtnText}>Foto</Text>
+        <View
+          style={{
+            flexDirection: "row",
+            gap: SoftUI.space.sm,
+            marginBottom: SoftUI.space.md,
+          }}
+        >
+          <Tap style={styles.attachBtn} onPress={pickImage} disabled={saving}>
+            <Ionicons name="image-outline" size={18} color={SoftUI.blue} />
+            <Text style={styles.attachBtnText}>Foto</Text>
           </Tap>
-          <Tap style={styles_attachBtn} onPress={pickPdf} disabled={saving}>
-            <Ionicons name="document-text-outline" size={18} color={AuthUI.text} />
-            <Text style={styles_attachBtnText}>PDF</Text>
+          <Tap style={styles.attachBtn} onPress={pickPdf} disabled={saving}>
+            <Ionicons
+              name="document-text-outline"
+              size={18}
+              color={SoftUI.blue}
+            />
+            <Text style={styles.attachBtnText}>PDF</Text>
           </Tap>
         </View>
 
         {archivos.length > 0 ? (
-          <View style={{ gap: 8, marginBottom: 8 }}>
+          <View style={{ gap: SoftUI.space.sm, marginBottom: SoftUI.space.sm }}>
             {archivos.map((a) => {
               const isImage = a.mimeType.startsWith("image/");
               return (
-                <View key={a.key} style={styles_attachRow}>
+                <View key={a.key} style={styles.attachRow}>
                   {isImage ? (
-                    <Image source={{ uri: a.uri }} style={styles_thumb} />
+                    <Image source={{ uri: a.uri }} style={styles.thumb} />
                   ) : (
-                    <View style={styles_attachIcon}>
-                      <Ionicons name="document-text" size={18} color={AuthUI.text} />
+                    <View style={styles.attachIcon}>
+                      <Ionicons
+                        name="document-text"
+                        size={18}
+                        color={SoftUI.blue}
+                      />
                     </View>
                   )}
-                  <Text style={styles_attachName} numberOfLines={1}>
+                  <Text style={styles.attachName} numberOfLines={1}>
                     {a.nombre}
                   </Text>
                   <Tap onPress={() => removeArchivo(a.key)} haptic={false}>
-                    <Ionicons name="close-circle" size={22} color={AuthUI.textMuted} />
+                    <Ionicons
+                      name="close-circle"
+                      size={22}
+                      color={SoftUI.textSecondary}
+                    />
                   </Tap>
                 </View>
               );
@@ -449,13 +566,27 @@ function CrearAvisoSheet({
           </View>
         ) : null}
 
-        <Text style={[styles_label, { marginTop: 14 }]}>Audiencia</Text>
-        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+        <Text style={[styles.label, { marginTop: SoftUI.space.base }]}>
+          Audiencia
+        </Text>
+        <View
+          style={{
+            flexDirection: "row",
+            flexWrap: "wrap",
+            gap: SoftUI.space.sm,
+          }}
+        >
           {(Object.keys(AUDIENCIA_LABEL) as Audiencia[]).map((a) => {
             const active = audiencia === a;
             return (
-              <Pressable key={a} onPress={() => setAudiencia(a)} style={chip(active)}>
-                <Text style={{ color: active ? "#fff" : C.textSoft, fontSize: 13, fontWeight: "600" }}>
+              <Pressable
+                key={a}
+                onPress={() => setAudiencia(a)}
+                style={[styles.chip, active && styles.chipActive]}
+              >
+                <Text
+                  style={[styles.chipText, active && styles.chipTextActive]}
+                >
                   {AUDIENCIA_LABEL[a]}
                 </Text>
               </Pressable>
@@ -463,17 +594,25 @@ function CrearAvisoSheet({
           })}
         </View>
 
-        <Text style={[styles_label, { marginTop: 14 }]}>Prioridad</Text>
-        <View style={{ flexDirection: "row", gap: 8 }}>
+        <Text style={[styles.label, { marginTop: SoftUI.space.base }]}>
+          Prioridad
+        </Text>
+        <View style={{ flexDirection: "row", gap: SoftUI.space.sm }}>
           {(["normal", "importante", "urgente"] as Prioridad[]).map((p) => {
             const active = prioridad === p;
             return (
               <Pressable
                 key={p}
                 onPress={() => setPrioridad(p)}
-                style={[chip(active), { flex: 1, alignItems: "center" }]}
+                style={[
+                  styles.chip,
+                  { flex: 1, alignItems: "center" },
+                  active && styles.chipActive,
+                ]}
               >
-                <Text style={{ color: active ? "#fff" : C.textSoft, fontSize: 13, fontWeight: "600" }}>
+                <Text
+                  style={[styles.chipText, active && styles.chipTextActive]}
+                >
                   {PRIORIDAD_LABEL[p]}
                 </Text>
               </Pressable>
@@ -483,35 +622,48 @@ function CrearAvisoSheet({
 
         <Pressable
           onPress={() => setFijado((f) => !f)}
-          style={{ flexDirection: "row", alignItems: "center", gap: 10, marginTop: 16 }}
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            gap: SoftUI.space.md,
+            marginTop: SoftUI.space.base,
+          }}
         >
           <View
-            style={{
-              width: 24,
-              height: 24,
-              borderRadius: 7,
-              borderWidth: 1.5,
-              borderColor: fijado ? "#0E0E0F" : C.border,
-              backgroundColor: fijado ? "#0E0E0F" : C.card,
-              alignItems: "center",
-              justifyContent: "center",
-            }}
+            style={[
+              styles.checkbox,
+              fijado && {
+                backgroundColor: SoftUI.blue,
+                borderColor: SoftUI.blue,
+              },
+            ]}
           >
-            {fijado && <Ionicons name="checkmark" size={16} color="#fff" />}
+            {fijado && (
+              <Ionicons name="checkmark" size={16} color={SoftUI.white} />
+            )}
           </View>
-          <Text style={{ color: C.text, fontSize: 14, fontWeight: "500" }}>
-            Fijar en la parte superior
-          </Text>
+          <Text style={styles.checkboxLabel}>Fijar en la parte superior</Text>
         </Pressable>
 
         {error && (
-          <View style={{ backgroundColor: C.dangerSoft, borderRadius: 12, padding: 12, marginTop: 16 }}>
-            <Text style={{ color: C.danger, fontSize: 13 }}>{error}</Text>
+          <View style={styles.errorBox}>
+            <Text style={styles.errorText}>{error}</Text>
           </View>
         )}
 
-        <View style={{ flexDirection: "row", gap: 12, marginTop: 20 }}>
-          <GlassButton label="Cancelar" variant="secondary" onPress={onClose} style={{ flex: 1 }} />
+        <View
+          style={{
+            flexDirection: "row",
+            gap: SoftUI.space.md,
+            marginTop: SoftUI.space.lg,
+          }}
+        >
+          <GlassButton
+            label="Cancelar"
+            variant="secondary"
+            onPress={onClose}
+            style={{ flex: 1 }}
+          />
           <GlassButton
             label={saving ? "Publicando…" : "Publicar"}
             variant="primary"
@@ -534,53 +686,115 @@ function ComunicadoCard({
   onPress: () => void;
   onImagePress: (url: string) => void;
 }) {
-  const primerImagen = (c.archivosItems ?? []).find((a) => a.mimeType.startsWith("image/"));
-  const pdfCount = (c.archivosItems ?? []).filter((a) => a.mimeType.includes("pdf")).length;
+  const primerImagen = (c.archivosItems ?? []).find((a) =>
+    a.mimeType.startsWith("image/"),
+  );
+  const pdfCount = (c.archivosItems ?? []).filter((a) =>
+    a.mimeType.includes("pdf"),
+  ).length;
   const hasUrgent = c.prioridad === "urgente";
 
   return (
     <GlassPressable onPress={onPress}>
       <GlassCard
         style={{
-          padding: 16,
-          borderLeftWidth: hasUrgent ? 3 : c.prioridad === "importante" ? 3 : 0,
-          borderLeftColor: hasUrgent ? C.danger : c.prioridad === "importante" ? C.warning : "transparent",
+          padding: SoftUI.space.base,
+          borderLeftWidth:
+            hasUrgent || c.prioridad === "importante" ? 3 : 0,
+          borderLeftColor: hasUrgent
+            ? SoftUI.danger
+            : c.prioridad === "importante"
+              ? SoftUI.warning
+              : "transparent",
         }}
       >
-        <View style={{ flexDirection: "row", gap: 12 }}>
-          <View style={{ flex: 1, gap: 6 }}>
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-              {c.fijado && <Ionicons name="pin" size={12} color={C.brand} />}
-              <Text style={{ color: C.text, fontSize: 15, fontWeight: "600", flex: 1 }} numberOfLines={1}>
+        <View style={{ flexDirection: "row", gap: SoftUI.space.md }}>
+          <View
+            style={[
+              styles.cardIcon,
+              hasUrgent && { backgroundColor: SoftUI.dangerSoft },
+              c.prioridad === "importante" && {
+                backgroundColor: SoftUI.warningSoft,
+              },
+            ]}
+          >
+            <Ionicons
+              name={c.fijado ? "pin" : "megaphone-outline"}
+              size={20}
+              color={
+                hasUrgent
+                  ? SoftUI.danger
+                  : c.prioridad === "importante"
+                    ? "#B8860B"
+                    : SoftUI.blue
+              }
+            />
+          </View>
+          <View style={{ flex: 1, gap: SoftUI.space.xs, minWidth: 0 }}>
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                gap: SoftUI.space.sm,
+              }}
+            >
+              <Text style={styles.cardTitle} numberOfLines={1}>
                 {c.titulo}
               </Text>
               {c.prioridad !== "normal" && (
-                <GlassBadge label={PRIORIDAD_LABEL[c.prioridad]} tone={PRIORIDAD_TONE[c.prioridad]} />
+                <GlassBadge
+                  label={PRIORIDAD_LABEL[c.prioridad]}
+                  tone={PRIORIDAD_TONE[c.prioridad]}
+                />
               )}
             </View>
-            <Text style={{ color: C.textSoft, fontSize: 13, lineHeight: 18 }} numberOfLines={2}>
+            <Text style={styles.cardBody} numberOfLines={2}>
               {c.cuerpo}
             </Text>
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-              <View style={{ width: 20, height: 20, borderRadius: 10, backgroundColor: C.bgSubtle, alignItems: "center", justifyContent: "center" }}>
-                <Text style={{ color: C.textSoft, fontSize: 8, fontWeight: "700" }}>
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                gap: SoftUI.space.sm,
+              }}
+            >
+              <View style={styles.miniAvatar}>
+                <Text style={styles.miniInitials}>
                   {initials(c.autorNombre)}
                 </Text>
               </View>
-              <Text style={{ color: C.textMuted, fontSize: 11 }}>
+              <Text style={styles.metaText}>
                 {c.autorNombre} · {fmtFechaCorta(c.createdAt)}
               </Text>
               {pdfCount > 0 ? (
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 3, marginLeft: 4 }}>
-                  <Ionicons name="document-attach-outline" size={12} color={C.textMuted} />
-                  <Text style={{ color: C.textMuted, fontSize: 11 }}>{pdfCount}</Text>
+                <View
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    gap: 3,
+                    marginLeft: SoftUI.space.xs,
+                  }}
+                >
+                  <Ionicons
+                    name="document-attach-outline"
+                    size={12}
+                    color={SoftUI.textSecondary}
+                  />
+                  <Text style={styles.metaText}>{pdfCount}</Text>
                 </View>
               ) : null}
             </View>
           </View>
           {primerImagen ? (
             <Pressable onPress={() => onImagePress(primerImagen.url)}>
-              <Image source={{ uri: primerImagen.url }} style={{ width: 68, height: 68, borderRadius: 12 }} />
+              <Image
+                source={{ uri: primerImagen.url }}
+                style={{
+                  width: 68,
+                  height: 68,
+                  borderRadius: SoftUI.radius.icon,
+                }}
+              />
             </Pressable>
           ) : null}
         </View>
@@ -589,72 +803,225 @@ function ComunicadoCard({
   );
 }
 
-const styles_label = { color: C.text, fontSize: 13, fontWeight: "500" as const, marginBottom: 8 };
-const inputStyle = {
-  borderWidth: 1,
-  borderColor: C.border,
-  backgroundColor: C.card,
-  borderRadius: 14,
-  paddingHorizontal: 14,
-  paddingVertical: 12,
-  fontSize: 15,
-  color: C.text,
-};
-const styles_attachBtn = {
-  flex: 1,
-  flexDirection: "row" as const,
-  alignItems: "center" as const,
-  justifyContent: "center" as const,
-  gap: 8,
-  paddingVertical: 12,
-  borderRadius: 14,
-  borderWidth: 1,
-  borderColor: C.border,
-  backgroundColor: "#FFFFFF",
-};
-const styles_attachBtnText = {
-  color: AuthUI.text,
-  fontSize: 14,
-  fontFamily: AuthUI.font.semibold,
-};
-const styles_attachRow = {
-  flexDirection: "row" as const,
-  alignItems: "center" as const,
-  gap: 10,
-  paddingVertical: 10,
-  paddingHorizontal: 12,
-  borderRadius: 14,
-  borderWidth: 1,
-  borderColor: C.border,
-  backgroundColor: "#FFFFFF",
-};
-const styles_attachIcon = {
-  width: 40,
-  height: 40,
-  borderRadius: 10,
-  backgroundColor: "rgba(14,14,15,0.06)",
-  alignItems: "center" as const,
-  justifyContent: "center" as const,
-};
-const styles_thumb = {
-  width: 40,
-  height: 40,
-  borderRadius: 10,
-  backgroundColor: C.bgSubtle,
-};
-const styles_attachName = {
-  flex: 1,
-  color: AuthUI.text,
-  fontSize: 13,
-  fontFamily: AuthUI.font.medium,
-};
-function chip(active: boolean) {
-  return {
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: active ? C.text : C.border,
-    backgroundColor: active ? C.text : C.card,
-  };
-}
+const styles = StyleSheet.create({
+  scroll: {
+    paddingBottom: 150,
+    paddingHorizontal: SoftUI.padH,
+    paddingTop: SoftUI.space.md,
+  },
+  toolbar: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    marginBottom: SoftUI.space.base,
+  },
+  nuevaBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: SoftUI.space.xs,
+    backgroundColor: SoftUI.blue,
+    paddingHorizontal: SoftUI.space.base,
+    paddingVertical: SoftUI.space.sm + 2,
+    borderRadius: SoftUI.radius.chip,
+    minHeight: SoftUI.touch,
+  },
+  nuevaBtnText: {
+    color: SoftUI.white,
+    fontSize: SoftUI.type.chip.size,
+    fontFamily: AuthUI.font.semibold,
+  },
+  emptyCard: {
+    padding: SoftUI.space.xxl,
+    alignItems: "center",
+    gap: SoftUI.space.md,
+    marginTop: SoftUI.space.sm,
+  },
+  emptyText: {
+    color: SoftUI.textSecondary,
+    fontSize: SoftUI.type.caption.size + 1,
+    fontFamily: AuthUI.font.regular,
+    textAlign: "center",
+  },
+  detailTitle: {
+    color: SoftUI.text,
+    fontSize: SoftUI.type.section.size,
+    lineHeight: SoftUI.type.section.line,
+    fontFamily: AuthUI.font.bold,
+    marginBottom: SoftUI.space.md,
+  },
+  detailBody: {
+    color: SoftUI.textSecondary,
+    fontSize: SoftUI.type.body.size,
+    lineHeight: SoftUI.type.body.line,
+    fontFamily: AuthUI.font.regular,
+    marginBottom: SoftUI.space.lg,
+  },
+  authorAvatar: {
+    width: 28,
+    height: 28,
+    borderRadius: SoftUI.radius.chip,
+    backgroundColor: SoftUI.infoSoft,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  authorInitials: {
+    color: SoftUI.blue,
+    fontSize: 10,
+    fontFamily: AuthUI.font.bold,
+  },
+  metaText: {
+    color: SoftUI.textSecondary,
+    fontSize: SoftUI.type.chip.size - 1,
+    fontFamily: AuthUI.font.regular,
+  },
+  sheetTitle: {
+    color: SoftUI.text,
+    fontSize: SoftUI.type.section.size,
+    fontFamily: AuthUI.font.bold,
+    marginBottom: SoftUI.space.base,
+  },
+  label: {
+    color: SoftUI.text,
+    fontSize: SoftUI.type.caption.size,
+    fontFamily: AuthUI.font.semibold,
+    marginBottom: SoftUI.space.sm,
+  },
+  hintMuted: {
+    color: SoftUI.textSecondary,
+    fontSize: SoftUI.type.chip.size,
+    fontFamily: AuthUI.font.regular,
+    marginBottom: SoftUI.space.md,
+  },
+  input: {
+    backgroundColor: SoftUI.field,
+    borderRadius: SoftUI.radius.field,
+    paddingHorizontal: SoftUI.space.base,
+    paddingVertical: SoftUI.space.md,
+    fontSize: SoftUI.type.body.size,
+    color: SoftUI.text,
+    fontFamily: AuthUI.font.regular,
+    minHeight: SoftUI.fieldH,
+  },
+  attachBtn: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: SoftUI.space.sm,
+    paddingVertical: SoftUI.space.md,
+    borderRadius: SoftUI.radius.button,
+    backgroundColor: SoftUI.card,
+    ...softShadow,
+  },
+  attachBtnText: {
+    color: SoftUI.text,
+    fontSize: SoftUI.type.caption.size + 1,
+    fontFamily: AuthUI.font.semibold,
+  },
+  attachRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: SoftUI.space.md,
+    paddingVertical: SoftUI.space.md,
+    paddingHorizontal: SoftUI.space.md,
+    borderRadius: SoftUI.radius.cardSm,
+    backgroundColor: SoftUI.card,
+    ...softShadow,
+  },
+  attachIcon: {
+    width: SoftUI.iconBtn - 8,
+    height: SoftUI.iconBtn - 8,
+    borderRadius: SoftUI.radius.icon,
+    backgroundColor: SoftUI.infoSoft,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  thumb: {
+    width: SoftUI.iconBtn - 8,
+    height: SoftUI.iconBtn - 8,
+    borderRadius: SoftUI.radius.icon,
+    backgroundColor: SoftUI.bgSecondary,
+  },
+  attachName: {
+    flex: 1,
+    color: SoftUI.text,
+    fontSize: SoftUI.type.caption.size,
+    fontFamily: AuthUI.font.medium,
+  },
+  chip: {
+    paddingHorizontal: SoftUI.space.base,
+    paddingVertical: SoftUI.space.sm,
+    borderRadius: SoftUI.radius.chip,
+    backgroundColor: SoftUI.card,
+    ...softShadow,
+  },
+  chipActive: {
+    backgroundColor: SoftUI.blue,
+  },
+  chipText: {
+    color: SoftUI.textSecondary,
+    fontSize: SoftUI.type.chip.size,
+    fontFamily: AuthUI.font.semibold,
+  },
+  chipTextActive: {
+    color: SoftUI.white,
+  },
+  checkbox: {
+    width: 24,
+    height: 24,
+    borderRadius: SoftUI.radius.icon - 8,
+    borderWidth: 1.5,
+    borderColor: SoftUI.divider,
+    backgroundColor: SoftUI.card,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  checkboxLabel: {
+    color: SoftUI.text,
+    fontSize: SoftUI.type.body.size - 1,
+    fontFamily: AuthUI.font.medium,
+  },
+  errorBox: {
+    backgroundColor: SoftUI.dangerSoft,
+    borderRadius: SoftUI.radius.cardSm,
+    padding: SoftUI.space.md,
+    marginTop: SoftUI.space.base,
+  },
+  errorText: {
+    color: SoftUI.danger,
+    fontSize: SoftUI.type.caption.size,
+    fontFamily: AuthUI.font.medium,
+  },
+  cardIcon: {
+    width: SoftUI.iconBtn,
+    height: SoftUI.iconBtn,
+    borderRadius: SoftUI.radius.chip,
+    backgroundColor: SoftUI.infoSoft,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  cardTitle: {
+    color: SoftUI.text,
+    fontSize: SoftUI.type.body.size,
+    fontFamily: AuthUI.font.semibold,
+    flex: 1,
+  },
+  cardBody: {
+    color: SoftUI.textSecondary,
+    fontSize: SoftUI.type.caption.size,
+    lineHeight: SoftUI.type.caption.line,
+    fontFamily: AuthUI.font.regular,
+  },
+  miniAvatar: {
+    width: 20,
+    height: 20,
+    borderRadius: SoftUI.radius.chip,
+    backgroundColor: SoftUI.bgSecondary,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  miniInitials: {
+    color: SoftUI.textSecondary,
+    fontSize: 8,
+    fontFamily: AuthUI.font.bold,
+  },
+});

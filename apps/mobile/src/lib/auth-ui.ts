@@ -1,25 +1,28 @@
-/** Tokens UI auth — spec pastel minimal (referencia 390×844). */
-export const AuthUI = {
-  bg: "#FCFBFD",
-  text: "#0E0E0F",
-  textBody: "#111113",
-  textSecondary: "#67666B",
-  textMuted: "#747277",
-  placeholder: "#77767A",
-  border: "#D8D6DC",
-  purple: "#7819F1",
-  pink: "#F8E7EF",
-  lavender: "#ECE8FF",
-  sky: "#EDF4FF",
-  dotInactive: "#C9C7CC",
-  dotActive: "#111111",
-  white: "#FFFFFF",
+import { SoftUI } from "@/lib/soft-ui";
 
-  padH: 31,
-  radiusField: 12,
-  radiusBtn: 11,
-  fieldH: 54,
-  btnH: 57,
+/** Tokens UI globales — Soft UI sky-blue (referencia 390×844). */
+export const AuthUI = {
+  bg: SoftUI.bg,
+  text: SoftUI.text,
+  textBody: SoftUI.text,
+  textSecondary: SoftUI.textSecondary,
+  textMuted: SoftUI.textSecondary,
+  placeholder: SoftUI.textDisabled,
+  border: SoftUI.divider,
+  /** Accent primario (antes purple). */
+  purple: SoftUI.blue,
+  pink: SoftUI.infoSoft,
+  lavender: SoftUI.blueLight,
+  sky: SoftUI.infoSoft,
+  dotInactive: SoftUI.divider,
+  dotActive: SoftUI.blue,
+  white: SoftUI.white,
+
+  padH: SoftUI.padH,
+  radiusField: SoftUI.radius.field,
+  radiusBtn: SoftUI.radius.button,
+  fieldH: SoftUI.fieldH,
+  btnH: SoftUI.buttonH,
 
   font: {
     regular: "Poppins_400Regular",

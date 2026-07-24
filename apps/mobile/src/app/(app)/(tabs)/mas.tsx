@@ -1,13 +1,14 @@
 import { View, Text, ScrollView, StyleSheet } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { Authenticated } from "convex/react";
-import { ScreenBackground } from "@/components/ui/glass";
+import { Authenticated, useQuery } from "convex/react";
+import { api } from "@vekino/backend/api";
+import { ScreenBackground, GlassCard, GlassSection } from "@/components/ui/glass";
+import { SoftHomeHeader } from "@/components/ui/soft-home-header";
 import { useCondominio } from "@/context/condominio-context";
-import { CondominioHeader } from "@/components/ui/condominio-header";
 import { Tap } from "@/components/ui/tap";
 import { AuthUI } from "@/lib/auth-ui";
+import { SoftUI } from "@/lib/soft-ui";
 import { NoCondominioScreen } from "@/components/ui/no-condominio";
 
 type Ionicon = React.ComponentProps<typeof Ionicons>["name"];
@@ -73,12 +74,37 @@ export default function MasScreen() {
   );
 }
 
+function ModuloRow({ m, onPress }: { m: Modulo; onPress: () => void }) {
+  return (
+    <Tap onPress={onPress}>
+      <GlassCard style={styles.row}>
+        <View style={styles.icon}>
+          <Ionicons name={m.icon} size={22} color={SoftUI.blue} />
+        </View>
+        <View style={styles.body}>
+          <Text style={styles.label}>{m.label}</Text>
+          <Text style={styles.hint}>{m.hint}</Text>
+        </View>
+        <View style={styles.chevron}>
+          <Ionicons name="chevron-forward" size={18} color={SoftUI.blue} />
+        </View>
+      </GlassCard>
+    </Tap>
+  );
+}
+
 function MasContent() {
   const router = useRouter();
-  const { condominioId, canManage, isGuardia, isLoading } = useCondominio();
+  const me = useQuery(api.users.me);
+  const { condominioId, condominioName, canManage, isGuardia, isLoading } =
+    useCondominio();
 
   if (isLoading) return <View style={{ flex: 1 }} />;
   if (!condominioId) return <NoCondominioScreen />;
+
+  const hora = new Date().getHours();
+  const saludo =
+    hora < 12 ? "Buenos días" : hora < 18 ? "Buenas tardes" : "Buenas noches";
 
   if (isGuardia) {
     const items: Modulo[] = [
@@ -119,61 +145,50 @@ function MasContent() {
         route: "/(app)/guardia/avisos",
       },
     ];
+
     return (
-      <SafeAreaView style={{ flex: 1 }} edges={["top"]}>
+      <View style={{ flex: 1 }}>
+        <SoftHomeHeader
+          saludo={saludo}
+          displayName={me?.name ?? "Guardia"}
+          avatarUrl={me?.image}
+          badgeLabel={condominioName ?? "Más"}
+        />
         <ScrollView
           style={{ flex: 1 }}
           contentContainerStyle={styles.scroll}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
         >
-          <CondominioHeader condominioId={condominioId} title="Más" />
-          <Text style={styles.subtitle}>Módulos de portería</Text>
-          <View style={styles.group}>
-            <Text style={styles.groupTitle}>Operación</Text>
+          <GlassSection title="Operación">
             <View style={styles.listGap}>
               {items.map((m) => (
-                <Tap
+                <ModuloRow
                   key={m.route}
-                  style={styles.row}
+                  m={m}
                   onPress={() => router.push(m.route as never)}
-                >
-                  <View style={styles.icon}>
-                    <Ionicons name={m.icon} size={18} color={AuthUI.text} />
-                  </View>
-                  <View style={styles.body}>
-                    <Text style={styles.label}>{m.label}</Text>
-                    <Text style={styles.hint}>{m.hint}</Text>
-                  </View>
-                  <View style={styles.chevron}>
-                    <Ionicons name="chevron-forward" size={16} color={AuthUI.textMuted} />
-                  </View>
-                </Tap>
+                />
               ))}
             </View>
-          </View>
-          <View style={styles.group}>
-            <Text style={styles.groupTitle}>Cuenta</Text>
-            <View style={styles.listGap}>
-              <Tap
-                style={styles.row}
-                onPress={() => router.push("/(app)/soporte" as never)}
-              >
-                <View style={styles.icon}>
-                  <Ionicons name="help-buoy-outline" size={18} color={AuthUI.text} />
-                </View>
-                <View style={styles.body}>
-                  <Text style={styles.label}>Soporte</Text>
-                  <Text style={styles.hint}>Pedir ayuda a admin y Vekino</Text>
-                </View>
-                <View style={styles.chevron}>
-                  <Ionicons name="chevron-forward" size={16} color={AuthUI.textMuted} />
-                </View>
-              </Tap>
-            </View>
+          </GlassSection>
+
+          <View style={{ marginTop: SoftUI.space.xl }}>
+            <GlassSection title="Cuenta">
+              <View style={styles.listGap}>
+                <ModuloRow
+                  m={{
+                    label: "Soporte",
+                    hint: "Pedir ayuda a admin y Vekino",
+                    icon: "help-buoy-outline",
+                    route: "/(app)/soporte",
+                  }}
+                  onPress={() => router.push("/(app)/soporte" as never)}
+                />
+              </View>
+            </GlassSection>
           </View>
         </ScrollView>
-      </SafeAreaView>
+      </View>
     );
   }
 
@@ -183,113 +198,85 @@ function MasContent() {
   })).filter((g) => g.items.length > 0);
 
   return (
-    <SafeAreaView style={{ flex: 1 }} edges={["top"]}>
+    <View style={{ flex: 1 }}>
+      <SoftHomeHeader
+        saludo={saludo}
+        displayName={me?.name ?? "Residente"}
+        avatarUrl={me?.image}
+        badgeLabel={condominioName ?? "Más"}
+      />
       <ScrollView
         style={{ flex: 1 }}
         contentContainerStyle={styles.scroll}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
-        <CondominioHeader condominioId={condominioId} title="Más" />
-        <Text style={styles.subtitle}>
-          {canManage ? "Módulos adicionales" : "Tus módulos"}
-        </Text>
-
-        {grupos.map((grupo) => (
-          <View key={grupo.title} style={styles.group}>
-            <Text style={styles.groupTitle}>{grupo.title}</Text>
-            <View style={styles.listGap}>
-              {grupo.items.map((m) => (
-                <Tap
-                  key={m.route}
-                  style={styles.row}
-                  onPress={() => router.push(m.route as never)}
-                >
-                  <View style={styles.icon}>
-                    <Ionicons name={m.icon} size={18} color={AuthUI.text} />
-                  </View>
-                  <View style={styles.body}>
-                    <Text style={styles.label}>{m.label}</Text>
-                    <Text style={styles.hint}>{m.hint}</Text>
-                  </View>
-                  <View style={styles.chevron}>
-                    <Ionicons name="chevron-forward" size={16} color={AuthUI.textMuted} />
-                  </View>
-                </Tap>
-              ))}
-            </View>
+        {grupos.map((grupo, i) => (
+          <View
+            key={grupo.title}
+            style={i > 0 ? { marginTop: SoftUI.space.xl } : undefined}
+          >
+            <GlassSection title={grupo.title}>
+              <View style={styles.listGap}>
+                {grupo.items.map((m) => (
+                  <ModuloRow
+                    key={m.route}
+                    m={m}
+                    onPress={() => router.push(m.route as never)}
+                  />
+                ))}
+              </View>
+            </GlassSection>
           </View>
         ))}
       </ScrollView>
-    </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   scroll: {
     paddingBottom: 150,
-    paddingHorizontal: AuthUI.padH - 7,
-  },
-  subtitle: {
-    color: AuthUI.textSecondary,
-    fontSize: 15,
-    fontFamily: AuthUI.font.regular,
-    marginTop: 2,
-    marginBottom: 22,
-  },
-  group: {
-    marginBottom: 26,
-  },
-  groupTitle: {
-    color: AuthUI.text,
-    fontSize: 17,
-    fontFamily: AuthUI.font.semibold,
-    marginBottom: 12,
+    paddingHorizontal: SoftUI.padH,
+    paddingTop: SoftUI.space.md,
   },
   listGap: {
-    gap: 10,
+    gap: SoftUI.space.md,
   },
   row: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#FFFFFF",
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: "#D8D6DC",
-    paddingLeft: 14,
-    paddingRight: 12,
-    paddingVertical: 14,
-    width: "100%",
+    padding: SoftUI.space.base,
+    gap: SoftUI.space.md,
   },
   icon: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    backgroundColor: "rgba(14,14,15,0.05)",
+    width: SoftUI.iconBtn,
+    height: SoftUI.iconBtn,
+    borderRadius: SoftUI.radius.chip,
+    backgroundColor: SoftUI.infoSoft,
     alignItems: "center",
     justifyContent: "center",
   },
   body: {
-    flexGrow: 1,
-    flexShrink: 1,
-    flexBasis: 0,
-    marginLeft: 12,
-    marginRight: 8,
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
   },
   label: {
-    color: AuthUI.text,
-    fontSize: 15,
+    color: SoftUI.text,
+    fontSize: SoftUI.type.body.size,
     fontFamily: AuthUI.font.semibold,
   },
   hint: {
-    color: AuthUI.textMuted,
-    fontSize: 12,
+    color: SoftUI.textSecondary,
+    fontSize: SoftUI.type.chip.size,
     fontFamily: AuthUI.font.regular,
-    marginTop: 2,
   },
   chevron: {
-    width: 24,
-    height: 24,
+    width: 36,
+    height: 36,
+    borderRadius: SoftUI.radius.chip,
+    backgroundColor: SoftUI.infoSoft,
     alignItems: "center",
     justifyContent: "center",
   },

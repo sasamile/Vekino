@@ -24,6 +24,7 @@
     "better-auth": "~1.6.15",
     "convex": "^1.28.0",
     "expo": "~54.0.0",
+    "expo-apple-authentication": "~8.0.8",
     "expo-blur": "~15.0.8",
     "expo-camera": "~16.1.11",
     "expo-constants": "~18.0.13",

@@ -8,11 +8,6 @@ import { GlassCard, GlassBadge } from "@/components/ui/glass";
 import { initials } from "@/lib/utils";
 import { C } from "@/lib/theme";
 
-const CARGO_LABEL: Record<string, string> = {
-  presidente: "Presidente", vicepresidente: "Vicepresidente", secretario: "Secretario",
-  tesorero: "Tesorero", vocal: "Vocal", fiscal: "Fiscal", suplente: "Suplente",
-};
-
 export default function ConsejoScreen() {
   return (
     <Authenticated>
@@ -41,23 +36,20 @@ function Inner() {
           ) : (
             <View style={{ gap: 10 }}>
               {miembros.map((m) => (
-                <GlassCard key={m._id} style={{ padding: 16 }}>
+                <GlassCard key={m.membershipId} style={{ padding: 16 }}>
                   <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
                     <View style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: C.bgSubtle, alignItems: "center", justifyContent: "center" }}>
                       <Text style={{ color: C.textSoft, fontSize: 14, fontWeight: "700" }}>{initials(m.nombre)}</Text>
                     </View>
                     <View style={{ flex: 1, gap: 3 }}>
                       <Text style={{ color: C.text, fontSize: 15, fontWeight: "600" }}>{m.nombre}</Text>
-                      {(m.unidadNumero || m.telefono) && (
+                      {(m.unidades.length > 0 || m.email) && (
                         <Text style={{ color: C.textMuted, fontSize: 12 }}>
-                          {[m.unidadNumero ? `Unidad ${m.unidadNumero}` : null, m.telefono].filter(Boolean).join(" · ")}
+                          {[m.unidades.join(", ") || null, m.email].filter(Boolean).join(" · ")}
                         </Text>
                       )}
                     </View>
-                    <View style={{ alignItems: "flex-end", gap: 4 }}>
-                      <GlassBadge label={CARGO_LABEL[m.cargo] ?? m.cargo} tone="orange" />
-                      {!m.activo && <Text style={{ color: C.textMuted, fontSize: 10 }}>Inactivo</Text>}
-                    </View>
+                    <GlassBadge label="Junta" tone="blue" />
                   </View>
                 </GlassCard>
               ))}

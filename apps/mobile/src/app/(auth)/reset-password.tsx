@@ -162,17 +162,19 @@ export default function ResetPasswordScreen() {
               </View>
             </View>
 
-            <AuthPrimaryButton
-              label={success ? "Ir a iniciar sesión" : "Guardar contraseña"}
-              loading={loading}
-              onPress={() => {
-                if (success) {
-                  router.replace("/(auth)/login" as never);
-                  return;
-                }
-                submit();
-              }}
-            />
+            <View style={{ marginTop: 16 }}>
+              <AuthPrimaryButton
+                label={success ? "Ir a iniciar sesión" : "Guardar contraseña"}
+                loading={loading}
+                onPress={() => {
+                  if (success) {
+                    router.replace("/(auth)/login" as never);
+                    return;
+                  }
+                  submit();
+                }}
+              />
+            </View>
 
             {!success ? (
               <Text

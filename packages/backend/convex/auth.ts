@@ -15,6 +15,11 @@ const convexSiteUrl = process.env.CONVEX_SITE_URL ?? siteUrl;
 const appScheme = "vekino";
 const googleClientId = process.env.GOOGLE_CLIENT_ID?.trim();
 const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET?.trim();
+// Sign in with Apple (iOS nativo): el token de identidad de Apple trae como
+// audiencia el bundle id de la app. Better Auth verifica ese idToken contra las
+// llaves públicas de Apple usando appBundleIdentifier — NO necesita clientSecret
+// ni Services ID para el flujo nativo con idToken (solo verificación de firma).
+const appleBundleId = process.env.APPLE_BUNDLE_ID?.trim() || "com.vekino.app";
 
 export const authComponent = createClient<DataModel>(components.betterAuth);
 
@@ -35,15 +40,22 @@ export const createAuth = (ctx: GenericCtx<DataModel>) => {
             },
           }
         : {}),
+      // Apple: solo flujo nativo con idToken (verificación de firma + audiencia).
+      // clientSecret vacío es intencional: nunca se usa el flujo web de Apple.
+      apple: {
+        clientId: appleBundleId,
+        clientSecret: "",
+        appBundleIdentifier: appleBundleId,
+      },
     },
     // Si el usuario ya existe con email/contraseña (emailVerified=false porque
     // no exigimos verificación), Better Auth bloquea el link implícito salvo:
-    // - google en trustedProviders, y
-    // - requireLocalEmailVerified: false (Google ya verifica el correo).
+    // - el proveedor en trustedProviders, y
+    // - requireLocalEmailVerified: false (Google/Apple ya verifican el correo).
     account: {
       accountLinking: {
         enabled: true,
-        trustedProviders: ["google"],
+        trustedProviders: ["google", "apple"],
         requireLocalEmailVerified: false,
       },
     },

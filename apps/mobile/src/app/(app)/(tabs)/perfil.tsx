@@ -15,13 +15,13 @@ import * as Haptics from "expo-haptics";
 import { useQuery, useMutation, useAction, Authenticated } from "convex/react";
 import { api } from "@vekino/backend/api";
 import * as ImagePicker from "expo-image-picker";
-import { ScreenBackground, GlassBadge } from "@/components/ui/glass";
+import { ScreenBackground, GlassBadge, GlassCard } from "@/components/ui/glass";
 import { Tap } from "@/components/ui/tap";
 import { useCondominio } from "@/context/condominio-context";
 import { initials } from "@/lib/utils";
 import { authClient } from "@/lib/auth-client";
 import { AuthUI } from "@/lib/auth-ui";
-import { C } from "@/lib/theme";
+import { SoftUI } from "@/lib/soft-ui";
 import type { Id } from "@vekino/backend/dataModel";
 import { uploadLocalFile } from "@/lib/guardia-upload";
 
@@ -65,7 +65,9 @@ function PerfilContent() {
   const generateUploadUrl = useAction(api.files.generateUploadUrl);
   const setMyAvatar = useMutation(api.users.setMyAvatar);
   const clearMyAvatar = useMutation(api.users.clearMyAvatar);
+  const deleteMyAccount = useAction(api.users.deleteMyAccount);
   const [uploading, setUploading] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   async function signOut() {
     Alert.alert("Cerrar sesión", "¿Seguro que quieres salir?", [
@@ -79,6 +81,56 @@ function PerfilContent() {
         },
       },
     ]);
+  }
+
+  async function runDelete() {
+    if (deleting) return;
+    setDeleting(true);
+    try {
+      await deleteMyAccount({});
+      await authClient.signOut().catch(() => {});
+      router.replace("/(auth)/login" as never);
+    } catch (e) {
+      setDeleting(false);
+      Alert.alert(
+        "No se pudo eliminar",
+        e instanceof Error
+          ? e.message
+          : "Ocurrió un error al eliminar tu cuenta. Intenta de nuevo.",
+      );
+    }
+  }
+
+  function deleteAccount() {
+    // Doble confirmación: Apple exige que el borrado sea intencional pero real.
+    Alert.alert(
+      "Eliminar cuenta",
+      "Tu cuenta se eliminará de forma permanente y no podrás volver a iniciar " +
+        "sesión. Se borrarán tus datos personales (nombre, correo, teléfono, " +
+        "documento y foto). La administración conserva el historial de cobros de " +
+        "tu inmueble por obligación contable. Esta acción no se puede deshacer.",
+      [
+        { text: "Cancelar", style: "cancel" },
+        {
+          text: "Eliminar cuenta",
+          style: "destructive",
+          onPress: () => {
+            Alert.alert(
+              "¿Confirmar eliminación?",
+              "Tu cuenta se eliminará de forma permanente y no podrás iniciar sesión de nuevo.",
+              [
+                { text: "Cancelar", style: "cancel" },
+                {
+                  text: "Sí, eliminar",
+                  style: "destructive",
+                  onPress: () => void runDelete(),
+                },
+              ],
+            );
+          },
+        },
+      ],
+    );
   }
 
   async function pickAvatar() {
@@ -121,9 +173,11 @@ function PerfilContent() {
   }
 
   function onAvatarPress() {
-    const options: { text: string; style?: "cancel" | "destructive"; onPress?: () => void }[] = [
-      { text: "Elegir foto", onPress: () => void pickAvatar() },
-    ];
+    const options: {
+      text: string;
+      style?: "cancel" | "destructive";
+      onPress?: () => void;
+    }[] = [{ text: "Elegir foto", onPress: () => void pickAvatar() }];
     if (me?.image) {
       options.push({
         text: "Quitar foto",
@@ -138,7 +192,7 @@ function PerfilContent() {
   if (!me) {
     return (
       <View style={styles.loading}>
-        <ActivityIndicator color={AuthUI.text} size="large" />
+        <ActivityIndicator color={SoftUI.blue} size="large" />
       </View>
     );
   }
@@ -153,63 +207,65 @@ function PerfilContent() {
         contentContainerStyle={styles.scroll}
         showsVerticalScrollIndicator={false}
       >
-        <Text style={styles.title}>Mi perfil</Text>
-
-        <View style={styles.profileCard}>
-          <View
-            onTouchEnd={() => {
-              if (uploading) return;
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-              onAvatarPress();
-            }}
-            style={{ alignItems: "center" }}
-          >
-            <View style={styles.avatarRing}>
-              {uploading ? (
-                <ActivityIndicator color={AuthUI.textMuted} />
-              ) : me.image ? (
-                <Image source={{ uri: me.image }} style={styles.avatarImg} resizeMode="cover" />
-              ) : (
-                <Text style={styles.avatarInitials}>{initials(me.name)}</Text>
-              )}
-            </View>
-            <View style={styles.cameraBadge}>
-              <Ionicons name="camera" size={14} color="#fff" />
-            </View>
-            <Text style={styles.avatarHint}>Toca para cambiar foto</Text>
+        <GlassCard style={styles.profileCard}>
+        <View
+          onTouchEnd={() => {
+            if (uploading) return;
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            onAvatarPress();
+          }}
+          style={{ alignItems: "center" }}
+        >
+          <View style={styles.avatarRing}>
+            {uploading ? (
+              <ActivityIndicator color={SoftUI.blue} />
+            ) : me.image ? (
+              <Image
+                source={{ uri: me.image }}
+                style={styles.avatarImg}
+                resizeMode="cover"
+              />
+            ) : (
+              <Text style={styles.avatarInitials}>{initials(me.name)}</Text>
+            )}
           </View>
-
-          <Text style={styles.name}>
-            {[firstName, lastName].filter(Boolean).join(" ")}
-          </Text>
-          <Text style={styles.email}>{me.email}</Text>
-          {me.telefono ? <Text style={styles.phone}>{me.telefono}</Text> : null}
-          {me.isSuperadmin ? (
-            <View style={{ marginTop: 12 }}>
-              <GlassBadge label="Superadmin" tone="orange" />
-            </View>
-          ) : null}
+          <View style={styles.cameraBadge}>
+            <Ionicons name="camera" size={14} color={SoftUI.white} />
+          </View>
+          <Text style={styles.avatarHint}>Toca para cambiar foto</Text>
         </View>
 
-        {me.memberships.length > 0 && (
-          <View style={styles.section}>
-            <Text style={styles.sectionLabel}>Mis condominios</Text>
-            <View style={styles.listGap}>
-              {me.memberships.map((m) => {
-                const accent = m.condominioPrimaryColor || AuthUI.purple;
-                const active = m.condominioId === condominioId;
-                return (
-                  <Tap
-                    key={m.membershipId}
-                    style={styles.condoRow}
-                    onPress={() => {
-                      if (!m.condominioId || !m.condominioName) return;
-                      selectCondominio(
-                        m.condominioId as Id<"condominios">,
-                        m.condominioName,
-                      );
-                    }}
-                  >
+        <Text style={styles.name}>
+          {[firstName, lastName].filter(Boolean).join(" ")}
+        </Text>
+        <Text style={styles.email}>{me.email}</Text>
+        {me.telefono ? <Text style={styles.phone}>{me.telefono}</Text> : null}
+        {me.isSuperadmin ? (
+          <View style={{ marginTop: SoftUI.space.md }}>
+            <GlassBadge label="Superadmin" tone="orange" />
+          </View>
+        ) : null}
+      </GlassCard>
+
+      {me.memberships.length > 0 && (
+        <View style={styles.section}>
+          <Text style={styles.sectionLabel}>Mis condominios</Text>
+          <View style={styles.listGap}>
+            {me.memberships.map((m) => {
+              const accent = m.condominioPrimaryColor || SoftUI.blue;
+              const active = m.condominioId === condominioId;
+              return (
+                <Tap
+                  key={m.membershipId}
+                  onPress={() => {
+                    if (!m.condominioId || !m.condominioName) return;
+                    selectCondominio(
+                      m.condominioId as Id<"condominios">,
+                      m.condominioName,
+                    );
+                  }}
+                >
+                  <GlassCard style={styles.condoRow}>
                     {m.condominioLogo ? (
                       <Image
                         source={{ uri: m.condominioLogo }}
@@ -217,7 +273,12 @@ function PerfilContent() {
                         resizeMode="cover"
                       />
                     ) : (
-                      <View style={[styles.condoLogoFallback, { backgroundColor: accent + "18" }]}>
+                      <View
+                        style={[
+                          styles.condoLogoFallback,
+                          { backgroundColor: SoftUI.infoSoft },
+                        ]}
+                      >
                         <Text style={[styles.condoInitials, { color: accent }]}>
                           {initials(m.condominioName ?? "?")}
                         </Text>
@@ -243,64 +304,79 @@ function PerfilContent() {
                       </View>
                     </View>
                     {active ? (
-                      <Ionicons name="checkmark-circle" size={20} color={AuthUI.purple} />
+                      <Ionicons
+                        name="checkmark-circle"
+                        size={20}
+                        color={SoftUI.blue}
+                      />
                     ) : (
-                      <Ionicons name="ellipse-outline" size={20} color={AuthUI.textMuted} />
+                      <Ionicons
+                        name="ellipse-outline"
+                        size={20}
+                        color={SoftUI.textDisabled}
+                      />
                     )}
-                  </Tap>
-                );
-              })}
-            </View>
-          </View>
-        )}
-
-        <View style={styles.section}>
-          <Text style={styles.sectionLabel}>Información</Text>
-          <View style={styles.infoCard}>
-            {(
-              [
-                {
-                  icon: "shield-checkmark-outline" as const,
-                  label: "Privacidad",
-                  subtitle: "Cómo usamos tus datos",
-                  route: "/(app)/privacidad",
-                },
-                {
-                  icon: "notifications-outline" as const,
-                  label: "Notificaciones",
-                  subtitle:
-                    pushStatus === undefined
-                      ? "Cargando…"
-                      : pushStatus.enabled
-                        ? "Activas"
-                        : "Inactivas",
-                  route: "/(app)/notificaciones",
-                },
-                {
-                  icon: "help-circle-outline" as const,
-                  label: "Soporte",
-                  subtitle: "Pedir ayuda a admin y Vekino",
-                  route: "/(app)/soporte",
-                },
-              ] as const
-            ).map((item, i, arr) => (
-              <Tap
-                key={item.label}
-                style={[styles.infoRow, i < arr.length - 1 && styles.infoBorder]}
-                onPress={() => router.push(item.route as never)}
-              >
-                <View style={styles.infoIcon}>
-                  <Ionicons name={item.icon} size={18} color={AuthUI.text} />
-                </View>
-                <View style={styles.rowBody}>
-                  <Text style={styles.infoLabel}>{item.label}</Text>
-                  <Text style={styles.infoSub}>{item.subtitle}</Text>
-                </View>
-                <Ionicons name="chevron-forward" size={16} color={AuthUI.textMuted} />
-              </Tap>
-            ))}
+                  </GlassCard>
+                </Tap>
+              );
+            })}
           </View>
         </View>
+      )}
+
+      <View style={styles.section}>
+        <Text style={styles.sectionLabel}>Información</Text>
+        <GlassCard style={styles.infoCard}>
+          {(
+            [
+              {
+                icon: "shield-checkmark-outline" as const,
+                label: "Privacidad",
+                subtitle: "Cómo usamos tus datos",
+                route: "/(app)/privacidad",
+              },
+              {
+                icon: "notifications-outline" as const,
+                label: "Notificaciones",
+                subtitle:
+                  pushStatus === undefined
+                    ? "Cargando…"
+                    : pushStatus.enabled
+                      ? "Activas"
+                      : "Inactivas",
+                route: "/(app)/notificaciones",
+              },
+              {
+                icon: "help-circle-outline" as const,
+                label: "Soporte",
+                subtitle: "Pedir ayuda a admin y Vekino",
+                route: "/(app)/soporte",
+              },
+            ] as const
+          ).map((item, i, arr) => (
+            <Tap
+              key={item.label}
+              style={[styles.infoRow, i < arr.length - 1 && styles.infoBorder]}
+              onPress={() => router.push(item.route as never)}
+            >
+              <View style={styles.infoIcon}>
+                <Ionicons name={item.icon} size={18} color={SoftUI.blue} />
+              </View>
+              <View style={styles.rowBody}>
+                <Text style={styles.infoLabel}>{item.label}</Text>
+                <Text style={styles.infoSub}>{item.subtitle}</Text>
+              </View>
+              <View style={styles.chevron}>
+                <Ionicons
+                  name="chevron-forward"
+                  size={16}
+                  color={SoftUI.blue}
+                />
+              </View>
+            </Tap>
+          ))}
+        </GlassCard>
+      </View>
 
         <Text style={styles.version}>Vekino v1.0 · Powered by Zyntek</Text>
 
@@ -311,8 +387,26 @@ function PerfilContent() {
             signOut();
           }}
         >
-          <Ionicons name="log-out-outline" size={18} color={C.danger} />
+          <Ionicons name="log-out-outline" size={18} color={SoftUI.danger} />
           <Text style={styles.signOutText}>Cerrar sesión</Text>
+        </View>
+
+        <View
+          style={styles.deleteAccount}
+          onTouchEnd={() => {
+            if (deleting) return;
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+            deleteAccount();
+          }}
+        >
+          {deleting ? (
+            <ActivityIndicator color={SoftUI.textSecondary} size="small" />
+          ) : (
+            <>
+              <Ionicons name="trash-outline" size={16} color={SoftUI.textSecondary} />
+              <Text style={styles.deleteAccountText}>Eliminar cuenta</Text>
+            </>
+          )}
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -326,34 +420,23 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   scroll: {
-    paddingBottom: 140,
-    paddingHorizontal: AuthUI.padH - 7,
-  },
-  title: {
-    marginTop: 12,
-    marginBottom: 22,
-    color: AuthUI.text,
-    fontSize: 30,
-    lineHeight: 36,
-    fontFamily: AuthUI.font.bold,
+    paddingBottom: 150,
+    paddingHorizontal: SoftUI.padH,
+    paddingTop: SoftUI.space.md,
   },
   profileCard: {
-    backgroundColor: "#FFFFFF",
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: "#D8D6DC",
-    paddingVertical: 28,
-    paddingHorizontal: 20,
+    paddingVertical: SoftUI.space.xl,
+    paddingHorizontal: SoftUI.space.lg,
     alignItems: "center",
-    marginBottom: 22,
+    marginBottom: SoftUI.space.xl,
   },
   avatarRing: {
     width: 88,
     height: 88,
-    borderRadius: 44,
-    backgroundColor: "rgba(14,14,15,0.05)",
-    borderWidth: 1,
-    borderColor: "#D8D6DC",
+    borderRadius: SoftUI.radius.chip,
+    backgroundColor: SoftUI.infoSoft,
+    borderWidth: 2,
+    borderColor: SoftUI.white,
     alignItems: "center",
     justifyContent: "center",
     overflow: "hidden",
@@ -363,169 +446,176 @@ const styles = StyleSheet.create({
     height: "100%",
   },
   avatarInitials: {
-    color: AuthUI.text,
+    color: SoftUI.blue,
     fontSize: 28,
     fontFamily: AuthUI.font.semibold,
   },
   cameraBadge: {
     marginTop: -12,
-    backgroundColor: "#0E0E0F",
+    backgroundColor: SoftUI.blue,
     width: 28,
     height: 28,
-    borderRadius: 14,
+    borderRadius: SoftUI.radius.chip,
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 2,
-    borderColor: "#FFFFFF",
+    borderColor: SoftUI.white,
   },
   avatarHint: {
-    color: AuthUI.textMuted,
-    fontSize: 12,
+    color: SoftUI.textSecondary,
+    fontSize: SoftUI.type.chip.size,
     fontFamily: AuthUI.font.regular,
-    marginTop: 8,
+    marginTop: SoftUI.space.sm,
   },
   name: {
-    color: AuthUI.text,
-    fontSize: 22,
+    color: SoftUI.text,
+    fontSize: SoftUI.type.section.size,
     fontFamily: AuthUI.font.bold,
-    marginTop: 12,
+    marginTop: SoftUI.space.md,
     textAlign: "center",
   },
   email: {
-    color: AuthUI.textSecondary,
-    fontSize: 14,
+    color: SoftUI.textSecondary,
+    fontSize: SoftUI.type.caption.size + 1,
     fontFamily: AuthUI.font.regular,
-    marginTop: 4,
+    marginTop: SoftUI.space.xs,
   },
   phone: {
-    color: AuthUI.textMuted,
-    fontSize: 13,
+    color: SoftUI.textDisabled,
+    fontSize: SoftUI.type.caption.size,
     fontFamily: AuthUI.font.regular,
     marginTop: 2,
   },
   section: {
-    marginBottom: 22,
+    marginBottom: SoftUI.space.xl,
   },
   sectionLabel: {
-    color: AuthUI.text,
-    fontSize: 17,
+    color: SoftUI.text,
+    fontSize: SoftUI.type.section.size - 2,
     fontFamily: AuthUI.font.semibold,
-    marginBottom: 12,
+    marginBottom: SoftUI.space.md,
   },
   listGap: {
-    gap: 10,
+    gap: SoftUI.space.md,
   },
   condoRow: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#FFFFFF",
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: "#D8D6DC",
-    paddingLeft: 14,
-    paddingRight: 12,
-    paddingVertical: 14,
-    width: "100%",
+    padding: SoftUI.space.base,
+    gap: SoftUI.space.md,
   },
   condoLogo: {
-    width: 48,
-    height: 48,
-    borderRadius: 14,
-    backgroundColor: "#F4F4F5",
+    width: SoftUI.iconBtn,
+    height: SoftUI.iconBtn,
+    borderRadius: SoftUI.radius.icon,
+    backgroundColor: SoftUI.bgSecondary,
   },
   condoLogoFallback: {
-    width: 48,
-    height: 48,
-    borderRadius: 14,
+    width: SoftUI.iconBtn,
+    height: SoftUI.iconBtn,
+    borderRadius: SoftUI.radius.chip,
     alignItems: "center",
     justifyContent: "center",
   },
   condoInitials: {
-    fontSize: 14,
+    fontSize: SoftUI.type.caption.size + 1,
     fontFamily: AuthUI.font.bold,
   },
   rowBody: {
-    flexGrow: 1,
-    flexShrink: 1,
-    flexBasis: 0,
-    marginLeft: 12,
-    marginRight: 8,
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
   },
   condoName: {
-    color: AuthUI.text,
-    fontSize: 15,
+    color: SoftUI.text,
+    fontSize: SoftUI.type.body.size,
     fontFamily: AuthUI.font.semibold,
   },
   condoSub: {
-    color: AuthUI.textMuted,
-    fontSize: 12,
+    color: SoftUI.textSecondary,
+    fontSize: SoftUI.type.chip.size,
     fontFamily: AuthUI.font.regular,
-    marginTop: 2,
   },
   badgeRow: {
     flexDirection: "row",
     flexWrap: "wrap",
-    marginTop: 6,
-    gap: 6,
+    marginTop: SoftUI.space.sm,
+    gap: SoftUI.space.sm,
   },
   infoCard: {
-    backgroundColor: "#FFFFFF",
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: "#D8D6DC",
+    paddingVertical: SoftUI.space.xs,
     overflow: "hidden",
   },
   infoRow: {
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: 14,
-    paddingVertical: 14,
+    paddingHorizontal: SoftUI.space.base,
+    paddingVertical: SoftUI.space.md,
     width: "100%",
+    gap: SoftUI.space.md,
   },
   infoBorder: {
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: "rgba(14,14,15,0.08)",
+    borderBottomColor: SoftUI.divider,
   },
   infoIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    backgroundColor: "rgba(14,14,15,0.05)",
+    width: SoftUI.iconBtn - 8,
+    height: SoftUI.iconBtn - 8,
+    borderRadius: SoftUI.radius.chip,
+    backgroundColor: SoftUI.infoSoft,
     alignItems: "center",
     justifyContent: "center",
   },
   infoLabel: {
-    color: AuthUI.text,
-    fontSize: 14,
+    color: SoftUI.text,
+    fontSize: SoftUI.type.body.size - 1,
     fontFamily: AuthUI.font.semibold,
   },
   infoSub: {
-    color: AuthUI.textMuted,
-    fontSize: 12,
+    color: SoftUI.textSecondary,
+    fontSize: SoftUI.type.chip.size,
     fontFamily: AuthUI.font.regular,
-    marginTop: 2,
+  },
+  chevron: {
+    width: 28,
+    height: 28,
+    borderRadius: SoftUI.radius.chip,
+    backgroundColor: SoftUI.infoSoft,
+    alignItems: "center",
+    justifyContent: "center",
   },
   version: {
-    color: AuthUI.textMuted,
-    fontSize: 12,
+    color: SoftUI.textDisabled,
+    fontSize: SoftUI.type.chip.size,
     fontFamily: AuthUI.font.regular,
     textAlign: "center",
-    marginBottom: 16,
+    marginBottom: SoftUI.space.base,
   },
   signOut: {
-    height: 52,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: C.dangerSoft,
-    backgroundColor: C.dangerSoft,
+    height: SoftUI.buttonH,
+    borderRadius: SoftUI.radius.button,
+    backgroundColor: SoftUI.dangerSoft,
     alignItems: "center",
     justifyContent: "center",
     flexDirection: "row",
+    gap: SoftUI.space.sm,
   },
   signOutText: {
-    color: C.danger,
-    fontSize: 16,
+    color: SoftUI.danger,
+    fontSize: SoftUI.type.body.size + 1,
     fontFamily: AuthUI.font.semibold,
-    marginLeft: 8,
+  },
+  deleteAccount: {
+    height: 46,
+    marginTop: SoftUI.space.md,
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: SoftUI.space.sm,
+  },
+  deleteAccountText: {
+    color: SoftUI.textSecondary,
+    fontSize: SoftUI.type.body.size,
+    fontFamily: AuthUI.font.medium,
   },
 });

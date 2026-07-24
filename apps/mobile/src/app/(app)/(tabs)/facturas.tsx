@@ -9,8 +9,8 @@ import {
   Linking,
   Alert,
   Image,
+  StyleSheet,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useQuery, useMutation, useAction, Authenticated } from "convex/react";
 import * as ImagePicker from "expo-image-picker";
@@ -19,7 +19,7 @@ import type { Id } from "@vekino/backend/dataModel";
 import { getDocumentPicker } from "@/lib/document-picker";
 import { useCondominio } from "@/context/condominio-context";
 import { NoCondominioScreen } from "@/components/ui/no-condominio";
-import { CondominioHeader } from "@/components/ui/condominio-header";
+import { SoftHomeHeader } from "@/components/ui/soft-home-header";
 import { BottomSheet } from "@/components/ui/bottom-sheet";
 import { Tap } from "@/components/ui/tap";
 import {
@@ -28,28 +28,50 @@ import {
   GlassBadge,
   GlassButton,
   GlassSection,
-  GlassPressable,
 } from "@/components/ui/glass";
 import { cop, fmtPeriodo } from "@/lib/utils";
-import { C } from "@/lib/theme";
 import { AuthUI } from "@/lib/auth-ui";
+import { SoftUI, softShadow } from "@/lib/soft-ui";
 
 type Estado = "pendiente" | "pagada" | "vencida" | "abonada" | "saldo_a_favor";
 
 const ESTADO_TONE: Record<Estado, "yellow" | "green" | "red" | "neutral" | "blue"> = {
   pendiente: "yellow",
-  pagada:    "green",
-  vencida:   "red",
-  abonada:   "neutral",
+  pagada: "green",
+  vencida: "red",
+  abonada: "blue",
   saldo_a_favor: "blue",
 };
 
 const ESTADO_LABEL: Record<Estado, string> = {
   pendiente: "Pendiente",
-  pagada:    "Pagada",
-  vencida:   "Vencida",
-  abonada:   "Abonada",
+  pagada: "Pagada",
+  vencida: "Vencida",
+  abonada: "Abonada",
   saldo_a_favor: "Saldo a favor",
+};
+
+const ESTADO_ICON: Record<
+  string,
+  { name: React.ComponentProps<typeof Ionicons>["name"]; bg: string; fg: string }
+> = {
+  pendiente: { name: "time-outline", bg: SoftUI.warningSoft, fg: "#B8860B" },
+  pagada: {
+    name: "checkmark-circle-outline",
+    bg: SoftUI.successSoft,
+    fg: SoftUI.success,
+  },
+  vencida: {
+    name: "alert-circle-outline",
+    bg: SoftUI.dangerSoft,
+    fg: SoftUI.danger,
+  },
+  abonada: { name: "wallet-outline", bg: SoftUI.infoSoft, fg: SoftUI.blue },
+  saldo_a_favor: {
+    name: "trending-up-outline",
+    bg: SoftUI.infoSoft,
+    fg: SoftUI.blue,
+  },
 };
 
 type FacturaRow = {
@@ -65,7 +87,13 @@ type FacturaRow = {
   fechaEmision: number;
   fechaVencimiento: number;
   pdfUrl?: string | null;
-  lineas: { codigo: number; concepto: string; saldoAnterior: number; actual: number; total: number }[];
+  lineas: {
+    codigo: number;
+    concepto: string;
+    saldoAnterior: number;
+    actual: number;
+    total: number;
+  }[];
 };
 
 export default function FacturasScreen() {
@@ -90,7 +118,7 @@ function FacturasContent() {
   return <ResidentFacturasView condominioId={condominioId} />;
 }
 
-/* ── Selector de período (select estilo web) ─────────────────── */
+/* ── Selector de período Soft UI ─────────────────── */
 function PeriodoSelect({
   periodos,
   value,
@@ -103,34 +131,41 @@ function PeriodoSelect({
   const [open, setOpen] = useState(false);
   return (
     <>
-      <Pressable
-        onPress={() => setOpen(true)}
-        style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", borderWidth: 1, borderColor: C.border, backgroundColor: C.card, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 11 }}
-      >
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-          <Ionicons name="calendar-outline" size={16} color={C.textSoft} />
-          <Text style={{ color: C.text, fontSize: 15, fontWeight: "600" }}>
+      <Pressable onPress={() => setOpen(true)} style={styles.periodoBtn}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: SoftUI.space.sm }}>
+          <View style={styles.periodoIcon}>
+            <Ionicons name="calendar-outline" size={18} color={SoftUI.blue} />
+          </View>
+          <Text style={styles.periodoLabel}>
             {value ? fmtPeriodo(value) : "Selecciona período"}
           </Text>
         </View>
-        <Ionicons name="chevron-down" size={18} color={C.textMuted} />
+        <Ionicons name="chevron-down" size={18} color={SoftUI.textSecondary} />
       </Pressable>
 
       <BottomSheet visible={open} onClose={() => setOpen(false)} maxHeight="70%">
-        <ScrollView contentContainerStyle={{ padding: 20, paddingBottom: 40 }}>
-          <Text style={{ color: C.text, fontSize: 18, fontWeight: "700", marginBottom: 16 }}>Período</Text>
+        <ScrollView contentContainerStyle={{ padding: SoftUI.space.lg, paddingBottom: 40 }}>
+          <Text style={styles.sheetTitle}>Período</Text>
           {periodos.map((p) => {
             const active = p === value;
             return (
               <Pressable
                 key={p}
-                onPress={() => { onChange(p); setOpen(false); }}
-                style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 13, paddingHorizontal: 12, borderRadius: 8, backgroundColor: active ? C.bgSubtle : "transparent", marginBottom: 2 }}
+                onPress={() => {
+                  onChange(p);
+                  setOpen(false);
+                }}
+                style={[styles.sheetRow, active && styles.sheetRowActive]}
               >
-                <Text style={{ color: C.text, fontSize: 15, fontWeight: active ? "600" : "400" }}>
+                <Text
+                  style={[
+                    styles.sheetRowText,
+                    active && { fontFamily: AuthUI.font.semibold, color: SoftUI.blue },
+                  ]}
+                >
                   {fmtPeriodo(p)}
                 </Text>
-                {active && <Ionicons name="checkmark" size={18} color={C.navy} />}
+                {active && <Ionicons name="checkmark" size={18} color={SoftUI.blue} />}
               </Pressable>
             );
           })}
@@ -140,8 +175,106 @@ function PeriodoSelect({
   );
 }
 
+function FacturaListCard({
+  f,
+  onPress,
+  showResident,
+}: {
+  f: FacturaRow;
+  onPress: () => void;
+  showResident?: boolean;
+}) {
+  const iconMeta = ESTADO_ICON[f.estado] ?? ESTADO_ICON.abonada;
+  return (
+    <Tap onPress={onPress}>
+      <GlassCard style={styles.facturaCard}>
+        <View style={[styles.facturaIcon, { backgroundColor: iconMeta.bg }]}>
+          <Ionicons name={iconMeta.name} size={22} color={iconMeta.fg} />
+        </View>
+        <View style={styles.facturaBody}>
+          <Text style={styles.facturaTitle} numberOfLines={1}>
+            {showResident ? f.residenteNombre : fmtPeriodo(f.periodo)}
+          </Text>
+          <Text style={styles.facturaMeta} numberOfLines={1}>
+            {showResident
+              ? f.apto
+                ? `Apto ${f.apto}`
+                : "Sin apto"
+              : f.apto
+                ? `Apto ${f.apto}`
+                : f.residenteNombre}
+          </Text>
+          <View style={{ marginTop: 6, flexDirection: "row", alignItems: "center", gap: 8 }}>
+            <GlassBadge
+              label={ESTADO_LABEL[f.estado as Estado] ?? f.estado}
+              tone={ESTADO_TONE[f.estado as Estado] ?? "neutral"}
+            />
+            {!showResident && (
+              <Text style={styles.facturaDue}>
+                Vence{" "}
+                {new Date(f.fechaVencimiento).toLocaleDateString("es-CO", {
+                  day: "numeric",
+                  month: "short",
+                })}
+              </Text>
+            )}
+          </View>
+          {!showResident && f.totalConDescuento && f.estado === "pendiente" ? (
+            <View style={styles.descuentoRow}>
+              <Ionicons name="pricetag" size={12} color={SoftUI.success} />
+              <Text style={styles.descuentoText}>
+                Con descuento: {cop(f.totalConDescuento)}
+              </Text>
+            </View>
+          ) : null}
+        </View>
+        <View style={styles.facturaRight}>
+          <Text style={styles.facturaMonto}>{cop(f.totalAPagar)}</Text>
+          <View style={styles.glassAction}>
+            <Ionicons name="chevron-forward" size={18} color={SoftUI.blue} />
+          </View>
+        </View>
+      </GlassCard>
+    </Tap>
+  );
+}
+
+function EstadoChips({
+  value,
+  onChange,
+}: {
+  value: "" | Estado;
+  onChange: (e: "" | Estado) => void;
+}) {
+  return (
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      style={{ marginBottom: SoftUI.space.base }}
+      contentContainerStyle={{ gap: SoftUI.space.sm, paddingVertical: 2 }}
+    >
+      {(["", "pendiente", "pagada", "vencida", "saldo_a_favor"] as const).map((e) => {
+        const active = value === e;
+        return (
+          <Pressable
+            key={e}
+            onPress={() => onChange(e)}
+            style={[styles.chip, active && styles.chipActive]}
+          >
+            <Text style={[styles.chipText, active && styles.chipTextActive]}>
+              {e === "" ? "Todas" : ESTADO_LABEL[e]}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </ScrollView>
+  );
+}
+
 /* ── Vista admin: todas las facturas del período ────────────── */
 function AdminFacturasView({ condominioId }: { condominioId: Id<"condominios"> }) {
+  const me = useQuery(api.users.me);
+  const { condominioName } = useCondominio();
   const periodos = useQuery(api.facturas.listPeriodos, { condominioId });
   const [selectedPeriodo, setSelectedPeriodo] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
@@ -159,157 +292,109 @@ function AdminFacturasView({ condominioId }: { condominioId: Id<"condominios"> }
     .filter((f) => !estadoFiltro || f.estado === estadoFiltro)
     .filter((f) => !q || f.residenteNombre.toLowerCase().includes(q) || (f.apto ?? "").toLowerCase().includes(q));
 
+  const hora = new Date().getHours();
+  const saludo =
+    hora < 12 ? "Buenos días" : hora < 18 ? "Buenas tardes" : "Buenas noches";
+
   return (
-    <SafeAreaView style={{ flex: 1 }} edges={["top"]}>
+    <View style={{ flex: 1 }}>
+      <SoftHomeHeader
+        saludo={saludo}
+        displayName={me?.name ?? "Admin"}
+        avatarUrl={me?.image}
+        badgeLabel={condominioName ?? "Facturas"}
+      />
       <ScrollView
         style={{ flex: 1 }}
-        contentContainerStyle={{ paddingBottom: 130, paddingHorizontal: 16 }}
+        contentContainerStyle={styles.scroll}
         showsVerticalScrollIndicator={false}
       >
-        <CondominioHeader
-          condominioId={condominioId}
-          title="Facturas"
-          right={
-            <View
-              style={{
-                flexDirection: "row",
-                alignItems: "center",
-                gap: 4,
-                backgroundColor: "#0E0E0F",
-                paddingHorizontal: 12,
-                paddingVertical: 9,
-                borderRadius: 12,
-              }}
-              onTouchEnd={() => setShowForm(true)}
-            >
-              <Ionicons name="add" size={16} color="#fff" />
-              <Text style={{ color: "#fff", fontSize: 13, fontWeight: "700" }}>Nueva</Text>
+        <View style={styles.periodoRow}>
+          {periodos && periodos.length > 0 ? (
+            <View style={{ flex: 1 }}>
+              <PeriodoSelect
+                periodos={periodos}
+                value={periodo}
+                onChange={setSelectedPeriodo}
+              />
             </View>
-          }
-        />
+          ) : (
+            <View style={{ flex: 1 }} />
+          )}
+          <Tap style={styles.nuevaBtn} onPress={() => setShowForm(true)}>
+            <Ionicons name="add" size={18} color={SoftUI.white} />
+            <Text style={styles.nuevaBtnText}>Nueva</Text>
+          </Tap>
+        </View>
 
-        {/* Período select */}
-        {periodos && periodos.length > 0 && (
-          <View style={{ marginBottom: 16 }}>
-            <PeriodoSelect periodos={periodos} value={periodo} onChange={setSelectedPeriodo} />
-          </View>
-        )}
-
-        {/* Stats neutros */}
         {resumen && (
-          <View style={{ flexDirection: "row", gap: 10, marginBottom: 16 }}>
+          <View style={styles.kpiRow}>
             {[
-              { label: "Pendientes", value: resumen.pendientes },
-              { label: "Pagadas", value: resumen.pagadas },
-              { label: "Vencidas", value: resumen.vencidas },
+              { label: "Pendientes", value: resumen.pendientes, color: SoftUI.warning },
+              { label: "Pagadas", value: resumen.pagadas, color: SoftUI.success },
+              { label: "Vencidas", value: resumen.vencidas, color: SoftUI.danger },
             ].map((s) => (
-              <GlassCard key={s.label} style={{ flex: 1, padding: 14, alignItems: "center", gap: 4 }}>
-                <Text style={{ color: C.text, fontSize: 22, fontWeight: "700" }}>{s.value}</Text>
-                <Text style={{ color: C.textMuted, fontSize: 11 }}>{s.label}</Text>
+              <GlassCard key={s.label} style={styles.kpiCard}>
+                <Text style={[styles.kpiValue, { color: s.color }]}>{s.value}</Text>
+                <Text style={styles.kpiLabel}>{s.label}</Text>
               </GlassCard>
             ))}
           </View>
         )}
 
-        {/* Total cartera */}
         {resumen && (
-          <GlassCard style={{ padding: 20, marginBottom: 16 }}>
-            <Text style={{ color: C.textMuted, fontSize: 13, fontWeight: "500" }}>
-              Total cartera
-            </Text>
-            <Text style={{ color: C.text, fontSize: 28, fontWeight: "600", letterSpacing: -0.8, marginTop: 4 }}>
-              {cop(resumen.sumaTotalAPagar)}
-            </Text>
-            <Text style={{ color: C.textMuted, fontSize: 13, marginTop: 2 }}>
-              {resumen.total} unidades facturadas
-            </Text>
+          <GlassCard style={styles.summaryCard}>
+            <View style={styles.summaryIcon}>
+              <Ionicons name="wallet-outline" size={22} color={SoftUI.white} />
+            </View>
+            <View style={{ flex: 1, gap: 2 }}>
+              <Text style={styles.summaryTitle}>{cop(resumen.sumaTotalAPagar)}</Text>
+              <Text style={styles.summarySub}>
+                Cartera · {resumen.total} unidad{resumen.total === 1 ? "" : "es"}
+              </Text>
+            </View>
           </GlassCard>
         )}
 
-        {/* Buscador */}
-        <View style={{ flexDirection: "row", alignItems: "center", borderWidth: 1, borderColor: C.border, backgroundColor: C.card, borderRadius: 8, paddingHorizontal: 12, marginBottom: 14 }}>
-          <Ionicons name="search" size={16} color={C.textMuted} />
+        <View style={styles.searchBox}>
+          <Ionicons name="search" size={18} color={SoftUI.textSecondary} />
           <TextInput
             value={search}
             onChangeText={setSearch}
             placeholder="Buscar por nombre o apto…"
-            placeholderTextColor={C.textMuted}
-            style={{
-              flex: 1,
-              color: C.text,
-              fontSize: 15,
-              paddingVertical: 12,
-              paddingHorizontal: 8,
-              letterSpacing: 0,
-              fontFamily: AuthUI.font.regular,
-            }}
+            placeholderTextColor={SoftUI.textDisabled}
+            style={styles.searchInput}
           />
           {search.length > 0 && (
             <Pressable onPress={() => setSearch("")} hitSlop={8}>
-              <Ionicons name="close-circle" size={18} color={C.textMuted} />
+              <Ionicons name="close-circle" size={18} color={SoftUI.textSecondary} />
             </Pressable>
           )}
         </View>
 
-        {/* Filtros estado */}
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          style={{ marginBottom: 16 }}
-          contentContainerStyle={{ gap: 8, paddingVertical: 2 }}
-        >
-          {(["", "pendiente", "pagada", "vencida", "saldo_a_favor"] as const).map((e) => {
-            const active = estadoFiltro === e;
-            return (
-              <Pressable key={e} onPress={() => setEstadoFiltro(e)} style={chipStyle(active)}>
-                <Text style={{ color: active ? "#fff" : C.textSoft, fontSize: 13, fontWeight: "600" }}>
-                  {e === "" ? "Todas" : ESTADO_LABEL[e]}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </ScrollView>
+        <EstadoChips value={estadoFiltro} onChange={setEstadoFiltro} />
 
-        {/* Lista */}
-        <GlassSection title={`${filtered.length} factura${filtered.length === 1 ? "" : "s"}`}>
+        <GlassSection
+          title={`${filtered.length} factura${filtered.length === 1 ? "" : "s"}`}
+        >
           {facturas === undefined ? (
-            <ActivityIndicator color={C.textSoft} style={{ marginTop: 20 }} />
+            <ActivityIndicator color={SoftUI.blue} style={{ marginTop: 20 }} />
           ) : filtered.length === 0 ? (
-            <GlassCard style={{ padding: 32, alignItems: "center", gap: 10 }}>
-              <Ionicons name="wallet-outline" size={32} color={C.textMuted} />
-              <Text style={{ color: C.textMuted, fontSize: 14, textAlign: "center" }}>
+            <GlassCard style={styles.emptyCard}>
+              <Ionicons name="wallet-outline" size={32} color={SoftUI.textSecondary} />
+              <Text style={styles.emptyText}>
                 {q ? "Sin resultados para tu búsqueda" : "Sin facturas en esta categoría"}
               </Text>
             </GlassCard>
           ) : (
-            <View style={{ gap: 10 }}>
+            <View style={{ gap: SoftUI.space.md }}>
               {filtered.map((f) => (
-                <GlassPressable key={f._id} onPress={() => setDetalle(f)}>
-                  <GlassCard style={{ padding: 16 }}>
-                    <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
-                      <View style={{ width: 38, height: 38, borderRadius: 10, backgroundColor: C.bgSubtle, alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                        <Ionicons name="person-outline" size={17} color={C.textSoft} />
-                      </View>
-                      <View style={{ flex: 1, gap: 2 }}>
-                        <Text style={{ color: C.text, fontSize: 14, fontWeight: "600" }} numberOfLines={1}>
-                          {f.residenteNombre}
-                        </Text>
-                        <Text style={{ color: C.textMuted, fontSize: 12 }}>
-                          {f.apto ? `Apto ${f.apto}` : "Sin apto"}
-                        </Text>
-                      </View>
-                      <View style={{ alignItems: "flex-end", gap: 6 }}>
-                        <Text style={{ color: C.text, fontSize: 14, fontWeight: "700" }}>
-                          {cop(f.totalAPagar)}
-                        </Text>
-                        <GlassBadge
-                          label={ESTADO_LABEL[f.estado as Estado] ?? f.estado}
-                          tone={ESTADO_TONE[f.estado as Estado] ?? "neutral"}
-                        />
-                      </View>
-                    </View>
-                  </GlassCard>
-                </GlassPressable>
+                <FacturaListCard
+                  key={f._id}
+                  f={f}
+                  showResident
+                  onPress={() => setDetalle(f)}
+                />
               ))}
             </View>
           )}
@@ -327,113 +412,97 @@ function AdminFacturasView({ condominioId }: { condominioId: Id<"condominios"> }
         condominioId={condominioId}
         defaultPeriodo={periodo}
       />
-    </SafeAreaView>
+    </View>
   );
 }
 
 /* ── Vista residente: mis propias facturas ──────────────────── */
-function ResidentFacturasView({ condominioId }: { condominioId: Id<"condominios"> | undefined }) {
-  const facturas = useQuery(api.facturas.listMia, condominioId ? { condominioId } : "skip");
+function ResidentFacturasView({
+  condominioId,
+}: {
+  condominioId: Id<"condominios"> | undefined;
+}) {
+  const me = useQuery(api.users.me);
+  const { condominioName } = useCondominio();
+  const facturas = useQuery(
+    api.facturas.listMia,
+    condominioId ? { condominioId } : "skip",
+  );
   const [estadoFiltro, setEstadoFiltro] = useState<"" | Estado>("");
   const [detalle, setDetalle] = useState<FacturaRow | null>(null);
 
-  const filtered = (facturas ?? []).filter((f) => !estadoFiltro || f.estado === estadoFiltro) as FacturaRow[];
+  const filtered = (facturas ?? []).filter(
+    (f) => !estadoFiltro || f.estado === estadoFiltro,
+  ) as FacturaRow[];
 
-  const pendientesTotal = (facturas ?? [])
-    .filter((f) => f.estado === "pendiente")
-    .reduce((s, f) => s + f.totalAPagar, 0);
+  const pendientes = (facturas ?? []).filter((f) => f.estado === "pendiente");
+  const pendientesTotal = pendientes.reduce((s, f) => s + f.totalAPagar, 0);
+
+  const hora = new Date().getHours();
+  const saludo =
+    hora < 12 ? "Buenos días" : hora < 18 ? "Buenas tardes" : "Buenas noches";
 
   return (
-    <SafeAreaView style={{ flex: 1 }} edges={["top"]}>
+    <View style={{ flex: 1 }}>
+      <SoftHomeHeader
+        saludo={saludo}
+        displayName={me?.name ?? "Residente"}
+        avatarUrl={me?.image}
+        badgeLabel={condominioName ?? "Facturas"}
+      />
       <ScrollView
         style={{ flex: 1 }}
-        contentContainerStyle={{ paddingBottom: 130, paddingHorizontal: 16 }}
+        contentContainerStyle={styles.scroll}
         showsVerticalScrollIndicator={false}
       >
-        <CondominioHeader condominioId={condominioId} title="Facturas" />
-
-        <GlassCard style={{ padding: 16, marginBottom: 20 }}>
-          <Text style={{ color: C.textMuted, fontSize: 13, fontWeight: "500" }}>Por pagar</Text>
-          <Text style={{ color: C.text, fontSize: 28, fontWeight: "600", letterSpacing: -0.6, marginTop: 4 }}>
-            {cop(pendientesTotal)}
-          </Text>
-          <Text style={{ color: C.textMuted, fontSize: 13, marginTop: 4 }}>
-            {(facturas ?? []).filter((f) => f.estado === "pendiente").length} factura(s) activa(s)
-          </Text>
+        <GlassCard style={styles.summaryCard}>
+          <View style={styles.summaryIcon}>
+            <Ionicons name="wallet-outline" size={22} color={SoftUI.white} />
+          </View>
+          <View style={{ flex: 1, gap: 2, minWidth: 0 }}>
+            <Text style={styles.summaryTitle} numberOfLines={1}>
+              {facturas === undefined
+                ? "…"
+                : pendientes.length === 0
+                  ? "Estás al día"
+                  : pendientes.length === 1
+                    ? "1 factura pendiente"
+                    : `${pendientes.length} facturas pendientes`}
+            </Text>
+            <Text style={styles.summarySub} numberOfLines={1}>
+              {pendientesTotal > 0
+                ? `${cop(pendientesTotal)} por pagar`
+                : "No tienes saldos pendientes"}
+            </Text>
+          </View>
         </GlassCard>
 
-        {/* Filtros */}
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          style={{ marginBottom: 20 }}
-          contentContainerStyle={{ gap: 8, paddingVertical: 2 }}
-        >
-          {(["", "pendiente", "pagada", "vencida", "saldo_a_favor"] as const).map((e) => {
-            const active = estadoFiltro === e;
-            return (
-              <Pressable key={e} onPress={() => setEstadoFiltro(e)} style={chipStyle(active)}>
-                <Text style={{ color: active ? "#fff" : C.textSoft, fontSize: 13, fontWeight: "600" }}>
-                  {e === "" ? "Todas" : ESTADO_LABEL[e]}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </ScrollView>
+        <EstadoChips value={estadoFiltro} onChange={setEstadoFiltro} />
 
-        {/* Lista */}
-        <GlassSection title={`${filtered.length} factura${filtered.length === 1 ? "" : "s"}`}>
-          {facturas === undefined ? (
-            <ActivityIndicator color={C.textSoft} style={{ marginTop: 20 }} />
-          ) : filtered.length === 0 ? (
-            <GlassCard style={{ padding: 32, alignItems: "center", gap: 10 }}>
-              <Ionicons name="wallet-outline" size={32} color={C.textMuted} />
-              <Text style={{ color: C.textMuted, fontSize: 14, textAlign: "center" }}>
-                Sin facturas en esta categoría
-              </Text>
-            </GlassCard>
-          ) : (
-            <View style={{ gap: 10 }}>
-              {filtered.map((f) => (
-                <GlassPressable key={f._id} onPress={() => setDetalle(f)}>
-                  <GlassCard style={{ padding: 18 }}>
-                    <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" }}>
-                      <View style={{ flex: 1, gap: 4 }}>
-                        <Text style={{ color: C.text, fontSize: 16, fontWeight: "700" }}>
-                          {fmtPeriodo(f.periodo)}
-                        </Text>
-                        {f.apto && (
-                          <Text style={{ color: C.textMuted, fontSize: 12 }}>Apto {f.apto}</Text>
-                        )}
-                        {f.totalConDescuento && f.estado === "pendiente" && (
-                          <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 4 }}>
-                            <Ionicons name="pricetag" size={12} color={C.success} />
-                            <Text style={{ color: C.success, fontSize: 12, fontWeight: "600" }}>
-                              Con descuento: {cop(f.totalConDescuento)} (del 1-15)
-                            </Text>
-                          </View>
-                        )}
-                      </View>
-                      <View style={{ alignItems: "flex-end", gap: 8 }}>
-                        <Text style={{ color: C.text, fontSize: 16, fontWeight: "700" }}>{cop(f.totalAPagar)}</Text>
-                        <GlassBadge
-                          label={ESTADO_LABEL[f.estado as Estado] ?? f.estado}
-                          tone={ESTADO_TONE[f.estado as Estado] ?? "neutral"}
-                        />
-                      </View>
-                    </View>
-                    <View style={{ marginTop: 12, flexDirection: "row", alignItems: "center", gap: 4 }}>
-                      <Ionicons name="time-outline" size={12} color={C.textMuted} />
-                      <Text style={{ color: C.textMuted, fontSize: 11 }}>
-                        Vence {new Date(f.fechaVencimiento).toLocaleDateString("es-CO", { day: "numeric", month: "short" })}
-                      </Text>
-                    </View>
-                  </GlassCard>
-                </GlassPressable>
-              ))}
-            </View>
-          )}
-        </GlassSection>
+        <View style={{ marginTop: SoftUI.space.xs }}>
+          <GlassSection
+            title={`${filtered.length} factura${filtered.length === 1 ? "" : "s"}`}
+          >
+            {facturas === undefined ? (
+              <ActivityIndicator color={SoftUI.blue} style={{ marginTop: 20 }} />
+            ) : filtered.length === 0 ? (
+              <GlassCard style={styles.emptyCard}>
+                <Ionicons name="wallet-outline" size={32} color={SoftUI.textSecondary} />
+                <Text style={styles.emptyText}>Sin facturas en esta categoría</Text>
+              </GlassCard>
+            ) : (
+              <View style={{ gap: SoftUI.space.md }}>
+                {filtered.map((f) => (
+                  <FacturaListCard
+                    key={f._id}
+                    f={f}
+                    onPress={() => setDetalle(f)}
+                  />
+                ))}
+              </View>
+            )}
+          </GlassSection>
+        </View>
       </ScrollView>
 
       <FacturaDetalleModal
@@ -441,7 +510,7 @@ function ResidentFacturasView({ condominioId }: { condominioId: Id<"condominios"
         condominioId={condominioId}
         onClose={() => setDetalle(null)}
       />
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -646,13 +715,14 @@ function CrearFacturaSheet({
     <>
       <BottomSheet visible={visible} onClose={onClose} maxHeight="92%">
         <ScrollView
-          contentContainerStyle={{ padding: 24, paddingBottom: 36 }}
+          contentContainerStyle={{
+            padding: SoftUI.padH,
+            paddingBottom: SoftUI.space.xxl,
+          }}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          <Text style={{ color: C.text, fontSize: 20, fontWeight: "700", marginBottom: 20, letterSpacing: -0.4 }}>
-            Nueva factura
-          </Text>
+          <Text style={styles.sheetTitle}>Nueva factura</Text>
 
           <Text style={styles_label}>Unidad *</Text>
           <Tap
@@ -660,105 +730,163 @@ function CrearFacturaSheet({
             onPress={() => setUnidadPicker(true)}
             haptic={false}
           >
-            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+              }}
+            >
               <Text
                 style={{
-                  color: selectedUnidad ? C.text : C.textMuted,
-                  fontSize: 15,
+                  color: selectedUnidad ? SoftUI.text : SoftUI.textDisabled,
+                  fontSize: SoftUI.type.body.size,
+                  fontFamily: AuthUI.font.regular,
                   flex: 1,
                 }}
                 numberOfLines={1}
               >
-                {selectedUnidad ? unidadLabel(selectedUnidad) : "Selecciona una unidad"}
+                {selectedUnidad
+                  ? unidadLabel(selectedUnidad)
+                  : "Selecciona una unidad"}
               </Text>
-              <Ionicons name="chevron-down" size={18} color={C.textMuted} />
+              <Ionicons
+                name="chevron-down"
+                size={18}
+                color={SoftUI.textSecondary}
+              />
             </View>
           </Tap>
 
-          <Text style={[styles_label, { marginTop: 14 }]}>Período * (YYYY-MM)</Text>
+          <Text style={[styles_label, { marginTop: SoftUI.space.base }]}>
+            Período * (YYYY-MM)
+          </Text>
           <TextInput
             value={periodo}
             onChangeText={setPeriodo}
             placeholder="2026-06"
-            placeholderTextColor={C.textMuted}
+            placeholderTextColor={SoftUI.textDisabled}
             autoCapitalize="none"
             style={inputStyle}
           />
 
-          <Text style={[styles_label, { marginTop: 14 }]}>Fecha vencimiento * (YYYY-MM-DD)</Text>
+          <Text style={[styles_label, { marginTop: SoftUI.space.base }]}>
+            Fecha vencimiento * (YYYY-MM-DD)
+          </Text>
           <TextInput
             value={fechaVencimiento}
             onChangeText={setFechaVencimiento}
             placeholder="2026-07-15"
-            placeholderTextColor={C.textMuted}
+            placeholderTextColor={SoftUI.textDisabled}
             autoCapitalize="none"
             style={inputStyle}
           />
 
-          <Text style={[styles_label, { marginTop: 14 }]}>Valor (sin descuento) *</Text>
+          <Text style={[styles_label, { marginTop: SoftUI.space.base }]}>
+            Valor (sin descuento) *
+          </Text>
           <TextInput
             value={valor}
             onChangeText={setValor}
             placeholder="360000"
-            placeholderTextColor={C.textMuted}
+            placeholderTextColor={SoftUI.textDisabled}
             keyboardType="numeric"
             style={inputStyle}
           />
 
-          <Text style={[styles_label, { marginTop: 14 }]}>Saldo a favor (opcional)</Text>
+          <Text style={[styles_label, { marginTop: SoftUI.space.base }]}>
+            Saldo a favor (opcional)
+          </Text>
           <TextInput
             value={saldoAFavor}
             onChangeText={setSaldoAFavor}
             placeholder="0"
-            placeholderTextColor={C.textMuted}
+            placeholderTextColor={SoftUI.textDisabled}
             keyboardType="numeric"
             style={inputStyle}
           />
 
-          <Text style={[styles_label, { marginTop: 14 }]}>Valor con descuento (opcional)</Text>
+          <Text style={[styles_label, { marginTop: SoftUI.space.base }]}>
+            Valor con descuento (opcional)
+          </Text>
           <TextInput
             value={totalConDescuento}
             onChangeText={setTotalConDescuento}
             placeholder="Ej: 140000"
-            placeholderTextColor={C.textMuted}
+            placeholderTextColor={SoftUI.textDisabled}
             keyboardType="numeric"
             style={inputStyle}
           />
 
-          <Text style={[styles_label, { marginTop: 14 }]}>Adjunto (PDF o imagen)</Text>
-          <View style={{ flexDirection: "row", gap: 10, marginBottom: 12 }}>
+          <Text style={[styles_label, { marginTop: SoftUI.space.base }]}>
+            Adjunto (PDF o imagen)
+          </Text>
+          <View
+            style={{
+              flexDirection: "row",
+              gap: SoftUI.space.sm,
+              marginBottom: SoftUI.space.md,
+            }}
+          >
             <Tap style={styles_attachBtn} onPress={pickImage} disabled={saving}>
-              <Ionicons name="image-outline" size={18} color={AuthUI.text} />
+              <Ionicons name="image-outline" size={18} color={SoftUI.blue} />
               <Text style={styles_attachBtnText}>Foto</Text>
             </Tap>
             <Tap style={styles_attachBtn} onPress={pickPdf} disabled={saving}>
-              <Ionicons name="document-text-outline" size={18} color={AuthUI.text} />
+              <Ionicons
+                name="document-text-outline"
+                size={18}
+                color={SoftUI.blue}
+              />
               <Text style={styles_attachBtnText}>PDF</Text>
             </Tap>
           </View>
           {adjunto ? (
-            <View style={[styles_attachRow, { marginBottom: 8 }]}>
+            <View style={[styles_attachRow, { marginBottom: SoftUI.space.sm }]}>
               {adjunto.mimeType.startsWith("image/") ? (
                 <Image source={{ uri: adjunto.uri }} style={styles_thumb} />
               ) : (
                 <View style={styles_attachIcon}>
-                  <Ionicons name="document-text" size={18} color={AuthUI.text} />
+                  <Ionicons
+                    name="document-text"
+                    size={18}
+                    color={SoftUI.blue}
+                  />
                 </View>
               )}
               <Text style={styles_attachName} numberOfLines={1}>
                 {adjunto.nombre}
               </Text>
               <Tap onPress={() => setAdjunto(null)} haptic={false}>
-                <Ionicons name="close-circle" size={22} color={AuthUI.textMuted} />
+                <Ionicons
+                  name="close-circle"
+                  size={22}
+                  color={SoftUI.textSecondary}
+                />
               </Tap>
             </View>
           ) : null}
 
           {error ? (
-            <Text style={{ color: C.danger, fontSize: 13, marginTop: 8 }}>{error}</Text>
+            <Text
+              style={{
+                color: SoftUI.danger,
+                fontSize: SoftUI.type.caption.size,
+                fontFamily: AuthUI.font.medium,
+                marginTop: SoftUI.space.sm,
+              }}
+            >
+              {error}
+            </Text>
           ) : null}
 
-          <View style={{ flexDirection: "row", gap: 10, marginTop: 24 }}>
+          <View
+            style={{
+              flexDirection: "row",
+              gap: SoftUI.space.sm,
+              marginTop: SoftUI.space.xl,
+            }}
+          >
             <Tap
               style={[styles_footerBtn, styles_footerCancel]}
               onPress={() => {
@@ -767,7 +895,15 @@ function CrearFacturaSheet({
               }}
               disabled={saving}
             >
-              <Text style={{ color: C.text, fontSize: 15, fontWeight: "600" }}>Cancelar</Text>
+              <Text
+                style={{
+                  color: SoftUI.text,
+                  fontSize: SoftUI.type.body.size,
+                  fontFamily: AuthUI.font.semibold,
+                }}
+              >
+                Cancelar
+              </Text>
             </Tap>
             <Tap
               style={[styles_footerBtn, styles_footerPrimary]}
@@ -775,57 +911,56 @@ function CrearFacturaSheet({
               disabled={saving}
             >
               {saving ? (
-                <ActivityIndicator color="#fff" />
+                <ActivityIndicator color={SoftUI.white} />
               ) : (
-                <Text style={{ color: "#fff", fontSize: 15, fontWeight: "700" }}>Crear</Text>
+                <Text
+                  style={{
+                    color: SoftUI.white,
+                    fontSize: SoftUI.type.body.size,
+                    fontFamily: AuthUI.font.bold,
+                  }}
+                >
+                  Crear
+                </Text>
               )}
             </Tap>
           </View>
         </ScrollView>
       </BottomSheet>
 
-      <BottomSheet visible={unidadPicker} onClose={() => setUnidadPicker(false)} maxHeight="80%">
-        <View style={{ padding: 20, paddingBottom: 8 }}>
-          <Text style={{ color: C.text, fontSize: 18, fontWeight: "700", marginBottom: 12 }}>
-            Seleccionar unidad
-          </Text>
-          <View
-            style={{
-              flexDirection: "row",
-              alignItems: "center",
-              borderWidth: 1,
-              borderColor: C.border,
-              backgroundColor: C.card,
-              borderRadius: 12,
-              paddingHorizontal: 12,
-              marginBottom: 12,
-            }}
-          >
-            <Ionicons name="search" size={16} color={C.textMuted} />
+      <BottomSheet
+        visible={unidadPicker}
+        onClose={() => setUnidadPicker(false)}
+        maxHeight="80%"
+      >
+        <View
+          style={{
+            padding: SoftUI.padH,
+            paddingBottom: SoftUI.space.sm,
+          }}
+        >
+          <Text style={styles.sheetTitle}>Seleccionar unidad</Text>
+          <View style={styles.searchBox}>
+            <Ionicons name="search" size={16} color={SoftUI.textSecondary} />
             <TextInput
               value={unidadSearch}
               onChangeText={setUnidadSearch}
               placeholder="Buscar apto o nombre…"
-              placeholderTextColor={C.textMuted}
-              style={{
-                flex: 1,
-                color: C.text,
-                fontSize: 15,
-                paddingVertical: 12,
-                paddingHorizontal: 8,
-                letterSpacing: 0,
-                fontFamily: AuthUI.font.regular,
-              }}
+              placeholderTextColor={SoftUI.textDisabled}
+              style={styles.searchInput}
             />
           </View>
         </View>
-        <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 40 }}>
+        <ScrollView
+          contentContainerStyle={{
+            paddingHorizontal: SoftUI.padH,
+            paddingBottom: SoftUI.space.section,
+          }}
+        >
           {unidades === undefined ? (
-            <ActivityIndicator color={C.textSoft} />
+            <ActivityIndicator color={SoftUI.blue} />
           ) : filteredUnidades.length === 0 ? (
-            <Text style={{ color: C.textMuted, textAlign: "center", marginTop: 20 }}>
-              Sin unidades
-            </Text>
+            <Text style={styles.emptyText}>Sin unidades</Text>
           ) : (
             filteredUnidades.map((u) => {
               const active = u._id === unidadId;
@@ -837,21 +972,22 @@ function CrearFacturaSheet({
                     setUnidadPicker(false);
                     setUnidadSearch("");
                   }}
-                  style={{
-                    flexDirection: "row",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    paddingVertical: 13,
-                    paddingHorizontal: 12,
-                    borderRadius: 10,
-                    backgroundColor: active ? C.bgSubtle : "transparent",
-                    marginBottom: 2,
-                  }}
+                  style={[styles.sheetRow, active && styles.sheetRowActive]}
                 >
-                  <Text style={{ color: C.text, fontSize: 14, fontWeight: active ? "600" : "400", flex: 1 }}>
+                  <Text
+                    style={[
+                      styles.sheetRowText,
+                      active && {
+                        fontFamily: AuthUI.font.semibold,
+                        color: SoftUI.blue,
+                      },
+                    ]}
+                  >
                     {unidadLabel(u)}
                   </Text>
-                  {active ? <Ionicons name="checkmark" size={18} color={C.navy} /> : null}
+                  {active ? (
+                    <Ionicons name="checkmark" size={18} color={SoftUI.blue} />
+                  ) : null}
                 </Pressable>
               );
             })
@@ -928,21 +1064,64 @@ function FacturaDetalleModal({
       {detalle && (
         <ScrollView
           bounces={false}
-          contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 4, paddingBottom: 16 }}
+          contentContainerStyle={{
+            paddingHorizontal: SoftUI.padH,
+            paddingTop: SoftUI.space.xs,
+            paddingBottom: SoftUI.space.base,
+          }}
           showsVerticalScrollIndicator={false}
         >
-          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
-            <View style={{ gap: 3, flex: 1, paddingRight: 12 }}>
-              <Text style={{ color: C.textMuted, fontSize: 13, fontWeight: "500" }}>Factura</Text>
-              <Text style={{ color: C.text, fontSize: 22, fontWeight: "700" }}>
+          <View
+            style={{
+              flexDirection: "row",
+              justifyContent: "space-between",
+              alignItems: "flex-start",
+              marginBottom: SoftUI.space.md,
+              gap: SoftUI.space.md,
+            }}
+          >
+            <View style={{ gap: SoftUI.space.xs, flex: 1 }}>
+              <Text
+                style={{
+                  color: SoftUI.textSecondary,
+                  fontSize: SoftUI.type.caption.size,
+                  fontFamily: AuthUI.font.medium,
+                }}
+              >
+                Factura
+              </Text>
+              <Text
+                style={{
+                  color: SoftUI.text,
+                  fontSize: SoftUI.type.hero.size - 2,
+                  lineHeight: SoftUI.type.hero.line,
+                  fontFamily: AuthUI.font.bold,
+                }}
+              >
                 {fmtPeriodo(detalle.periodo)}
               </Text>
-              {detalle.residenteNombre && (
-                <Text style={{ color: C.textSoft, fontSize: 14 }}>{detalle.residenteNombre}</Text>
-              )}
-              {detalle.apto && (
-                <Text style={{ color: C.textMuted, fontSize: 13 }}>Apto {detalle.apto}</Text>
-              )}
+              {detalle.residenteNombre ? (
+                <Text
+                  style={{
+                    color: SoftUI.textSecondary,
+                    fontSize: SoftUI.type.body.size - 1,
+                    fontFamily: AuthUI.font.regular,
+                  }}
+                >
+                  {detalle.residenteNombre}
+                </Text>
+              ) : null}
+              {detalle.apto ? (
+                <Text
+                  style={{
+                    color: SoftUI.textSecondary,
+                    fontSize: SoftUI.type.caption.size,
+                    fontFamily: AuthUI.font.regular,
+                  }}
+                >
+                  Apto {detalle.apto}
+                </Text>
+              ) : null}
             </View>
             <GlassBadge
               label={ESTADO_LABEL[detalle.estado as Estado] ?? detalle.estado}
@@ -950,49 +1129,126 @@ function FacturaDetalleModal({
             />
           </View>
 
-          <View style={{ backgroundColor: C.card, borderRadius: 12, borderWidth: 1, borderColor: C.border, paddingHorizontal: 16, marginBottom: 12, marginTop: 8 }}>
+          <GlassCard
+            style={{
+              paddingHorizontal: SoftUI.space.base,
+              marginBottom: SoftUI.space.md,
+            }}
+          >
             {detalle.lineas.map((l, i) => (
               <View
                 key={i}
                 style={{
                   flexDirection: "row",
                   justifyContent: "space-between",
-                  paddingVertical: 12,
-                  borderBottomWidth: i < detalle.lineas.length - 1 ? 1 : 0,
-                  borderColor: C.borderSoft,
+                  paddingVertical: SoftUI.space.md,
+                  borderBottomWidth:
+                    i < detalle.lineas.length - 1 ? StyleSheet.hairlineWidth : 0,
+                  borderColor: SoftUI.divider,
                 }}
               >
-                <Text style={{ color: C.textSoft, fontSize: 13, flex: 1, paddingRight: 12 }}>
+                <Text
+                  style={{
+                    color: SoftUI.textSecondary,
+                    fontSize: SoftUI.type.caption.size,
+                    fontFamily: AuthUI.font.regular,
+                    flex: 1,
+                    paddingRight: SoftUI.space.md,
+                  }}
+                >
                   {l.concepto}
                 </Text>
-                <Text style={{ color: C.text, fontSize: 13, fontWeight: "600" }}>{cop(l.total)}</Text>
+                <Text
+                  style={{
+                    color: SoftUI.text,
+                    fontSize: SoftUI.type.caption.size,
+                    fontFamily: AuthUI.font.semibold,
+                  }}
+                >
+                  {cop(l.total)}
+                </Text>
               </View>
             ))}
-          </View>
+          </GlassCard>
 
-          <View style={{ backgroundColor: C.bgSubtle, borderRadius: 12, padding: 16, gap: 10, marginBottom: 16 }}>
-            <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
-              <Text style={{ color: C.textSoft, fontSize: 14 }}>Sin descuento (16-30)</Text>
-              <Text style={{ color: C.text, fontSize: 14, fontWeight: "700" }}>{cop(detalle.totalAPagar)}</Text>
+          <GlassCard
+            style={{
+              padding: SoftUI.space.base,
+              gap: SoftUI.space.sm,
+              marginBottom: SoftUI.space.base,
+              backgroundColor: SoftUI.bgSecondary,
+            }}
+          >
+            <View
+              style={{
+                flexDirection: "row",
+                justifyContent: "space-between",
+              }}
+            >
+              <Text
+                style={{
+                  color: SoftUI.textSecondary,
+                  fontSize: SoftUI.type.body.size - 1,
+                  fontFamily: AuthUI.font.regular,
+                }}
+              >
+                Sin descuento (16-30)
+              </Text>
+              <Text
+                style={{
+                  color: SoftUI.text,
+                  fontSize: SoftUI.type.body.size - 1,
+                  fontFamily: AuthUI.font.bold,
+                }}
+              >
+                {cop(detalle.totalAPagar)}
+              </Text>
             </View>
             {detalle.totalConDescuento ? (
-              <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                  <Ionicons name="pricetag" size={14} color={C.success} />
-                  <Text style={{ color: C.success, fontSize: 14, fontWeight: "600" }}>Con descuento (1-15)</Text>
+              <View
+                style={{
+                  flexDirection: "row",
+                  justifyContent: "space-between",
+                }}
+              >
+                <View
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    gap: SoftUI.space.xs,
+                  }}
+                >
+                  <Ionicons name="pricetag" size={14} color={SoftUI.success} />
+                  <Text
+                    style={{
+                      color: SoftUI.success,
+                      fontSize: SoftUI.type.body.size - 1,
+                      fontFamily: AuthUI.font.semibold,
+                    }}
+                  >
+                    Con descuento (1-15)
+                  </Text>
                 </View>
-                <Text style={{ color: C.success, fontSize: 14, fontWeight: "700" }}>{cop(detalle.totalConDescuento)}</Text>
+                <Text
+                  style={{
+                    color: SoftUI.success,
+                    fontSize: SoftUI.type.body.size - 1,
+                    fontFamily: AuthUI.font.bold,
+                  }}
+                >
+                  {cop(detalle.totalConDescuento)}
+                </Text>
               </View>
             ) : null}
-          </View>
+          </GlassCard>
 
-          <View style={{ gap: 10 }}>
+          <View style={{ gap: SoftUI.space.sm }}>
             {puedePagar ? (
               <GlassButton
                 label={pagando ? "Abriendo pasarela…" : "Pagar"}
                 icon={
                   pagando ? undefined : (
-                    <Ionicons name="card-outline" size={18} color="#fff" />
+                    <Ionicons name="card-outline" size={18} color={SoftUI.white} />
                   )
                 }
                 onPress={pagando ? undefined : pagar}
@@ -1007,19 +1263,26 @@ function FacturaDetalleModal({
                   <Ionicons
                     name="document-text-outline"
                     size={18}
-                    color={puedePagar ? C.text : "#fff"}
+                    color={puedePagar ? SoftUI.blue : SoftUI.white}
                   />
                 }
                 onPress={async () => {
                   try {
                     await openUrl(detalle.pdfUrl!);
                   } catch {
-                    Alert.alert("Error", "No se pudo abrir el archivo. Intenta de nuevo.");
+                    Alert.alert(
+                      "Error",
+                      "No se pudo abrir el archivo. Intenta de nuevo.",
+                    );
                   }
                 }}
               />
             ) : (
-              <GlassButton label="PDF no disponible" variant="secondary" disabled />
+              <GlassButton
+                label="PDF no disponible"
+                variant="secondary"
+                disabled
+              />
             )}
             <GlassButton label="Cerrar" variant="secondary" onPress={onClose} />
           </View>
@@ -1027,17 +1290,6 @@ function FacturaDetalleModal({
       )}
     </BottomSheet>
   );
-}
-
-function chipStyle(active: boolean) {
-  return {
-    paddingHorizontal: 14,
-    paddingVertical: 7,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: active ? C.text : C.border,
-    backgroundColor: active ? C.text : C.card,
-  };
 }
 
 /** Fallback Aval Pay Center por convenio (mismo patrón que VekinoWeb). */
@@ -1055,77 +1307,311 @@ function avalPortalFallback(subdomain?: string | null): string | null {
   return map[key] ?? null;
 }
 
-const styles_label = { color: C.text, fontSize: 13, fontWeight: "500" as const, marginBottom: 8 };
+const styles_label = {
+  color: SoftUI.text,
+  fontSize: SoftUI.type.caption.size,
+  fontFamily: AuthUI.font.semibold,
+  marginBottom: SoftUI.space.sm,
+};
 const inputStyle = {
-  borderWidth: 1,
-  borderColor: C.border,
-  backgroundColor: C.card,
-  borderRadius: 14,
-  paddingHorizontal: 14,
-  paddingVertical: 12,
-  fontSize: 15,
-  color: C.text,
+  backgroundColor: SoftUI.field,
+  borderRadius: SoftUI.radius.field,
+  paddingHorizontal: SoftUI.space.base,
+  paddingVertical: SoftUI.space.md,
+  fontSize: SoftUI.type.body.size,
+  color: SoftUI.text,
+  fontFamily: AuthUI.font.regular,
+  minHeight: SoftUI.fieldH,
 };
 const styles_attachBtn = {
   flex: 1,
   flexDirection: "row" as const,
   alignItems: "center" as const,
   justifyContent: "center" as const,
-  gap: 8,
-  paddingVertical: 12,
-  borderRadius: 14,
-  borderWidth: 1,
-  borderColor: C.border,
-  backgroundColor: "#FFFFFF",
+  gap: SoftUI.space.sm,
+  paddingVertical: SoftUI.space.md,
+  borderRadius: SoftUI.radius.button,
+  backgroundColor: SoftUI.card,
+  ...softShadow,
 };
 const styles_attachBtnText = {
-  color: AuthUI.text,
-  fontSize: 14,
+  color: SoftUI.text,
+  fontSize: SoftUI.type.caption.size + 1,
   fontFamily: AuthUI.font.semibold,
 };
 const styles_attachRow = {
   flexDirection: "row" as const,
   alignItems: "center" as const,
-  gap: 10,
-  paddingVertical: 10,
-  paddingHorizontal: 12,
-  borderRadius: 14,
-  borderWidth: 1,
-  borderColor: C.border,
-  backgroundColor: "#FFFFFF",
+  gap: SoftUI.space.md,
+  paddingVertical: SoftUI.space.md,
+  paddingHorizontal: SoftUI.space.md,
+  borderRadius: SoftUI.radius.cardSm,
+  backgroundColor: SoftUI.card,
+  ...softShadow,
 };
 const styles_attachIcon = {
-  width: 40,
-  height: 40,
-  borderRadius: 10,
-  backgroundColor: "rgba(14,14,15,0.06)",
+  width: SoftUI.iconBtn - 8,
+  height: SoftUI.iconBtn - 8,
+  borderRadius: SoftUI.radius.icon,
+  backgroundColor: SoftUI.infoSoft,
   alignItems: "center" as const,
   justifyContent: "center" as const,
 };
 const styles_thumb = {
-  width: 40,
-  height: 40,
-  borderRadius: 10,
-  backgroundColor: C.bgSubtle,
+  width: SoftUI.iconBtn - 8,
+  height: SoftUI.iconBtn - 8,
+  borderRadius: SoftUI.radius.icon,
+  backgroundColor: SoftUI.bgSecondary,
 };
 const styles_attachName = {
   flex: 1,
-  color: AuthUI.text,
-  fontSize: 13,
+  color: SoftUI.text,
+  fontSize: SoftUI.type.caption.size,
   fontFamily: AuthUI.font.medium,
 };
 const styles_footerBtn = {
   flex: 1,
   alignItems: "center" as const,
   justifyContent: "center" as const,
-  paddingVertical: 14,
-  borderRadius: 14,
+  paddingVertical: SoftUI.space.base,
+  borderRadius: SoftUI.radius.button,
+  minHeight: SoftUI.buttonH - 4,
 };
 const styles_footerCancel = {
-  borderWidth: 1,
-  borderColor: C.border,
-  backgroundColor: "#FFFFFF",
+  backgroundColor: SoftUI.card,
+  borderWidth: StyleSheet.hairlineWidth,
+  borderColor: SoftUI.divider,
 };
 const styles_footerPrimary = {
-  backgroundColor: "#0E0E0F",
+  backgroundColor: SoftUI.blue,
 };
+
+const styles = StyleSheet.create({
+  scroll: {
+    paddingBottom: 150,
+    paddingHorizontal: SoftUI.padH,
+    paddingTop: SoftUI.space.md,
+  },
+  periodoRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: SoftUI.space.sm,
+    marginBottom: SoftUI.space.base,
+  },
+  periodoBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: SoftUI.card,
+    borderRadius: SoftUI.radius.cardSm,
+    paddingHorizontal: SoftUI.space.base,
+    paddingVertical: SoftUI.space.md,
+    minHeight: SoftUI.fieldH,
+    ...softShadow,
+  },
+  periodoIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: SoftUI.radius.chip,
+    backgroundColor: SoftUI.infoSoft,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  periodoLabel: {
+    color: SoftUI.text,
+    fontSize: SoftUI.type.body.size,
+    fontFamily: AuthUI.font.semibold,
+  },
+  sheetTitle: {
+    color: SoftUI.text,
+    fontSize: SoftUI.type.section.size,
+    fontFamily: AuthUI.font.bold,
+    marginBottom: SoftUI.space.base,
+  },
+  sheetRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: SoftUI.space.md,
+    paddingHorizontal: SoftUI.space.md,
+    borderRadius: SoftUI.radius.cardSm,
+    marginBottom: 2,
+  },
+  sheetRowActive: {
+    backgroundColor: SoftUI.infoSoft,
+  },
+  sheetRowText: {
+    color: SoftUI.text,
+    fontSize: SoftUI.type.body.size,
+    fontFamily: AuthUI.font.regular,
+  },
+  nuevaBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: SoftUI.space.xs,
+    backgroundColor: SoftUI.blue,
+    paddingHorizontal: SoftUI.space.base,
+    paddingVertical: SoftUI.space.sm + 2,
+    borderRadius: SoftUI.radius.chip,
+    minHeight: SoftUI.touch,
+  },
+  nuevaBtnText: {
+    color: SoftUI.white,
+    fontSize: SoftUI.type.chip.size,
+    fontFamily: AuthUI.font.semibold,
+  },
+  kpiRow: {
+    flexDirection: "row",
+    gap: SoftUI.space.sm,
+    marginBottom: SoftUI.space.base,
+  },
+  kpiCard: {
+    flex: 1,
+    paddingVertical: SoftUI.space.base,
+    paddingHorizontal: SoftUI.space.sm,
+    alignItems: "center",
+    gap: SoftUI.space.xs,
+  },
+  kpiValue: {
+    fontSize: SoftUI.type.section.size,
+    fontFamily: AuthUI.font.bold,
+  },
+  kpiLabel: {
+    color: SoftUI.textSecondary,
+    fontSize: SoftUI.type.chip.size - 1,
+    fontFamily: AuthUI.font.medium,
+  },
+  summaryCard: {
+    padding: SoftUI.space.base,
+    marginBottom: SoftUI.space.base,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: SoftUI.space.md,
+    minHeight: 82,
+  },
+  summaryIcon: {
+    width: SoftUI.iconBtn,
+    height: SoftUI.iconBtn,
+    borderRadius: SoftUI.radius.chip,
+    backgroundColor: SoftUI.blue,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  summaryTitle: {
+    color: SoftUI.text,
+    fontSize: SoftUI.type.cardTitle.size - 1,
+    fontFamily: AuthUI.font.semibold,
+  },
+  summarySub: {
+    color: SoftUI.textSecondary,
+    fontSize: SoftUI.type.caption.size,
+    fontFamily: AuthUI.font.regular,
+  },
+  searchBox: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: SoftUI.field,
+    borderRadius: SoftUI.radius.field,
+    paddingHorizontal: SoftUI.space.base,
+    marginBottom: SoftUI.space.base,
+    minHeight: SoftUI.fieldH,
+    gap: SoftUI.space.sm,
+  },
+  searchInput: {
+    flex: 1,
+    color: SoftUI.text,
+    fontSize: SoftUI.type.body.size,
+    paddingVertical: SoftUI.space.md,
+    fontFamily: AuthUI.font.regular,
+  },
+  chip: {
+    paddingHorizontal: SoftUI.space.base,
+    paddingVertical: SoftUI.space.sm,
+    borderRadius: SoftUI.radius.chip,
+    backgroundColor: SoftUI.card,
+    ...softShadow,
+  },
+  chipActive: {
+    backgroundColor: SoftUI.blue,
+  },
+  chipText: {
+    color: SoftUI.textSecondary,
+    fontSize: SoftUI.type.chip.size,
+    fontFamily: AuthUI.font.semibold,
+  },
+  chipTextActive: {
+    color: SoftUI.white,
+  },
+  facturaCard: {
+    padding: SoftUI.space.base,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: SoftUI.space.md,
+  },
+  facturaIcon: {
+    width: SoftUI.iconBtn,
+    height: SoftUI.iconBtn,
+    borderRadius: SoftUI.radius.chip,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  facturaBody: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  facturaTitle: {
+    color: SoftUI.text,
+    fontSize: SoftUI.type.body.size,
+    fontFamily: AuthUI.font.semibold,
+  },
+  facturaMeta: {
+    color: SoftUI.textSecondary,
+    fontSize: SoftUI.type.chip.size,
+    fontFamily: AuthUI.font.regular,
+  },
+  facturaDue: {
+    color: SoftUI.textSecondary,
+    fontSize: SoftUI.type.chip.size - 1,
+    fontFamily: AuthUI.font.regular,
+  },
+  descuentoRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: SoftUI.space.xs,
+    marginTop: SoftUI.space.sm,
+  },
+  descuentoText: {
+    color: SoftUI.success,
+    fontSize: SoftUI.type.chip.size,
+    fontFamily: AuthUI.font.semibold,
+  },
+  facturaRight: {
+    alignItems: "flex-end",
+    gap: SoftUI.space.sm,
+  },
+  facturaMonto: {
+    color: SoftUI.text,
+    fontSize: SoftUI.type.body.size,
+    fontFamily: AuthUI.font.bold,
+  },
+  glassAction: {
+    width: 36,
+    height: 36,
+    borderRadius: SoftUI.radius.chip,
+    backgroundColor: SoftUI.infoSoft,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  emptyCard: {
+    padding: SoftUI.space.xxl,
+    alignItems: "center",
+    gap: SoftUI.space.md,
+  },
+  emptyText: {
+    color: SoftUI.textSecondary,
+    fontSize: SoftUI.type.caption.size + 1,
+    fontFamily: AuthUI.font.regular,
+    textAlign: "center",
+  },
+});

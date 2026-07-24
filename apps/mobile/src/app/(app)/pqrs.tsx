@@ -6,19 +6,25 @@ import {
   TextInput,
   ScrollView,
   Pressable,
+  StyleSheet,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useQuery, useMutation, Authenticated } from "convex/react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
 import { useCondominio } from "@/context/condominio-context";
-import { Section } from "@/components/ui/section";
-import { GlassCard, GlassBadge } from "@/components/ui/glass";
+import { SoftHomeHeader } from "@/components/ui/soft-home-header";
+import {
+  ScreenBackground,
+  GlassCard,
+  GlassBadge,
+  GlassSection,
+} from "@/components/ui/glass";
 import { BottomSheet } from "@/components/ui/bottom-sheet";
 import { Tap } from "@/components/ui/tap";
 import { fmtFechaCorta } from "@/lib/utils";
-import { C } from "@/lib/theme";
 import { AuthUI } from "@/lib/auth-ui";
+import { SoftUI, softShadow } from "@/lib/soft-ui";
 
 type Tipo = "peticion" | "queja" | "reclamo" | "sugerencia" | "felicitacion";
 
@@ -50,14 +56,18 @@ const PRIORIDAD_TONE: Record<string, "red" | "yellow" | "neutral"> = {
 
 export default function PqrsScreen() {
   return (
-    <Authenticated>
-      <Inner />
-    </Authenticated>
+    <View style={{ flex: 1 }}>
+      <ScreenBackground>
+        <Authenticated>
+          <Inner />
+        </Authenticated>
+      </ScreenBackground>
+    </View>
   );
 }
 
 function Inner() {
-  const { condominioId, canManage } = useCondominio();
+  const { condominioId, condominioName, canManage } = useCondominio();
   const me = useQuery(api.users.me);
   const home = useQuery(
     api.portal.home,
@@ -79,144 +89,103 @@ function Inner() {
   const unidadNumero =
     home && home.allowed ? home.unidades[0]?.numero : undefined;
 
+  const hora = new Date().getHours();
+  const saludo =
+    hora < 12 ? "Buenos días" : hora < 18 ? "Buenas tardes" : "Buenas noches";
+
   return (
-    <>
-      <Section
-        title="PQRS"
-        right={
-          condominioId ? (
-            <View
-              style={{
-                flexDirection: "row",
-                alignItems: "center",
-                gap: 4,
-                backgroundColor: "#0E0E0F",
-                paddingHorizontal: 12,
-                paddingVertical: 9,
-                borderRadius: 12,
-              }}
-              onTouchEnd={() => setShowForm(true)}
-            >
-              <Ionicons name="add" size={16} color="#fff" />
-              <Text style={{ color: "#fff", fontSize: 13, fontWeight: "700" }}>
-                Nueva
-              </Text>
-            </View>
-          ) : undefined
-        }
+    <View style={{ flex: 1 }}>
+      <SoftHomeHeader
+        saludo={saludo}
+        displayName={me?.name ?? (canManage ? "Admin" : "Residente")}
+        avatarUrl={me?.image}
+        badgeLabel={condominioName ?? "PQRS"}
+      />
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={styles.scroll}
+        showsVerticalScrollIndicator={false}
       >
+        {condominioId ? (
+          <View style={styles.toolbar}>
+            <View style={{ flex: 1 }} />
+            <Tap style={styles.nuevaBtn} onPress={() => setShowForm(true)}>
+              <Ionicons name="add" size={18} color={SoftUI.white} />
+              <Text style={styles.nuevaBtnText}>Nueva</Text>
+            </Tap>
+          </View>
+        ) : null}
+
         {data === undefined || me === undefined ? (
-          <ActivityIndicator color={C.textSoft} style={{ marginTop: 30 }} />
+          <ActivityIndicator color={SoftUI.blue} style={{ marginTop: 30 }} />
         ) : data.length === 0 ? (
-          <GlassCard style={{ padding: 40, alignItems: "center", gap: 12 }}>
-            <Ionicons name="chatbox-ellipses-outline" size={32} color={C.textMuted} />
-            <Text style={{ color: C.textMuted, fontSize: 14, textAlign: "center" }}>
+          <GlassCard style={styles.emptyCard}>
+            <Ionicons
+              name="chatbox-ellipses-outline"
+              size={32}
+              color={SoftUI.textSecondary}
+            />
+            <Text style={styles.emptyText}>
               {canManage
                 ? "Sin PQRS registrados"
                 : "No has enviado solicitudes todavía"}
             </Text>
-            <Tap
-              style={styles.emptyCta}
-              onPress={() => setShowForm(true)}
-            >
+            <Tap style={styles.emptyCta} onPress={() => setShowForm(true)}>
               <Text style={styles.emptyCtaText}>Crear solicitud</Text>
             </Tap>
           </GlassCard>
         ) : (
-          <View style={{ gap: 10 }}>
-            {!canManage ? (
-              <Text style={{ color: C.textMuted, fontSize: 13, marginBottom: 2 }}>
-                Tus solicitudes
-              </Text>
-            ) : null}
-            {data.map((p) => (
-              <GlassCard key={p._id} style={{ padding: 16 }}>
-                <View
-                  style={{
-                    flexDirection: "row",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    marginBottom: 6,
-                  }}
-                >
-                  <Text
-                    style={{
-                      color: C.textMuted,
-                      fontSize: 11,
-                      fontWeight: "700",
-                      letterSpacing: 0.5,
-                    }}
-                  >
-                    {p.radicado}
-                  </Text>
-                  <GlassBadge
-                    label={ESTADO_LABEL[p.estado] ?? p.estado}
-                    tone={ESTADO_TONE[p.estado] ?? "neutral"}
-                  />
-                </View>
-                <Text
-                  style={{ color: C.text, fontSize: 15, fontWeight: "700", marginBottom: 4 }}
-                  numberOfLines={1}
-                >
-                  {p.asunto}
-                </Text>
-                <Text
-                  style={{ color: C.textSoft, fontSize: 13, lineHeight: 18 }}
-                  numberOfLines={2}
-                >
-                  {p.descripcion}
-                </Text>
-                <View
-                  style={{
-                    flexDirection: "row",
-                    flexWrap: "wrap",
-                    gap: 6,
-                    marginTop: 10,
-                    alignItems: "center",
-                  }}
-                >
-                  <GlassBadge
-                    label={TIPO_LABEL[p.tipo as Tipo] ?? p.tipo}
-                    tone="neutral"
-                  />
-                  <GlassBadge
-                    label={`Prioridad ${p.prioridad}`}
-                    tone={PRIORIDAD_TONE[p.prioridad] ?? "neutral"}
-                  />
-                  <Text style={{ color: C.textMuted, fontSize: 11, marginLeft: "auto" }}>
-                    {canManage
-                      ? `${p.solicitanteNombre}${p.unidadNumero ? ` · ${p.unidadNumero}` : ""} · `
-                      : ""}
-                    {fmtFechaCorta(p.createdAt)}
-                  </Text>
-                </View>
-                {p.respuesta ? (
-                  <View
-                    style={{
-                      marginTop: 10,
-                      backgroundColor: C.bgSubtle,
-                      borderRadius: 10,
-                      padding: 12,
-                    }}
-                  >
-                    <Text
-                      style={{
-                        color: C.textSoft,
-                        fontSize: 12,
-                        fontWeight: "700",
-                        marginBottom: 3,
-                      }}
-                    >
-                      Respuesta
-                    </Text>
-                    <Text style={{ color: C.textSoft, fontSize: 13 }}>{p.respuesta}</Text>
+          <GlassSection
+            title={
+              canManage
+                ? `${data.length} solicitud${data.length === 1 ? "" : "es"}`
+                : "Tus solicitudes"
+            }
+          >
+            <View style={{ gap: SoftUI.space.md }}>
+              {data.map((p) => (
+                <GlassCard key={p._id} style={styles.card}>
+                  <View style={styles.cardTop}>
+                    <Text style={styles.radicado}>{p.radicado}</Text>
+                    <GlassBadge
+                      label={ESTADO_LABEL[p.estado] ?? p.estado}
+                      tone={ESTADO_TONE[p.estado] ?? "neutral"}
+                    />
                   </View>
-                ) : null}
-              </GlassCard>
-            ))}
-          </View>
+                  <Text style={styles.asunto} numberOfLines={1}>
+                    {p.asunto}
+                  </Text>
+                  <Text style={styles.desc} numberOfLines={2}>
+                    {p.descripcion}
+                  </Text>
+                  <View style={styles.metaRow}>
+                    <GlassBadge
+                      label={TIPO_LABEL[p.tipo as Tipo] ?? p.tipo}
+                      tone="neutral"
+                    />
+                    <GlassBadge
+                      label={`Prioridad ${p.prioridad}`}
+                      tone={PRIORIDAD_TONE[p.prioridad] ?? "neutral"}
+                    />
+                    <Text style={styles.metaDate}>
+                      {canManage
+                        ? `${p.solicitanteNombre}${p.unidadNumero ? ` · ${p.unidadNumero}` : ""} · `
+                        : ""}
+                      {fmtFechaCorta(p.createdAt)}
+                    </Text>
+                  </View>
+                  {p.respuesta ? (
+                    <View style={styles.respuestaBox}>
+                      <Text style={styles.respuestaLabel}>Respuesta</Text>
+                      <Text style={styles.respuestaText}>{p.respuesta}</Text>
+                    </View>
+                  ) : null}
+                </GlassCard>
+              ))}
+            </View>
+          </GlassSection>
         )}
-      </Section>
+      </ScrollView>
 
       {condominioId ? (
         <CrearPqrsSheet
@@ -226,7 +195,7 @@ function Inner() {
           unidadNumero={unidadNumero}
         />
       ) : null}
-    </>
+    </View>
   );
 }
 
@@ -282,48 +251,30 @@ function CrearPqrsSheet({
   return (
     <BottomSheet visible={visible} onClose={onClose} maxHeight="90%">
       <ScrollView
-        contentContainerStyle={{ padding: 24, paddingBottom: 36 }}
+        contentContainerStyle={{
+          padding: SoftUI.padH,
+          paddingBottom: SoftUI.space.xxl,
+        }}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        <Text
-          style={{
-            color: C.text,
-            fontSize: 20,
-            fontWeight: "700",
-            marginBottom: 8,
-            letterSpacing: -0.4,
-          }}
-        >
-          Nueva solicitud
-        </Text>
-        <Text style={{ color: C.textMuted, fontSize: 13, marginBottom: 20 }}>
+        <Text style={styles.sheetTitle}>Nueva solicitud</Text>
+        <Text style={styles.sheetSub}>
           Petición, queja, reclamo o sugerencia para la administración.
         </Text>
 
         <Text style={styles.label}>Tipo</Text>
-        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>
+        <View style={styles.chipWrap}>
           {(Object.keys(TIPO_LABEL) as Tipo[]).map((t) => {
             const active = tipo === t;
             return (
               <Pressable
                 key={t}
                 onPress={() => setTipo(t)}
-                style={{
-                  paddingHorizontal: 12,
-                  paddingVertical: 8,
-                  borderRadius: 12,
-                  borderWidth: 1,
-                  borderColor: active ? C.text : C.border,
-                  backgroundColor: active ? C.text : C.card,
-                }}
+                style={[styles.chip, active && styles.chipActive]}
               >
                 <Text
-                  style={{
-                    color: active ? "#fff" : C.textSoft,
-                    fontSize: 13,
-                    fontWeight: "600",
-                  }}
+                  style={[styles.chipText, active && styles.chipTextActive]}
                 >
                   {TIPO_LABEL[t]}
                 </Text>
@@ -337,31 +288,31 @@ function CrearPqrsSheet({
           value={asunto}
           onChangeText={setAsunto}
           placeholder="Ej: Daño en la luz del parqueadero"
-          placeholderTextColor={C.textMuted}
+          placeholderTextColor={SoftUI.textDisabled}
           style={styles.input}
         />
 
-        <Text style={[styles.label, { marginTop: 14 }]}>Descripción</Text>
+        <Text style={[styles.label, { marginTop: SoftUI.space.base }]}>
+          Descripción
+        </Text>
         <TextInput
           value={descripcion}
           onChangeText={setDescripcion}
           placeholder="Describe con detalle tu solicitud…"
-          placeholderTextColor={C.textMuted}
+          placeholderTextColor={SoftUI.textDisabled}
           multiline
-          style={[styles.input, { minHeight: 110, textAlignVertical: "top" }]}
+          style={[styles.input, styles.inputMulti]}
         />
 
         {unidadNumero ? (
-          <Text style={{ color: C.textMuted, fontSize: 12, marginTop: 10 }}>
+          <Text style={styles.hint}>
             Se enviará asociada a la unidad {unidadNumero}
           </Text>
         ) : null}
 
-        {error ? (
-          <Text style={{ color: C.danger, fontSize: 13, marginTop: 10 }}>{error}</Text>
-        ) : null}
+        {error ? <Text style={styles.error}>{error}</Text> : null}
 
-        <View style={{ flexDirection: "row", gap: 10, marginTop: 24 }}>
+        <View style={styles.footerRow}>
           <Tap
             style={[styles.footerBtn, styles.footerCancel]}
             onPress={() => {
@@ -370,7 +321,7 @@ function CrearPqrsSheet({
             }}
             disabled={saving}
           >
-            <Text style={{ color: C.text, fontSize: 15, fontWeight: "600" }}>Cancelar</Text>
+            <Text style={styles.footerCancelText}>Cancelar</Text>
           </Tap>
           <Tap
             style={[styles.footerBtn, styles.footerPrimary]}
@@ -378,9 +329,9 @@ function CrearPqrsSheet({
             disabled={saving}
           >
             {saving ? (
-              <ActivityIndicator color="#fff" />
+              <ActivityIndicator color={SoftUI.white} />
             ) : (
-              <Text style={{ color: "#fff", fontSize: 15, fontWeight: "700" }}>Enviar</Text>
+              <Text style={styles.footerPrimaryText}>Enviar</Text>
             )}
           </Tap>
         </View>
@@ -389,48 +340,209 @@ function CrearPqrsSheet({
   );
 }
 
-const styles = {
-  label: {
-    color: C.text,
-    fontSize: 13,
-    fontWeight: "500" as const,
-    marginBottom: 8,
+const styles = StyleSheet.create({
+  scroll: {
+    paddingBottom: 150,
+    paddingHorizontal: SoftUI.padH,
+    paddingTop: SoftUI.space.md,
   },
-  input: {
-    borderWidth: 1,
-    borderColor: C.border,
-    backgroundColor: C.card,
-    borderRadius: 14,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 15,
-    color: C.text,
+  toolbar: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: SoftUI.space.base,
+  },
+  nuevaBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: SoftUI.space.xs,
+    backgroundColor: SoftUI.blue,
+    paddingHorizontal: SoftUI.space.base,
+    paddingVertical: SoftUI.space.sm + 2,
+    borderRadius: SoftUI.radius.chip,
+    minHeight: SoftUI.touch,
+  },
+  nuevaBtnText: {
+    color: SoftUI.white,
+    fontSize: SoftUI.type.chip.size,
+    fontFamily: AuthUI.font.semibold,
+  },
+  emptyCard: {
+    padding: SoftUI.space.xxl,
+    alignItems: "center",
+    gap: SoftUI.space.md,
+  },
+  emptyText: {
+    color: SoftUI.textSecondary,
+    fontSize: SoftUI.type.caption.size + 1,
+    fontFamily: AuthUI.font.regular,
+    textAlign: "center",
   },
   emptyCta: {
-    marginTop: 4,
-    backgroundColor: "#0E0E0F",
-    paddingHorizontal: 16,
-    paddingVertical: 11,
-    borderRadius: 12,
+    marginTop: SoftUI.space.xs,
+    backgroundColor: SoftUI.blue,
+    paddingHorizontal: SoftUI.space.base,
+    paddingVertical: SoftUI.space.md,
+    borderRadius: SoftUI.radius.button,
   },
   emptyCtaText: {
-    color: "#fff",
-    fontSize: 14,
+    color: SoftUI.white,
+    fontSize: SoftUI.type.caption.size + 1,
     fontFamily: AuthUI.font.semibold,
+  },
+  card: {
+    padding: SoftUI.space.base,
+  },
+  cardTop: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: SoftUI.space.sm,
+  },
+  radicado: {
+    color: SoftUI.textSecondary,
+    fontSize: SoftUI.type.chip.size - 1,
+    fontFamily: AuthUI.font.bold,
+    letterSpacing: 0.5,
+  },
+  asunto: {
+    color: SoftUI.text,
+    fontSize: SoftUI.type.body.size,
+    fontFamily: AuthUI.font.semibold,
+    marginBottom: SoftUI.space.xs,
+  },
+  desc: {
+    color: SoftUI.textSecondary,
+    fontSize: SoftUI.type.caption.size,
+    lineHeight: SoftUI.type.caption.line + 2,
+    fontFamily: AuthUI.font.regular,
+  },
+  metaRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: SoftUI.space.sm,
+    marginTop: SoftUI.space.md,
+    alignItems: "center",
+  },
+  metaDate: {
+    color: SoftUI.textDisabled,
+    fontSize: SoftUI.type.chip.size - 1,
+    fontFamily: AuthUI.font.regular,
+    marginLeft: "auto",
+  },
+  respuestaBox: {
+    marginTop: SoftUI.space.md,
+    backgroundColor: SoftUI.bgSecondary,
+    borderRadius: SoftUI.radius.field,
+    padding: SoftUI.space.md,
+  },
+  respuestaLabel: {
+    color: SoftUI.textSecondary,
+    fontSize: SoftUI.type.chip.size,
+    fontFamily: AuthUI.font.semibold,
+    marginBottom: SoftUI.space.xs,
+  },
+  respuestaText: {
+    color: SoftUI.textSecondary,
+    fontSize: SoftUI.type.caption.size,
+    fontFamily: AuthUI.font.regular,
+  },
+  sheetTitle: {
+    color: SoftUI.text,
+    fontSize: SoftUI.type.section.size,
+    fontFamily: AuthUI.font.bold,
+    marginBottom: SoftUI.space.sm,
+  },
+  sheetSub: {
+    color: SoftUI.textSecondary,
+    fontSize: SoftUI.type.caption.size,
+    fontFamily: AuthUI.font.regular,
+    marginBottom: SoftUI.space.lg,
+  },
+  label: {
+    color: SoftUI.text,
+    fontSize: SoftUI.type.caption.size,
+    fontFamily: AuthUI.font.semibold,
+    marginBottom: SoftUI.space.sm,
+  },
+  chipWrap: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: SoftUI.space.sm,
+    marginBottom: SoftUI.space.base,
+  },
+  chip: {
+    paddingHorizontal: SoftUI.space.base,
+    paddingVertical: SoftUI.space.sm,
+    borderRadius: SoftUI.radius.chip,
+    backgroundColor: SoftUI.card,
+    ...softShadow,
+  },
+  chipActive: {
+    backgroundColor: SoftUI.blue,
+  },
+  chipText: {
+    color: SoftUI.textSecondary,
+    fontSize: SoftUI.type.chip.size,
+    fontFamily: AuthUI.font.semibold,
+  },
+  chipTextActive: {
+    color: SoftUI.white,
+  },
+  input: {
+    backgroundColor: SoftUI.field,
+    borderRadius: SoftUI.radius.field,
+    paddingHorizontal: SoftUI.space.base,
+    paddingVertical: SoftUI.space.md,
+    fontSize: SoftUI.type.body.size,
+    color: SoftUI.text,
+    fontFamily: AuthUI.font.regular,
+    minHeight: SoftUI.fieldH,
+  },
+  inputMulti: {
+    minHeight: 110,
+    textAlignVertical: "top",
+  },
+  hint: {
+    color: SoftUI.textSecondary,
+    fontSize: SoftUI.type.chip.size,
+    fontFamily: AuthUI.font.regular,
+    marginTop: SoftUI.space.md,
+  },
+  error: {
+    color: SoftUI.danger,
+    fontSize: SoftUI.type.caption.size,
+    fontFamily: AuthUI.font.medium,
+    marginTop: SoftUI.space.md,
+  },
+  footerRow: {
+    flexDirection: "row",
+    gap: SoftUI.space.sm,
+    marginTop: SoftUI.space.xl,
   },
   footerBtn: {
     flex: 1,
-    alignItems: "center" as const,
-    justifyContent: "center" as const,
-    paddingVertical: 14,
-    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: SoftUI.space.base,
+    borderRadius: SoftUI.radius.button,
+    minHeight: SoftUI.buttonH - 4,
   },
   footerCancel: {
-    borderWidth: 1,
-    borderColor: C.border,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: SoftUI.card,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: SoftUI.divider,
+  },
+  footerCancelText: {
+    color: SoftUI.text,
+    fontSize: SoftUI.type.body.size,
+    fontFamily: AuthUI.font.semibold,
   },
   footerPrimary: {
-    backgroundColor: "#0E0E0F",
+    backgroundColor: SoftUI.blue,
   },
-};
+  footerPrimaryText: {
+    color: SoftUI.white,
+    fontSize: SoftUI.type.body.size,
+    fontFamily: AuthUI.font.bold,
+  },
+});

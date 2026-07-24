@@ -1,10 +1,11 @@
 import { View, Text, ActivityIndicator, StyleSheet } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import * as Haptics from "expo-haptics";
-import { C } from "@/lib/theme";
+import { SoftUI, softShadow } from "@/lib/soft-ui";
+import { AuthUI } from "@/lib/auth-ui";
 
 /**
- * CTA con profundidad (gradiente + highlight).
+ * CTA Soft UI (gradiente azul cielo).
  * View + onTouchEnd — no Pressable (NativeWind lo rompía).
  */
 export function AuthPrimaryButton({
@@ -26,7 +27,7 @@ export function AuthPrimaryButton({
       }}
     >
       <LinearGradient
-        colors={[C.navy, "#063163", "#042046"]}
+        colors={[SoftUI.gradientStart, SoftUI.gradientEnd]}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
         style={StyleSheet.absoluteFill}
@@ -45,36 +46,25 @@ export function AuthPrimaryButton({
 
 const styles = StyleSheet.create({
   wrap: {
-    height: 54,
-    minHeight: 54,
-    borderRadius: 14,
+    height: SoftUI.buttonH,
+    minHeight: SoftUI.buttonH,
+    borderRadius: SoftUI.radius.button,
     overflow: "hidden",
-    marginTop: 16,
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.18)",
-    shadowColor: C.navy,
-    shadowOpacity: 0.35,
-    shadowRadius: 14,
-    shadowOffset: { width: 0, height: 8 },
-    elevation: 6,
+    ...softShadow,
   },
   shine: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    right: 0,
-    height: 26,
-    backgroundColor: "rgba(255,255,255,0.12)",
+    ...StyleSheet.absoluteFillObject,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: "rgba(255,255,255,0.45)",
   },
   content: {
-    ...StyleSheet.absoluteFillObject,
+    flex: 1,
     alignItems: "center",
     justifyContent: "center",
   },
   label: {
-    color: "#ffffff",
-    fontSize: 16,
-    fontWeight: "700",
-    letterSpacing: -0.2,
+    color: SoftUI.white,
+    fontSize: SoftUI.type.body.size,
+    fontFamily: AuthUI.font.semibold,
   },
 });

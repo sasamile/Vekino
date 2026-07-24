@@ -1,4 +1,4 @@
-import { AuthUI } from "@/lib/auth-ui";
+import { SoftUI } from "@/lib/soft-ui";
 
 /** Tema visual del condominio activo (glow + accent). */
 export type CondoTheme = {
@@ -9,21 +9,22 @@ export type CondoTheme = {
   tabActiveBg: string;
 };
 
+/** Soft UI sky-blue — default de producto. */
 const DEFAULT: CondoTheme = {
-  accent: AuthUI.purple,
-  glowA: "#F4C4E0",
-  glowB: "#A8D4F5",
-  glowC: "#DDD4FA",
-  tabActiveBg: "rgba(14,14,15,0.06)",
+  accent: SoftUI.blue,
+  glowA: SoftUI.blueLight,
+  glowB: "#B8E4FF",
+  glowC: SoftUI.infoSoft,
+  tabActiveBg: "rgba(36,157,242,0.12)",
 };
 
-/** Ciudad del Campo → azul */
+/** Ciudad del Campo → azul cielo Soft UI */
 const BLUE: CondoTheme = {
-  accent: "#2563EB",
-  glowA: "#BFDBFE",
-  glowB: "#93C5FD",
-  glowC: "#DBEAFE",
-  tabActiveBg: "rgba(37,99,235,0.12)",
+  accent: SoftUI.blueSky,
+  glowA: SoftUI.blueLight,
+  glowB: "#A8D8FF",
+  glowC: SoftUI.infoSoft,
+  tabActiveBg: "rgba(67,178,250,0.14)",
 };
 
 /** Arboleda → dorado #dfc231 */
@@ -44,7 +45,10 @@ export function resolveCondoTheme(
   name: string | null | undefined,
   primaryColor?: string | null,
 ): CondoTheme {
-  const n = (name ?? "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  const n = (name ?? "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
 
   if (n.includes("campo")) return BLUE;
   if (n.includes("arboleda")) return ARBOLEDA;
