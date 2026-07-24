@@ -5,7 +5,7 @@ import { SoftUI, softShadow } from "@/lib/soft-ui";
 import { AuthUI } from "@/lib/auth-ui";
 
 /**
- * CTA Soft UI (gradiente azul cielo).
+ * CTA de marca Vekino (gradiente naranja).
  * View + onTouchEnd — no Pressable (NativeWind lo rompía).
  */
 export function AuthPrimaryButton({
@@ -27,7 +27,7 @@ export function AuthPrimaryButton({
       }}
     >
       <LinearGradient
-        colors={[SoftUI.gradientStart, SoftUI.gradientEnd]}
+        colors={[SoftUI.brandGradientStart, SoftUI.brandGradientEnd]}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
         style={StyleSheet.absoluteFill}

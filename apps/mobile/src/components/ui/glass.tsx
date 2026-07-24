@@ -206,7 +206,7 @@ interface GlassBadgeProps {
 }
 
 const BADGE_COLORS: Record<string, { bg: string; text: string }> = {
-  orange: { bg: SoftUI.infoSoft, text: SoftUI.blue },
+  orange: { bg: SoftUI.brandSoft, text: SoftUI.brand },
   green: { bg: SoftUI.successSoft, text: SoftUI.success },
   red: { bg: SoftUI.dangerSoft, text: SoftUI.danger },
   yellow: { bg: SoftUI.warningSoft, text: "#B8860B" },

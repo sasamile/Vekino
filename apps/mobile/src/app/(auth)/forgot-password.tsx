@@ -208,6 +208,6 @@ const styles = StyleSheet.create({
     textAlign: "center",
     fontFamily: AuthUI.font.semibold,
     fontSize: SoftUI.type.body.size,
-    color: SoftUI.blue,
+    color: SoftUI.brand,
   },
 });

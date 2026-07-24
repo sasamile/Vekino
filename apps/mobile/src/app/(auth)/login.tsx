@@ -23,10 +23,11 @@ import { GoogleLogo } from "@/components/ui/google-logo";
 import { VekinoLogo } from "@/components/ui/vekino-logo";
 import { AuthPrimaryButton } from "@/components/ui/auth-primary-button";
 import { AuthUI } from "@/lib/auth-ui";
-import { SoftUI, softShadow } from "@/lib/soft-ui";
+import { SoftUI } from "@/lib/soft-ui";
 import { useAuthFonts } from "@/lib/use-auth-fonts";
 import { storageGet, storageRemove, storageSet } from "@/lib/storage";
 import { Toast } from "@/components/ui/toast";
+import { LegalModal, type LegalDoc } from "@/components/ui/legal-modal";
 import { authErrorEs } from "@/lib/auth-errors";
 
 const REMEMBER_KEY = "vekino_remember_email";
@@ -46,6 +47,7 @@ export default function LoginScreen() {
   }>({});
   const [loading, setLoading] = useState(false);
   const [appleAvailable, setAppleAvailable] = useState(false);
+  const [legalDoc, setLegalDoc] = useState<LegalDoc | null>(null);
 
   useEffect(() => {
     storageGet(REMEMBER_KEY).then((v) => {
@@ -202,14 +204,14 @@ export default function LoginScreen() {
 
   if (!fontsLoaded) {
     return (
-      <PastelShell>
+      <PastelShell bottomGlows={false}>
         <View style={{ flex: 1 }} />
       </PastelShell>
     );
   }
 
   return (
-    <PastelShell>
+    <PastelShell bottomGlows={false}>
       <SafeAreaView style={{ flex: 1 }} edges={["top", "bottom"]}>
         <Toast message={error} type="error" position="bottom" />
         <KeyboardAvoidingView
@@ -221,163 +223,188 @@ export default function LoginScreen() {
             keyboardShouldPersistTaps="handled"
             keyboardDismissMode="on-drag"
             showsVerticalScrollIndicator={false}
+            bounces={false}
           >
-            <View style={styles.brand}>
-              <View style={styles.logoMark}>
-                <VekinoLogo size={34} color={SoftUI.white} />
-              </View>
-              <Text style={styles.brandName}>Vekino</Text>
-            </View>
-
-            <Text style={styles.title}>Iniciar sesión</Text>
-            <Text style={styles.subtitle}>Qué bueno verte de nuevo</Text>
-
-            <Text style={[styles.label, { marginTop: SoftUI.space.xxl }]}>
-              Correo
-            </Text>
-            <View style={styles.field}>
-              <TextInput
-                value={email}
-                onChangeText={setEmail}
-                placeholder="tu@correo.com"
-                placeholderTextColor={AuthUI.placeholder}
-                keyboardType="email-address"
-                autoCapitalize="none"
-                autoCorrect={false}
-                autoComplete="email"
-                textContentType="emailAddress"
-                returnKeyType="next"
-                onSubmitEditing={() => passwordRef.current?.focus()}
-                style={styles.input}
-              />
-            </View>
-            {fieldError.email ? (
-              <Text style={styles.fieldErr}>{fieldError.email}</Text>
-            ) : null}
-
-            <Text style={[styles.label, { marginTop: SoftUI.space.lg }]}>
-              Contraseña
-            </Text>
-            <View style={styles.field}>
-              <TextInput
-                ref={passwordRef}
-                value={password}
-                onChangeText={setPassword}
-                placeholder="Tu contraseña"
-                placeholderTextColor={AuthUI.placeholder}
-                secureTextEntry={!showPassword}
-                autoCapitalize="none"
-                autoComplete="password"
-                textContentType="password"
-                returnKeyType="done"
-                onSubmitEditing={signIn}
-                style={[styles.input, { paddingRight: 48 }]}
-              />
-              <Pressable
-                onPress={() => setShowPassword((v) => !v)}
-                style={styles.eye}
-                hitSlop={10}
-              >
-                <Ionicons
-                  name={showPassword ? "eye-outline" : "eye-off-outline"}
-                  size={22}
-                  color={SoftUI.textDisabled}
-                />
-              </Pressable>
-            </View>
-            {fieldError.password ? (
-              <Text style={styles.fieldErr}>{fieldError.password}</Text>
-            ) : null}
-
-            <View style={styles.rowOptions}>
-              <Pressable
-                onPress={() => setRemember((v) => !v)}
-                style={styles.remember}
-                hitSlop={6}
-              >
-                <View style={[styles.checkbox, remember && styles.checkboxOn]}>
-                  {remember ? (
-                    <Ionicons name="checkmark" size={14} color="#fff" />
-                  ) : null}
+            <View style={styles.main}>
+              <View style={styles.hero}>
+                <View style={styles.logoMark}>
+                  <VekinoLogo size={40} color={SoftUI.brand} />
                 </View>
-                <Text style={styles.rememberLabel}>Recordarme</Text>
-              </Pressable>
-              <Text
-                style={styles.forgot}
-                onPress={() => router.push("/(auth)/forgot-password" as never)}
-              >
-                ¿Olvidaste tu contraseña?
+                <Text style={styles.title}>Iniciar sesión</Text>
+                <Text style={styles.subtitle}>Accede a tu condominio</Text>
+              </View>
+
+              <Text style={[styles.label, { marginTop: SoftUI.space.xl }]}>
+                Correo
               </Text>
-            </View>
+              <View style={styles.field}>
+                <TextInput
+                  value={email}
+                  onChangeText={setEmail}
+                  placeholder="tu@correo.com"
+                  placeholderTextColor={AuthUI.placeholder}
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  autoComplete="email"
+                  textContentType="emailAddress"
+                  returnKeyType="next"
+                  onSubmitEditing={() => passwordRef.current?.focus()}
+                  style={styles.input}
+                />
+              </View>
+              {fieldError.email ? (
+                <Text style={styles.fieldErr}>{fieldError.email}</Text>
+              ) : null}
 
-            <View style={styles.primaryWrap}>
-              <AuthPrimaryButton
-                label="Ingresar"
-                loading={loading}
-                onPress={signIn}
-              />
-            </View>
+              <Text style={[styles.label, { marginTop: SoftUI.space.base }]}>
+                Contraseña
+              </Text>
+              <View style={styles.field}>
+                <TextInput
+                  ref={passwordRef}
+                  value={password}
+                  onChangeText={setPassword}
+                  placeholder="Tu contraseña"
+                  placeholderTextColor={AuthUI.placeholder}
+                  secureTextEntry={!showPassword}
+                  autoCapitalize="none"
+                  autoComplete="password"
+                  textContentType="password"
+                  returnKeyType="done"
+                  onSubmitEditing={signIn}
+                  style={[styles.input, { paddingRight: 48 }]}
+                />
+                <Pressable
+                  onPress={() => setShowPassword((v) => !v)}
+                  style={styles.eye}
+                  hitSlop={10}
+                >
+                  <Ionicons
+                    name={showPassword ? "eye-outline" : "eye-off-outline"}
+                    size={22}
+                    color={SoftUI.textDisabled}
+                  />
+                </Pressable>
+              </View>
+              {fieldError.password ? (
+                <Text style={styles.fieldErr}>{fieldError.password}</Text>
+              ) : null}
 
-            <Text style={styles.orCentered}>o continúa con</Text>
+              <View style={styles.rowOptions}>
+                <Pressable
+                  onPress={() => setRemember((v) => !v)}
+                  style={styles.remember}
+                  hitSlop={6}
+                >
+                  <View style={[styles.checkbox, remember && styles.checkboxOn]}>
+                    {remember ? (
+                      <Ionicons name="checkmark" size={14} color="#fff" />
+                    ) : null}
+                  </View>
+                  <Text style={styles.rememberLabel}>Recordarme</Text>
+                </Pressable>
+                <Text
+                  style={styles.forgot}
+                  onPress={() =>
+                    router.push("/(auth)/forgot-password" as never)
+                  }
+                >
+                  ¿Olvidaste tu contraseña?
+                </Text>
+              </View>
 
-            {appleAvailable ? (
-              <AppleAuthentication.AppleAuthenticationButton
-                buttonType={
-                  AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN
-                }
-                buttonStyle={
-                  AppleAuthentication.AppleAuthenticationButtonStyle.BLACK
-                }
-                cornerRadius={SoftUI.radius.button}
-                style={styles.appleBtn}
+              <View style={styles.primaryWrap}>
+                <AuthPrimaryButton
+                  label="Ingresar"
+                  loading={loading}
+                  onPress={signIn}
+                />
+              </View>
+
+              <Text style={styles.orCentered}>o continúa con</Text>
+
+              {appleAvailable ? (
+                <Pressable
+                  style={[styles.appleBtn, { opacity: loading ? 0.7 : 1 }]}
+                  disabled={loading}
+                  onPress={() => {
+                    if (loading) return;
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    void signInWithApple();
+                  }}
+                >
+                  {loading ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <>
+                      <Ionicons name="logo-apple" size={20} color="#fff" />
+                      <Text style={styles.appleLabel}>
+                        Iniciar sesión con Apple
+                      </Text>
+                    </>
+                  )}
+                </Pressable>
+              ) : null}
+
+              <Pressable
+                style={[styles.secondaryBtn, { opacity: loading ? 0.7 : 1 }]}
+                disabled={loading}
                 onPress={() => {
-                  if (loading) return;
                   Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                  void signInWithApple();
+                  void signInWithGoogle();
                 }}
-              />
-            ) : null}
+              >
+                {loading ? (
+                  <ActivityIndicator color={SoftUI.text} />
+                ) : (
+                  <>
+                    <GoogleLogo size={20} />
+                    <Text style={styles.secondaryLabel}>
+                      Iniciar sesión con Google
+                    </Text>
+                  </>
+                )}
+              </Pressable>
 
-            <Pressable
-              style={[styles.secondaryBtn, { opacity: loading ? 0.7 : 1 }]}
-              disabled={loading}
-              onPress={() => {
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                void signInWithGoogle();
-              }}
-            >
-              {loading ? (
-                <ActivityIndicator color={SoftUI.text} />
-              ) : (
-                <>
-                  <GoogleLogo size={20} />
-                  <Text style={styles.secondaryLabel}>Continuar con Google</Text>
-                </>
-              )}
-            </Pressable>
-
-            <Pressable
-              onPress={() => {
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                router.push("/(auth)/codigo-asamblea" as never);
-              }}
-              style={styles.secondaryBtn}
-            >
-              <Ionicons name="key-outline" size={18} color={SoftUI.text} />
-              <Text style={styles.secondaryLabel}>
-                Iniciar con código para asamblea
-              </Text>
-            </Pressable>
+              <Pressable
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  router.push("/(auth)/codigo-asamblea" as never);
+                }}
+                style={[styles.secondaryBtn, { marginBottom: 0 }]}
+              >
+                <Ionicons name="key-outline" size={18} color={SoftUI.text} />
+                <Text style={styles.secondaryLabel}>
+                  Iniciar con código para asamblea
+                </Text>
+              </Pressable>
+            </View>
 
             <Text style={styles.legal}>
               Al continuar aceptas los{" "}
-              <Text style={styles.legalLink}>Términos de servicio</Text>
+              <Text
+                style={styles.legalLink}
+                onPress={() => setLegalDoc("terminos")}
+              >
+                Términos de servicio
+              </Text>
               {"\n"}y la{" "}
-              <Text style={styles.legalLink}>Política de privacidad</Text>
+              <Text
+                style={styles.legalLink}
+                onPress={() => setLegalDoc("privacidad")}
+              >
+                Política de privacidad
+              </Text>
             </Text>
           </ScrollView>
         </KeyboardAvoidingView>
       </SafeAreaView>
+      <LegalModal
+        visible={legalDoc !== null}
+        doc={legalDoc}
+        onClose={() => setLegalDoc(null)}
+      />
     </PastelShell>
   );
 }
@@ -386,44 +413,42 @@ const styles = StyleSheet.create({
   scroll: {
     flexGrow: 1,
     paddingHorizontal: SoftUI.padH,
-    paddingBottom: SoftUI.space.xl,
+    paddingTop: SoftUI.space.sm,
+    paddingBottom: SoftUI.space.base,
+    justifyContent: "space-between",
   },
-  brand: {
-    marginTop: SoftUI.space.lg,
-    marginBottom: SoftUI.space.xl,
-    flexDirection: "row",
+  main: {
+    width: "100%",
+  },
+  hero: {
     alignItems: "center",
-    gap: SoftUI.space.sm,
   },
   logoMark: {
-    width: SoftUI.iconBtn,
-    height: SoftUI.iconBtn,
+    width: 56,
+    height: 56,
     borderRadius: SoftUI.radius.icon,
-    backgroundColor: SoftUI.blue,
+    backgroundColor: SoftUI.white,
+    borderWidth: 1,
+    borderColor: SoftUI.divider,
     alignItems: "center",
     justifyContent: "center",
-    ...softShadow,
-  },
-  brandName: {
-    fontFamily: AuthUI.font.bold,
-    fontSize: SoftUI.type.section.size,
-    lineHeight: SoftUI.type.section.line,
-    color: SoftUI.text,
-    letterSpacing: -0.3,
+    marginBottom: SoftUI.space.md,
   },
   title: {
     fontFamily: AuthUI.font.bold,
-    fontSize: SoftUI.type.hero.size,
-    lineHeight: SoftUI.type.hero.line,
+    fontSize: 26,
+    lineHeight: 32,
     color: SoftUI.text,
     letterSpacing: -0.4,
+    textAlign: "center",
   },
   subtitle: {
     fontFamily: AuthUI.font.regular,
     fontSize: SoftUI.type.body.size,
     lineHeight: SoftUI.type.body.line,
     color: SoftUI.textSecondary,
-    marginTop: SoftUI.space.xs,
+    marginTop: 4,
+    textAlign: "center",
   },
   label: {
     fontFamily: AuthUI.font.semibold,
@@ -432,7 +457,7 @@ const styles = StyleSheet.create({
   },
   field: {
     marginTop: SoftUI.space.sm,
-    height: SoftUI.fieldH,
+    height: 50,
     borderRadius: SoftUI.radius.field,
     borderWidth: 1,
     borderColor: SoftUI.divider,
@@ -446,12 +471,12 @@ const styles = StyleSheet.create({
     letterSpacing: 0,
     color: SoftUI.text,
     paddingVertical: 0,
-    height: SoftUI.fieldH - 2,
+    height: 48,
   },
   eye: {
     position: "absolute",
     right: SoftUI.space.base,
-    height: SoftUI.fieldH,
+    height: 50,
     justifyContent: "center",
   },
   fieldErr: {
@@ -461,7 +486,7 @@ const styles = StyleSheet.create({
     marginTop: SoftUI.space.xs,
   },
   rowOptions: {
-    marginTop: SoftUI.space.base,
+    marginTop: SoftUI.space.md,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
@@ -482,8 +507,8 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   checkboxOn: {
-    backgroundColor: SoftUI.blue,
-    borderColor: SoftUI.blue,
+    backgroundColor: SoftUI.brand,
+    borderColor: SoftUI.brand,
   },
   rememberLabel: {
     fontFamily: AuthUI.font.regular,
@@ -493,14 +518,14 @@ const styles = StyleSheet.create({
   forgot: {
     fontFamily: AuthUI.font.medium,
     fontSize: SoftUI.type.caption.size + 1,
-    color: SoftUI.blue,
+    color: SoftUI.brand,
   },
   primaryWrap: {
-    marginTop: SoftUI.space.xxl,
+    marginTop: SoftUI.space.xl,
   },
   orCentered: {
-    marginTop: SoftUI.space.xxl,
-    marginBottom: SoftUI.space.base,
+    marginTop: SoftUI.space.lg,
+    marginBottom: SoftUI.space.md,
     textAlign: "center",
     fontFamily: AuthUI.font.regular,
     fontSize: SoftUI.type.caption.size,
@@ -508,12 +533,24 @@ const styles = StyleSheet.create({
   },
   appleBtn: {
     alignSelf: "stretch",
-    height: SoftUI.buttonH,
+    height: 48,
+    borderRadius: SoftUI.radius.button,
+    backgroundColor: "#000000",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: SoftUI.space.lg,
     marginBottom: SoftUI.space.md,
+  },
+  appleLabel: {
+    marginLeft: SoftUI.space.md,
+    fontFamily: AuthUI.font.medium,
+    fontSize: SoftUI.type.body.size,
+    color: SoftUI.white,
   },
   secondaryBtn: {
     alignSelf: "stretch",
-    height: SoftUI.buttonH,
+    height: 48,
     borderRadius: SoftUI.radius.button,
     borderWidth: StyleSheet.hairlineWidth * 2,
     borderColor: SoftUI.divider,
@@ -531,8 +568,7 @@ const styles = StyleSheet.create({
     color: SoftUI.text,
   },
   legal: {
-    marginTop: SoftUI.space.lg,
-    marginBottom: SoftUI.space.sm,
+    marginTop: SoftUI.space.xl,
     textAlign: "center",
     fontFamily: AuthUI.font.regular,
     fontSize: SoftUI.type.caption.size,

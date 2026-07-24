@@ -1,6 +1,7 @@
 import { View, StyleSheet, useWindowDimensions, type ViewStyle } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import Svg, { Defs, RadialGradient, Stop, Ellipse } from "react-native-svg";
+import { SoftUI } from "@/lib/soft-ui";
 
 type GlowColors = {
   left: string;
@@ -29,9 +30,9 @@ export function PastelShell({
   const navGlowW = Math.min(300, width * 0.68);
   const bg = tone === "mist" ? "#F5F6F8" : "#FFFFFF";
 
-  const left = glows?.left ?? "#8FD6FF";
-  const right = glows?.right ?? "#B8E4FF";
-  const top = glows?.top ?? "#E8F6FF";
+  const left = glows?.left ?? SoftUI.brandLight;
+  const right = glows?.right ?? "#FFB08A";
+  const top = glows?.top ?? SoftUI.brandSoft;
 
   return (
     <View style={[styles.root, { backgroundColor: bg }]}>

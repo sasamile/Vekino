@@ -18,10 +18,10 @@ export const C = {
   borderSoft: SoftUI.bgSecondary,
   shadow: "rgba(20, 30, 45, 1)",
 
-  brand: SoftUI.blue,
-  brandDark: SoftUI.gradientStart,
-  brandSoft: SoftUI.infoSoft,
-  brandSoftBorder: SoftUI.blueLight,
+  brand: SoftUI.brand,
+  brandDark: SoftUI.brandDark,
+  brandSoft: SoftUI.brandSoft,
+  brandSoftBorder: SoftUI.brandLight,
   navy: SoftUI.deep,
 
   success: SoftUI.success,

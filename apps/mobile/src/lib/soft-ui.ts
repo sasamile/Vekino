@@ -1,10 +1,18 @@
 /**
  * Soft UI — design system Vekino Mobile
- * Estética iOS contemporánea: azul cielo, tarjetas redondeadas, sombras suaves.
+ * Marca Vekino = naranja. Azul cielo = tema de condominio (ej. Ciudad del Campo).
  */
 
 export const SoftUI = {
-  // Primarios
+  // Marca Vekino (auth, logo, CTAs de producto)
+  brand: "#F6560B",
+  brandDark: "#D94808",
+  brandLight: "#FF8A4C",
+  brandSoft: "#FFF0E8",
+  brandGradientStart: "#F6560B",
+  brandGradientEnd: "#FF7A3D",
+
+  // Condominio / acentos de tema (Ciudad del Campo, etc.)
   blue: "#249DF2",
   blueSky: "#43B2FA",
   blueLight: "#8FD6FF",

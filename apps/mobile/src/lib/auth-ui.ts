@@ -9,13 +9,13 @@ export const AuthUI = {
   textMuted: SoftUI.textSecondary,
   placeholder: SoftUI.textDisabled,
   border: SoftUI.divider,
-  /** Accent primario (antes purple). */
-  purple: SoftUI.blue,
-  pink: SoftUI.infoSoft,
-  lavender: SoftUI.blueLight,
-  sky: SoftUI.infoSoft,
+  /** Accent de marca Vekino (naranja). Azul = tema de condominio. */
+  purple: SoftUI.brand,
+  pink: SoftUI.brandSoft,
+  lavender: SoftUI.brandLight,
+  sky: SoftUI.brandSoft,
   dotInactive: SoftUI.divider,
-  dotActive: SoftUI.blue,
+  dotActive: SoftUI.brand,
   white: SoftUI.white,
 
   padH: SoftUI.padH,

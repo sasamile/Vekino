@@ -6,7 +6,12 @@ import { Authenticated } from "convex/react";
 import { ScreenBackground, GlassCard } from "@/components/ui/glass";
 import { Tap } from "@/components/ui/tap";
 import { AuthUI } from "@/lib/auth-ui";
-import { C } from "@/lib/theme";
+import { SoftUI } from "@/lib/soft-ui";
+import {
+  PRIVACY_LEAD,
+  PRIVACY_NOTE,
+  PRIVACY_SECTIONS,
+} from "@/lib/legal-content";
 
 export default function PrivacidadScreen() {
   return (
@@ -32,55 +37,26 @@ function Inner() {
           </View>
 
           <ScrollView contentContainerStyle={styles.scroll}>
-            <Text style={styles.lead}>
-              En Vekino cuidamos tus datos personales. Esto es lo que usamos y
-              cómo los protegemos.
-            </Text>
+            <Text style={styles.lead}>{PRIVACY_LEAD}</Text>
 
-            <Section title="Qué datos guardamos">
-              Nombre, correo, teléfono y documento (si los registraste); tu
-              unidad y roles en el condominio; actividad operativa (facturas,
-              reservas, visitantes, PQRS) necesaria para administrar el
-              conjunto.
-            </Section>
-
-            <Section title="Quién puede verlos">
-              La administración de tu condominio y, según el módulo, portería.
-              El equipo Vekino solo accede cuando das soporte o para operar la
-              plataforma de forma segura.
-            </Section>
-
-            <Section title="Tus derechos">
-              Puedes editar tu perfil y avatar en esta app. Si quieres corregir
-              o eliminar datos, usa Soporte: tu solicitud llega al administrador
-              del condominio y al equipo Vekino.
-            </Section>
-
-            <Section title="Notificaciones y dispositivos">
-              Si activas las notificaciones push, guardamos un token del
-              dispositivo para enviarte avisos. Puedes desactivarlas en
-              Notificaciones o en los ajustes del teléfono.
-            </Section>
+            {PRIVACY_SECTIONS.map((s) => (
+              <View key={s.title} style={styles.section}>
+                <Text style={styles.sectionTitle}>{s.title}</Text>
+                <Text style={styles.sectionBody}>{s.body}</Text>
+              </View>
+            ))}
 
             <GlassCard style={styles.note}>
-              <Ionicons name="lock-closed-outline" size={18} color={AuthUI.text} />
-              <Text style={styles.noteText}>
-                No vendemos tus datos. El tratamiento se limita a la operación
-                del condominio y al soporte del servicio.
-              </Text>
+              <Ionicons
+                name="lock-closed-outline"
+                size={18}
+                color={SoftUI.brand}
+              />
+              <Text style={styles.noteText}>{PRIVACY_NOTE}</Text>
             </GlassCard>
           </ScrollView>
         </SafeAreaView>
       </ScreenBackground>
-    </View>
-  );
-}
-
-function Section({ title, children }: { title: string; children: string }) {
-  return (
-    <View style={styles.section}>
-      <Text style={styles.sectionTitle}>{title}</Text>
-      <Text style={styles.sectionBody}>{children}</Text>
     </View>
   );
 }
