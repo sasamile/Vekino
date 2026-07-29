@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useParams } from "next/navigation";
-import { useQuery, useMutation, useAction } from "convex/react";
+import { useQuery, useMutation } from "convex/react";
 import {
   AlertTriangle, Plus, Loader2, Paperclip, FileText,
 } from "lucide-react";
@@ -14,8 +14,10 @@ import { Modal } from "@/components/ui/modal";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Input, Select, Textarea } from "@/components/ui/input";
+import { PageContainer } from "@/components/layout/page-container";
+import { PageHeader } from "@/components/layout/page-header";
 import { cn } from "@/lib/utils";
-import { uploadToS3 } from "@/lib/upload-s3";
+import { useUploadToS3 } from "@/hooks/use-upload-s3";
 
 type Prioridad = "baja" | "media" | "alta";
 
@@ -36,16 +38,17 @@ export default function GuardiaNovedadesPage() {
   const [formOpen, setFormOpen] = useState(false);
 
   return (
-    <div className="space-y-5">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="flex items-center gap-2 text-xl font-bold tracking-tight text-foreground">
-            <AlertTriangle className="h-5 w-5 text-brand" /> Novedades
-          </h1>
-          <p className="text-sm text-muted-foreground">Reporta incidentes de seguridad a la administración</p>
-        </div>
-        <Button onClick={() => setFormOpen(true)}><Plus className="h-4 w-4" /> Reportar novedad</Button>
-      </div>
+    <PageContainer>
+      <div className="space-y-6">
+        <PageHeader
+          title="Novedades"
+          description="Reporta incidentes de seguridad a la administración"
+          action={
+            <Button size="sm" onClick={() => setFormOpen(true)}>
+              <Plus className="h-4 w-4" /> Reportar novedad
+            </Button>
+          }
+        />
 
       {reportes === undefined ? (
         <div className="space-y-3">{[...Array(3)].map((_, i) => <Skeleton key={i} className="h-24 rounded-2xl" />)}</div>
@@ -91,13 +94,14 @@ export default function GuardiaNovedadesPage() {
       )}
 
       {formOpen && <NovedadModal condominioId={condominioId} onClose={() => setFormOpen(false)} />}
-    </div>
+      </div>
+    </PageContainer>
   );
 }
 
 function NovedadModal({ condominioId, onClose }: { condominioId: Id<"condominios">; onClose: () => void }) {
   const reportar = useMutation(api.guardia.reportarNovedad);
-  const generateUploadUrl = useAction(api.files.generateUploadUrl);
+  const uploadFile = useUploadToS3();
   const [titulo, setTitulo] = useState("");
   const [prioridad, setPrioridad] = useState<Prioridad>("media");
   const [descripcion, setDescripcion] = useState("");
@@ -113,9 +117,8 @@ function NovedadModal({ condominioId, onClose }: { condominioId: Id<"condominios
     try {
       let archivoUrl: string | undefined;
       if (archivo) {
-        if (archivo.size > 20 * 1024 * 1024) throw new Error("El adjunto no puede superar 20 MB.");
-        const uploaded = await uploadToS3(
-          generateUploadUrl,
+        if (archivo.size > 15 * 1024 * 1024) throw new Error("El adjunto no puede superar 15 MB.");
+        const uploaded = await uploadFile(
           archivo,
           `condominios/guardia/${condominioId}/novedades`,
         );

@@ -17,6 +17,8 @@ import { Modal } from "@/components/ui/modal";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Input, Select } from "@/components/ui/input";
+import { PageContainer } from "@/components/layout/page-container";
+import { PageHeader } from "@/components/layout/page-header";
 import { cn } from "@/lib/utils";
 
 type Vis = Doc<"visitantes">;
@@ -53,27 +55,24 @@ export default function GuardiaVisitantesPage() {
   const porAprobar = visitantes?.filter((v) => v.estado === "esperando_aprobacion").length ?? 0;
 
   return (
-    <div className="space-y-5">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="flex items-center gap-2 text-xl font-bold tracking-tight text-foreground">
-            <UserCheck className="h-5 w-5 text-brand" /> Control de acceso
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            Escanea el QR al llegar. Si no trae QR, registra y espera la aceptación del residente.
-          </p>
-        </div>
-        <div className="flex gap-2 text-sm">
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 px-3 py-1 font-medium text-emerald-600">
-            <DoorOpen className="h-3.5 w-3.5" /> {adentro} adentro
-          </span>
-          {porAprobar > 0 && (
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-500/10 px-3 py-1 font-medium text-amber-600">
-              <Clock className="h-3.5 w-3.5" /> {porAprobar} por aprobar
-            </span>
-          )}
-        </div>
-      </div>
+    <PageContainer>
+      <div className="space-y-6">
+        <PageHeader
+          title="Control de acceso"
+          description="Escanea el QR al llegar. Si no trae QR, registra y espera la aceptación del residente."
+          action={
+            <>
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 px-3 py-1 text-sm font-medium text-emerald-700 dark:text-emerald-400">
+                <DoorOpen className="h-3.5 w-3.5" /> {adentro} adentro
+              </span>
+              {porAprobar > 0 && (
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-500/10 px-3 py-1 text-sm font-medium text-amber-700 dark:text-amber-400">
+                  <Clock className="h-3.5 w-3.5" /> {porAprobar} por aprobar
+                </span>
+              )}
+            </>
+          }
+        />
 
       <div className="flex gap-1 rounded-xl border border-border bg-card p-1">
         {([
@@ -97,7 +96,8 @@ export default function GuardiaVisitantesPage() {
       {tab === "escanear" && <EscanearTab />}
       {tab === "registrar" && <RegistrarTab condominioId={condominioId} />}
       {tab === "actividad" && <ActividadTab visitantes={visitantes} />}
-    </div>
+      </div>
+    </PageContainer>
   );
 }
 

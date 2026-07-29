@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useParams } from "next/navigation";
-import { useQuery, useMutation, useAction } from "convex/react";
+import { useQuery, useMutation } from "convex/react";
 import {
   Package, Plus, Loader2, Check, Search, PackageCheck, Camera, Eye, Image as ImageIcon,
 } from "lucide-react";
@@ -15,8 +15,10 @@ import { Modal } from "@/components/ui/modal";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Input, Select } from "@/components/ui/input";
+import { PageContainer } from "@/components/layout/page-container";
+import { PageHeader } from "@/components/layout/page-header";
 import { cn } from "@/lib/utils";
-import { uploadToS3 } from "@/lib/upload-s3";
+import { useUploadToS3 } from "@/hooks/use-upload-s3";
 
 type Paq = Doc<"paquetes"> & { fotoUrl: string | null; fotoEntregaUrl: string | null };
 type TipoPaq = Doc<"paquetes">["tipo"];
@@ -52,19 +54,21 @@ export default function GuardiaPaqueteriaPage() {
     });
 
   return (
-    <div className="space-y-5">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="flex items-center gap-2 text-xl font-bold tracking-tight text-foreground">
-            <Package className="h-5 w-5 text-brand" /> Paquetería
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            Recepción y entrega con evidencia fotográfica
-            {pendientes > 0 && <span className="ml-2 rounded-full bg-amber-500/10 px-2 py-0.5 text-xs font-semibold text-amber-600">{pendientes} por entregar</span>}
-          </p>
-        </div>
-        <Button onClick={() => setNuevoOpen(true)}><Plus className="h-4 w-4" /> Recibir paquete</Button>
-      </div>
+    <PageContainer>
+      <div className="space-y-6">
+        <PageHeader
+          title="Paquetería"
+          description={
+            pendientes > 0
+              ? `Recepción y entrega con evidencia fotográfica · ${pendientes} por entregar`
+              : "Recepción y entrega con evidencia fotográfica"
+          }
+          action={
+            <Button size="sm" onClick={() => setNuevoOpen(true)}>
+              <Plus className="h-4 w-4" /> Recibir paquete
+            </Button>
+          }
+        />
 
       <div className="flex flex-col gap-2 sm:flex-row">
         <div className="flex gap-1 rounded-xl bg-muted p-1">
@@ -135,13 +139,14 @@ export default function GuardiaPaqueteriaPage() {
       {nuevoOpen && <RecibirModal condominioId={condominioId} onClose={() => setNuevoOpen(false)} />}
       {entregar && <EntregarModal paquete={entregar} onClose={() => setEntregar(null)} />}
       {detalle && <DetalleModal paquete={detalle} onClose={() => setDetalle(null)} />}
-    </div>
+      </div>
+    </PageContainer>
   );
 }
 
 function RecibirModal({ condominioId, onClose }: { condominioId: Id<"condominios">; onClose: () => void }) {
   const recibir = useMutation(api.guardia.recibirPaquete);
-  const generateUploadUrl = useAction(api.files.generateUploadUrl);
+  const uploadFile = useUploadToS3();
   const [unidadNumero, setUnidadNumero] = useState("");
   const [tipo, setTipo] = useState<TipoPaq>("paquete");
   const [remitente, setRemitente] = useState("");
@@ -159,8 +164,7 @@ function RecibirModal({ condominioId, onClose }: { condominioId: Id<"condominios
     try {
       let fotoUrl: string | undefined;
       if (foto) {
-        const uploaded = await uploadToS3(
-          generateUploadUrl,
+        const uploaded = await uploadFile(
           foto,
           `condominios/guardia/${condominioId}/paquetes`,
         );
@@ -233,7 +237,7 @@ function RecibirModal({ condominioId, onClose }: { condominioId: Id<"condominios
 
 function EntregarModal({ paquete, onClose }: { paquete: Paq; onClose: () => void }) {
   const entregar = useMutation(api.guardia.entregarPaquete);
-  const generateUploadUrl = useAction(api.files.generateUploadUrl);
+  const uploadFile = useUploadToS3();
   const [entregadoA, setEntregadoA] = useState("");
   const [observaciones, setObservaciones] = useState("");
   const [foto, setFoto] = useState<File | null>(null);
@@ -245,8 +249,7 @@ function EntregarModal({ paquete, onClose }: { paquete: Paq; onClose: () => void
     try {
       let fotoEntregaUrl: string | undefined;
       if (foto) {
-        const uploaded = await uploadToS3(
-          generateUploadUrl,
+        const uploaded = await uploadFile(
           foto,
           `condominios/guardia/${paquete.condominioId}/paquetes`,
         );

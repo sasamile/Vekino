@@ -41,6 +41,7 @@ export function AccountMenu({
   roleLabel,
   isPlatform,
   onNavigate,
+  perfilHref,
 }: {
   condominioId: Id<"condominios">;
   userName: string;
@@ -48,6 +49,8 @@ export function AccountMenu({
   roleLabel: string;
   isPlatform?: boolean;
   onNavigate?: () => void;
+  /** Override del enlace a perfil (portal usa /mi/[id]/perfil). */
+  perfilHref?: string;
 }) {
   const router = useRouter();
   const { theme, setTheme } = useTheme();
@@ -113,7 +116,7 @@ export function AccountMenu({
     setOpen(false);
     onNavigate?.();
     await authClient.signOut();
-    router.replace("/");
+    router.replace("/login");
   }
 
   const themeLabel =
@@ -143,7 +146,7 @@ export function AccountMenu({
 
             <div className="flex flex-col gap-0.5">
               <Link
-                href={`/condominio/${condominioId}/perfil`}
+                href={perfilHref ?? `/condominio/${condominioId}/perfil`}
                 onClick={() => {
                   setOpen(false);
                   onNavigate?.();

@@ -67,7 +67,7 @@ export default function PqrsScreen() {
 }
 
 function Inner() {
-  const { condominioId, condominioName, canManage } = useCondominio();
+  const { condominioId, condominioName, canManage, theme } = useCondominio();
   const me = useQuery(api.users.me);
   const home = useQuery(
     api.portal.home,
@@ -109,7 +109,10 @@ function Inner() {
         {condominioId ? (
           <View style={styles.toolbar}>
             <View style={{ flex: 1 }} />
-            <Tap style={styles.nuevaBtn} onPress={() => setShowForm(true)}>
+            <Tap
+              style={[styles.nuevaBtn, { backgroundColor: theme.accent }]}
+              onPress={() => setShowForm(true)}
+            >
               <Ionicons name="add" size={18} color={SoftUI.white} />
               <Text style={styles.nuevaBtnText}>Nueva</Text>
             </Tap>
@@ -117,7 +120,7 @@ function Inner() {
         ) : null}
 
         {data === undefined || me === undefined ? (
-          <ActivityIndicator color={SoftUI.blue} style={{ marginTop: 30 }} />
+          <ActivityIndicator color={theme.accent} style={{ marginTop: 30 }} />
         ) : data.length === 0 ? (
           <GlassCard style={styles.emptyCard}>
             <Ionicons
@@ -130,7 +133,10 @@ function Inner() {
                 ? "Sin PQRS registrados"
                 : "No has enviado solicitudes todavía"}
             </Text>
-            <Tap style={styles.emptyCta} onPress={() => setShowForm(true)}>
+            <Tap
+              style={[styles.emptyCta, { backgroundColor: theme.accent }]}
+              onPress={() => setShowForm(true)}
+            >
               <Text style={styles.emptyCtaText}>Crear solicitud</Text>
             </Tap>
           </GlassCard>
@@ -210,6 +216,7 @@ function CrearPqrsSheet({
   condominioId: Id<"condominios">;
   unidadNumero?: string;
 }) {
+  const { theme } = useCondominio();
   const create = useMutation(api.pqrs.create);
   const [tipo, setTipo] = useState<Tipo>("peticion");
   const [asunto, setAsunto] = useState("");
@@ -271,7 +278,10 @@ function CrearPqrsSheet({
               <Pressable
                 key={t}
                 onPress={() => setTipo(t)}
-                style={[styles.chip, active && styles.chipActive]}
+                style={[
+                  styles.chip,
+                  active && { backgroundColor: theme.accent },
+                ]}
               >
                 <Text
                   style={[styles.chipText, active && styles.chipTextActive]}
@@ -324,7 +334,11 @@ function CrearPqrsSheet({
             <Text style={styles.footerCancelText}>Cancelar</Text>
           </Tap>
           <Tap
-            style={[styles.footerBtn, styles.footerPrimary]}
+            style={[
+              styles.footerBtn,
+              styles.footerPrimary,
+              { backgroundColor: theme.accent },
+            ]}
             onPress={submit}
             disabled={saving}
           >

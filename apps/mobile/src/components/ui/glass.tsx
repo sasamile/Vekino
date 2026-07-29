@@ -110,19 +110,21 @@ export function GlassButton({
   icon,
   style,
 }: GlassButtonProps) {
+  const { theme } = useCondominio();
   const h = BUTTON_HEIGHT[size];
   const fs = BUTTON_FONT[size];
   const isPrimary = variant === "primary";
   const isGhost = variant === "ghost";
+  const accent = theme.accent;
 
   const content = loading ? (
-    <ActivityIndicator color={isPrimary ? "#fff" : SoftUI.blue} size="small" />
+    <ActivityIndicator color={isPrimary ? "#fff" : accent} size="small" />
   ) : (
     <>
       {icon}
       <Text
         style={{
-          color: isPrimary ? SoftUI.white : SoftUI.blue,
+          color: isPrimary ? SoftUI.white : accent,
           fontSize: fs,
           fontFamily: AuthUI.font.semibold,
         }}
@@ -152,7 +154,7 @@ export function GlassButton({
         ]}
       >
         <LinearGradient
-          colors={[SoftUI.gradientStart, SoftUI.gradientEnd]}
+          colors={[accent, mixEnd(accent)]}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 1 }}
           style={{
@@ -215,7 +217,11 @@ const BADGE_COLORS: Record<string, { bg: string; text: string }> = {
 };
 
 export function GlassBadge({ label, tone = "neutral" }: GlassBadgeProps) {
-  const c = BADGE_COLORS[tone] ?? BADGE_COLORS.neutral;
+  const { theme } = useCondominio();
+  const c =
+    tone === "blue"
+      ? { bg: theme.accentSoft, text: theme.accent }
+      : (BADGE_COLORS[tone] ?? BADGE_COLORS.neutral);
   return (
     <View
       style={{
@@ -338,18 +344,23 @@ export function GlassSection({
   );
 }
 
-/** CTA con gradiente azul Soft UI (tarjeta de acción principal). */
+/** CTA con gradiente del color de marca del condominio. */
 export function SoftGradientCard({
   children,
   style,
+  colors,
 }: {
   children: React.ReactNode;
   style?: ViewStyle;
+  /** Par [inicio, fin]. Si no se pasa, usa el accent del condo activo. */
+  colors?: [string, string];
 }) {
+  const { theme } = useCondominio();
+  const gradient = colors ?? [theme.accent, mixEnd(theme.accent)];
   return (
     <View style={[{ borderRadius: SoftUI.radius.card, overflow: "hidden", ...floatShadow }, style]}>
       <LinearGradient
-        colors={[SoftUI.gradientStart, SoftUI.gradientEnd]}
+        colors={gradient}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
         style={{ padding: SoftUI.space.lg, minHeight: 132 }}
@@ -358,6 +369,17 @@ export function SoftGradientCard({
       </LinearGradient>
     </View>
   );
+}
+
+function mixEnd(hex: string): string {
+  // Aclara un poco el accent para el extremo del gradiente.
+  const n = parseInt(hex.slice(1), 16);
+  if (!Number.isFinite(n)) return SoftUI.gradientEnd;
+  const r = Math.min(255, ((n >> 16) & 255) + 40);
+  const g = Math.min(255, ((n >> 8) & 255) + 40);
+  const b = Math.min(255, (n & 255) + 40);
+  const c = (v: number) => v.toString(16).padStart(2, "0");
+  return `#${c(r)}${c(g)}${c(b)}`;
 }
 
 const styles = StyleSheet.create({

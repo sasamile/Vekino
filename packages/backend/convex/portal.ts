@@ -95,6 +95,7 @@ export const home = query({
         address: condominio.address ?? null,
         nit: condominio.nit ?? null,
         logo: condominio.logo ?? null,
+        coverImage: condominio.coverImage ?? null,
         primaryColor: condominio.primaryColor ?? null,
         avalPortalUrl: condominio.avalPortalUrl ?? null,
       },
@@ -171,5 +172,72 @@ export const misActividades = query({
     }
 
     return { reservasActivas, ticketsAbiertos };
+  },
+});
+
+/**
+ * Contadores para badges del sidebar del portal (facturas vencidas, PQRS, etc.).
+ */
+export const navBadges = query({
+  args: { condominioId: v.id("condominios") },
+  handler: async (ctx, args) => {
+    const user = await getCurrentAppUser(ctx);
+    if (!user) {
+      return { facturasVencidas: 0, avisos: 0, asambleas: 0, pqrs: 0 };
+    }
+
+    const membership = await getMembership(ctx, user._id, args.condominioId);
+
+    const pqrsRows = await ctx.db
+      .query("pqrs")
+      .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
+      .collect();
+    const pqrs = pqrsRows.filter(
+      (p) =>
+        p.solicitanteUserId === user._id &&
+        (p.estado === "abierto" || p.estado === "en_gestion"),
+    ).length;
+
+    let facturasVencidas = 0;
+    if (membership) {
+      const links = await ctx.db
+        .query("usuarioUnidad")
+        .withIndex("by_membership", (q) => q.eq("membershipId", membership._id))
+        .collect();
+      const sets = await Promise.all(
+        links.map((l) =>
+          ctx.db
+            .query("facturas")
+            .withIndex("by_unidad", (q) => q.eq("unidadId", l.unidadId))
+            .collect(),
+        ),
+      );
+      facturasVencidas = sets
+        .flat()
+        .filter((f) => f.estado === "vencida").length;
+    }
+
+    const avisos = await ctx.db
+      .query("comunicados")
+      .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
+      .take(40);
+    const avisosCount = avisos.filter(
+      (a) => a.prioridad === "urgente" || a.prioridad === "importante",
+    ).length;
+
+    const asambleas = await ctx.db
+      .query("asambleas")
+      .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
+      .collect();
+    const asambleasCount = asambleas.filter(
+      (a) => a.estado === "programada" || a.estado === "en_curso",
+    ).length;
+
+    return {
+      facturasVencidas,
+      avisos: avisosCount,
+      asambleas: asambleasCount,
+      pqrs,
+    };
   },
 });

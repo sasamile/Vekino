@@ -44,12 +44,6 @@ function CondoDefaultActions({
           >
             <Bell className="h-4 w-4" />
           </Button>
-          <Button variant="secondary" className="hidden sm:inline-flex" asChild>
-            <Link href={`${base}/reportes`}>
-              <Download className="h-3.75 w-3.75" aria-hidden />
-              Exportar
-            </Link>
-          </Button>
           <Button variant="brand" asChild>
             <Link href={`${base}/finanzas`}>
               <Upload className="h-3.75 w-3.75" aria-hidden />

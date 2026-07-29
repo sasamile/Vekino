@@ -55,16 +55,17 @@ export function PlatformSidebar({
   const pathname = usePathname();
 
   return (
-    <div className="relative flex h-full min-h-0 flex-col gap-3 bg-card px-3 py-3.5">
-      {/* Brand — mismo patrón que CondoSwitcher */}
-      <div className="flex shrink-0 items-center gap-2.5 rounded-lg px-1 py-1">
-        <div className="grid h-9 w-9 shrink-0 place-items-center overflow-hidden rounded-[10px] border border-border bg-muted">
+    <div className="relative flex h-full min-h-0 flex-col bg-card">
+      {/* Misma altura que AdminTopbar (h-16 en desktop) para alinear el borde */}
+      <div className="flex h-16 shrink-0 items-center gap-2.5 border-b border-border/80 px-3">
+        <div className="grid h-9 w-9 shrink-0 place-items-center overflow-hidden rounded-[10px] bg-muted">
           <Image
-            src="/logos/logo-vekino.svg"
-            alt=""
+            src="/logos/isotipo-vekino.svg"
+            alt="Vekino"
             width={28}
             height={28}
-            className="h-6 w-6 object-contain dark:brightness-0 dark:invert"
+            className="h-6 w-6 object-contain"
+            priority
           />
         </div>
         <div className="min-w-0 flex-1">
@@ -77,50 +78,50 @@ export function PlatformSidebar({
         </div>
       </div>
 
-      <div className="pointer-events-none absolute left-0 right-0 top-14 h-px bg-border" />
-
-      <nav className="mt-1 flex min-h-0 flex-1 flex-col gap-px overflow-y-auto pt-1">
-        {PLATFORM_NAV.map((item) => {
-          const active =
-            item.segment === ""
-              ? pathname === "/dashboard"
-              : pathname === item.href || pathname.startsWith(`${item.href}/`);
-          const Icon = item.icon;
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
-              onClick={onNavigate}
-              aria-current={active ? "page" : undefined}
-              className={cn(
-                "group flex h-8 items-center gap-2.5 rounded-lg px-2.5 text-[13px] font-normal tracking-[-0.01em] transition-colors",
-                active
-                  ? "bg-accent text-foreground"
-                  : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
-              )}
-            >
-              <Icon
+      <div className="flex min-h-0 flex-1 flex-col gap-3 px-3 py-3">
+        <nav className="flex min-h-0 flex-1 flex-col gap-px overflow-y-auto">
+          {PLATFORM_NAV.map((item) => {
+            const active =
+              item.segment === ""
+                ? pathname === "/dashboard"
+                : pathname === item.href || pathname.startsWith(`${item.href}/`);
+            const Icon = item.icon;
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                onClick={onNavigate}
+                aria-current={active ? "page" : undefined}
                 className={cn(
-                  "h-3.75 w-3.75 shrink-0 stroke-2",
+                  "group flex h-8 items-center gap-2.5 rounded-lg px-2.5 text-[13px] font-normal tracking-[-0.01em] transition-colors",
                   active
-                    ? "text-brand"
-                    : "text-foreground/45 group-hover:text-foreground/70",
+                    ? "bg-accent text-foreground"
+                    : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
                 )}
-                aria-hidden
-              />
-              <span className="truncate">{item.label}</span>
-            </Link>
-          );
-        })}
-      </nav>
+              >
+                <Icon
+                  className={cn(
+                    "h-3.75 w-3.75 shrink-0 stroke-2",
+                    active
+                      ? "text-foreground"
+                      : "text-foreground/45 group-hover:text-foreground/70",
+                  )}
+                  aria-hidden
+                />
+                <span className="truncate">{item.label}</span>
+              </Link>
+            );
+          })}
+        </nav>
 
-      <PlatformAccountMenu
-        userName={userName}
-        userEmail={userEmail}
-        userImage={userImage}
-        roleLabel={roleLabel(platformRole)}
-        onNavigate={onNavigate}
-      />
+        <PlatformAccountMenu
+          userName={userName}
+          userEmail={userEmail}
+          userImage={userImage}
+          roleLabel={roleLabel(platformRole)}
+          onNavigate={onNavigate}
+        />
+      </div>
     </div>
   );
 }
@@ -202,7 +203,7 @@ function PlatformAccountMenu({
     setOpen(false);
     onNavigate?.();
     await authClient.signOut();
-    router.replace("/");
+    router.replace("/login");
   }
 
   const themeLabel =
@@ -366,6 +367,15 @@ export function PlatformMobileNav({
         >
           <Menu className="h-5 w-5" />
         </button>
+        <div className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-muted">
+          <Image
+            src="/logos/isotipo-vekino.svg"
+            alt=""
+            width={22}
+            height={22}
+            className="h-5 w-5 object-contain"
+          />
+        </div>
         <div className="min-w-0">
           <p className="truncate text-sm font-medium text-foreground">Vekino</p>
           <p className="-mt-0.5 text-[11px] text-muted-foreground">Plataforma</p>

@@ -2,7 +2,7 @@
 
 import { useState, useRef } from "react";
 import { useParams } from "next/navigation";
-import { usePaginatedQuery, useQuery, useMutation, useAction } from "convex/react";
+import { usePaginatedQuery, useQuery, useMutation } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import {
   FolderOpen, Plus, Trash2, Loader2, Download,
@@ -14,6 +14,7 @@ import type { Id } from "@vekino/backend/dataModel";
 import { PageContainer } from "@/components/layout/page-container";
 import { PageHeader } from "@/components/layout/page-header";
 import { useNuevoQuery } from "@/hooks/use-nuevo-query";
+import { useUploadToS3 } from "@/hooks/use-upload-s3";
 import { StatCard } from "@/components/layout/stat-card";
 import { Select, Input, Textarea } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
@@ -23,7 +24,6 @@ import { Modal } from "@/components/ui/modal";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { LucideIcon } from "lucide-react";
-import { uploadToS3 } from "@/lib/upload-s3";
 
 const PAGE_SIZE = 30;
 
@@ -55,7 +55,7 @@ function fmtFecha(ts: number) {
   return new Date(ts).toLocaleDateString("es-CO", { day: "numeric", month: "short", year: "numeric" });
 }
 
-const MAX_SIZE = 50 * 1024 * 1024; // 50 MB
+const MAX_SIZE = 15 * 1024 * 1024; // 15 MB (límite de upload por Convex)
 
 type DocRow = FunctionReturnType<typeof api.documentos.listPage>["page"][number];
 
@@ -215,7 +215,7 @@ function DocCard({ doc, onDelete }: { doc: DocRow; onDelete: () => void }) {
 }
 
 function UploadForm({ condominioId, onClose }: { condominioId: Id<"condominios">; onClose: () => void }) {
-  const generateUploadUrl = useAction(api.files.generateUploadUrl);
+  const uploadFile = useUploadToS3();
   const create = useMutation(api.documentos.create);
 
   const [nombre, setNombre] = useState("");
@@ -228,7 +228,7 @@ function UploadForm({ condominioId, onClose }: { condominioId: Id<"condominios">
 
   function handleFile(f: File | null) {
     if (!f) return;
-    if (f.size > MAX_SIZE) { setError("El archivo supera el límite de 50 MB."); return; }
+    if (f.size > MAX_SIZE) { setError("El archivo supera el límite de 15 MB."); return; }
     setFile(f);
     if (!nombre) setNombre(f.name.replace(/\.[^.]+$/, ""));
     setError(null);
@@ -241,8 +241,7 @@ function UploadForm({ condominioId, onClose }: { condominioId: Id<"condominios">
     setBusy(true);
     setError(null);
     try {
-      const { url, key } = await uploadToS3(
-        generateUploadUrl,
+      const { url, key } = await uploadFile(
         file,
         `condominios/documentos/${condominioId}`,
       );
@@ -313,7 +312,7 @@ function UploadForm({ condominioId, onClose }: { condominioId: Id<"condominios">
             >
               <Paperclip className="h-8 w-8 opacity-50" />
               <span className="font-medium">Seleccionar archivo</span>
-              <span className="text-xs">PDF, Word, Excel, imágenes — máx 50 MB</span>
+              <span className="text-xs">PDF, Word, Excel, imágenes — máx 15 MB</span>
             </button>
           )}
         </div>

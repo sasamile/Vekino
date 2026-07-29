@@ -157,23 +157,57 @@ export const NAV_GROUPS: NavGroup[] = [
 ];
 
 const ROLE_SEGMENTS: Record<string, string[]> = {
-  contadora: ["", "finanzas", "reportes", "documentos"],
-  junta_directiva: [
-    "", "residentes", "unidades", "vehiculos", "reservas",
-    "comunicacion", "pqrs", "soporte", "documentos", "reportes", "asamblea", "consejo", "historial",
-  ],
+  // Misma lógica que VekinoWeb CONTADORA: finanzas + reportes + docs + consejo.
+  contadora: ["", "finanzas", "reportes", "documentos", "consejo"],
+  // junta_directiva vive en el portal (/mi) con sección Consejo; no abre shell admin.
   representante_asamblea: ["", "asamblea", "consejo", "documentos", "historial"],
 };
 
-export function visibleNavGroups(roles: string[], isPlatform: boolean): NavGroup[] {
-  if (isPlatform || roles.includes("administrador")) return NAV_GROUPS;
+/** Segmentos siempre permitidos en el shell (cuenta). */
+const ALWAYS_ALLOWED = new Set(["perfil"]);
 
-  const allowed = new Set<string>([""]);
+/**
+ * `null` = acceso total (admin / plataforma).
+ * `Set` = lista blanca de segmentos (primer path tras /condominio/:id).
+ */
+export function allowedCondoSegments(
+  roles: string[],
+  isPlatform: boolean,
+): Set<string> | null {
+  if (isPlatform || roles.includes("administrador")) return null;
+
+  const allowed = new Set<string>(ALWAYS_ALLOWED);
   for (const r of roles) {
     for (const seg of ROLE_SEGMENTS[r] ?? []) allowed.add(seg);
   }
 
+  // Contadora (u otro rol restringido) sin ser admin → lista blanca.
+  if (roles.includes("contadora") || roles.includes("representante_asamblea")) {
+    return allowed;
+  }
+
+  return null;
+}
+
+export function canAccessCondoSegment(
+  roles: string[],
+  isPlatform: boolean,
+  segment: string,
+): boolean {
+  const allowed = allowedCondoSegments(roles, isPlatform);
+  if (allowed === null) return true;
+  return allowed.has(segment || "");
+}
+
+export function visibleNavGroups(roles: string[], isPlatform: boolean): NavGroup[] {
+  if (isPlatform || roles.includes("administrador")) return NAV_GROUPS;
+
+  const allowed = allowedCondoSegments(roles, isPlatform) ?? new Set([""]);
+
   return NAV_GROUPS
-    .map((g) => ({ ...g, items: g.items.filter((it) => allowed.has(it.segment)) }))
+    .map((g) => ({
+      ...g,
+      items: g.items.filter((it) => allowed.has(it.segment)),
+    }))
     .filter((g) => g.items.length > 0);
 }

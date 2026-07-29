@@ -1,14 +1,14 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
-import { useMutation, useQuery, useAction } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { Loader2, Plus, FileText, X } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
 import { Modal } from "@/components/ui/modal";
 import { Button } from "@/components/ui/button";
 import { Input, Select } from "@/components/ui/input";
-import { uploadToS3 } from "@/lib/upload-s3";
+import { useUploadToS3 } from "@/hooks/use-upload-s3";
 
 function currentPeriodo() {
   const d = new Date();
@@ -56,7 +56,7 @@ export function CreateFacturaForm({
     open ? { condominioId } : "skip",
   );
   const createManual = useMutation(api.facturas.createManual);
-  const generateUploadUrl = useAction(api.files.generateUploadUrl);
+  const uploadFile = useUploadToS3();
 
   const sortedUnidades = useMemo(() => {
     return [...(unidades ?? [])].sort((a, b) =>
@@ -106,8 +106,7 @@ export function CreateFacturaForm({
     try {
       let pdfUrl: string | undefined;
       if (file) {
-        const uploaded = await uploadToS3(
-          generateUploadUrl,
+        const uploaded = await uploadFile(
           file,
           `condominios/facturas/${condominioId}`,
         );

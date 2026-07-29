@@ -1,28 +1,26 @@
 /**
- * Paleta de gráficas
- * — brand = positivo / recaudo
- * — debt / pending = acento lima #B1D459 (cartera secundaria)
- * — danger = solo riesgo crítico (rojo semántico)
+ * Paleta de gráficas — neutra + semántica.
+ * El naranja de marca (--brand) solo para CTAs de producto, no para rellenar charts.
  */
 export const CHART = {
   brand: "hsl(var(--brand))",
   brandSoft: "hsl(var(--brand) / 0.45)",
-  primary: "hsl(var(--primary))",
-  accent: "#B1D459",
-  accentSoft: "#c9e07a",
-  accentMuted: "#d4e8a0",
-  debt: "#B1D459",
-  debtSoft: "#c9e07a",
-  pending: "#c9e07a",
-  success: "hsl(var(--brand))",
-  muted: "hsl(var(--muted-foreground) / 0.35)",
-  mutedStrong: "#c9e07a",
+  primary: "hsl(var(--foreground) / 0.75)",
+  accent: "#0d9488",
+  accentSoft: "#5eead4",
+  accentMuted: "#99f6e4",
+  debt: "#0d9488",
+  debtSoft: "#5eead4",
+  pending: "#d97706",
+  success: "#059669",
+  muted: "hsl(var(--muted-foreground) / 0.28)",
+  mutedStrong: "hsl(var(--muted-foreground) / 0.55)",
   danger: "hsl(0 68% 52%)",
-  // aliases legacy
-  emerald: "hsl(var(--brand))",
-  amber: "#B1D459",
+  // aliases
+  emerald: "#059669",
+  amber: "#d97706",
   red: "hsl(0 68% 52%)",
-  sky: "hsl(var(--brand))",
+  sky: "#0284c7",
   violet: "hsl(var(--muted-foreground) / 0.5)",
   slate: "hsl(var(--muted-foreground) / 0.4)",
 } as const;

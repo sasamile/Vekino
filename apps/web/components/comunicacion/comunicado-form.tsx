@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef } from "react";
-import { useMutation, useAction } from "convex/react";
+import { useMutation } from "convex/react";
 import { Loader2, Pin, Paperclip, File as FileIcon, X } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
@@ -9,7 +9,7 @@ import { Modal } from "@/components/ui/modal";
 import { Button } from "@/components/ui/button";
 import { Input, Textarea, Select } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { uploadToS3 } from "@/lib/upload-s3";
+import { useUploadToS3 } from "@/hooks/use-upload-s3";
 
 export type Audiencia = "todos" | "propietario" | "arrendatario" | "residente" | "junta_directiva" | "guardia";
 export type Prioridad = "normal" | "importante" | "urgente";
@@ -61,9 +61,12 @@ function ArchivoPreview({
   onRemove: () => void;
 }) {
   const isImage = mimeType.startsWith("image/");
+  const hasUrl = Boolean(url?.trim());
+
   return (
     <div className="group relative">
-      {isImage ? (
+      {isImage && hasUrl ? (
+        // eslint-disable-next-line @next/next/no-img-element
         <img
           src={url}
           alt={nombre}
@@ -71,10 +74,16 @@ function ArchivoPreview({
         />
       ) : (
         <div className="flex h-20 w-20 flex-col items-center justify-center gap-1 rounded-lg border border-border bg-muted px-2">
-          <FileIcon className="h-6 w-6 text-muted-foreground" />
-          <span className="w-full truncate text-center text-[10px] text-muted-foreground">
-            {nombre}
-          </span>
+          {isImage && !hasUrl ? (
+            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+          ) : (
+            <>
+              <FileIcon className="h-6 w-6 text-muted-foreground" />
+              <span className="w-full truncate text-center text-[10px] text-muted-foreground">
+                {nombre}
+              </span>
+            </>
+          )}
         </div>
       )}
       <button
@@ -100,7 +109,7 @@ export function ComunicadoForm({
 }) {
   const create = useMutation(api.comunicados.create);
   const update = useMutation(api.comunicados.update);
-  const generateUploadUrl = useAction(api.files.generateUploadUrl);
+  const uploadFile = useUploadToS3();
   const editing = Boolean(initial?.id);
 
   const [titulo, setTitulo] = useState(initial?.titulo ?? "");
@@ -132,15 +141,15 @@ export function ComunicadoForm({
       }
       return true;
     });
+    if (arr.length === 0) return;
+
+    // Placeholders alineados 1:1 con los archivos (evita src="" mientras carga)
+    const placeholders = arr.map((f) =>
+      f.type.startsWith("image/") ? URL.createObjectURL(f) : "",
+    );
     setNuevosArchivos((prev) => [...prev, ...arr]);
-    arr.forEach((f) => {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        setNuevasPreviews((prev) => [...prev, (e.target?.result as string) ?? ""]);
-      };
-      reader.readAsDataURL(f);
-    });
-    // Reset input so same file can be re-selected
+    setNuevasPreviews((prev) => [...prev, ...placeholders]);
+
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
@@ -150,7 +159,11 @@ export function ComunicadoForm({
 
   function removeNuevo(idx: number) {
     setNuevosArchivos((prev) => prev.filter((_, i) => i !== idx));
-    setNuevasPreviews((prev) => prev.filter((_, i) => i !== idx));
+    setNuevasPreviews((prev) => {
+      const url = prev[idx];
+      if (url?.startsWith("blob:")) URL.revokeObjectURL(url);
+      return prev.filter((_, i) => i !== idx);
+    });
   }
 
   async function save() {
@@ -165,8 +178,7 @@ export function ComunicadoForm({
         nombre: string;
       }[] = [];
       for (const file of nuevosArchivos) {
-        const { url, key } = await uploadToS3(
-          generateUploadUrl,
+        const { url, key } = await uploadFile(
           file,
           `condominios/comunicados/${condominioId}`,
         );
@@ -320,10 +332,10 @@ export function ComunicadoForm({
               ))}
               {nuevosArchivos.map((f, i) => (
                 <ArchivoPreview
-                  key={`nuevo-${i}`}
-                  url={nuevasPreviews[i] ?? ""}
+                  key={`nuevo-${i}-${f.name}`}
+                  url={nuevasPreviews[i] || ""}
                   nombre={f.name}
-                  mimeType={f.type}
+                  mimeType={f.type || "application/octet-stream"}
                   onRemove={() => removeNuevo(i)}
                 />
               ))}

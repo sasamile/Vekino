@@ -105,7 +105,7 @@ export default function VisitantesScreen() {
 
 function Inner() {
   const me = useQuery(api.users.me);
-  const { condominioId, condominioName } = useCondominio();
+  const { condominioId, condominioName, theme } = useCondominio();
   const home = useQuery(
     api.portal.home,
     condominioId ? { condominioId } : "skip",
@@ -138,7 +138,10 @@ function Inner() {
       >
         {condominioId ? (
           <View style={styles.actionRow}>
-            <Tap style={styles.autorizarBtn} onPress={() => setShowForm(true)}>
+            <Tap
+              style={[styles.autorizarBtn, { backgroundColor: theme.accent }]}
+              onPress={() => setShowForm(true)}
+            >
               <Ionicons name="add" size={18} color={SoftUI.white} />
               <Text style={styles.autorizarBtnText}>Autorizar</Text>
             </Tap>
@@ -153,13 +156,16 @@ function Inner() {
           }
         >
           {data === undefined ? (
-            <ActivityIndicator color={SoftUI.blue} style={{ marginTop: SoftUI.space.xl }} />
+            <ActivityIndicator color={theme.accent} style={{ marginTop: SoftUI.space.xl }} />
           ) : data.length === 0 ? (
             <GlassCard style={styles.emptyCard}>
               <Ionicons name="person-add-outline" size={32} color={SoftUI.textSecondary} />
               <Text style={styles.emptyText}>Sin visitantes autorizados</Text>
               {condominioId ? (
-                <Tap style={styles.emptyCta} onPress={() => setShowForm(true)}>
+                <Tap
+                  style={[styles.emptyCta, { backgroundColor: theme.accent }]}
+                  onPress={() => setShowForm(true)}
+                >
                   <Text style={styles.emptyCtaText}>Autorizar visitante</Text>
                 </Tap>
               ) : null}
@@ -201,8 +207,10 @@ function Inner() {
                     ) : v.estado === "pendiente" ? (
                       <View style={styles.actionsRow}>
                         <Tap style={styles.secondaryBtn} onPress={() => setQrId(v._id)}>
-                          <Ionicons name="qr-code-outline" size={16} color={SoftUI.blue} />
-                          <Text style={styles.secondaryBtnText}>Ver QR</Text>
+                          <Ionicons name="qr-code-outline" size={16} color={theme.accent} />
+                          <Text style={[styles.secondaryBtnText, { color: theme.accent }]}>
+                            Ver QR
+                          </Text>
                         </Tap>
                       </View>
                     ) : null}
@@ -251,6 +259,7 @@ function Inner() {
 }
 
 function WalkInButtons({ id }: { id: Id<"visitantes"> }) {
+  const { theme } = useCondominio();
   const responder = useMutation(api.visitantes.responderWalkIn);
   const [busy, setBusy] = useState(false);
 
@@ -284,7 +293,7 @@ function WalkInButtons({ id }: { id: Id<"visitantes"> }) {
         )}
       </Tap>
       <Tap
-        style={[styles.primaryBtnSm, { flex: 1 }]}
+        style={[styles.primaryBtnSm, { flex: 1, backgroundColor: theme.accent }]}
         onPress={() => go(true)}
         disabled={busy}
       >
@@ -311,6 +320,7 @@ function CrearVisitanteSheet({
   unidades: { _id: Id<"unidades">; numero: string; torre: string | null }[];
   onCreated: (id: Id<"visitantes">) => void;
 }) {
+  const { theme } = useCondominio();
   const create = useMutation(api.visitantes.crearMio);
   const [unidadId, setUnidadId] = useState<Id<"unidades"> | null>(null);
   const [nombre, setNombre] = useState("");
@@ -390,7 +400,10 @@ function CrearVisitanteSheet({
                   <Pressable
                     key={u._id}
                     onPress={() => setUnidadId(u._id)}
-                    style={[styles.chip, active && styles.chipActive]}
+                    style={[
+                      styles.chip,
+                      active && { backgroundColor: theme.accent },
+                    ]}
                   >
                     <Text style={[styles.chipText, active && styles.chipTextActive]}>
                       {label}
@@ -419,7 +432,10 @@ function CrearVisitanteSheet({
               <Pressable
                 key={t.value}
                 onPress={() => setTipoDocumento(t.value)}
-                style={[styles.chip, active && styles.chipActive]}
+                style={[
+                  styles.chip,
+                  active && { backgroundColor: theme.accent },
+                ]}
               >
                 <Text style={[styles.chipText, active && styles.chipTextActive]}>
                   {t.label}
@@ -445,7 +461,10 @@ function CrearVisitanteSheet({
               <Pressable
                 key={t.value}
                 onPress={() => setTipo(t.value)}
-                style={[styles.chip, active && styles.chipActive]}
+                style={[
+                  styles.chip,
+                  active && { backgroundColor: theme.accent },
+                ]}
               >
                 <Text style={[styles.chipText, active && styles.chipTextActive]}>
                   {t.label}
@@ -479,7 +498,11 @@ function CrearVisitanteSheet({
             <Text style={styles.footerCancelText}>Cancelar</Text>
           </Tap>
           <Tap
-            style={[styles.footerBtn, styles.footerPrimary]}
+            style={[
+              styles.footerBtn,
+              styles.footerPrimary,
+              { backgroundColor: theme.accent },
+            ]}
             onPress={submit}
             disabled={saving}
           >

@@ -45,6 +45,9 @@ function sanitizeFileName(name: string) {
 /**
  * URL firmada (PUT) para subir directo al bucket S3.
  * El cliente debe hacer PUT con el Content-Type indicado.
+ *
+ * Nota: en algunos entornos el PUT desde el browser falla por CORS
+ * (`Failed to fetch`). Preferí `uploadBytes` desde el cliente cuando eso pase.
  */
 export const generateUploadUrl = action({
   args: {
@@ -78,6 +81,50 @@ export const generateUploadUrl = action({
       key,
       publicUrl: publicUrlFor(key),
     };
+  },
+});
+
+/**
+ * Subida server-side (evita CORS del browser → S3).
+ * Límite práctico ~15 MB (argumentos de action Convex).
+ */
+export const uploadBytes = action({
+  args: {
+    folder: v.string(),
+    contentType: v.string(),
+    fileName: v.optional(v.string()),
+    bytes: v.bytes(),
+  },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{ key: string; publicUrl: string }> => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("No autenticado.");
+
+    const size = args.bytes.byteLength;
+    if (size <= 0) throw new Error("Archivo vacío.");
+    if (size > 15 * 1024 * 1024) {
+      throw new Error("El archivo supera el límite de 15 MB.");
+    }
+
+    const { bucket } = requireS3Env();
+    const client = s3Client();
+    const folder = args.folder.replace(/^\/+|\/+$/g, "") || "uploads";
+    const rawName = args.fileName?.trim() || "file";
+    const safe = sanitizeFileName(rawName);
+    const key = `${folder}/${Date.now()}-${randomUUID().slice(0, 8)}-${safe}`;
+
+    await client.send(
+      new PutObjectCommand({
+        Bucket: bucket,
+        Key: key,
+        ContentType: args.contentType || "application/octet-stream",
+        Body: Buffer.from(args.bytes),
+      }),
+    );
+
+    return { key, publicUrl: publicUrlFor(key) };
   },
 });
 

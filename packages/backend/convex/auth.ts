@@ -20,16 +20,29 @@ const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET?.trim();
 // llaves públicas de Apple usando appBundleIdentifier — NO necesita clientSecret
 // ni Services ID para el flujo nativo con idToken (solo verificación de firma).
 const appleBundleId = process.env.APPLE_BUNDLE_ID?.trim() || "com.vekino.app";
+// Solo para el flujo web de Apple (Sign in with Apple JS / redirect).
+const appleServicesId = process.env.APPLE_SERVICES_ID?.trim() ?? "";
+const appleClientSecret = process.env.APPLE_CLIENT_SECRET?.trim() ?? "";
 
 export const authComponent = createClient<DataModel>(components.betterAuth);
 
 export const createAuth = (ctx: GenericCtx<DataModel>) => {
   return betterAuth({
     baseURL: convexSiteUrl,
-    // Orígenes de confianza: web, Convex site, app nativa (vekino://) y Expo Go (exp://)
-    // exp:// es necesario porque el plugin expo() solo lo agrega si NODE_ENV==="development",
-    // pero Convex siempre corre con NODE_ENV==="production".
-    trustedOrigins: [siteUrl, convexSiteUrl, `${appScheme}://`, "exp://"],
+    // Orígenes de confianza: web, Convex site, app nativa (vekino://) y Expo Go.
+    // Convex corre con NODE_ENV=production, así que el plugin expo() NO agrega
+    // exp:// solo. Incluimos wildcards para IPs LAN de Expo Go (docs Better Auth).
+    trustedOrigins: [
+      siteUrl,
+      convexSiteUrl,
+      `${appScheme}://`,
+      `${appScheme}://*`,
+      "exp://",
+      "exp://**",
+      "exp://192.168.*.*:*/**",
+      "exp://10.*.*.*:*/**",
+      "exp://172.*.*.*:*/**",
+    ],
     database: authComponent.adapter(ctx),
     socialProviders: {
       ...(googleClientId && googleClientSecret
@@ -40,11 +53,13 @@ export const createAuth = (ctx: GenericCtx<DataModel>) => {
             },
           }
         : {}),
-      // Apple: solo flujo nativo con idToken (verificación de firma + audiencia).
-      // clientSecret vacío es intencional: nunca se usa el flujo web de Apple.
+      // Apple:
+      // - Nativo (iOS): idToken; se valida firma + audiencia contra appBundleIdentifier.
+      // - Web: necesita un Services ID + client secret (JWT) de Apple. Si no están
+      //   configurados, clientId cae al bundle id y solo funciona el flujo nativo.
       apple: {
-        clientId: appleBundleId,
-        clientSecret: "",
+        clientId: appleServicesId || appleBundleId,
+        clientSecret: appleClientSecret,
         appBundleIdentifier: appleBundleId,
       },
     },

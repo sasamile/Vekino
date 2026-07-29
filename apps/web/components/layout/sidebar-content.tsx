@@ -39,46 +39,46 @@ export function SidebarContent({
     ? "Administrador"
     : roles.includes("contadora")
       ? "Contadora"
-      : roles.includes("junta_directiva")
-        ? "Junta directiva"
-        : isPlatform
-          ? "Plataforma"
-          : "Miembro";
+      : isPlatform
+        ? "Plataforma"
+        : "Miembro";
 
   return (
-    <div className="relative flex h-full min-h-0 flex-col gap-3 bg-card px-3 py-3.5">
-      <CondoSwitcher
-        currentId={condominioId}
-        name={name}
-        logo={logo}
-        city={city}
-        isPlatform={isPlatform}
-        onNavigate={onNavigate}
-      />
+    <div className="relative flex h-full min-h-0 flex-col bg-card">
+      {/* Misma altura que AdminTopbar (h-16) para alinear el borde */}
+      <div className="flex h-16 shrink-0 items-center border-b border-border/80 px-3">
+        <CondoSwitcher
+          currentId={condominioId}
+          name={name}
+          logo={logo}
+          city={city}
+          isPlatform={isPlatform}
+          onNavigate={onNavigate}
+        />
+      </div>
 
-      <div className="absolute top-14 right-0 left-0 h-2 border-b border-border" />
+      <div className="flex min-h-0 flex-1 flex-col gap-3 px-3 py-3">
+        <SidebarNav
+          base={base}
+          roles={roles}
+          isPlatform={isPlatform}
+          onNavigate={onNavigate}
+        />
 
-      <SidebarNav
-        base={base}
-        roles={roles}
-        isPlatform={isPlatform}
-        onNavigate={onNavigate}
-      />
-
-      <div className="mt-auto flex shrink-0 flex-col gap-2.5 pt-1">
-        <div className="relative rounded-xl border border-border bg-muted/90 p-3 shadow-soft backdrop-blur-xl backdrop-saturate-150 dark:border-white/12 dark:bg-[#1a1c1a]/75 supports-backdrop-filter:bg-muted/75 dark:supports-backdrop-filter:bg-[#1a1c1a]/60">
-          <div className="mb-1.5 flex items-center gap-1.5">
-            <Headphones
-              className="h-3.5 w-3.5 shrink-0 stroke-[1.5] text-foreground"
-              aria-hidden
-            />
-            <p className="text-[12.5px] font-medium text-foreground">
-              ¿Necesitas ayuda?
+        <div className="mt-auto flex shrink-0 flex-col gap-2.5 pt-1">
+          <div className="relative rounded-xl border border-border bg-muted/90 p-3 shadow-soft backdrop-blur-xl backdrop-saturate-150 dark:border-white/12 dark:bg-[#1a1c1a]/75 supports-backdrop-filter:bg-muted/75 dark:supports-backdrop-filter:bg-[#1a1c1a]/60">
+            <div className="mb-1.5 flex items-center gap-1.5">
+              <Headphones
+                className="h-3.5 w-3.5 shrink-0 stroke-[1.5] text-foreground"
+                aria-hidden
+              />
+              <p className="text-[12.5px] font-medium text-foreground">
+                ¿Necesitas ayuda?
+              </p>
+            </div>
+            <p className="mb-2.5 text-[11.5px] leading-snug text-muted-foreground">
+              Habla con soporte Vekino y te ayudamos en menos de 24h hábiles.
             </p>
-          </div>
-          <p className="mb-2.5 text-[11.5px] leading-snug text-muted-foreground">
-            Habla con soporte Vekino y te ayudamos en menos de 24h hábiles.
-          </p>
           <BorderBeam
             size="sm"
             colorVariant="ocean"
@@ -106,6 +106,7 @@ export function SidebarContent({
           isPlatform={isPlatform}
           onNavigate={onNavigate}
         />
+      </div>
       </div>
     </div>
   );

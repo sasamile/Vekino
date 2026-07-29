@@ -140,14 +140,18 @@ export const equipo = query({
 
 /**
  * Inicia turno con checklist de dotación.
- * Reglas (VekinoApi): un solo turno abierto por condominio; checklist con al
- * menos 1 ítem; el segundo guardia debe ser válido y distinto del principal.
+ * Reglas: un solo turno abierto por condominio; checklist con al
+ * menos 1 ítem. Nombre del guardia (y compañero) en texto libre —
+ * suele haber una sola cuenta compartida en portería.
  */
 export const iniciarTurno = mutation({
   args: {
     condominioId: v.id("condominios"),
     checklist: v.array(checklistItemValidator),
     observacionesInicio: v.optional(v.string()),
+    /** Nombre de quien toma el turno (cuenta compartida). */
+    guardiaNombre: v.optional(v.string()),
+    /** Legado: userId de segundo guardia (preferir nombre libre). */
     guardiaSecundarioUserId: v.optional(v.id("users")),
     guardiaSecundarioNombre: v.optional(v.string()),
   },
@@ -164,26 +168,39 @@ export const iniciarTurno = mutation({
       throw new Error("El checklist de inicio necesita al menos un ítem.");
     }
 
+    const guardiaNombre =
+      args.guardiaNombre?.trim() || displayNameFromUser(user);
+
     let secundarioNombre = args.guardiaSecundarioNombre?.trim() || undefined;
-    if (args.guardiaSecundarioUserId) {
-      if (args.guardiaSecundarioUserId === user._id) {
+    let secundarioUserId = args.guardiaSecundarioUserId;
+    if (secundarioUserId) {
+      if (secundarioUserId === user._id) {
         throw new Error("El guardia secundario no puede ser el mismo que inicia el turno.");
       }
-      const sec = await ctx.db.get(args.guardiaSecundarioUserId);
+      const sec = await ctx.db.get(secundarioUserId);
       if (!sec || !sec.active) throw new Error("Guardia secundario no válido.");
       const secMembership = await getMembership(ctx, sec._id, args.condominioId);
       if (!secMembership?.isActive || !secMembership.roles.includes("guardia")) {
         throw new Error("El guardia secundario no tiene rol de guardia en este conjunto.");
       }
-      secundarioNombre = sec.name;
+      secundarioNombre = secundarioNombre || displayNameFromUser(sec);
+    } else {
+      secundarioUserId = undefined;
+    }
+
+    if (
+      secundarioNombre &&
+      secundarioNombre.toLowerCase() === guardiaNombre.toLowerCase()
+    ) {
+      throw new Error("El compañero de turno no puede ser el mismo nombre.");
     }
 
     const now = Date.now();
     const turnoId = await ctx.db.insert("guardiaTurnos", {
       condominioId: args.condominioId,
       guardiaUserId: user._id,
-      guardiaNombre: user.name,
-      guardiaSecundarioUserId: args.guardiaSecundarioUserId,
+      guardiaNombre,
+      guardiaSecundarioUserId: secundarioUserId,
       guardiaSecundarioNombre: secundarioNombre,
       observacionesInicio: args.observacionesInicio?.trim() || undefined,
       checklist: args.checklist.map((c) => ({
@@ -202,10 +219,10 @@ export const iniciarTurno = mutation({
       modulo: "minuta",
       tipo: "Inicio de Turno",
       unidad: "Portería",
-      resumen: `Turno iniciado por ${user.name}${secundarioNombre ? ` (compartido con ${secundarioNombre})` : ""}. Checklist: ${args.checklist.length} ítems.`,
+      resumen: `Turno iniciado por ${guardiaNombre}${secundarioNombre ? ` (compartido con ${secundarioNombre})` : ""}. Checklist: ${args.checklist.length} ítems.`,
       estado: "abierto",
       actorUserId: user._id,
-      actorNombre: user.name,
+      actorNombre: guardiaNombre,
       turnoId,
     });
     return turnoId;

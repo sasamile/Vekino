@@ -39,6 +39,7 @@ export const me = query({
             condominioName: condominio?.name ?? null,
             condominioSubdomain: condominio?.subdomain ?? null,
             condominioLogo: condominio?.logo ?? null,
+            condominioCoverImage: condominio?.coverImage ?? null,
             condominioPrimaryColor: condominio?.primaryColor ?? null,
             roles: m.roles,
           };
@@ -64,12 +65,13 @@ export const me = query({
 /**
  * Crea (o enlaza) el perfil de aplicación del usuario autenticado con Better
  * Auth. Idempotente: se puede llamar en cada login sin duplicar.
+ * Si aún no hay JWT (carrera al montar), retorna null sin fallar.
  */
 export const ensureProfile = mutation({
   args: {},
   handler: async (ctx) => {
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("No autenticado.");
+    if (!identity) return null;
 
     // ¿Ya existe perfil enlazado por authId?
     const existing = await ctx.db

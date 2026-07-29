@@ -38,6 +38,8 @@ export default defineSchema({
 
     // Marca
     logo: v.optional(v.string()),
+    /** Foto destacada del home (app móvil / portal). URL pública S3. */
+    coverImage: v.optional(v.string()),
     primaryColor: v.optional(v.string()),
 
     // Pagos: URL del portal público de AvalPayCenter (deep-link por convenio,
@@ -714,8 +716,20 @@ export default defineSchema({
     condominioId: v.id("condominios"),
     nombre: v.string(),
     slug: v.string(),
+    /** Legado: clave lucide. Preferir iconType + iconValue. */
     iconKey: v.optional(v.string()),
     colorKey: v.optional(v.string()),
+    /** Notion-like: lucide | emoji | svg | image */
+    iconType: v.optional(
+      v.union(
+        v.literal("lucide"),
+        v.literal("emoji"),
+        v.literal("svg"),
+        v.literal("image"),
+      ),
+    ),
+    /** lucide key, emoji, markup SVG sanitizado, o URL de imagen */
+    iconValue: v.optional(v.string()),
     orden: v.number(),
     activo: v.boolean(),
     createdAt: v.number(),
@@ -771,11 +785,24 @@ export default defineSchema({
     userId: v.id("users"),
     autorNombre: v.string(),
     contenido: v.string(),
+    /** Respuesta a otro comentario */
+    parentId: v.optional(v.id("consejoDocumentoComentarios")),
     activo: v.boolean(),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
-    .index("by_documento", ["documentoId"]),
+    .index("by_documento", ["documentoId"])
+    .index("by_parent", ["parentId"]),
+
+  consejoComentarioReacciones: defineTable({
+    condominioId: v.id("condominios"),
+    comentarioId: v.id("consejoDocumentoComentarios"),
+    userId: v.id("users"),
+    emoji: v.string(),
+    createdAt: v.number(),
+  })
+    .index("by_comentario", ["comentarioId"])
+    .index("by_comentario_user_emoji", ["comentarioId", "userId", "emoji"]),
 
   // ─────────────────────────────────────────────────────────────
   // Consejo administrativo — miembros (catálogo de cargos)

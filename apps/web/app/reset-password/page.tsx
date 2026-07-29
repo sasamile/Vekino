@@ -103,7 +103,7 @@ function ResetPasswordForm() {
       {success ? (
         <button
           type="button"
-          onClick={() => router.replace("/")}
+          onClick={() => router.replace("/login")}
           className="w-full py-3 rounded-lg bg-primary text-white text-sm font-semibold hover:bg-primary/90 transition-colors"
         >
           Ir a iniciar sesión
@@ -159,7 +159,7 @@ function ResetPasswordForm() {
           </button>
 
           <p className="text-xs text-zinc-500 text-center">
-            <Link href="/" className="underline font-medium text-primary">
+            <Link href="/login" className="underline font-medium text-primary">
               Volver a iniciar sesión
             </Link>
           </p>

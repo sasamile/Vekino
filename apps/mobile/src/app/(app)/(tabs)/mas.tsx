@@ -18,8 +18,12 @@ type Modulo = {
   hint: string;
   icon: Ionicon;
   route: string;
-  /** Solo administradores / junta / contadora */
+  /** Solo administradores (no contadora) */
   adminOnly?: boolean;
+  /** Contadora + admin */
+  contadoraOk?: boolean;
+  /** Junta directiva (y también admin si canManage) */
+  juntaOnly?: boolean;
 };
 
 /**
@@ -43,20 +47,20 @@ const GRUPOS: { title: string; items: Modulo[] }[] = [
       { label: "Residentes", hint: "Usuarios del condo", icon: "people-outline", route: "/(app)/residentes", adminOnly: true },
       { label: "Unidades", hint: "Inmuebles", icon: "home-outline", route: "/(app)/unidades", adminOnly: true },
       { label: "Asambleas", hint: "Convocatorias", icon: "hammer-outline", route: "/(app)/asambleas" },
-      { label: "Consejo", hint: "Junta directiva", icon: "people-circle-outline", route: "/(app)/consejo", adminOnly: true },
+      { label: "Consejo", hint: "Junta / finanzas", icon: "people-circle-outline", route: "/(app)/consejo", juntaOnly: true, contadoraOk: true },
     ],
   },
   {
     title: "Operación",
     items: [
-      { label: "Documentos", hint: "Archivos", icon: "document-text-outline", route: "/(app)/documentos" },
+      { label: "Documentos", hint: "Archivos", icon: "document-text-outline", route: "/(app)/documentos", contadoraOk: true },
       { label: "Control", hint: "Accesos", icon: "shield-checkmark-outline", route: "/(app)/control", adminOnly: true },
     ],
   },
   {
     title: "Análisis",
     items: [
-      { label: "Reportes", hint: "Indicadores", icon: "bar-chart-outline", route: "/(app)/reportes", adminOnly: true },
+      { label: "Reportes", hint: "Indicadores", icon: "bar-chart-outline", route: "/(app)/reportes", adminOnly: true, contadoraOk: true },
       { label: "Historial", hint: "Actividad", icon: "time-outline", route: "/(app)/historial", adminOnly: true },
     ],
   },
@@ -75,18 +79,19 @@ export default function MasScreen() {
 }
 
 function ModuloRow({ m, onPress }: { m: Modulo; onPress: () => void }) {
+  const { theme } = useCondominio();
   return (
     <Tap onPress={onPress}>
       <GlassCard style={styles.row}>
-        <View style={styles.icon}>
-          <Ionicons name={m.icon} size={22} color={SoftUI.blue} />
+        <View style={[styles.icon, { backgroundColor: theme.accentSoft }]}>
+          <Ionicons name={m.icon} size={22} color={theme.accent} />
         </View>
         <View style={styles.body}>
           <Text style={styles.label}>{m.label}</Text>
           <Text style={styles.hint}>{m.hint}</Text>
         </View>
-        <View style={styles.chevron}>
-          <Ionicons name="chevron-forward" size={18} color={SoftUI.blue} />
+        <View style={[styles.chevron, { backgroundColor: theme.accentSoft }]}>
+          <Ionicons name="chevron-forward" size={18} color={theme.accent} />
         </View>
       </GlassCard>
     </Tap>
@@ -96,7 +101,7 @@ function ModuloRow({ m, onPress }: { m: Modulo; onPress: () => void }) {
 function MasContent() {
   const router = useRouter();
   const me = useQuery(api.users.me);
-  const { condominioId, condominioName, canManage, isGuardia, isLoading } =
+  const { condominioId, condominioName, canManage, isJunta, isGuardia, isContadora, isLoading } =
     useCondominio();
 
   if (isLoading) return <View style={{ flex: 1 }} />;
@@ -194,7 +199,17 @@ function MasContent() {
 
   const grupos = GRUPOS.map((g) => ({
     ...g,
-    items: g.items.filter((m) => canManage || !m.adminOnly),
+    items: g.items.filter((m) => {
+      if (isContadora) {
+        // Misma superficie que web: reportes, documentos, consejo (+ día a día del portal).
+        if (m.contadoraOk) return true;
+        if (m.adminOnly || m.juntaOnly) return false;
+        return true;
+      }
+      if (m.juntaOnly) return isJunta || canManage;
+      if (m.adminOnly) return canManage;
+      return true;
+    }),
   })).filter((g) => g.items.length > 0);
 
   return (
@@ -253,7 +268,6 @@ const styles = StyleSheet.create({
     width: SoftUI.iconBtn,
     height: SoftUI.iconBtn,
     borderRadius: SoftUI.radius.chip,
-    backgroundColor: SoftUI.infoSoft,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -276,7 +290,6 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: SoftUI.radius.chip,
-    backgroundColor: SoftUI.infoSoft,
     alignItems: "center",
     justifyContent: "center",
   },

@@ -59,3 +59,54 @@ export const TIPO_UNIDAD_LABEL: Record<string, string> = {
   oficina: "Oficina",
   otro: "Unidad",
 };
+
+/** "Apartamento 204" · "Apartamento 204 · Torre A" */
+export function etiquetaUnidad(u: {
+  numero?: string | null;
+  tipo?: string | null;
+  torre?: string | null;
+  unidadNumero?: string | null;
+  unidadTipo?: string | null;
+  unidadTorre?: string | null;
+}): string {
+  const numero = u.numero ?? u.unidadNumero;
+  if (!numero) return "Unidad";
+  const tipo = TIPO_UNIDAD_LABEL[u.tipo ?? u.unidadTipo ?? ""] ?? "Unidad";
+  const torre = u.torre ?? u.unidadTorre;
+  return torre ? `${tipo} ${numero} · ${torre}` : `${tipo} ${numero}`;
+}
+
+const MESES_ES = [
+  "enero",
+  "febrero",
+  "marzo",
+  "abril",
+  "mayo",
+  "junio",
+  "julio",
+  "agosto",
+  "septiembre",
+  "octubre",
+  "noviembre",
+  "diciembre",
+];
+
+/** "2026-06" | "01-junio-2026" | "Junio / 2026" → "Junio de 2026" */
+export function periodoHumano(periodoOrLabel: string): string {
+  const ym = periodoOrLabel.match(/^(\d{4})-(\d{2})$/);
+  if (ym) {
+    const mes = MESES_ES[Number(ym[2]) - 1];
+    if (mes) {
+      return `${mes.charAt(0).toUpperCase()}${mes.slice(1)} de ${ym[1]}`;
+    }
+  }
+  const dash = periodoOrLabel.match(/^\d{1,2}-([a-záéíóúñ]+)-(\d{4})$/i);
+  if (dash?.[1] && dash[2]) {
+    const mes = dash[1].toLowerCase();
+    return `${mes.charAt(0).toUpperCase()}${mes.slice(1)} de ${dash[2]}`;
+  }
+  return periodoOrLabel
+    .replace(/\s*\/\s*/g, " de ")
+    .replace(/\bde de\b/gi, "de");
+}
+

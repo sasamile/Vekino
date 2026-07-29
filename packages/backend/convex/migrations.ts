@@ -34,6 +34,7 @@ export const upsertCondominio = internalMutation({
     city: v.optional(v.string()),
     timezone: v.optional(v.string()),
     logo: v.optional(v.string()),
+    coverImage: v.optional(v.string()),
     primaryColor: v.optional(v.string()),
     subscriptionPlan: v.optional(subscriptionPlanValidator),
     unitLimit: v.optional(v.number()),

@@ -87,7 +87,7 @@ export default function ComunicadosScreen() {
 
 function ComunicadosContent() {
   const me = useQuery(api.users.me);
-  const { condominioId, condominioName, isSuperadmin, canManage } =
+  const { condominioId, condominioName, isSuperadmin, canManage, theme } =
     useCondominio();
   const comunicados = useQuery(
     api.comunicados.listByCondominio,
@@ -121,7 +121,10 @@ function ComunicadosContent() {
       >
         {canManage ? (
           <View style={styles.toolbar}>
-            <Tap style={styles.nuevaBtn} onPress={() => setShowForm(true)}>
+            <Tap
+              style={[styles.nuevaBtn, { backgroundColor: theme.accent }]}
+              onPress={() => setShowForm(true)}
+            >
               <Ionicons name="add" size={18} color={SoftUI.white} />
               <Text style={styles.nuevaBtnText}>Nuevo</Text>
             </Tap>
@@ -130,7 +133,7 @@ function ComunicadosContent() {
 
         {comunicados === undefined ? (
           <ActivityIndicator
-            color={SoftUI.blue}
+            color={theme.accent}
             style={{ marginTop: SoftUI.space.xxl }}
           />
         ) : (comunicados ?? []).length === 0 ? (
@@ -336,6 +339,7 @@ function CrearAvisoSheet({
   onClose: () => void;
   condominioId: Id<"condominios">;
 }) {
+  const { theme } = useCondominio();
   const create = useMutation(api.comunicados.create);
   const generateUploadUrl = useAction(api.files.generateUploadUrl);
   const [titulo, setTitulo] = useState("");
@@ -633,8 +637,8 @@ function CrearAvisoSheet({
             style={[
               styles.checkbox,
               fijado && {
-                backgroundColor: SoftUI.blue,
-                borderColor: SoftUI.blue,
+                backgroundColor: theme.accent,
+                borderColor: theme.accent,
               },
             ]}
           >
@@ -686,6 +690,7 @@ function ComunicadoCard({
   onPress: () => void;
   onImagePress: (url: string) => void;
 }) {
+  const { theme } = useCondominio();
   const primerImagen = (c.archivosItems ?? []).find((a) =>
     a.mimeType.startsWith("image/"),
   );
@@ -726,7 +731,7 @@ function ComunicadoCard({
                   ? SoftUI.danger
                   : c.prioridad === "importante"
                     ? "#B8860B"
-                    : SoftUI.blue
+                    : theme.accent
               }
             />
           </View>

@@ -720,36 +720,66 @@ export const listMia = query({
   handler: async (ctx, args) => {
     const { membership } = await requireCondominioRole(ctx, args.condominioId, []);
 
+    let rows: Doc<"facturas">[];
+
     if (!membership) {
       // Superadmin/admin: retorna las últimas facturas del condominio
-      return await ctx.db
+      rows = await ctx.db
         .query("facturas")
         .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
         .order("desc")
         .take(50);
+    } else {
+      const links = await ctx.db
+        .query("usuarioUnidad")
+        .withIndex("by_membership", (q) => q.eq("membershipId", membership._id))
+        .collect();
+
+      if (links.length === 0) return [];
+
+      const sets = await Promise.all(
+        links.map((l) =>
+          ctx.db
+            .query("facturas")
+            .withIndex("by_unidad", (q) => q.eq("unidadId", l.unidadId))
+            .order("desc")
+            .take(50),
+        ),
+      );
+
+      rows = sets
+        .flat()
+        .sort((a, b) => b.fechaEmision - a.fechaEmision)
+        .slice(0, 50);
     }
 
-    const links = await ctx.db
-      .query("usuarioUnidad")
-      .withIndex("by_membership", (q) => q.eq("membershipId", membership._id))
-      .collect();
+    const unidadCache = new Map<
+      Id<"unidades">,
+      { numero: string; tipo: string; torre: string | null }
+    >();
 
-    if (links.length === 0) return [];
-
-    const sets = await Promise.all(
-      links.map((l) =>
-        ctx.db
-          .query("facturas")
-          .withIndex("by_unidad", (q) => q.eq("unidadId", l.unidadId))
-          .order("desc")
-          .take(50)
-      )
+    return await Promise.all(
+      rows.map(async (f) => {
+        let u = unidadCache.get(f.unidadId);
+        if (!u) {
+          const doc = await ctx.db.get(f.unidadId);
+          u = doc
+            ? {
+                numero: doc.numero,
+                tipo: doc.tipo,
+                torre: doc.torre ?? null,
+              }
+            : { numero: "—", tipo: "otro", torre: null };
+          unidadCache.set(f.unidadId, u);
+        }
+        return {
+          ...f,
+          unidadNumero: u.numero,
+          unidadTipo: u.tipo,
+          unidadTorre: u.torre,
+        };
+      }),
     );
-
-    return sets
-      .flat()
-      .sort((a, b) => b.fechaEmision - a.fechaEmision)
-      .slice(0, 50);
   },
 });
 

@@ -18,6 +18,7 @@ import {
 import { visibleNavGroups } from "./nav-config";
 import { PLATFORM_NAV } from "./platform-nav-config";
 import { cn } from "@/lib/utils";
+import { useBrandThemeStyle } from "@/lib/brand-theme";
 
 type QuickItem = {
   id: string;
@@ -44,6 +45,7 @@ export function QuickAccess({
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
+  const brandStyle = useBrandThemeStyle();
   const [q, setQ] = useState("");
   const [active, setActive] = useState(0);
   const [mounted, setMounted] = useState(false);
@@ -287,6 +289,7 @@ export function QuickAccess({
       ? createPortal(
           <div
             className="animate-fade-in fixed inset-0 z-200 flex items-start justify-center bg-foreground/40 px-4 pt-[12vh] backdrop-blur-sm dark:bg-foreground/50"
+            style={brandStyle}
             onMouseDown={(e) => {
               if (e.target === e.currentTarget) close();
             }}

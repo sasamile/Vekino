@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect } from "react";
+import { Suspense, useEffect, type CSSProperties } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
@@ -32,7 +32,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
         </Fullscreen>
       </AuthLoading>
       <Unauthenticated>
-        <Redirect to="/" />
+        <Redirect to="/login" />
       </Unauthenticated>
       <Authenticated>
         <Shell>{children}</Shell>
@@ -66,8 +66,20 @@ function Shell({ children }: { children: React.ReactNode }) {
   const me = useQuery(api.users.me);
   const pathname = usePathname();
 
+  // Cuando `me` aún es null, el JWT puede no haber llegado: reintentamos al
+  // resolverse la sesión para no spamear errores de "No autenticado".
   useEffect(() => {
-    ensureProfile().catch(() => {});
+    let cancelled = false;
+    void (async () => {
+      const id = await ensureProfile();
+      if (cancelled || id) return;
+      // Reintento corto si la mutación llegó antes del token.
+      await new Promise((r) => setTimeout(r, 400));
+      if (!cancelled) await ensureProfile();
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [ensureProfile]);
 
   if (me === undefined || me === null) {
@@ -100,7 +112,19 @@ function Shell({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="font-admin flex h-dvh flex-col overflow-hidden bg-background lg:p-3.5">
+    <div
+      className="font-admin flex h-dvh flex-col overflow-hidden bg-background lg:p-3.5"
+      style={
+        {
+          /* Panel maestro: acento carbón (sin naranja de producto) */
+          "--brand": "120 6% 14%",
+          "--brand-foreground": "0 0% 100%",
+          "--ring": "120 4% 38%",
+          "--success": "120 5% 32%",
+          "--success-foreground": "0 0% 100%",
+        } as CSSProperties
+      }
+    >
       <div className="flex min-h-0 w-full flex-1 overflow-hidden bg-card lg:rounded-[18px] lg:border lg:border-border lg:shadow-soft">
         <aside className="hidden w-60 shrink-0 flex-col overflow-hidden border-r border-border lg:flex">
           <PlatformSidebar
@@ -141,7 +165,7 @@ function UserMultiCondoShell({
 
   async function signOut() {
     await authClient.signOut();
-    router.replace("/");
+    router.replace("/login");
   }
 
   return (

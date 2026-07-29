@@ -129,12 +129,13 @@ function PeriodoSelect({
   onChange: (p: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const { theme } = useCondominio();
   return (
     <>
       <Pressable onPress={() => setOpen(true)} style={styles.periodoBtn}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: SoftUI.space.sm }}>
-          <View style={styles.periodoIcon}>
-            <Ionicons name="calendar-outline" size={18} color={SoftUI.blue} />
+          <View style={[styles.periodoIcon, { backgroundColor: theme.accentSoft }]}>
+            <Ionicons name="calendar-outline" size={18} color={theme.accent} />
           </View>
           <Text style={styles.periodoLabel}>
             {value ? fmtPeriodo(value) : "Selecciona período"}
@@ -155,17 +156,20 @@ function PeriodoSelect({
                   onChange(p);
                   setOpen(false);
                 }}
-                style={[styles.sheetRow, active && styles.sheetRowActive]}
+                style={[
+                  styles.sheetRow,
+                  active && { backgroundColor: theme.accentSoft },
+                ]}
               >
                 <Text
                   style={[
                     styles.sheetRowText,
-                    active && { fontFamily: AuthUI.font.semibold, color: SoftUI.blue },
+                    active && { fontFamily: AuthUI.font.semibold, color: theme.accent },
                   ]}
                 >
                   {fmtPeriodo(p)}
                 </Text>
-                {active && <Ionicons name="checkmark" size={18} color={SoftUI.blue} />}
+                {active && <Ionicons name="checkmark" size={18} color={theme.accent} />}
               </Pressable>
             );
           })}
@@ -184,6 +188,7 @@ function FacturaListCard({
   onPress: () => void;
   showResident?: boolean;
 }) {
+  const { theme } = useCondominio();
   const iconMeta = ESTADO_ICON[f.estado] ?? ESTADO_ICON.abonada;
   return (
     <Tap onPress={onPress}>
@@ -230,8 +235,8 @@ function FacturaListCard({
         </View>
         <View style={styles.facturaRight}>
           <Text style={styles.facturaMonto}>{cop(f.totalAPagar)}</Text>
-          <View style={styles.glassAction}>
-            <Ionicons name="chevron-forward" size={18} color={SoftUI.blue} />
+          <View style={[styles.glassAction, { backgroundColor: theme.accentSoft }]}>
+            <Ionicons name="chevron-forward" size={18} color={theme.accent} />
           </View>
         </View>
       </GlassCard>
@@ -246,6 +251,7 @@ function EstadoChips({
   value: "" | Estado;
   onChange: (e: "" | Estado) => void;
 }) {
+  const { theme } = useCondominio();
   return (
     <ScrollView
       horizontal
@@ -259,7 +265,10 @@ function EstadoChips({
           <Pressable
             key={e}
             onPress={() => onChange(e)}
-            style={[styles.chip, active && styles.chipActive]}
+            style={[
+              styles.chip,
+              active && { backgroundColor: theme.accent },
+            ]}
           >
             <Text style={[styles.chipText, active && styles.chipTextActive]}>
               {e === "" ? "Todas" : ESTADO_LABEL[e]}
@@ -274,7 +283,7 @@ function EstadoChips({
 /* ── Vista admin: todas las facturas del período ────────────── */
 function AdminFacturasView({ condominioId }: { condominioId: Id<"condominios"> }) {
   const me = useQuery(api.users.me);
-  const { condominioName } = useCondominio();
+  const { condominioName, theme } = useCondominio();
   const periodos = useQuery(api.facturas.listPeriodos, { condominioId });
   const [selectedPeriodo, setSelectedPeriodo] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
@@ -321,7 +330,7 @@ function AdminFacturasView({ condominioId }: { condominioId: Id<"condominios"> }
           ) : (
             <View style={{ flex: 1 }} />
           )}
-          <Tap style={styles.nuevaBtn} onPress={() => setShowForm(true)}>
+          <Tap style={[styles.nuevaBtn, { backgroundColor: theme.accent }]} onPress={() => setShowForm(true)}>
             <Ionicons name="add" size={18} color={SoftUI.white} />
             <Text style={styles.nuevaBtnText}>Nueva</Text>
           </Tap>
@@ -344,7 +353,7 @@ function AdminFacturasView({ condominioId }: { condominioId: Id<"condominios"> }
 
         {resumen && (
           <GlassCard style={styles.summaryCard}>
-            <View style={styles.summaryIcon}>
+            <View style={[styles.summaryIcon, { backgroundColor: theme.accent }]}>
               <Ionicons name="wallet-outline" size={22} color={SoftUI.white} />
             </View>
             <View style={{ flex: 1, gap: 2 }}>
@@ -378,7 +387,7 @@ function AdminFacturasView({ condominioId }: { condominioId: Id<"condominios"> }
           title={`${filtered.length} factura${filtered.length === 1 ? "" : "s"}`}
         >
           {facturas === undefined ? (
-            <ActivityIndicator color={SoftUI.blue} style={{ marginTop: 20 }} />
+            <ActivityIndicator color={theme.accent} style={{ marginTop: 20 }} />
           ) : filtered.length === 0 ? (
             <GlassCard style={styles.emptyCard}>
               <Ionicons name="wallet-outline" size={32} color={SoftUI.textSecondary} />
@@ -423,7 +432,7 @@ function ResidentFacturasView({
   condominioId: Id<"condominios"> | undefined;
 }) {
   const me = useQuery(api.users.me);
-  const { condominioName } = useCondominio();
+  const { condominioName, theme } = useCondominio();
   const facturas = useQuery(
     api.facturas.listMia,
     condominioId ? { condominioId } : "skip",
@@ -456,7 +465,7 @@ function ResidentFacturasView({
         showsVerticalScrollIndicator={false}
       >
         <GlassCard style={styles.summaryCard}>
-          <View style={styles.summaryIcon}>
+          <View style={[styles.summaryIcon, { backgroundColor: theme.accent }]}>
             <Ionicons name="wallet-outline" size={22} color={SoftUI.white} />
           </View>
           <View style={{ flex: 1, gap: 2, minWidth: 0 }}>
@@ -484,7 +493,7 @@ function ResidentFacturasView({
             title={`${filtered.length} factura${filtered.length === 1 ? "" : "s"}`}
           >
             {facturas === undefined ? (
-              <ActivityIndicator color={SoftUI.blue} style={{ marginTop: 20 }} />
+              <ActivityIndicator color={theme.accent} style={{ marginTop: 20 }} />
             ) : filtered.length === 0 ? (
               <GlassCard style={styles.emptyCard}>
                 <Ionicons name="wallet-outline" size={32} color={SoftUI.textSecondary} />
@@ -556,6 +565,7 @@ function CrearFacturaSheet({
   condominioId: Id<"condominios">;
   defaultPeriodo?: string;
 }) {
+  const { theme } = useCondominio();
   const createManual = useMutation(api.facturas.createManual);
   const generateUploadUrl = useAction(api.files.generateUploadUrl);
   const unidades = useQuery(
@@ -829,14 +839,14 @@ function CrearFacturaSheet({
             }}
           >
             <Tap style={styles_attachBtn} onPress={pickImage} disabled={saving}>
-              <Ionicons name="image-outline" size={18} color={SoftUI.blue} />
+              <Ionicons name="image-outline" size={18} color={theme.accent} />
               <Text style={styles_attachBtnText}>Foto</Text>
             </Tap>
             <Tap style={styles_attachBtn} onPress={pickPdf} disabled={saving}>
               <Ionicons
                 name="document-text-outline"
                 size={18}
-                color={SoftUI.blue}
+                color={theme.accent}
               />
               <Text style={styles_attachBtnText}>PDF</Text>
             </Tap>
@@ -850,7 +860,7 @@ function CrearFacturaSheet({
                   <Ionicons
                     name="document-text"
                     size={18}
-                    color={SoftUI.blue}
+                    color={theme.accent}
                   />
                 </View>
               )}
@@ -958,7 +968,7 @@ function CrearFacturaSheet({
           }}
         >
           {unidades === undefined ? (
-            <ActivityIndicator color={SoftUI.blue} />
+            <ActivityIndicator color={theme.accent} />
           ) : filteredUnidades.length === 0 ? (
             <Text style={styles.emptyText}>Sin unidades</Text>
           ) : (
@@ -979,14 +989,14 @@ function CrearFacturaSheet({
                       styles.sheetRowText,
                       active && {
                         fontFamily: AuthUI.font.semibold,
-                        color: SoftUI.blue,
+                        color: theme.accent,
                       },
                     ]}
                   >
                     {unidadLabel(u)}
                   </Text>
                   {active ? (
-                    <Ionicons name="checkmark" size={18} color={SoftUI.blue} />
+                    <Ionicons name="checkmark" size={18} color={theme.accent} />
                   ) : null}
                 </Pressable>
               );
@@ -1008,6 +1018,7 @@ function FacturaDetalleModal({
   condominioId?: Id<"condominios">;
   onClose: () => void;
 }) {
+  const { theme } = useCondominio();
   const condo = useQuery(
     api.condominios.get,
     condominioId ? { condominioId } : "skip",
@@ -1263,7 +1274,7 @@ function FacturaDetalleModal({
                   <Ionicons
                     name="document-text-outline"
                     size={18}
-                    color={puedePagar ? SoftUI.blue : SoftUI.white}
+                    color={puedePagar ? theme.accent : SoftUI.white}
                   />
                 }
                 onPress={async () => {

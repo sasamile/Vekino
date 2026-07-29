@@ -5,7 +5,15 @@ import { useParams } from "next/navigation";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
-import { MessageSquareWarning, Plus, CheckCircle2, Trash2, Loader2 } from "lucide-react";
+import {
+  MessageSquareWarning,
+  Plus,
+  CheckCircle2,
+  Trash2,
+  Loader2,
+  Pencil,
+  Clock,
+} from "lucide-react";
 import { PageContainer } from "@/components/layout/page-container";
 import { PageHeader } from "@/components/layout/page-header";
 import { Card } from "@/components/ui/card";
@@ -26,7 +34,10 @@ const TIPO_LABEL: Record<string, string> = {
   felicitacion: "Felicitación",
 };
 
-const ESTADO_META: Record<string, { label: string; tone: "warning" | "info" | "success" | "neutral" }> = {
+const ESTADO_META: Record<
+  string,
+  { label: string; tone: "warning" | "info" | "success" | "neutral" }
+> = {
   abierto: { label: "Abierto", tone: "warning" },
   en_gestion: { label: "En gestión", tone: "info" },
   resuelto: { label: "Resuelto", tone: "success" },
@@ -93,6 +104,13 @@ export default function MisPqrs() {
   );
 }
 
+type Mensaje = {
+  autorNombre: string;
+  esAdmin: boolean;
+  texto: string;
+  createdAt: number;
+};
+
 type PqrsItem = {
   _id: Id<"pqrs">;
   radicado: string;
@@ -104,16 +122,40 @@ type PqrsItem = {
   updatedAt: number;
   respuesta?: string;
   respondidoPor?: string;
-  mensajes?: { autorNombre: string; esAdmin: boolean; texto: string; createdAt: number }[];
+  mensajes?: Mensaje[];
 };
 
 function PqrsCard({ p }: { p: PqrsItem }) {
   const comentar = useMutation(api.pqrs.comentar);
+  const actualizar = useMutation(api.pqrs.actualizarMio);
   const remove = useMutation(api.pqrs.removeMio);
   const [texto, setTexto] = useState("");
   const [busy, setBusy] = useState(false);
   const [borrando, setBorrando] = useState(false);
+  const [editando, setEditando] = useState(false);
+  const [tipo, setTipo] = useState(p.tipo);
+  const [asunto, setAsunto] = useState(p.asunto);
+  const [descripcion, setDescripcion] = useState(p.descripcion);
+  const [editError, setEditError] = useState<string | null>(null);
   const estado = ESTADO_META[p.estado];
+
+  const hilo: Mensaje[] =
+    p.mensajes && p.mensajes.length > 0
+      ? p.mensajes
+      : p.respuesta
+        ? [
+            {
+              autorNombre: p.respondidoPor ?? "Administración",
+              esAdmin: true,
+              texto: p.respuesta,
+              createdAt: p.updatedAt,
+            },
+          ]
+        : [];
+
+  const hayRespuestaAdmin = hilo.some((m) => m.esAdmin);
+  const puedeEditar = p.estado === "abierto" && !hayRespuestaAdmin;
+  const cerrado = p.estado === "cerrado" || p.estado === "resuelto";
 
   async function eliminar() {
     if (!confirm(`¿Eliminar la solicitud ${p.radicado}?`)) return;
@@ -125,14 +167,34 @@ function PqrsCard({ p }: { p: PqrsItem }) {
     }
   }
 
-  const hilo =
-    p.mensajes && p.mensajes.length > 0
-      ? p.mensajes
-      : p.respuesta
-        ? [{ autorNombre: p.respondidoPor ?? "Administración", esAdmin: true, texto: p.respuesta, createdAt: p.updatedAt }]
-        : [];
+  async function guardarEdicion() {
+    if (!asunto.trim() || !descripcion.trim()) {
+      setEditError("Asunto y descripción son obligatorios.");
+      return;
+    }
+    setBusy(true);
+    setEditError(null);
+    try {
+      await actualizar({
+        id: p._id,
+        tipo: tipo as
+          | "peticion"
+          | "queja"
+          | "reclamo"
+          | "sugerencia"
+          | "felicitacion",
+        asunto,
+        descripcion,
+      });
+      setEditando(false);
+    } catch (err) {
+      setEditError(err instanceof Error ? err.message : "No se pudo guardar.");
+    } finally {
+      setBusy(false);
+    }
+  }
 
-  async function enviar() {
+  async function enviarSeguimiento() {
     if (!texto.trim()) return;
     setBusy(true);
     try {
@@ -149,63 +211,187 @@ function PqrsCard({ p }: { p: PqrsItem }) {
         <Badge tone="brand">{TIPO_LABEL[p.tipo] ?? p.tipo}</Badge>
         {estado && <Badge tone={estado.tone}>{estado.label}</Badge>}
         <span className="ml-auto text-xs text-muted-foreground">{p.radicado}</span>
+        {puedeEditar ? (
+          <button
+            type="button"
+            onClick={() => {
+              setTipo(p.tipo);
+              setAsunto(p.asunto);
+              setDescripcion(p.descripcion);
+              setEditError(null);
+              setEditando((v) => !v);
+            }}
+            aria-label="Editar solicitud"
+            className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
+            <Pencil className="h-4 w-4" />
+          </button>
+        ) : null}
         <button
+          type="button"
           onClick={eliminar}
           disabled={borrando}
           aria-label="Eliminar solicitud"
           className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-red-50 hover:text-red-600 disabled:opacity-50 dark:hover:bg-red-950/20"
         >
-          {borrando ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+          {borrando ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <Trash2 className="h-4 w-4" />
+          )}
         </button>
       </div>
 
-      <h3 className="mt-3 text-lg font-semibold text-foreground">{p.asunto}</h3>
-      <p className="mt-1 whitespace-pre-line text-sm text-foreground/90">{p.descripcion}</p>
-      <p className="mt-3 text-xs text-muted-foreground">Enviado el {fechaLarga(p.createdAt)}</p>
-
-      {/* Hilo de conversación */}
-      {hilo.length > 0 && (
-        <div className="mt-4 space-y-2 border-t border-border pt-4">
-          {hilo.map((m, i) => (
-            <div
-              key={i}
-              className={cn(
-                "rounded-xl border p-3",
-                m.esAdmin
-                  ? "border-emerald-500/20 bg-emerald-500/5"
-                  : "border-border bg-muted/30",
-              )}
+      {editando && puedeEditar ? (
+        <div className="mt-4 space-y-3">
+          <div>
+            <label className="mb-1.5 block text-sm font-medium text-foreground">
+              Tipo
+            </label>
+            <Select value={tipo} onChange={(e) => setTipo(e.target.value)}>
+              {Object.entries(TIPO_LABEL).map(([k, label]) => (
+                <option key={k} value={k}>
+                  {label}
+                </option>
+              ))}
+            </Select>
+          </div>
+          <div>
+            <label className="mb-1.5 block text-sm font-medium text-foreground">
+              Asunto
+            </label>
+            <Input value={asunto} onChange={(e) => setAsunto(e.target.value)} />
+          </div>
+          <div>
+            <label className="mb-1.5 block text-sm font-medium text-foreground">
+              Descripción
+            </label>
+            <Textarea
+              rows={4}
+              value={descripcion}
+              onChange={(e) => setDescripcion(e.target.value)}
+            />
+          </div>
+          {editError ? (
+            <p className="text-sm text-destructive">{editError}</p>
+          ) : null}
+          <div className="flex justify-end gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setEditando(false)}
+              disabled={busy}
             >
-              <div className="flex items-center gap-1.5 text-xs font-medium">
-                {m.esAdmin ? (
-                  <span className="flex items-center gap-1.5 text-emerald-700 dark:text-emerald-400">
-                    <CheckCircle2 className="h-3.5 w-3.5" />
-                    Administración
-                  </span>
-                ) : (
-                  <span className="text-foreground">Tú</span>
-                )}
-                <span className="text-muted-foreground">· {fechaLarga(m.createdAt)}</span>
-              </div>
-              <p className="mt-1.5 whitespace-pre-line text-sm text-foreground/90">{m.texto}</p>
-            </div>
-          ))}
+              Cancelar
+            </Button>
+            <Button
+              variant="brand"
+              size="sm"
+              onClick={guardarEdicion}
+              disabled={busy}
+            >
+              {busy ? (
+                <Spinner className="h-4 w-4 text-brand-foreground" />
+              ) : (
+                "Guardar cambios"
+              )}
+            </Button>
+          </div>
         </div>
+      ) : (
+        <>
+          <h3 className="mt-3 text-lg font-semibold text-foreground">
+            {p.asunto}
+          </h3>
+          <p className="mt-1 whitespace-pre-line text-sm text-foreground/90">
+            {p.descripcion}
+          </p>
+          <p className="mt-3 text-xs text-muted-foreground">
+            Enviado el {fechaLarga(p.createdAt)}
+          </p>
+        </>
       )}
 
-      {/* Responder */}
-      <div className="mt-3 space-y-2">
-        <Textarea
-          rows={2}
-          value={texto}
-          onChange={(e) => setTexto(e.target.value)}
-          placeholder="Escribe un mensaje…"
-        />
-        <div className="flex justify-end">
-          <Button variant="brand" size="sm" onClick={enviar} disabled={busy || !texto.trim()}>
-            {busy ? <Spinner className="h-4 w-4 text-brand-foreground" /> : "Responder"}
-          </Button>
-        </div>
+      <div className="mt-4 space-y-3 border-t border-border pt-4">
+        <p className="text-sm font-medium text-foreground">
+          Respuestas de la administración
+        </p>
+
+        {!hayRespuestaAdmin ? (
+          <div className="flex items-start gap-2.5 rounded-xl border border-border bg-muted/30 px-3.5 py-3">
+            <Clock className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+            <div>
+              <p className="text-sm font-medium text-foreground">
+                Aún no hay respuesta
+              </p>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Cuando la administración responda, la verás aquí.
+                {puedeEditar
+                  ? " Mientras tanto puedes editar o eliminar tu solicitud."
+                  : null}
+              </p>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {hilo.map((m, i) => (
+              <div
+                key={i}
+                className={cn(
+                  "rounded-xl border p-3",
+                  m.esAdmin
+                    ? "border-emerald-500/20 bg-emerald-500/5"
+                    : "border-border bg-muted/30",
+                )}
+              >
+                <div className="flex items-center gap-1.5 text-xs font-medium">
+                  {m.esAdmin ? (
+                    <span className="flex items-center gap-1.5 text-emerald-700 dark:text-emerald-400">
+                      <CheckCircle2 className="h-3.5 w-3.5" />
+                      Administración
+                    </span>
+                  ) : (
+                    <span className="text-foreground">Tú</span>
+                  )}
+                  <span className="text-muted-foreground">
+                    · {fechaLarga(m.createdAt)}
+                  </span>
+                </div>
+                <p className="mt-1.5 whitespace-pre-line text-sm text-foreground/90">
+                  {m.texto}
+                </p>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {hayRespuestaAdmin && !cerrado ? (
+          <div className="space-y-2 pt-1">
+            <p className="text-xs text-muted-foreground">
+              ¿Quieres agregar algo más a la conversación?
+            </p>
+            <Textarea
+              rows={2}
+              value={texto}
+              onChange={(e) => setTexto(e.target.value)}
+              placeholder="Escribe un mensaje de seguimiento…"
+            />
+            <div className="flex justify-end">
+              <Button
+                variant="brand"
+                size="sm"
+                onClick={enviarSeguimiento}
+                disabled={busy || !texto.trim()}
+              >
+                {busy ? (
+                  <Spinner className="h-4 w-4 text-brand-foreground" />
+                ) : (
+                  "Enviar mensaje"
+                )}
+              </Button>
+            </div>
+          </div>
+        ) : null}
       </div>
     </Card>
   );
@@ -240,7 +426,12 @@ function NuevaSolicitud({
     try {
       await crear({
         condominioId,
-        tipo: tipo as "peticion" | "queja" | "reclamo" | "sugerencia" | "felicitacion",
+        tipo: tipo as
+          | "peticion"
+          | "queja"
+          | "reclamo"
+          | "sugerencia"
+          | "felicitacion",
         asunto: asunto.trim(),
         descripcion: descripcion.trim(),
         unidadNumero,
@@ -268,14 +459,20 @@ function NuevaSolicitud({
             Cancelar
           </Button>
           <Button variant="brand" onClick={submit} disabled={saving}>
-            {saving ? <Spinner className="h-4 w-4 text-brand-foreground" /> : "Enviar"}
+            {saving ? (
+              <Spinner className="h-4 w-4 text-brand-foreground" />
+            ) : (
+              "Enviar"
+            )}
           </Button>
         </>
       }
     >
       <form onSubmit={submit} className="space-y-4">
         <div>
-          <label className="mb-1.5 block text-sm font-medium text-foreground">Tipo</label>
+          <label className="mb-1.5 block text-sm font-medium text-foreground">
+            Tipo
+          </label>
           <Select value={tipo} onChange={(e) => setTipo(e.target.value)}>
             {Object.entries(TIPO_LABEL).map(([k, label]) => (
               <option key={k} value={k}>
@@ -285,7 +482,9 @@ function NuevaSolicitud({
           </Select>
         </div>
         <div>
-          <label className="mb-1.5 block text-sm font-medium text-foreground">Asunto</label>
+          <label className="mb-1.5 block text-sm font-medium text-foreground">
+            Asunto
+          </label>
           <Input
             value={asunto}
             onChange={(e) => setAsunto(e.target.value)}

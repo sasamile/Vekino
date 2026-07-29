@@ -91,7 +91,7 @@ export default function ReservasScreen() {
 
 function ReservasContent() {
   const me = useQuery(api.users.me);
-  const { condominioId, condominioName, isSuperadmin } = useCondominio();
+  const { condominioId, condominioName, isSuperadmin, theme } = useCondominio();
   const reservas = useQuery(
     api.reservas.listByCondominio,
     condominioId ? { condominioId } : "skip",
@@ -181,7 +181,7 @@ function ReservasContent() {
           <View style={styles.topRow}>
             <View style={{ flex: 1 }} />
             <Tap
-              style={styles.nuevaBtn}
+              style={[styles.nuevaBtn, { backgroundColor: theme.accent }]}
               onPress={() => {
                 resetForm();
                 setShowForm(true);
@@ -194,7 +194,9 @@ function ReservasContent() {
         ) : null}
 
         <GlassCard style={styles.summaryCard}>
-          <View style={styles.summaryIcon}>
+          <View
+            style={[styles.summaryIcon, { backgroundColor: SoftUI.text }]}
+          >
             <Ionicons name="calendar-outline" size={22} color={SoftUI.white} />
           </View>
           <View style={{ flex: 1, gap: 2, minWidth: 0 }}>
@@ -234,7 +236,7 @@ function ReservasContent() {
         <EstadoChips value={filtro} onChange={setFiltro} />
 
         {reservas === undefined ? (
-          <ActivityIndicator color={SoftUI.blue} style={{ marginTop: SoftUI.space.xxl }} />
+          <ActivityIndicator color={theme.accent} style={{ marginTop: SoftUI.space.xxl }} />
         ) : zonasActivas.length === 0 && (reservas ?? []).length === 0 ? (
           <GlassCard style={styles.emptyCard}>
             <Ionicons name="calendar-outline" size={32} color={SoftUI.textSecondary} />
@@ -308,7 +310,10 @@ function ReservasContent() {
                   <Pressable
                     key={z._id}
                     onPress={() => setZonaId(z._id)}
-                    style={[styles.zonaChip, active && styles.zonaChipActive]}
+                    style={[
+                      styles.zonaChip,
+                      active && { backgroundColor: theme.accent },
+                    ]}
                   >
                     <Ionicons
                       name={active ? "checkmark-circle" : "business-outline"}
@@ -354,7 +359,10 @@ function ReservasContent() {
                     <Pressable
                       key={u._id}
                       onPress={() => setUnidadId(u._id)}
-                      style={[styles.chip, active && styles.chipActive]}
+                      style={[
+                        styles.chip,
+                        active && { backgroundColor: theme.accent },
+                      ]}
                     >
                       <Text
                         style={[
@@ -480,6 +488,7 @@ function EstadoChips({
   value: "" | Estado;
   onChange: (e: "" | Estado) => void;
 }) {
+  const { theme } = useCondominio();
   return (
     <ScrollView
       horizontal
@@ -493,7 +502,10 @@ function EstadoChips({
           <Pressable
             key={f.value}
             onPress={() => onChange(f.value as "" | Estado)}
-            style={[styles.chip, active && styles.chipActive]}
+            style={[
+              styles.chip,
+              active && { backgroundColor: theme.accent },
+            ]}
           >
             <Text style={[styles.chipText, active && styles.chipTextActive]}>
               {f.label}

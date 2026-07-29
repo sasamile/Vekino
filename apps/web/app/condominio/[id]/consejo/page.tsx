@@ -1,8 +1,8 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
-import { useQuery, useMutation, useAction } from "convex/react";
+import { useQuery, useMutation } from "convex/react";
 import {
   Folder,
   FolderPlus,
@@ -19,6 +19,8 @@ import {
   LayoutList,
   Pencil,
   History,
+  Reply,
+  X,
 } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
@@ -41,7 +43,17 @@ import {
   CellStack,
 } from "@/components/ui/table";
 import { cn, initials } from "@/lib/utils";
-import { uploadToS3 } from "@/lib/upload-s3";
+import { useUploadToS3 } from "@/hooks/use-upload-s3";
+import {
+  CategoriaIcon,
+  resolveIconType,
+  resolveIconValue,
+  type CategoriaIconType,
+} from "@/components/consejo/categoria-icon";
+import {
+  CategoriaIconPicker,
+  type IconDraft,
+} from "@/components/consejo/categoria-icon-picker";
 
 type Estado = "pendiente" | "en_revision" | "aprobado" | "reemplazado";
 
@@ -49,20 +61,21 @@ const ESTADO_META: Record<
   Estado,
   { label: string; tone: React.ComponentProps<typeof Badge>["tone"] }
 > = {
-  pendiente: { label: "Pendiente", tone: "warning" },
+  pendiente: { label: "Por revisar", tone: "warning" },
   en_revision: { label: "En revisión", tone: "info" },
-  aprobado: { label: "Aprobado", tone: "success" },
-  reemplazado: { label: "Reemplazado", tone: "neutral" },
+  aprobado: { label: "Publicado", tone: "success" },
+  reemplazado: { label: "Archivado", tone: "neutral" },
 };
 
-const FOLDER_COLORS = [
-  "bg-amber-400/90 text-amber-950",
-  "bg-brand text-brand-foreground",
-  "bg-sky-500/90 text-white",
-  "bg-emerald-500/90 text-white",
-  "bg-violet-500/90 text-white",
-  "bg-rose-400/90 text-white",
-];
+type CategoriaRow = {
+  _id: Id<"consejoCategorias">;
+  nombre: string;
+  iconKey?: string;
+  colorKey?: string;
+  iconType?: CategoriaIconType;
+  iconValue?: string;
+  documentosCount: number;
+};
 
 function formatSize(bytes: number) {
   if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
@@ -103,7 +116,12 @@ export default function ConsejoPage() {
 
   const [catModal, setCatModal] = useState<
     | { mode: "create" }
-    | { mode: "edit"; id: Id<"consejoCategorias">; nombre: string }
+    | {
+        mode: "edit";
+        id: Id<"consejoCategorias">;
+        nombre: string;
+        icon: IconDraft;
+      }
     | null
   >(null);
   const [uploadOpen, setUploadOpen] = useState(false);
@@ -111,8 +129,14 @@ export default function ConsejoPage() {
     null,
   );
   const [miembrosOpen, setMiembrosOpen] = useState(false);
+  const [deleteDoc, setDeleteDoc] = useState<{
+    id: Id<"consejoDocumentos">;
+    titulo: string;
+  } | null>(null);
+  const [deletingDoc, setDeletingDoc] = useState(false);
 
   const removeCategoria = useMutation(api.consejo.removeCategoria);
+  const removeDocumento = useMutation(api.consejo.removeDocumento);
   const totalDocs =
     categorias?.reduce((n, c) => n + c.documentosCount, 0) ?? 0;
 
@@ -194,7 +218,7 @@ export default function ConsejoPage() {
           </div>
         </div>
 
-        {/* Carpetas / categorías */}
+        {/* Categorías — chips horizontales (cambio rápido) */}
         <section className="space-y-3">
           <div className="flex items-center justify-between gap-2">
             <h2 className="text-sm font-semibold text-foreground">
@@ -205,125 +229,132 @@ export default function ConsejoPage() {
                 </span>
               )}
             </h2>
+            {permisos?.canManageCategorias && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setCatModal({ mode: "create" })}
+              >
+                <FolderPlus className="h-4 w-4" />
+                Nueva
+              </Button>
+            )}
           </div>
 
           {loading ? (
-            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-              {Array.from({ length: 4 }).map((_, i) => (
-                <Skeleton key={i} className="h-28 rounded-2xl" />
+            <div className="flex gap-2 overflow-hidden">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <Skeleton key={i} className="h-11 w-36 shrink-0 rounded-full" />
               ))}
             </div>
           ) : (
-            <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+            <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1 [scrollbar-width:thin]">
               <button
                 type="button"
                 onClick={() => setCategoriaFiltro("")}
                 className={cn(
-                  "flex flex-col gap-3 rounded-2xl border p-4 text-left transition-colors",
+                  "inline-flex h-11 shrink-0 items-center gap-2 rounded-full border px-3.5 text-sm font-medium transition-colors",
                   !categoriaFiltro
-                    ? "border-brand/35 bg-brand/[0.06]"
-                    : "border-border bg-card hover:bg-accent/40",
+                    ? "border-foreground/20 bg-foreground text-background"
+                    : "border-border bg-card text-foreground hover:bg-accent/50",
                 )}
               >
-                <span className="grid h-11 w-11 place-items-center rounded-xl bg-muted text-muted-foreground">
-                  <Folder className="h-5 w-5" />
-                </span>
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-medium text-foreground">
-                    Todas
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    {totalDocs} archivo{totalDocs === 1 ? "" : "s"}
-                  </p>
-                </div>
-              </button>
-
-              {(categorias ?? []).map((c, i) => (
-                <div
-                  key={c._id}
+                <Folder className="h-4 w-4 opacity-80" />
+                Todas
+                <span
                   className={cn(
-                    "group relative flex flex-col gap-3 rounded-2xl border p-4 text-left transition-colors",
-                    categoriaFiltro === c._id
-                      ? "border-brand/35 bg-brand/[0.06]"
-                      : "border-border bg-card hover:bg-accent/40",
+                    "tabular-nums text-xs",
+                    !categoriaFiltro
+                      ? "text-background/70"
+                      : "text-muted-foreground",
                   )}
                 >
-                  <button
-                    type="button"
-                    onClick={() => setCategoriaFiltro(c._id)}
-                    className="absolute inset-0 rounded-2xl"
-                    aria-label={`Abrir ${c.nombre}`}
-                  />
-                  <span
+                  {totalDocs}
+                </span>
+              </button>
+
+              {(categorias as CategoriaRow[] | undefined)?.map((c) => {
+                const active = categoriaFiltro === c._id;
+                return (
+                  <div
+                    key={c._id}
                     className={cn(
-                      "relative z-[1] grid h-11 w-11 place-items-center rounded-xl",
-                      FOLDER_COLORS[i % FOLDER_COLORS.length],
+                      "group inline-flex h-11 shrink-0 items-center gap-1 rounded-full border pl-1.5 pr-1 transition-colors",
+                      active
+                        ? "border-brand/40 bg-brand/10"
+                        : "border-border bg-card hover:bg-accent/40",
                     )}
                   >
-                    <Folder className="h-5 w-5" />
-                  </span>
-                  <div className="relative z-[1] min-w-0">
-                    <p className="truncate text-sm font-medium text-foreground">
-                      {c.nombre}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      {c.documentosCount} archivo
-                      {c.documentosCount === 1 ? "" : "s"}
-                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setCategoriaFiltro(c._id)}
+                      className="inline-flex items-center gap-2 rounded-full py-1 pr-2 pl-0.5 text-left"
+                      aria-pressed={active}
+                    >
+                      <CategoriaIcon data={c} size="sm" />
+                      <span className="max-w-[9rem] truncate text-sm font-medium text-foreground">
+                        {c.nombre}
+                      </span>
+                      <span className="tabular-nums text-xs text-muted-foreground">
+                        {c.documentosCount}
+                      </span>
+                    </button>
+                    {permisos?.canManageCategorias && (
+                      <div className="flex items-center opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
+                        <button
+                          type="button"
+                          className="rounded-full p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+                          aria-label="Editar categoría"
+                          onClick={() =>
+                            setCatModal({
+                              mode: "edit",
+                              id: c._id,
+                              nombre: c.nombre,
+                              icon: {
+                                iconType: resolveIconType(c),
+                                iconValue: resolveIconValue(c),
+                                colorKey: c.colorKey ?? "slate",
+                              },
+                            })
+                          }
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          className="rounded-full p-1.5 text-muted-foreground hover:bg-accent hover:text-destructive"
+                          aria-label="Eliminar categoría"
+                          onClick={() => {
+                            const msg =
+                              c.documentosCount > 0
+                                ? `¿Eliminar «${c.nombre}» y sus ${c.documentosCount} documento(s)? No se puede deshacer.`
+                                : `¿Eliminar la categoría «${c.nombre}»?`;
+                            if (!confirm(msg)) return;
+                            void removeCategoria({
+                              id: c._id,
+                              force: c.documentosCount > 0,
+                            }).then(() => {
+                              if (categoriaFiltro === c._id)
+                                setCategoriaFiltro("");
+                            });
+                          }}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    )}
                   </div>
-                  {permisos?.canManageCategorias && (
-                    <div className="relative z-[2] flex gap-0.5 opacity-100 sm:opacity-0 sm:group-hover:opacity-100">
-                      <button
-                        type="button"
-                        className="rounded-lg p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
-                        aria-label="Editar categoría"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setCatModal({
-                            mode: "edit",
-                            id: c._id,
-                            nombre: c.nombre,
-                          });
-                        }}
-                      >
-                        <Pencil className="h-3.5 w-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        className="rounded-lg p-1.5 text-muted-foreground hover:bg-accent hover:text-destructive"
-                        aria-label="Eliminar categoría"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          const msg =
-                            c.documentosCount > 0
-                              ? `¿Eliminar «${c.nombre}» y sus ${c.documentosCount} documento(s)? No se puede deshacer.`
-                              : `¿Eliminar la categoría «${c.nombre}»?`;
-                          if (!confirm(msg)) return;
-                          void removeCategoria({
-                            id: c._id,
-                            force: c.documentosCount > 0,
-                          }).then(() => {
-                            if (categoriaFiltro === c._id) setCategoriaFiltro("");
-                          });
-                        }}
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
-                  )}
-                </div>
-              ))}
+                );
+              })}
 
               {permisos?.canManageCategorias && (
                 <button
                   type="button"
                   onClick={() => setCatModal({ mode: "create" })}
-                  className="flex flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-border bg-transparent p-4 text-muted-foreground transition-colors hover:border-brand/40 hover:bg-brand/[0.03] hover:text-foreground"
+                  className="inline-flex h-11 shrink-0 items-center gap-2 rounded-full border border-dashed border-border px-3.5 text-sm font-medium text-muted-foreground transition-colors hover:border-brand/40 hover:text-foreground"
                 >
-                  <span className="grid h-11 w-11 place-items-center rounded-xl border border-dashed border-border">
-                    <FolderPlus className="h-5 w-5" />
-                  </span>
-                  <p className="text-sm font-medium">Nueva categoría</p>
+                  <FolderPlus className="h-4 w-4" />
+                  Nueva categoría
                 </button>
               )}
             </div>
@@ -450,6 +481,21 @@ export default function ConsejoPage() {
                             >
                               <Download className="h-4 w-4" />
                             </a>
+                            {permisos?.canUpload && (
+                              <button
+                                type="button"
+                                className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+                                aria-label="Eliminar documento"
+                                onClick={() =>
+                                  setDeleteDoc({
+                                    id: d._id,
+                                    titulo: d.titulo,
+                                  })
+                                }
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </button>
+                            )}
                             {d.comentariosCount > 0 && (
                               <span className="inline-flex items-center gap-1 px-1.5 text-xs text-muted-foreground">
                                 <MessageSquare className="h-3.5 w-3.5" />
@@ -474,13 +520,22 @@ export default function ConsejoPage() {
           mode={catModal.mode}
           editId={catModal.mode === "edit" ? catModal.id : undefined}
           initialNombre={catModal.mode === "edit" ? catModal.nombre : ""}
+          initialIcon={
+            catModal.mode === "edit"
+              ? catModal.icon
+              : {
+                  iconType: "emoji",
+                  iconValue: "📁",
+                  colorKey: "slate",
+                }
+          }
           onClose={() => setCatModal(null)}
         />
       )}
       {uploadOpen && (
         <SubirDocumentoModal
           condominioId={condominioId}
-          categorias={categorias ?? []}
+          categorias={(categorias as CategoriaRow[] | undefined) ?? []}
           defaultCategoriaId={categoriaFiltro || undefined}
           onClose={() => setUploadOpen(false)}
         />
@@ -488,7 +543,7 @@ export default function ConsejoPage() {
       {detalleId && (
         <DocumentoDetalleModal
           id={detalleId}
-          categorias={categorias ?? []}
+          categorias={(categorias as CategoriaRow[] | undefined) ?? []}
           canUpload={Boolean(permisos?.canUpload)}
           canComment={Boolean(permisos?.canComment)}
           canAdmin={Boolean(permisos?.canManageCategorias)}
@@ -502,6 +557,58 @@ export default function ConsejoPage() {
           onClose={() => setMiembrosOpen(false)}
         />
       )}
+      {deleteDoc && (
+        <Modal
+          open
+          onClose={() => {
+            if (deletingDoc) return;
+            setDeleteDoc(null);
+          }}
+          title="Eliminar documento"
+          description="Se borrará el documento, todas sus versiones y los archivos en S3. Esta acción no se puede deshacer."
+          className="max-w-md"
+          overlayClassName={detalleId ? "z-[110]" : undefined}
+          footer={
+            <>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={deletingDoc}
+                onClick={() => setDeleteDoc(null)}
+              >
+                Cancelar
+              </Button>
+              <Button
+                size="sm"
+                variant="destructive"
+                disabled={deletingDoc}
+                onClick={() => {
+                  void (async () => {
+                    setDeletingDoc(true);
+                    try {
+                      await removeDocumento({ id: deleteDoc.id });
+                      if (detalleId === deleteDoc.id) setDetalleId(null);
+                      setDeleteDoc(null);
+                    } finally {
+                      setDeletingDoc(false);
+                    }
+                  })();
+                }}
+              >
+                {deletingDoc && <Loader2 className="h-4 w-4 animate-spin" />}
+                Eliminar
+              </Button>
+            </>
+          }
+        >
+          <p className="text-sm text-muted-foreground">
+            Documento:{" "}
+            <span className="font-medium text-foreground">
+              {deleteDoc.titulo}
+            </span>
+          </p>
+        </Modal>
+      )}
     </PageContainer>
   );
 }
@@ -511,29 +618,47 @@ function CategoriaModal({
   mode,
   editId,
   initialNombre,
+  initialIcon,
   onClose,
 }: {
   condominioId: Id<"condominios">;
   mode: "create" | "edit";
   editId?: Id<"consejoCategorias">;
   initialNombre: string;
+  initialIcon: IconDraft;
   onClose: () => void;
 }) {
   const create = useMutation(api.consejo.createCategoria);
   const update = useMutation(api.consejo.updateCategoria);
   const [nombre, setNombre] = useState(initialNombre);
+  const [icon, setIcon] = useState<IconDraft>(initialIcon);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function save() {
     if (!nombre.trim()) return;
+    if (icon.iconType === "image" && !icon.iconValue) {
+      setError("Sube una imagen o pega una URL.");
+      return;
+    }
+    if (icon.iconType === "svg" && !icon.iconValue) {
+      setError("Pega un SVG y pulsa «Usar este SVG».");
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
+      const payload = {
+        nombre,
+        iconType: icon.iconType,
+        iconValue: icon.iconValue,
+        colorKey: icon.colorKey,
+        iconKey: icon.iconType === "lucide" ? icon.iconValue : undefined,
+      };
       if (mode === "edit" && editId) {
-        await update({ id: editId, nombre });
+        await update({ id: editId, ...payload });
       } else {
-        await create({ condominioId, nombre });
+        await create({ condominioId, ...payload });
       }
       onClose();
     } catch (e) {
@@ -547,7 +672,8 @@ function CategoriaModal({
       open
       onClose={onClose}
       title={mode === "edit" ? "Editar categoría" : "Nueva categoría"}
-      description="Organiza los documentos del consejo (ej. Contabilidad, Estrategias)."
+      description="Nombre e icono (emoji, icono, SVG o imagen)."
+      className="max-w-md"
       footer={
         <>
           <Button variant="ghost" size="sm" onClick={onClose} disabled={busy}>
@@ -560,13 +686,21 @@ function CategoriaModal({
         </>
       }
     >
-      <div className="space-y-3">
-        <Input
-          value={nombre}
-          onChange={(e) => setNombre(e.target.value)}
-          placeholder="Nombre de la categoría"
-          autoFocus
+      <div className="space-y-5">
+        <CategoriaIconPicker
+          value={icon}
+          onChange={setIcon}
+          uploadPrefix={`condominios/${condominioId}/consejo/icons`}
         />
+        <div className="space-y-1.5">
+          <label className="text-xs font-medium text-foreground">Nombre</label>
+          <Input
+            value={nombre}
+            onChange={(e) => setNombre(e.target.value)}
+            placeholder="Ej. Contabilidad, Actas, Reportes…"
+            autoFocus
+          />
+        </div>
         {error && <p className="text-sm text-destructive">{error}</p>}
       </div>
     </Modal>
@@ -585,7 +719,7 @@ function SubirDocumentoModal({
   onClose: () => void;
 }) {
   const create = useMutation(api.consejo.createDocumento);
-  const generateUploadUrl = useAction(api.files.generateUploadUrl);
+  const uploadFile = useUploadToS3();
   const [categoriaId, setCategoriaId] = useState(
     defaultCategoriaId ?? categorias[0]?._id ?? "",
   );
@@ -603,8 +737,7 @@ function SubirDocumentoModal({
     setBusy(true);
     setError(null);
     try {
-      const { url, key } = await uploadToS3(
-        generateUploadUrl,
+      const { url, key } = await uploadFile(
         file,
         `condominios/${condominioId}/consejo`,
       );
@@ -632,7 +765,7 @@ function SubirDocumentoModal({
       open
       onClose={() => !busy && onClose()}
       title="Subir documento"
-      description="El documento queda pendiente para revisión de la junta."
+      description="El archivo queda publicado en la categoría elegida."
       className="max-w-lg"
       footer={
         <>
@@ -723,22 +856,51 @@ function DocumentoDetalleModal({
 }) {
   const doc = useQuery(api.consejo.getDocumento, { id });
   const addComentario = useMutation(api.consejo.addComentario);
+  const updateComentario = useMutation(api.consejo.updateComentario);
+  const removeComentario = useMutation(api.consejo.removeComentario);
+  const toggleReaccion = useMutation(api.consejo.toggleReaccion);
   const setEstado = useMutation(api.consejo.setEstadoDocumento);
   const updateDoc = useMutation(api.consejo.updateDocumento);
   const nuevaVersion = useMutation(api.consejo.nuevaVersion);
   const remove = useMutation(api.consejo.removeDocumento);
-  const generateUploadUrl = useAction(api.files.generateUploadUrl);
+  const removeVersion = useMutation(api.consejo.removeVersion);
+  const uploadFile = useUploadToS3();
 
   const [comentario, setComentario] = useState("");
+  const [replyTo, setReplyTo] = useState<{
+    id: Id<"consejoDocumentoComentarios">;
+    autor: string;
+  } | null>(null);
+  const [editingCommentId, setEditingCommentId] = useState<
+    Id<"consejoDocumentoComentarios"> | null
+  >(null);
+  const [editingText, setEditingText] = useState("");
+  const commentsEndRef = useRef<HTMLDivElement>(null);
   const [editing, setEditing] = useState(false);
   const [titulo, setTitulo] = useState("");
   const [descripcion, setDescripcion] = useState("");
   const [periodoMes, setPeriodoMes] = useState("");
   const [categoriaId, setCategoriaId] = useState("");
   const [notaVersion, setNotaVersion] = useState("");
+  const [versionModalOpen, setVersionModalOpen] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState<
+    | { kind: "documento" }
+    | { kind: "version_actual" }
+    | {
+        kind: "version_archivada";
+        versionId: Id<"consejoDocumentoVersiones">;
+        label: string;
+      }
+    | null
+  >(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  const commentCount = doc?.comentarios.length ?? 0;
+  useEffect(() => {
+    commentsEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [commentCount]);
 
   function startEdit() {
     if (!doc) return;
@@ -775,10 +937,33 @@ function DocumentoDetalleModal({
     setBusy(true);
     setError(null);
     try {
-      await addComentario({ documentoId: id, contenido: comentario });
+      await addComentario({
+        documentoId: id,
+        contenido: comentario,
+        parentId: replyTo?.id,
+      });
       setComentario("");
+      setReplyTo(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "No se pudo comentar.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function guardarEdicionComentario() {
+    if (!editingCommentId || !editingText.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await updateComentario({
+        id: editingCommentId,
+        contenido: editingText,
+      });
+      setEditingCommentId(null);
+      setEditingText("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudo editar.");
     } finally {
       setBusy(false);
     }
@@ -791,8 +976,7 @@ function DocumentoDetalleModal({
     setBusy(true);
     setError(null);
     try {
-      const { url, key } = await uploadToS3(
-        generateUploadUrl,
+      const { url, key } = await uploadFile(
         file,
         `condominios/${doc.condominioId}/consejo`,
       );
@@ -806,8 +990,43 @@ function DocumentoDetalleModal({
         nota: notaVersion.trim() || undefined,
       });
       setNotaVersion("");
+      setVersionModalOpen(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error al versionar.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function confirmarBorrado() {
+    if (!deleteConfirm) return;
+    setBusy(true);
+    setError(null);
+    try {
+      if (deleteConfirm.kind === "documento") {
+        await remove({ id });
+        setDeleteConfirm(null);
+        onClose();
+        return;
+      }
+      if (deleteConfirm.kind === "version_archivada") {
+        await removeVersion({
+          documentoId: id,
+          versionId: deleteConfirm.versionId,
+        });
+      } else {
+        const result = await removeVersion({ documentoId: id });
+        if (result.kind === "documento") {
+          setDeleteConfirm(null);
+          onClose();
+          return;
+        }
+      }
+      setDeleteConfirm(null);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "No se pudo eliminar.",
+      );
     } finally {
       setBusy(false);
     }
@@ -860,37 +1079,47 @@ function DocumentoDetalleModal({
                 Editar datos
               </Button>
             )}
-            {canAdmin && (
-              <Select
-                value={doc.estado}
-                onChange={(e) =>
-                  void setEstado({
-                    id,
-                    estado: e.target.value as Estado,
-                  })
-                }
-                className="w-36"
+            {canUpload && (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={busy}
+                onClick={() => {
+                  setError(null);
+                  setVersionModalOpen(true);
+                }}
               >
-                <option value="pendiente">Pendiente</option>
-                <option value="en_revision">En revisión</option>
-                <option value="aprobado">Aprobado</option>
-                <option value="reemplazado">Reemplazado</option>
-              </Select>
+                <Upload className="h-3.5 w-3.5" />
+                Actualizar archivo
+              </Button>
+            )}
+            {canAdmin && (
+              <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
+                <span className="sr-only sm:not-sr-only">Estado</span>
+                <Select
+                  value={doc.estado}
+                  onChange={(e) =>
+                    void setEstado({
+                      id,
+                      estado: e.target.value as Estado,
+                    })
+                  }
+                  className="w-40"
+                  aria-label="Cambiar estado"
+                >
+                  <option value="aprobado">Publicado</option>
+                  <option value="en_revision">En revisión</option>
+                  <option value="pendiente">Por revisar</option>
+                  <option value="reemplazado">Archivado</option>
+                </Select>
+              </label>
             )}
             {(canAdmin || canUpload) && (
               <Button
                 variant="ghost"
                 size="sm"
                 className="text-destructive"
-                onClick={() => {
-                  if (
-                    confirm(
-                      "¿Eliminar este documento y todas sus versiones?",
-                    )
-                  ) {
-                    void remove({ id }).then(onClose);
-                  }
-                }}
+                onClick={() => setDeleteConfirm({ kind: "documento" })}
               >
                 <Trash2 className="h-4 w-4" />
               </Button>
@@ -962,41 +1191,69 @@ function DocumentoDetalleModal({
             )
           )}
 
-          {canUpload && (
-            <div className="space-y-2 rounded-xl border border-dashed border-border p-3">
-              <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                <Upload className="h-3.5 w-3.5" />
-                Actualizar archivo → v{doc.version + 1}
-              </p>
-              <p className="text-xs text-muted-foreground">
-                La versión actual (v{doc.version}) se archiva y el nuevo archivo
-                pasa a ser la vigente.
-              </p>
-              <Input
-                value={notaVersion}
-                onChange={(e) => setNotaVersion(e.target.value)}
-                placeholder="Nota de cambios (opcional)"
-              />
-              <input
-                ref={fileRef}
-                type="file"
-                className="hidden"
-                onChange={onNuevaVersion}
-              />
-              <Button
-                size="sm"
-                disabled={busy}
-                onClick={() => fileRef.current?.click()}
-              >
-                {busy ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Upload className="h-4 w-4" />
-                )}
-                Subir nueva versión
-              </Button>
-            </div>
-          )}
+          {canUpload && versionModalOpen ? (
+            <Modal
+              open
+              onClose={() => {
+                if (busy) return;
+                setVersionModalOpen(false);
+                setNotaVersion("");
+              }}
+              title={`Actualizar archivo → v${doc.version + 1}`}
+              description={`La versión actual (v${doc.version}) se archiva y el nuevo archivo pasa a ser la vigente.`}
+              className="max-w-md"
+              overlayClassName="z-[110]"
+              footer={
+                <>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={busy}
+                    onClick={() => {
+                      setVersionModalOpen(false);
+                      setNotaVersion("");
+                    }}
+                  >
+                    Cancelar
+                  </Button>
+                  <Button
+                    size="sm"
+                    disabled={busy}
+                    onClick={() => fileRef.current?.click()}
+                  >
+                    {busy ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Upload className="h-4 w-4" />
+                    )}
+                    Subir nueva versión
+                  </Button>
+                </>
+              }
+            >
+              <div className="space-y-3">
+                <Input
+                  value={notaVersion}
+                  onChange={(e) => setNotaVersion(e.target.value)}
+                  placeholder="Nota de cambios (opcional)"
+                  disabled={busy}
+                />
+                <input
+                  ref={fileRef}
+                  type="file"
+                  className="hidden"
+                  onChange={onNuevaVersion}
+                />
+                <p className="text-xs text-muted-foreground">
+                  PDF, Word, Excel o imagen. Al elegir el archivo se sube de
+                  inmediato.
+                </p>
+                {error ? (
+                  <p className="text-sm text-destructive">{error}</p>
+                ) : null}
+              </div>
+            </Modal>
+          ) : null}
 
           <div>
             <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
@@ -1004,7 +1261,7 @@ function DocumentoDetalleModal({
               Historial de versiones
             </p>
             <ul className="space-y-1.5 text-xs">
-              <li className="flex items-center justify-between gap-2 rounded-lg border border-brand/25 bg-brand/[0.04] px-3 py-2">
+              <li className="flex items-center justify-between gap-2 rounded-lg border border-brand/25 bg-brand/4 px-3 py-2">
                 <span className="text-foreground">
                   <span className="font-semibold">v{doc.version}</span>
                   {" · "}
@@ -1013,14 +1270,28 @@ function DocumentoDetalleModal({
                   {fmtDate(doc.updatedAt)}
                   <span className="ml-1.5 text-brand">(actual)</span>
                 </span>
-                <a
-                  href={doc.fileUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="font-medium text-brand hover:underline"
-                >
-                  Abrir
-                </a>
+                <span className="flex shrink-0 items-center gap-2">
+                  <a
+                    href={doc.fileUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-medium text-brand hover:underline"
+                  >
+                    Abrir
+                  </a>
+                  {canUpload && (
+                    <button
+                      type="button"
+                      disabled={busy}
+                      className="text-destructive hover:underline disabled:opacity-50"
+                      onClick={() =>
+                        setDeleteConfirm({ kind: "version_actual" })
+                      }
+                    >
+                      Borrar
+                    </button>
+                  )}
+                </span>
               </li>
               {doc.versiones.map((v) => (
                 <li
@@ -1037,14 +1308,32 @@ function DocumentoDetalleModal({
                     {fmtDate(v.createdAt)}
                     {v.subidoPorNombre ? ` · ${v.subidoPorNombre}` : ""}
                   </span>
-                  <a
-                    href={v.fileUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-brand hover:underline"
-                  >
-                    Abrir
-                  </a>
+                  <span className="flex shrink-0 items-center gap-2">
+                    <a
+                      href={v.fileUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-brand hover:underline"
+                    >
+                      Abrir
+                    </a>
+                    {canUpload && (
+                      <button
+                        type="button"
+                        disabled={busy}
+                        className="text-destructive hover:underline disabled:opacity-50"
+                        onClick={() =>
+                          setDeleteConfirm({
+                            kind: "version_archivada",
+                            versionId: v._id,
+                            label: `v${v.version} · ${v.fileName}`,
+                          })
+                        }
+                      >
+                        Borrar
+                      </button>
+                    )}
+                  </span>
                 </li>
               ))}
             </ul>
@@ -1054,51 +1343,381 @@ function DocumentoDetalleModal({
             <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               Comentarios ({doc.comentarios.length})
             </p>
-            <div className="mb-3 max-h-56 space-y-2 overflow-y-auto">
+            <div className="mb-3 max-h-72 space-y-2 overflow-y-auto pr-1">
               {doc.comentarios.length === 0 ? (
                 <p className="text-sm text-muted-foreground">
                   Aún no hay comentarios.
                 </p>
               ) : (
-                doc.comentarios.map((c) => (
-                  <div
-                    key={c._id}
-                    className="rounded-lg border border-border bg-muted/40 px-3 py-2"
-                  >
-                    <p className="text-xs font-medium text-foreground">
-                      {c.autorNombre}{" "}
-                      <span className="font-normal text-muted-foreground">
-                        · {fmtDate(c.createdAt)}
-                      </span>
-                    </p>
-                    <p className="mt-0.5 text-sm text-foreground">{c.contenido}</p>
-                  </div>
-                ))
+                (() => {
+                  const roots = doc.comentarios.filter((c) => !c.parentId);
+                  const repliesOf = (parentId: string) =>
+                    doc.comentarios.filter(
+                      (c) => c.parentId && String(c.parentId) === parentId,
+                    );
+                  return (
+                    <>
+                      {roots.map((c) => (
+                        <div key={c._id} className="space-y-2">
+                          <ComentarioCard
+                            c={c}
+                            canComment={canComment}
+                            canAdmin={canAdmin}
+                            busy={busy}
+                            isEditing={editingCommentId === c._id}
+                            editingText={editingText}
+                            onEditingText={setEditingText}
+                            onStartEdit={() => {
+                              setEditingCommentId(c._id);
+                              setEditingText(c.contenido);
+                            }}
+                            onCancelEdit={() => {
+                              setEditingCommentId(null);
+                              setEditingText("");
+                            }}
+                            onSaveEdit={() => void guardarEdicionComentario()}
+                            onReply={() =>
+                              setReplyTo({ id: c._id, autor: c.autorNombre })
+                            }
+                            onDelete={() => {
+                              if (!confirm("¿Eliminar este comentario?")) return;
+                              void removeComentario({ id: c._id }).catch(
+                                (e) =>
+                                  setError(
+                                    e instanceof Error
+                                      ? e.message
+                                      : "No se pudo eliminar.",
+                                  ),
+                              );
+                            }}
+                            onReact={(emoji) =>
+                              void toggleReaccion({
+                                comentarioId: c._id,
+                                emoji,
+                              })
+                            }
+                          />
+                          {repliesOf(String(c._id)).map((r) => (
+                            <div key={r._id} className="ml-4 border-l-2 border-border pl-3">
+                              <ComentarioCard
+                                c={r}
+                                canComment={canComment}
+                                canAdmin={canAdmin}
+                                busy={busy}
+                                isReply
+                                isEditing={editingCommentId === r._id}
+                                editingText={editingText}
+                                onEditingText={setEditingText}
+                                onStartEdit={() => {
+                                  setEditingCommentId(r._id);
+                                  setEditingText(r.contenido);
+                                }}
+                                onCancelEdit={() => {
+                                  setEditingCommentId(null);
+                                  setEditingText("");
+                                }}
+                                onSaveEdit={() => void guardarEdicionComentario()}
+                                onReply={() =>
+                                  setReplyTo({
+                                    id: c._id,
+                                    autor: c.autorNombre,
+                                  })
+                                }
+                                onDelete={() => {
+                                  if (!confirm("¿Eliminar esta respuesta?"))
+                                    return;
+                                  void removeComentario({ id: r._id }).catch(
+                                    (e) =>
+                                      setError(
+                                        e instanceof Error
+                                          ? e.message
+                                          : "No se pudo eliminar.",
+                                      ),
+                                  );
+                                }}
+                                onReact={(emoji) =>
+                                  void toggleReaccion({
+                                    comentarioId: r._id,
+                                    emoji,
+                                  })
+                                }
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      ))}
+                      <div ref={commentsEndRef} />
+                    </>
+                  );
+                })()
               )}
             </div>
             {canComment && (
-              <div className="flex gap-2">
-                <Textarea
-                  value={comentario}
-                  onChange={(e) => setComentario(e.target.value)}
-                  placeholder="Escribe un comentario…"
-                  rows={2}
-                  className="flex-1"
-                />
-                <Button
-                  size="sm"
-                  disabled={busy || !comentario.trim()}
-                  onClick={enviarComentario}
-                >
-                  Enviar
-                </Button>
+              <div className="space-y-2">
+                {replyTo ? (
+                  <div className="flex items-center justify-between gap-2 rounded-lg bg-muted/50 px-3 py-1.5 text-xs text-muted-foreground">
+                    <span>
+                      Respondiendo a{" "}
+                      <span className="font-medium text-foreground">
+                        {replyTo.autor}
+                      </span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setReplyTo(null)}
+                      className="rounded p-0.5 hover:bg-accent hover:text-foreground"
+                      aria-label="Cancelar respuesta"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ) : null}
+                <div className="flex gap-2">
+                  <Textarea
+                    value={comentario}
+                    onChange={(e) => setComentario(e.target.value)}
+                    placeholder={
+                      replyTo
+                        ? "Escribe tu respuesta…"
+                        : "Escribe un comentario…"
+                    }
+                    rows={2}
+                    className="flex-1"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                        e.preventDefault();
+                        void enviarComentario();
+                      }
+                    }}
+                  />
+                  <Button
+                    size="sm"
+                    disabled={busy || !comentario.trim()}
+                    onClick={() => void enviarComentario()}
+                  >
+                    {replyTo ? "Responder" : "Enviar"}
+                  </Button>
+                </div>
               </div>
             )}
           </div>
           {error && <p className="text-sm text-destructive">{error}</p>}
         </div>
       )}
+      {deleteConfirm ? (
+        <Modal
+          open
+          onClose={() => {
+            if (busy) return;
+            setDeleteConfirm(null);
+          }}
+          title={
+            deleteConfirm.kind === "documento"
+              ? "Eliminar documento"
+              : deleteConfirm.kind === "version_actual"
+                ? "Eliminar versión actual"
+                : "Eliminar versión"
+          }
+          description={
+            deleteConfirm.kind === "documento"
+              ? "Se borrará el documento, todas sus versiones y los archivos en S3. No se puede deshacer."
+              : deleteConfirm.kind === "version_actual"
+                ? doc && doc.versiones.length > 0
+                  ? `Se borra el archivo actual (v${doc.version}) de S3 y se restaura la versión anterior.`
+                  : "No hay versiones anteriores: se eliminará el documento completo y su archivo en S3."
+                : "Se borrará esta versión del historial y su archivo en S3."
+          }
+          className="max-w-md"
+          overlayClassName="z-[110]"
+          footer={
+            <>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={busy}
+                onClick={() => setDeleteConfirm(null)}
+              >
+                Cancelar
+              </Button>
+              <Button
+                size="sm"
+                variant="destructive"
+                disabled={busy}
+                onClick={() => void confirmarBorrado()}
+              >
+                {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+                Eliminar
+              </Button>
+            </>
+          }
+        >
+          {deleteConfirm.kind === "version_archivada" ? (
+            <p className="text-sm text-muted-foreground">
+              Versión:{" "}
+              <span className="font-medium text-foreground">
+                {deleteConfirm.label}
+              </span>
+            </p>
+          ) : doc ? (
+            <p className="text-sm text-muted-foreground">
+              Documento:{" "}
+              <span className="font-medium text-foreground">{doc.titulo}</span>
+            </p>
+          ) : null}
+        </Modal>
+      ) : null}
     </Modal>
+  );
+}
+
+const REACCION_OPTS = ["👍", "❤️", "😮", "😂"] as const;
+
+type ComentarioView = {
+  _id: Id<"consejoDocumentoComentarios">;
+  autorNombre: string;
+  contenido: string;
+  createdAt: number;
+  updatedAt: number;
+  esMio: boolean;
+  reacciones: { emoji: string; count: number; mine: boolean }[];
+};
+
+function ComentarioCard({
+  c,
+  canComment,
+  canAdmin,
+  busy,
+  isReply,
+  isEditing,
+  editingText,
+  onEditingText,
+  onStartEdit,
+  onCancelEdit,
+  onSaveEdit,
+  onReply,
+  onDelete,
+  onReact,
+}: {
+  c: ComentarioView;
+  canComment: boolean;
+  canAdmin: boolean;
+  busy: boolean;
+  isReply?: boolean;
+  isEditing: boolean;
+  editingText: string;
+  onEditingText: (v: string) => void;
+  onStartEdit: () => void;
+  onCancelEdit: () => void;
+  onSaveEdit: () => void;
+  onReply: () => void;
+  onDelete: () => void;
+  onReact: (emoji: string) => void;
+}) {
+  const canManage = c.esMio || canAdmin;
+  const edited = c.updatedAt > c.createdAt + 2000;
+
+  return (
+    <div className="rounded-lg border border-border bg-muted/40 px-3 py-2">
+      <p className="text-xs font-medium text-foreground">
+        {c.autorNombre}{" "}
+        <span className="font-normal text-muted-foreground">
+          · {fmtDate(c.createdAt)}
+          {edited ? " · editado" : ""}
+          {isReply ? " · respuesta" : ""}
+        </span>
+      </p>
+
+      {isEditing ? (
+        <div className="mt-2 space-y-2">
+          <Textarea
+            value={editingText}
+            onChange={(e) => onEditingText(e.target.value)}
+            rows={2}
+            autoFocus
+          />
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              disabled={busy || !editingText.trim()}
+              onClick={onSaveEdit}
+            >
+              Guardar
+            </Button>
+            <Button size="sm" variant="ghost" onClick={onCancelEdit}>
+              Cancelar
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <p className="mt-0.5 whitespace-pre-wrap text-sm text-foreground">
+          {c.contenido}
+        </p>
+      )}
+
+      {!isEditing && (
+        <div className="mt-2 flex flex-wrap items-center gap-1">
+          {REACCION_OPTS.map((emoji) => {
+            const hit = c.reacciones.find((r) => r.emoji === emoji);
+            return (
+              <button
+                key={emoji}
+                type="button"
+                disabled={!canComment}
+                onClick={() => onReact(emoji)}
+                className={cn(
+                  "inline-flex h-7 items-center gap-1 rounded-full border px-2 text-xs transition-colors",
+                  hit?.mine
+                    ? "border-brand/40 bg-brand/10"
+                    : "border-transparent bg-transparent hover:border-border hover:bg-accent",
+                  !canComment && "opacity-60",
+                )}
+                title={canComment ? "Reaccionar" : undefined}
+              >
+                <span>{emoji}</span>
+                {hit && hit.count > 0 ? (
+                  <span className="tabular-nums text-muted-foreground">
+                    {hit.count}
+                  </span>
+                ) : null}
+              </button>
+            );
+          })}
+
+          <span className="mx-1 h-4 w-px bg-border" />
+
+          {canComment && !isReply ? (
+            <button
+              type="button"
+              onClick={onReply}
+              className="inline-flex h-7 items-center gap-1 rounded-lg px-2 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
+            >
+              <Reply className="h-3.5 w-3.5" />
+              Responder
+            </button>
+          ) : null}
+          {canManage ? (
+            <>
+              <button
+                type="button"
+                onClick={onStartEdit}
+                className="inline-flex h-7 items-center gap-1 rounded-lg px-2 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
+              >
+                <Pencil className="h-3.5 w-3.5" />
+                Editar
+              </button>
+              <button
+                type="button"
+                onClick={onDelete}
+                className="inline-flex h-7 items-center gap-1 rounded-lg px-2 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-destructive"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                Eliminar
+              </button>
+            </>
+          ) : null}
+        </div>
+      )}
+    </div>
   );
 }
 

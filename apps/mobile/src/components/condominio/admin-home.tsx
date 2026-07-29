@@ -12,6 +12,7 @@ import { Tap } from "@/components/ui/tap";
 import { cop, fmtPeriodo } from "@/lib/utils";
 import { AuthUI } from "@/lib/auth-ui";
 import { SoftUI, softShadow } from "@/lib/soft-ui";
+import { useCondominio } from "@/context/condominio-context";
 
 /** Home admin condominio — Soft UI + liquid glass header. */
 export function AdminCondominioHome({
@@ -32,6 +33,7 @@ export function AdminCondominioHome({
   onClearCondominio: () => void;
 }) {
   const router = useRouter();
+  const { theme } = useCondominio();
   const periodos = useQuery(api.facturas.listPeriodos, { condominioId });
   const periodo = periodos?.[0] ?? "";
   const resumen = useQuery(
@@ -127,7 +129,7 @@ export function AdminCondominioHome({
           <View style={styles.blockHead}>
             <Text style={styles.blockTitle}>Últimos avisos</Text>
             <Text
-              style={styles.link}
+              style={[styles.link, { color: theme.accent }]}
               onPress={() => router.push("/(app)/(tabs)/comunicados" as never)}
             >
               Ver todos
@@ -152,7 +154,7 @@ export function AdminCondominioHome({
                   <View style={styles.rowBody}>
                     <View style={styles.avisoTitleRow}>
                       {c.fijado ? (
-                        <Ionicons name="pin" size={12} color={SoftUI.blue} style={{ marginRight: 6 }} />
+                        <Ionicons name="pin" size={12} color={theme.accent} style={{ marginRight: 6 }} />
                       ) : null}
                       <Text style={styles.avisoTitle} numberOfLines={1}>
                         {c.titulo}
@@ -187,9 +189,10 @@ function MetaChip({
   value: string;
   accent?: boolean;
 }) {
+  const { theme } = useCondominio();
   return (
     <View style={styles.metaChip}>
-      <Text style={[styles.metaValue, accent && { color: SoftUI.blue }]}>{value}</Text>
+      <Text style={[styles.metaValue, accent && { color: theme.accent }]}>{value}</Text>
       <Text style={styles.metaLabel}>{label}</Text>
     </View>
   );

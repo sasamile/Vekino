@@ -78,6 +78,7 @@ export const listByCondominio = query({
   handler: async (ctx, args) => {
     await requireCondominioRole(ctx, args.condominioId, [
       "administrador",
+      "contadora",
       "junta_directiva",
     ]);
 

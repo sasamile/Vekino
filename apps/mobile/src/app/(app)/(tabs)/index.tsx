@@ -74,17 +74,13 @@ const ESTADO_ICON: Record<
   },
 };
 
-/** Foto destacada por condominio (JPEG optimizado) o fallback remoto. */
-const FEATURED_CIUDAD_DEL_CAMPO = require("../../../../assets/images/ciudad-del-campo-ii.jpg");
+/** Fallback remoto si el condo aún no tiene foto destacada en BD. */
 const FEATURED_FALLBACK_URI =
   "https://images.unsplash.com/photo-1600596542815-ffad4c1539a9?auto=format&fit=crop&w=800&q=70";
 
-function featuredImageSource(condominioName: string | null | undefined) {
-  const n = (condominioName ?? "")
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "");
-  if (n.includes("campo")) return FEATURED_CIUDAD_DEL_CAMPO;
+function featuredImageSource(coverImage: string | null | undefined) {
+  const uri = coverImage?.trim();
+  if (uri) return { uri };
   return { uri: FEATURED_FALLBACK_URI };
 }
 
@@ -114,7 +110,16 @@ function HomeContent() {
   } = useCondominio();
 
   useEffect(() => {
-    ensureProfile().catch(() => {});
+    let cancelled = false;
+    void (async () => {
+      const id = await ensureProfile();
+      if (cancelled || id) return;
+      await new Promise((r) => setTimeout(r, 400));
+      if (!cancelled) await ensureProfile();
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [ensureProfile]);
 
   const hora = new Date().getHours();
@@ -186,7 +191,7 @@ function ResidentHome({
   condominioName: string | null;
 }) {
   const router = useRouter();
-  const { theme } = useCondominio();
+  const { theme, coverImage } = useCondominio();
   const facturas = useQuery(
     api.facturas.listMia,
     condominioId ? { condominioId } : "skip",
@@ -218,8 +223,14 @@ function ResidentHome({
         {/* 1. Tarjeta de uso / plan (facturas) */}
         {condominioId && (
           <GlassCard style={styles.usageCard}>
-            <View style={styles.usageIcon}>
-              <Ionicons name="wallet-outline" size={22} color={SoftUI.white} />
+            <View
+              style={[styles.usageIcon, { backgroundColor: SoftUI.bgSecondary }]}
+            >
+              <Ionicons
+                name="wallet-outline"
+                size={22}
+                color={SoftUI.text}
+              />
             </View>
             <View style={{ flex: 1, gap: 2, minWidth: 0 }}>
               <Text style={styles.usageTitle} numberOfLines={1}>
@@ -241,7 +252,7 @@ function ResidentHome({
             </View>
             <Tap
               onPress={() => router.push("/(app)/(tabs)/facturas" as never)}
-              style={styles.capsuleBtn}
+              style={[styles.capsuleBtn, { backgroundColor: SoftUI.text }]}
             >
               <Text style={styles.capsuleBtnText}>Ver</Text>
             </Tap>
@@ -257,9 +268,9 @@ function ResidentHome({
             style={styles.featuredWrap}
           >
             <Image
-              source={featuredImageSource(condominioName)}
+              source={featuredImageSource(coverImage)}
               style={styles.featuredImage}
-              resizeMode="contain"
+              resizeMode="cover"
             />
             <LinearGradient
               colors={[
@@ -314,7 +325,7 @@ function ResidentHome({
                 onPress={() => router.push("/(app)/reservas" as never)}
                 style={styles.ctaCircle}
               >
-                <Ionicons name="paper-plane" size={22} color={SoftUI.blue} />
+                <Ionicons name="paper-plane" size={22} color={theme.accent} />
               </Tap>
             </View>
           </SoftGradientCard>
@@ -324,8 +335,8 @@ function ResidentHome({
         {condominioId && (
           <GlassCard style={styles.secondaryCard}>
             <View style={styles.secondaryHead}>
-              <View style={styles.secondaryIcon}>
-                <Ionicons name="person-add-outline" size={20} color={SoftUI.blue} />
+              <View style={[styles.secondaryIcon, { backgroundColor: theme.accentSoft }]}>
+                <Ionicons name="person-add-outline" size={20} color={theme.accent} />
               </View>
               <View style={{ flex: 1, gap: 2 }}>
                 <View style={styles.secondaryTitleRow}>
@@ -346,7 +357,7 @@ function ResidentHome({
               <Text style={styles.secondaryFieldText} numberOfLines={1}>
                 Registrar o ver visitas activas
               </Text>
-              <View style={styles.copyBtn}>
+              <View style={[styles.copyBtn, { backgroundColor: theme.accent }]}>
                 <Ionicons name="arrow-forward" size={16} color={SoftUI.white} />
                 <Text style={styles.copyBtnText}>Ir</Text>
               </View>
@@ -475,7 +486,7 @@ function ResidentHome({
                               <Ionicons
                                 name="chevron-forward"
                                 size={18}
-                                color={SoftUI.blue}
+                                color={theme.accent}
                               />
                             </View>
                           </View>
@@ -527,7 +538,6 @@ const styles = StyleSheet.create({
     width: SoftUI.iconBtn,
     height: SoftUI.iconBtn,
     borderRadius: SoftUI.radius.chip,
-    backgroundColor: SoftUI.blue,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -542,7 +552,6 @@ const styles = StyleSheet.create({
     fontFamily: AuthUI.font.regular,
   },
   capsuleBtn: {
-    backgroundColor: SoftUI.blue,
     borderRadius: SoftUI.radius.chip,
     paddingHorizontal: SoftUI.space.base,
     paddingVertical: SoftUI.space.sm + 2,
@@ -674,7 +683,6 @@ const styles = StyleSheet.create({
     width: SoftUI.iconBtn,
     height: SoftUI.iconBtn,
     borderRadius: SoftUI.radius.chip,
-    backgroundColor: SoftUI.infoSoft,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -725,7 +733,6 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    backgroundColor: SoftUI.blue,
     borderRadius: SoftUI.radius.chip,
     paddingHorizontal: SoftUI.space.md,
     paddingVertical: SoftUI.space.sm,

@@ -157,6 +157,7 @@ export const listRecent = query({
       .map((row) => ({
         _id: row._id,
         titulo: row.titulo,
+        cuerpo: row.cuerpo,
         prioridad: row.prioridad,
         fijado: row.fijado,
         createdAt: row.createdAt,

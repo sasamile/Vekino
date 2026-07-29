@@ -7,10 +7,10 @@ type Tone = "neutral" | "primary" | "brand" | "success" | "warning" | "destructi
 
 const toneIcon: Record<Tone, string> = {
   neutral: "bg-muted text-foreground/70",
-  primary: "bg-brand/10 text-brand",
+  primary: "bg-muted text-foreground/70",
   brand: "bg-brand/10 text-brand",
-  success: "bg-[#B1D459]/20 text-[#6b8a28] dark:text-[#B1D459]",
-  warning: "bg-[#B1D459]/20 text-[#6b8a28] dark:text-[#B1D459]",
+  success: "bg-emerald-500/12 text-emerald-700 dark:text-emerald-400",
+  warning: "bg-amber-500/12 text-amber-700 dark:text-amber-400",
   destructive: "bg-red-500/10 text-red-600 dark:text-red-400",
 };
 
@@ -43,10 +43,10 @@ export function StatCard({
 }) {
   const badgeClass =
     badgeTone === "positive"
-      ? "bg-brand/10 text-brand"
+      ? "bg-muted text-muted-foreground"
       : badgeTone === "negative"
-        ? "bg-[#B1D459]/20 text-[#6b8a28] dark:text-[#B1D459]"
-        : "bg-[#B1D459]/15 text-[#6b8a28] dark:text-[#c9e07a]";
+        ? "bg-red-500/10 text-red-600 dark:text-red-400"
+        : "bg-amber-500/12 text-amber-800 dark:text-amber-400";
 
   const chip = badge ?? hint;
   const valueStr = String(value);

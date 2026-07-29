@@ -24,6 +24,7 @@ import { AuthUI } from "@/lib/auth-ui";
 import { SoftUI } from "@/lib/soft-ui";
 import type { Id } from "@vekino/backend/dataModel";
 import { uploadLocalFile } from "@/lib/guardia-upload";
+import { themeFromPrimary } from "@/lib/condo-theme";
 
 const ROL_LABEL: Record<string, string> = {
   administrador: "Administrador",
@@ -61,7 +62,7 @@ function PerfilContent() {
   const router = useRouter();
   const me = useQuery(api.users.me);
   const pushStatus = useQuery(api.notifications.myStatus);
-  const { condominioId, selectCondominio } = useCondominio();
+  const { condominioId, selectCondominio, theme } = useCondominio();
   const generateUploadUrl = useAction(api.files.generateUploadUrl);
   const setMyAvatar = useMutation(api.users.setMyAvatar);
   const clearMyAvatar = useMutation(api.users.clearMyAvatar);
@@ -192,7 +193,7 @@ function PerfilContent() {
   if (!me) {
     return (
       <View style={styles.loading}>
-        <ActivityIndicator color={SoftUI.blue} size="large" />
+        <ActivityIndicator color={theme.accent} size="large" />
       </View>
     );
   }
@@ -216,9 +217,14 @@ function PerfilContent() {
           }}
           style={{ alignItems: "center" }}
         >
-          <View style={styles.avatarRing}>
+          <View
+            style={[
+              styles.avatarRing,
+              { backgroundColor: theme.accentSoft },
+            ]}
+          >
             {uploading ? (
-              <ActivityIndicator color={SoftUI.blue} />
+              <ActivityIndicator color={theme.accent} />
             ) : me.image ? (
               <Image
                 source={{ uri: me.image }}
@@ -226,10 +232,12 @@ function PerfilContent() {
                 resizeMode="cover"
               />
             ) : (
-              <Text style={styles.avatarInitials}>{initials(me.name)}</Text>
+              <Text style={[styles.avatarInitials, { color: theme.accent }]}>
+                {initials(me.name)}
+              </Text>
             )}
           </View>
-          <View style={styles.cameraBadge}>
+          <View style={[styles.cameraBadge, { backgroundColor: theme.accent }]}>
             <Ionicons name="camera" size={14} color={SoftUI.white} />
           </View>
           <Text style={styles.avatarHint}>Toca para cambiar foto</Text>
@@ -252,7 +260,9 @@ function PerfilContent() {
           <Text style={styles.sectionLabel}>Mis condominios</Text>
           <View style={styles.listGap}>
             {me.memberships.map((m) => {
-              const accent = m.condominioPrimaryColor || SoftUI.blue;
+              const condoTheme = m.condominioPrimaryColor
+                ? themeFromPrimary(m.condominioPrimaryColor)
+                : theme;
               const active = m.condominioId === condominioId;
               return (
                 <Tap
@@ -276,10 +286,15 @@ function PerfilContent() {
                       <View
                         style={[
                           styles.condoLogoFallback,
-                          { backgroundColor: SoftUI.infoSoft },
+                          { backgroundColor: condoTheme.accentSoft },
                         ]}
                       >
-                        <Text style={[styles.condoInitials, { color: accent }]}>
+                        <Text
+                          style={[
+                            styles.condoInitials,
+                            { color: condoTheme.accent },
+                          ]}
+                        >
                           {initials(m.condominioName ?? "?")}
                         </Text>
                       </View>
@@ -307,7 +322,7 @@ function PerfilContent() {
                       <Ionicons
                         name="checkmark-circle"
                         size={20}
-                        color={SoftUI.blue}
+                        color={condoTheme.accent}
                       />
                     ) : (
                       <Ionicons
@@ -359,18 +374,18 @@ function PerfilContent() {
               style={[styles.infoRow, i < arr.length - 1 && styles.infoBorder]}
               onPress={() => router.push(item.route as never)}
             >
-              <View style={styles.infoIcon}>
-                <Ionicons name={item.icon} size={18} color={SoftUI.blue} />
+              <View style={[styles.infoIcon, { backgroundColor: theme.accentSoft }]}>
+                <Ionicons name={item.icon} size={18} color={theme.accent} />
               </View>
               <View style={styles.rowBody}>
                 <Text style={styles.infoLabel}>{item.label}</Text>
                 <Text style={styles.infoSub}>{item.subtitle}</Text>
               </View>
-              <View style={styles.chevron}>
+              <View style={[styles.chevron, { backgroundColor: theme.accentSoft }]}>
                 <Ionicons
                   name="chevron-forward"
                   size={16}
-                  color={SoftUI.blue}
+                  color={theme.accent}
                 />
               </View>
             </Tap>

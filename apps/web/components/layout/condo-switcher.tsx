@@ -93,7 +93,7 @@ export function CondoSwitcher({
 
   if (!canSwitch) {
     return (
-      <div className="flex shrink-0 items-center gap-2.5 px-1">
+      <div className="flex w-full items-center gap-2.5 px-1">
         <CondoMark name={name} logo={logo} />
         <div className="min-w-0">
           <p className="truncate text-[13px] font-medium tracking-tight text-foreground">
@@ -108,7 +108,7 @@ export function CondoSwitcher({
   }
 
   return (
-    <div ref={rootRef} className="relative shrink-0">
+    <div ref={rootRef} className="relative w-full">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
 import { Home, Wallet, Megaphone, CalendarCheck, LayoutGrid, LogOut } from "lucide-react";
-import { PORTAL_NAV } from "./portal-nav-config";
+import { portalNavForRoles } from "./portal-nav-config";
 import { authClient } from "@/lib/auth-client";
 import { cn } from "@/lib/utils";
 
@@ -20,10 +20,17 @@ const MAIN = [
  * Barra de navegación inferior fija (móvil), réplica del patrón de VekinoWeb.
  * La opción activa usa el color primario. "Más" abre un panel con todo.
  */
-export function PortalBottomNav({ base }: { base: string }) {
+export function PortalBottomNav({
+  base,
+  roles = [],
+}: {
+  base: string;
+  roles?: string[];
+}) {
   const pathname = usePathname();
   const router = useRouter();
   const [open, setOpen] = useState(false);
+  const nav = portalNavForRoles(roles);
 
   function isActive(segment: string) {
     const href = segment ? `${base}/${segment}` : base;
@@ -32,7 +39,7 @@ export function PortalBottomNav({ base }: { base: string }) {
 
   async function signOut() {
     await authClient.signOut();
-    router.replace("/");
+    router.replace("/login");
   }
 
   return (
@@ -81,7 +88,7 @@ export function PortalBottomNav({ base }: { base: string }) {
           <div className="animate-slide-up absolute inset-x-0 bottom-0 rounded-t-2xl border-t border-border bg-card p-4 pb-8">
             <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-border" />
             <div className="grid grid-cols-3 gap-2">
-              {PORTAL_NAV.map((item) => {
+              {nav.map((item) => {
                 const href = item.segment ? `${base}/${item.segment}` : base;
                 const active = isActive(item.segment);
                 const Icon = item.icon;

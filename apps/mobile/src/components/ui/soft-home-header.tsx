@@ -10,6 +10,7 @@ import { WavingHand } from "@/components/ui/waving-hand";
 import { SoftUI } from "@/lib/soft-ui";
 import { AuthUI } from "@/lib/auth-ui";
 import { formatDisplayName } from "@/lib/utils";
+import { useCondominio } from "@/context/condominio-context";
 
 const AVATAR = 48;
 
@@ -33,6 +34,7 @@ export function SoftHomeHeader({
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const me = useQuery(api.users.me);
+  const { theme } = useCondominio();
   const pretty = formatDisplayName(displayName);
   const first =
     pretty.trim().split(/\s+/).filter(Boolean)[0] ?? pretty;
@@ -72,7 +74,12 @@ export function SoftHomeHeader({
             <WavingHand size={18} />
           </View>
           {badgeLabel ? (
-            <View style={styles.badge}>
+            <View
+              style={[
+                styles.badge,
+                { backgroundColor: theme.accent },
+              ]}
+            >
               <Text style={styles.badgeText} numberOfLines={1}>
                 {badgeLabel}
               </Text>
@@ -163,12 +170,11 @@ const styles = StyleSheet.create({
   },
   badge: {
     alignSelf: "flex-start",
-    backgroundColor: SoftUI.blue,
     borderRadius: SoftUI.radius.chip,
     paddingHorizontal: SoftUI.space.md,
     paddingVertical: 4,
     maxWidth: "100%",
-    opacity: 0.6,
+    opacity: 0.92,
   },
   badgeText: {
     color: SoftUI.white,

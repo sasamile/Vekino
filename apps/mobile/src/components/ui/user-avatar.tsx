@@ -2,6 +2,7 @@ import { View, Text, Image, StyleSheet } from "react-native";
 import { initials } from "@/lib/utils";
 import { AuthUI } from "@/lib/auth-ui";
 import { SoftUI } from "@/lib/soft-ui";
+import { useCondominio } from "@/context/condominio-context";
 
 export function UserAvatar({
   name,
@@ -12,6 +13,7 @@ export function UserAvatar({
   image?: string | null;
   size?: number;
 }) {
+  const { theme } = useCondominio();
   const radius = size / 2;
   const uri = typeof image === "string" && image.trim().length > 0 ? image.trim() : null;
 
@@ -34,6 +36,7 @@ export function UserAvatar({
           width: size,
           height: size,
           borderRadius: radius,
+          backgroundColor: theme.accentSoft,
         },
       ]}
       accessibilityLabel={`Avatar de ${name}`}
@@ -41,7 +44,10 @@ export function UserAvatar({
       <Text
         style={[
           styles.initials,
-          { fontSize: Math.max(12, size * 0.34) },
+          {
+            fontSize: Math.max(12, size * 0.34),
+            color: theme.accent,
+          },
         ]}
       >
         {initials(name)}

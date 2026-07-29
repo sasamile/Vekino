@@ -22,10 +22,13 @@ export function num(n: number) {
 
 /** Iniciales (máx. 2) a partir de un nombre. */
 export function initials(name: string) {
-  return name
-    .split(" ")
-    .map((p) => p[0])
+  const parts = name
+    .trim()
+    .split(/\s+/)
     .filter(Boolean)
+    .filter((p) => /[\p{L}\p{N}]/u.test(p[0] ?? ""));
+  return parts
+    .map((p) => p[0])
     .slice(0, 2)
     .join("")
     .toUpperCase();

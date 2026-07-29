@@ -259,6 +259,44 @@ export const remove = mutation({
   },
 });
 
+/** El residente edita su solicitud mientras esté abierta y sin respuesta de admin. */
+export const actualizarMio = mutation({
+  args: {
+    id: v.id("pqrs"),
+    tipo: v.optional(tipoValidator),
+    asunto: v.string(),
+    descripcion: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db.get(args.id);
+    if (!existing) throw new Error("PQRS no encontrado.");
+    const { user } = await requireCondominioRole(ctx, existing.condominioId, []);
+    if (existing.solicitanteUserId !== user._id) {
+      throw new Error("Solo puedes editar tus propias solicitudes.");
+    }
+    if (existing.estado !== "abierto") {
+      throw new Error("Solo puedes editar solicitudes abiertas.");
+    }
+    const hilo = hiloActual(existing);
+    if (hilo.some((m) => m.esAdmin)) {
+      throw new Error("Ya hay respuesta de la administración; no puedes editar.");
+    }
+
+    const asunto = args.asunto.trim();
+    const descripcion = args.descripcion.trim();
+    if (!asunto || !descripcion) {
+      throw new Error("Asunto y descripción son obligatorios.");
+    }
+
+    await ctx.db.patch(args.id, {
+      ...(args.tipo ? { tipo: args.tipo } : {}),
+      asunto,
+      descripcion,
+      updatedAt: Date.now(),
+    });
+  },
+});
+
 /** El residente elimina una de SUS propias solicitudes. */
 export const removeMio = mutation({
   args: { id: v.id("pqrs") },

@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useQuery, useMutation, useAction } from "convex/react";
+import { useQuery, useMutation } from "convex/react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
 import {
@@ -15,9 +15,10 @@ import { PageContainer } from "@/components/layout/page-container";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Spinner } from "@/components/ui/spinner";
-import { fechaISO } from "@/components/portal/portal-ui";
+import { fechaISO, etiquetaUnidad } from "@/components/portal/portal-ui";
 import { cn } from "@/lib/utils";
-import { uploadToS3 } from "@/lib/upload-s3";
+import { useUploadToS3 } from "@/hooks/use-upload-s3";
+import { AsambleaTabsTour } from "@/components/portal/asamblea-tabs-tour";
 
 function qrUrl(data: string) {
   return `https://api.qrserver.com/v1/create-qr-code/?size=220x220&margin=10&data=${encodeURIComponent(data)}`;
@@ -109,6 +110,13 @@ export default function AsambleaSala() {
           );
         })}
       </nav>
+
+      {poderPublicoAbierto ? (
+        <AsambleaTabsTour
+          enabled
+          onGoToTab={(k) => setTab(k)}
+        />
+      ) : null}
 
       {tab === "votar" && <VotarTab a={a} asambleaId={asambleaId} condominioId={condominioId} mi={mi} userId={home?.allowed ? (home.userId as string) : ""} />}
       {tab === "poderes" && poderPublicoAbierto && <PoderesSection asambleaId={asambleaId} condominioId={condominioId} mi={mi} />}
@@ -376,22 +384,22 @@ function PoderesSection({
   const otorgar = useMutation(api.asambleas.otorgarPoder);
   const revocar = useMutation(api.asambleas.revocarPoder);
   const responder = useMutation(api.asambleas.responderPoder);
-  const generateUploadUrl = useAction(api.files.generateUploadUrl);
+  const uploadFile = useUploadToS3();
 
   const unidades = home && home.allowed ? home.unidades : [];
   const [modo, setModo] = useState<"propietario" | "externo">("propietario");
-  const [unidadId, setUnidadId] = useState("");
+  const [unidadIds, setUnidadIds] = useState<string[]>([]);
   const [rep, setRep] = useState<{ _id: Id<"users">; name: string } | null>(null);
   const [nombre, setNombre] = useState("");
   const [documento, setDocumento] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [nuevo, setNuevo] = useState<{ codigo: string; nombre: string; esPropietario: boolean } | null>(null);
+  const [nuevo, setNuevo] = useState<{ codigo: string; nombre: string; esPropietario: boolean; unidades: number } | null>(null);
   const [copiado, setCopiado] = useState(false);
 
-  const delegadasIds = new Set((otorgados ?? []).map((p) => p.unidadId as string));
-  const disponibles = unidades.filter((u) => !delegadasIds.has(u._id));
+  const delegadasIds = new Set((otorgados ?? []).map((p) => String(p.unidadId)));
+  const disponibles = unidades.filter((u) => !delegadasIds.has(String(u._id)));
 
   const grupos = new Map<string, { nombre: string; codigo: string; esProp: boolean; poderes: { _id: Id<"poderesAsamblea">; unidadNumero: string }[] }>();
   for (const p of otorgados ?? []) {
@@ -401,27 +409,51 @@ function PoderesSection({
   }
   const representa = mi?.representa ?? [];
 
+  function toggleUnidad(id: string) {
+    setUnidadIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+    );
+  }
+
+  function toggleTodas() {
+    if (unidadIds.length === disponibles.length) {
+      setUnidadIds([]);
+    } else {
+      setUnidadIds(disponibles.map((u) => String(u._id)));
+    }
+  }
+
   async function darPoder() {
-    if (!unidadId) return setError("Elige la unidad que vas a delegar.");
+    if (unidadIds.length === 0) return setError("Elige al menos una unidad.");
     if (modo === "propietario" && !rep) return setError("Selecciona el propietario.");
     if (modo === "externo" && !nombre.trim()) return setError("Escribe el nombre del apoderado.");
     if (!file) return setError("Adjunta el documento del poder firmado (PDF o foto).");
     setBusy(true); setError(null);
     try {
-      const { url: documentoUrl } = await uploadToS3(
-        generateUploadUrl,
+      const { url: documentoUrl } = await uploadFile(
         file,
         `condominios/asambleas/${condominioId}/poderes`,
       );
 
-      const r = await otorgar({
+      const common = {
         asambleaId,
-        unidadId: unidadId as Id<"unidades">,
         documentoUrl,
-        ...(modo === "propietario" ? { representanteUserId: rep!._id } : { apoderadoNombre: nombre, apoderadoDocumento: documento.trim() || undefined }),
-      });
-      setNuevo(r);
-      setUnidadId(""); setRep(null); setNombre(""); setDocumento(""); setFile(null);
+        ...(modo === "propietario"
+          ? { representanteUserId: rep!._id }
+          : { apoderadoNombre: nombre, apoderadoDocumento: documento.trim() || undefined }),
+      };
+
+      let last: { codigo: string; nombre: string; esPropietario: boolean } | null = null;
+      for (const uid of unidadIds) {
+        last = await otorgar({
+          ...common,
+          unidadId: uid as Id<"unidades">,
+        });
+      }
+      if (last) {
+        setNuevo({ ...last, unidades: unidadIds.length });
+      }
+      setUnidadIds([]); setRep(null); setNombre(""); setDocumento(""); setFile(null);
     } catch (e) { setError(e instanceof Error ? e.message : "No se pudo otorgar."); }
     finally { setBusy(false); }
   }
@@ -462,8 +494,14 @@ function PoderesSection({
 
       {nuevo && (
         <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-4 text-center">
-          <p className="text-sm text-muted-foreground">{nuevo.esPropietario ? "Enlazado con" : "Código para"} <b className="text-foreground">{nuevo.nombre}</b></p>
-          {nuevo.esPropietario && <p className="mt-2 text-sm text-foreground">Es propietario del conjunto: verá tu casa en su cuenta y su voto contará por las dos. También puede usar este código:</p>}
+          <p className="text-sm text-muted-foreground">
+            {nuevo.esPropietario ? "Enlazado con" : "Código para"}{" "}
+            <b className="text-foreground">{nuevo.nombre}</b>
+            {nuevo.unidades > 1 ? (
+              <> · <b className="text-foreground">{nuevo.unidades} unidades</b></>
+            ) : null}
+          </p>
+          {nuevo.esPropietario && <p className="mt-2 text-sm text-foreground">Es propietario del conjunto: verá tus unidades en su cuenta y su voto contará por todas. También puede usar este código:</p>}
           <p className="my-2 select-all font-mono text-3xl font-bold tracking-[0.3em] text-emerald-700 dark:text-emerald-400">{nuevo.codigo}</p>
           <button onClick={() => copiar(nuevo.codigo)} className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-sm font-medium text-foreground hover:bg-accent">
             {copiado ? <><Check className="h-4 w-4 text-emerald-600" /> Copiado</> : <><Copy className="h-4 w-4" /> Copiar código</>}
@@ -501,13 +539,48 @@ function PoderesSection({
             <button onClick={() => setModo("propietario")} className={cn("flex-1 rounded-lg border py-2 text-sm font-medium", modo === "propietario" ? "border-brand bg-brand/10 text-brand" : "border-border text-muted-foreground")}>Propietario del conjunto</button>
             <button onClick={() => setModo("externo")} className={cn("flex-1 rounded-lg border py-2 text-sm font-medium", modo === "externo" ? "border-brand bg-brand/10 text-brand" : "border-border text-muted-foreground")}>Otra persona</button>
           </div>
-          <label className="block space-y-1.5">
-            <span className="text-xs font-medium text-muted-foreground">Unidad a delegar</span>
-            <select value={unidadId} onChange={(e) => setUnidadId(e.target.value)} className={inputCls}>
-              <option value="">Selecciona…</option>
-              {disponibles.map((u) => <option key={u._id} value={u._id}>Unidad {u.numero}</option>)}
-            </select>
-          </label>
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-medium text-muted-foreground">
+                Unidades a delegar
+                {unidadIds.length > 0 ? ` (${unidadIds.length})` : ""}
+              </span>
+              {disponibles.length > 1 ? (
+                <button
+                  type="button"
+                  onClick={toggleTodas}
+                  className="text-xs font-medium text-brand hover:underline"
+                >
+                  {unidadIds.length === disponibles.length
+                    ? "Quitar todas"
+                    : "Seleccionar todas"}
+                </button>
+              ) : null}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {disponibles.map((u) => {
+                const id = String(u._id);
+                const active = unidadIds.includes(id);
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => toggleUnidad(id)}
+                    className={cn(
+                      "inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm font-medium transition-colors",
+                      active
+                        ? "border-brand/40 bg-brand/10 text-foreground"
+                        : "border-border bg-card text-muted-foreground hover:bg-accent/50",
+                    )}
+                    aria-pressed={active}
+                  >
+                    {active ? <Check className="h-3.5 w-3.5 text-brand" /> : null}
+                    {etiquetaUnidad(u)}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
           {modo === "propietario" ? (
             <label className="block space-y-1.5">
               <span className="text-xs font-medium text-muted-foreground">Buscar propietario</span>
@@ -527,7 +600,10 @@ function PoderesSection({
           </label>
           {error && <p className="text-sm text-red-600">{error}</p>}
           <button onClick={darPoder} disabled={busy} className="inline-flex h-10 items-center gap-2 rounded-lg bg-brand px-4 text-sm font-semibold text-brand-foreground shadow-sm hover:bg-brand/90 disabled:opacity-60">
-            {busy && <Loader2 className="h-4 w-4 animate-spin" />} Otorgar poder
+            {busy && <Loader2 className="h-4 w-4 animate-spin" />}{" "}
+            {unidadIds.length > 1
+              ? `Otorgar poder (${unidadIds.length} unidades)`
+              : "Otorgar poder"}
           </button>
         </Card>
       ) : unidades.length > 0 ? (

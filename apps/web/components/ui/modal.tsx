@@ -4,6 +4,10 @@ import * as React from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useBrandThemeStyle } from "@/lib/brand-theme";
+
+/** Pila de onClose para Escape con modales anidados. */
+const escapeStack: Array<() => void> = [];
 
 export function Modal({
   open,
@@ -13,6 +17,7 @@ export function Modal({
   children,
   footer,
   className,
+  overlayClassName,
 }: {
   open: boolean;
   onClose: () => void;
@@ -21,8 +26,11 @@ export function Modal({
   children: React.ReactNode;
   footer?: React.ReactNode;
   className?: string;
+  /** Para apilar sobre otro modal (ej. z-[110]). */
+  overlayClassName?: string;
 }) {
   const [mounted, setMounted] = React.useState(false);
+  const brandStyle = useBrandThemeStyle();
 
   React.useEffect(() => {
     setMounted(true);
@@ -30,12 +38,21 @@ export function Modal({
 
   React.useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    escapeStack.push(onClose);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      // Solo el modal superior (útil al anidar).
+      if (escapeStack[escapeStack.length - 1] !== onClose) return;
+      e.preventDefault();
+      onClose();
+    };
     document.addEventListener("keydown", onKey);
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => {
       document.removeEventListener("keydown", onKey);
+      const i = escapeStack.lastIndexOf(onClose);
+      if (i >= 0) escapeStack.splice(i, 1);
       document.body.style.overflow = prev;
     };
   }, [open, onClose]);
@@ -44,7 +61,11 @@ export function Modal({
 
   return createPortal(
     <div
-      className="animate-fade-in fixed inset-0 z-100 overflow-y-auto overscroll-contain bg-foreground/35 backdrop-blur-sm dark:bg-foreground/45"
+      className={cn(
+        "animate-fade-in fixed inset-0 z-100 overflow-y-auto overscroll-contain bg-foreground/35 backdrop-blur-sm dark:bg-foreground/45",
+        overlayClassName,
+      )}
+      style={brandStyle}
       onClick={onClose}
     >
       {/*

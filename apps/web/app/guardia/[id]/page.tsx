@@ -2,9 +2,9 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
-import { useQuery, useMutation, useAction } from "convex/react";
+import { useQuery, useMutation } from "convex/react";
 import {
-  BookOpenCheck, PlayCircle, StopCircle, Footprints, PenLine, Loader2,
+  PlayCircle, StopCircle, Footprints, PenLine, Loader2,
   UserCheck, Package, AlertTriangle, Search, Plus, Trash2, Camera,
   ClipboardCheck, Users, Lock,
 } from "lucide-react";
@@ -16,8 +16,11 @@ import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Input, Select, Textarea } from "@/components/ui/input";
+import { PageContainer } from "@/components/layout/page-container";
+import { PageHeader } from "@/components/layout/page-header";
+import { StatCard } from "@/components/layout/stat-card";
 import { cn } from "@/lib/utils";
-import { uploadToS3 } from "@/lib/upload-s3";
+import { useUploadToS3 } from "@/hooks/use-upload-s3";
 
 type Modulo = Doc<"minutaEventos">["modulo"];
 
@@ -41,13 +44,13 @@ function fmtFechaHora(ts: number) {
 
 /** Sube archivos a S3 y devuelve las URLs públicas. */
 async function subirFotos(
-  generateUploadUrl: Parameters<typeof uploadToS3>[0],
+  uploadFile: (file: File, folder: string) => Promise<{ url: string; key: string }>,
   files: File[],
   folder: string,
 ): Promise<string[]> {
   const urls: string[] = [];
   for (const file of files) {
-    const { url } = await uploadToS3(generateUploadUrl, file, folder);
+    const { url } = await uploadFile(file, folder);
     urls.push(url);
   }
   return urls;
@@ -74,28 +77,27 @@ export default function GuardiaMinutaHome() {
   }), [eventosTurno, turno]);
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="flex items-center gap-2 text-xl font-bold tracking-tight text-foreground">
-            <BookOpenCheck className="h-5 w-5 text-brand" /> Minuta digital
-          </h1>
-          <p className="text-sm text-muted-foreground">Control de turno y bitácora de portería</p>
-        </div>
-        {turno && (
-          <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={() => setModal("nota")}>
-              <PenLine className="h-4 w-4" /> Anotación
-            </Button>
-            <Button variant="outline" size="sm" onClick={() => setModal("ronda")}>
-              <Footprints className="h-4 w-4" /> Ronda
-            </Button>
-            <Button size="sm" variant="destructive" onClick={() => setModal("cerrar")}>
-              <StopCircle className="h-4 w-4" /> Cerrar turno
-            </Button>
-          </div>
-        )}
-      </div>
+    <PageContainer>
+      <div className="space-y-6">
+        <PageHeader
+          title="Minuta digital"
+          description="Control de turno y bitácora de portería"
+          action={
+            turno ? (
+              <>
+                <Button variant="outline" size="sm" onClick={() => setModal("nota")}>
+                  <PenLine className="h-4 w-4" /> Anotación
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => setModal("ronda")}>
+                  <Footprints className="h-4 w-4" /> Ronda
+                </Button>
+                <Button size="sm" variant="destructive" onClick={() => setModal("cerrar")}>
+                  <StopCircle className="h-4 w-4" /> Cerrar turno
+                </Button>
+              </>
+            ) : undefined
+          }
+        />
 
       {/* Estado del turno */}
       {turno === undefined ? (
@@ -106,7 +108,7 @@ export default function GuardiaMinutaHome() {
             <PlayCircle className="h-7 w-7" />
           </div>
           <div>
-            <p className="text-lg font-bold text-foreground">No hay turno abierto</p>
+            <p className="text-lg font-semibold text-foreground">No hay turno abierto</p>
             <p className="mx-auto max-w-md text-sm text-muted-foreground">
               Inicia tu turno con el checklist de dotación para habilitar la minuta, las rondas y el control de portería.
             </p>
@@ -140,11 +142,11 @@ export default function GuardiaMinutaHome() {
             </div>
           </Card>
 
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <StatMini icon={UserCheck} label="Visitantes" value={stats.visitantes} />
-            <StatMini icon={Package} label="Paquetes" value={stats.paquetes} />
-            <StatMini icon={Footprints} label="Rondas" value={stats.rondas} />
-            <StatMini icon={AlertTriangle} label="Incidentes" value={stats.incidentes} tone="warn" />
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+            <StatCard icon={UserCheck} label="Visitantes" value={stats.visitantes} tone="primary" />
+            <StatCard icon={Package} label="Paquetes" value={stats.paquetes} tone="neutral" />
+            <StatCard icon={Footprints} label="Rondas" value={stats.rondas} tone="brand" />
+            <StatCard icon={AlertTriangle} label="Incidentes" value={stats.incidentes} tone="warning" />
           </div>
         </>
       )}
@@ -165,26 +167,8 @@ export default function GuardiaMinutaHome() {
       )}
       {modal === "ronda" && <RondaModal condominioId={condominioId} onClose={() => setModal(null)} />}
       {modal === "nota" && <NotaModal condominioId={condominioId} onClose={() => setModal(null)} />}
-    </div>
-  );
-}
-
-function StatMini({
-  icon: Icon, label, value, tone,
-}: { icon: React.ComponentType<{ className?: string }>; label: string; value: number; tone?: "warn" }) {
-  return (
-    <Card className="flex items-center gap-3 p-4">
-      <div className={cn(
-        "flex h-10 w-10 shrink-0 items-center justify-center rounded-xl",
-        tone === "warn" ? "bg-amber-500/10 text-amber-600" : "bg-brand/10 text-brand",
-      )}>
-        <Icon className="h-5 w-5" />
       </div>
-      <div>
-        <p className="text-xl font-bold leading-none text-foreground tabular-nums">{value}</p>
-        <p className="mt-1 text-xs text-muted-foreground">{label}</p>
-      </div>
-    </Card>
+    </PageContainer>
   );
 }
 
@@ -269,12 +253,12 @@ type ChecklistRow = {
 
 function IniciarTurnoModal({ condominioId, onClose }: { condominioId: Id<"condominios">; onClose: () => void }) {
   const template = useQuery(api.guardia.listChecklistTemplate, { condominioId });
-  const equipo = useQuery(api.guardia.equipo, { condominioId });
   const iniciar = useMutation(api.guardia.iniciarTurno);
 
   const [rows, setRows] = useState<ChecklistRow[] | null>(null);
+  const [quienTurno, setQuienTurno] = useState("");
+  const [companero, setCompanero] = useState("");
   const [observaciones, setObservaciones] = useState("");
-  const [secundarioId, setSecundarioId] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -302,6 +286,10 @@ function IniciarTurnoModal({ condominioId, onClose }: { condominioId: Id<"condom
 
   async function confirmar() {
     if (!rows || rows.length === 0) return;
+    if (!quienTurno.trim()) {
+      setError("Escribe el nombre de quien toma el turno.");
+      return;
+    }
     setBusy(true); setError(null);
     try {
       await iniciar({
@@ -314,7 +302,8 @@ function IniciarTurnoModal({ condominioId, onClose }: { condominioId: Id<"condom
             observacion: r.observacion || undefined,
           })),
         observacionesInicio: observaciones || undefined,
-        guardiaSecundarioUserId: secundarioId ? (secundarioId as Id<"users">) : undefined,
+        guardiaNombre: quienTurno.trim(),
+        guardiaSecundarioNombre: companero.trim() || undefined,
       });
       onClose();
     } catch (e) {
@@ -332,7 +321,11 @@ function IniciarTurnoModal({ condominioId, onClose }: { condominioId: Id<"condom
       footer={
         <>
           <Button variant="ghost" size="sm" onClick={onClose} disabled={busy}>Cancelar</Button>
-          <Button size="sm" onClick={confirmar} disabled={busy || !rows || rows.length === 0}>
+          <Button
+            size="sm"
+            onClick={confirmar}
+            disabled={busy || !rows || rows.length === 0 || !quienTurno.trim()}
+          >
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ClipboardCheck className="h-4 w-4" />}
             Iniciar turno
           </Button>
@@ -340,6 +333,21 @@ function IniciarTurnoModal({ condominioId, onClose }: { condominioId: Id<"condom
       }
     >
       <div className="space-y-4">
+        <div className="space-y-1.5">
+          <label className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+            <Users className="h-3.5 w-3.5" /> Quién toma el turno
+          </label>
+          <Input
+            value={quienTurno}
+            onChange={(e) => setQuienTurno(e.target.value)}
+            placeholder="Tu nombre completo"
+            autoFocus
+          />
+          <p className="text-[11px] text-muted-foreground">
+            La cuenta es compartida: escribe tu nombre para la minuta.
+          </p>
+        </div>
+
         <div className="space-y-2">
           <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Checklist de dotación</p>
           {rows === null ? (
@@ -403,13 +411,13 @@ function IniciarTurnoModal({ condominioId, onClose }: { condominioId: Id<"condom
 
         <div className="space-y-1.5">
           <label className="flex items-center gap-1.5 text-xs font-medium text-foreground">
-            <Users className="h-3.5 w-3.5" /> Turno compartido (opcional)
+            Compañero de turno (opcional)
           </label>
-          <Select value={secundarioId} onChange={(e) => setSecundarioId(e.target.value)}>
-            <option value="">Sin segundo guardia</option>
-            {(equipo ?? []).map((g) => <option key={g.userId} value={g.userId}>{g.nombre}</option>)}
-          </Select>
-          {secundarioId && <p className="text-[11px] text-muted-foreground">Si uno cierra el turno, se cierra para ambos.</p>}
+          <Input
+            value={companero}
+            onChange={(e) => setCompanero(e.target.value)}
+            placeholder="Nombre del segundo guardia, si aplica"
+          />
         </div>
 
         <div className="space-y-1.5">
@@ -501,7 +509,7 @@ function CerrarTurnoModal({
 function RondaModal({ condominioId, onClose }: { condominioId: Id<"condominios">; onClose: () => void }) {
   const zonas = useQuery(api.guardia.listRondaZonas, { condominioId });
   const registrar = useMutation(api.guardia.registrarRonda);
-  const generateUploadUrl = useAction(api.files.generateUploadUrl);
+  const uploadFile = useUploadToS3();
 
   const [zonaId, setZonaId] = useState("");
   const [zonaNombre, setZonaNombre] = useState("");
@@ -518,7 +526,7 @@ function RondaModal({ condominioId, onClose }: { condominioId: Id<"condominios">
     setBusy(true); setError(null);
     try {
       const fotos = await subirFotos(
-        generateUploadUrl,
+        uploadFile,
         files.slice(0, 5),
         `condominios/guardia/${condominioId}/rondas`,
       );

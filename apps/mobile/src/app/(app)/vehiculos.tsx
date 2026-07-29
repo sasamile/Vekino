@@ -32,7 +32,7 @@ export default function VehiculosScreen() {
 }
 
 function Inner() {
-  const { condominioId, condominioName, canManage } = useCondominio();
+  const { condominioId, condominioName, canManage, theme } = useCondominio();
   const me = useQuery(api.users.me);
 
   // Admin: todos. Propietario/residente: solo los de sus unidades (como el portal web).
@@ -59,7 +59,7 @@ function Inner() {
         showsVerticalScrollIndicator={false}
       >
         {data === undefined ? (
-          <ActivityIndicator color={SoftUI.blue} style={{ marginTop: 30 }} />
+          <ActivityIndicator color={theme.accent} style={{ marginTop: 30 }} />
         ) : data.length === 0 ? (
           <GlassCard style={styles.emptyCard}>
             <Ionicons name="car-outline" size={32} color={SoftUI.textSecondary} />
@@ -77,11 +77,16 @@ function Inner() {
               {data.map((v) => (
                 <GlassCard key={v._id} style={styles.card}>
                   <View style={styles.row}>
-                    <View style={styles.iconWrap}>
+                    <View
+                      style={[
+                        styles.iconWrap,
+                        { backgroundColor: theme.accentSoft },
+                      ]}
+                    >
                       <Ionicons
                         name={TIPO_ICON[v.tipo] ?? "car-outline"}
                         size={22}
-                        color={SoftUI.blue}
+                        color={theme.accent}
                       />
                     </View>
                     <View style={styles.body}>

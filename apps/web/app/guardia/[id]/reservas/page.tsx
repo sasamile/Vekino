@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useParams } from "next/navigation";
-import { useQuery, useMutation, useAction } from "convex/react";
+import { useQuery, useMutation } from "convex/react";
 import {
   CalendarCheck, Clock, Home, Loader2, LogIn, LogOut, Wallet, Camera, ShieldAlert,
 } from "lucide-react";
@@ -15,8 +15,10 @@ import { Modal } from "@/components/ui/modal";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Input, Textarea } from "@/components/ui/input";
+import { PageContainer } from "@/components/layout/page-container";
+import { PageHeader } from "@/components/layout/page-header";
 import { cn } from "@/lib/utils";
-import { uploadToS3 } from "@/lib/upload-s3";
+import { useUploadToS3 } from "@/hooks/use-upload-s3";
 
 type Reserva = Doc<"reservas"> & { deposito: Doc<"guardiaReservaDepositos"> | null };
 
@@ -35,13 +37,12 @@ export default function GuardiaReservasPage() {
   const [resolverDe, setResolverDe] = useState<Reserva | null>(null);
 
   return (
-    <div className="space-y-5">
-      <div>
-        <h1 className="flex items-center gap-2 text-xl font-bold tracking-tight text-foreground">
-          <CalendarCheck className="h-5 w-5 text-brand" /> Control de reservas
-        </h1>
-        <p className="text-sm text-muted-foreground">Valida ingresos y salidas de zonas comunes; controla depósitos</p>
-      </div>
+    <PageContainer>
+      <div className="space-y-6">
+        <PageHeader
+          title="Control de reservas"
+          description="Valida ingresos y salidas de zonas comunes; controla depósitos"
+        />
 
       {reservas === undefined ? (
         <div className="space-y-3">{[...Array(3)].map((_, i) => <Skeleton key={i} className="h-24 rounded-2xl" />)}</div>
@@ -64,7 +65,8 @@ export default function GuardiaReservasPage() {
       {resolverDe && resolverDe.deposito && (
         <ResolverModal reserva={resolverDe} deposito={resolverDe.deposito} onClose={() => setResolverDe(null)} />
       )}
-    </div>
+      </div>
+    </PageContainer>
   );
 }
 
@@ -153,7 +155,7 @@ function ReservaCard({
 /* ───────── Registrar depósito (+ valida ingreso) ───────── */
 function DepositoModal({ reserva, onClose }: { reserva: Reserva; onClose: () => void }) {
   const registrar = useMutation(api.guardia.registrarDepositoReserva);
-  const generateUploadUrl = useAction(api.files.generateUploadUrl);
+  const uploadFile = useUploadToS3();
   const [monto, setMonto] = useState("");
   const [observaciones, setObservaciones] = useState("");
   const [foto, setFoto] = useState<File | null>(null);
@@ -169,8 +171,7 @@ function DepositoModal({ reserva, onClose }: { reserva: Reserva; onClose: () => 
     try {
       let fotoUrl: string | undefined;
       if (foto) {
-        const uploaded = await uploadToS3(
-          generateUploadUrl,
+        const uploaded = await uploadFile(
           foto,
           `condominios/guardia/${reserva.condominioId}/depositos`,
         );
@@ -224,7 +225,7 @@ function ResolverModal({
   reserva, deposito, onClose,
 }: { reserva: Reserva; deposito: Doc<"guardiaReservaDepositos">; onClose: () => void }) {
   const resolver = useMutation(api.guardia.resolverDepositoReserva);
-  const generateUploadUrl = useAction(api.files.generateUploadUrl);
+  const uploadFile = useUploadToS3();
   const [devuelto, setDevuelto] = useState(true);
   const [observaciones, setObservaciones] = useState("");
   const [foto, setFoto] = useState<File | null>(null);
@@ -239,8 +240,7 @@ function ResolverModal({
     try {
       let fotoUrl: string | undefined;
       if (foto) {
-        const uploaded = await uploadToS3(
-          generateUploadUrl,
+        const uploaded = await uploadFile(
           foto,
           `condominios/guardia/${reserva.condominioId}/depositos`,
         );

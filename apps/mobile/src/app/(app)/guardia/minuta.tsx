@@ -308,12 +308,12 @@ function IniciarTurnoModal({
   onClose: () => void;
 }) {
   const template = useQuery(api.guardia.listChecklistTemplate, { condominioId });
-  const equipo = useQuery(api.guardia.equipo, { condominioId });
   const iniciar = useMutation(api.guardia.iniciarTurno);
 
   const [rows, setRows] = useState<ChecklistRow[] | null>(null);
+  const [quienTurno, setQuienTurno] = useState("");
+  const [companero, setCompanero] = useState("");
   const [observaciones, setObservaciones] = useState("");
-  const [secundarioId, setSecundarioId] = useState<Id<"users"> | "">("");
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -339,6 +339,10 @@ function IniciarTurnoModal({
 
   async function confirmar() {
     if (!rows || rows.length === 0) return;
+    if (!quienTurno.trim()) {
+      Alert.alert("Nombre requerido", "Escribe el nombre de quien toma el turno.");
+      return;
+    }
     setBusy(true);
     try {
       await iniciar({
@@ -354,7 +358,8 @@ function IniciarTurnoModal({
             observacion: r.observacion || undefined,
           })),
         observacionesInicio: observaciones || undefined,
-        guardiaSecundarioUserId: secundarioId || undefined,
+        guardiaNombre: quienTurno.trim(),
+        guardiaSecundarioNombre: companero.trim() || undefined,
       });
       onClose();
     } catch (e) {
@@ -371,13 +376,42 @@ function IniciarTurnoModal({
             <Text style={styles.cancel}>Cancelar</Text>
           </Tap>
           <Text style={styles.modalTitle}>Iniciar turno</Text>
-          <Tap onPress={confirmar} disabled={busy || !rows?.length}>
+          <Tap
+            onPress={confirmar}
+            disabled={busy || !rows?.length || !quienTurno.trim()}
+          >
             <Text style={[styles.save, busy && { opacity: 0.5 }]}>
               {busy ? "…" : "Iniciar"}
             </Text>
           </Tap>
         </View>
         <ScrollView contentContainerStyle={{ padding: 16, gap: 12 }}>
+          <View style={{ gap: 6 }}>
+            <Text style={styles.fieldLabel}>Quién toma el turno</Text>
+            <TextInput
+              style={styles.input}
+              value={quienTurno}
+              onChangeText={setQuienTurno}
+              placeholder="Tu nombre completo"
+              placeholderTextColor={AuthUI.textMuted}
+              autoFocus
+            />
+            <Text style={{ fontSize: 11, color: AuthUI.textMuted }}>
+              Cuenta compartida: escribe tu nombre para la minuta.
+            </Text>
+          </View>
+
+          <View style={{ gap: 6 }}>
+            <Text style={styles.fieldLabel}>Compañero de turno (opcional)</Text>
+            <TextInput
+              style={styles.input}
+              value={companero}
+              onChangeText={setCompanero}
+              placeholder="Nombre del segundo guardia"
+              placeholderTextColor={AuthUI.textMuted}
+            />
+          </View>
+
           <Text style={styles.fieldLabel}>Checklist de dotación</Text>
           {rows === null ? (
             <ActivityIndicator color={C.brand} />
@@ -408,41 +442,6 @@ function IniciarTurnoModal({
               </GlassCard>
             ))
           )}
-
-          {(equipo ?? []).length > 0 ? (
-            <View style={{ gap: 6 }}>
-              <Text style={styles.fieldLabel}>Turno compartido (opcional)</Text>
-              <Tap
-                onPress={() => setSecundarioId("")}
-                style={[styles.chip, !secundarioId && styles.chipActive]}
-              >
-                <Text
-                  style={[styles.chipText, !secundarioId && styles.chipTextActive]}
-                >
-                  Sin segundo guardia
-                </Text>
-              </Tap>
-              {(equipo ?? []).map((g) => (
-                <Tap
-                  key={g.userId}
-                  onPress={() => setSecundarioId(g.userId)}
-                  style={[
-                    styles.chip,
-                    secundarioId === g.userId && styles.chipActive,
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.chipText,
-                      secundarioId === g.userId && styles.chipTextActive,
-                    ]}
-                  >
-                    {g.nombre}
-                  </Text>
-                </Tap>
-              ))}
-            </View>
-          ) : null}
 
           <View style={{ gap: 6 }}>
             <Text style={styles.fieldLabel}>Observaciones iniciales</Text>

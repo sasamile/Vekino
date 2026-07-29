@@ -10,7 +10,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Spinner } from "@/components/ui/spinner";
 import { EmptyState } from "@/components/ui/empty-state";
-import { fechaLarga } from "@/components/portal/portal-ui";
+import { fechaLarga, etiquetaUnidad } from "@/components/portal/portal-ui";
 import { cn } from "@/lib/utils";
 
 const TIPO_DOC = [
@@ -293,7 +293,12 @@ function VisitanteForm({
   onCreated,
 }: {
   condominioId: Id<"condominios">;
-  unidades: { _id: string; numero: string }[];
+  unidades: {
+    _id: string;
+    numero: string;
+    tipo?: string;
+    torre?: string | null;
+  }[];
   onClose: () => void;
   onCreated: (id: Id<"visitantes">) => void;
 }) {
@@ -305,29 +310,52 @@ function VisitanteForm({
   const [tipo, setTipo] = useState<TipoVis>("visitante");
   const [placa, setPlaca] = useState("");
   const [fecha, setFecha] = useState(hoy);
-  const [unidadId, setUnidadId] = useState(unidades[0]?._id ?? "");
+  const [unidadIds, setUnidadIds] = useState<string[]>(
+    unidades[0]?._id ? [unidades[0]._id] : [],
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  function toggleUnidad(id: string) {
+    setUnidadIds((prev) => {
+      if (prev.includes(id)) {
+        if (prev.length === 1) return prev;
+        return prev.filter((x) => x !== id);
+      }
+      return [...prev, id];
+    });
+  }
+
+  function toggleTodas() {
+    if (unidadIds.length === unidades.length) {
+      setUnidadIds(unidades[0]?._id ? [unidades[0]._id] : []);
+    } else {
+      setUnidadIds(unidades.map((u) => u._id));
+    }
+  }
 
   async function guardar(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     if (!nombre.trim()) return setError("El nombre es obligatorio.");
     if (!documento.trim()) return setError("El documento es obligatorio.");
-    if (!unidadId) return setError("Selecciona una unidad.");
+    if (unidadIds.length === 0) return setError("Selecciona al menos una unidad.");
     setBusy(true);
     try {
-      const newId = await crear({
-        condominioId,
-        unidadId: unidadId as Id<"unidades">,
-        nombre,
-        documento,
-        tipoDocumento,
-        tipo,
-        placa: placa.trim() || undefined,
-        fechaVisita: fecha,
-      });
-      onCreated(newId);
+      let lastId: Id<"visitantes"> | null = null;
+      for (const uid of unidadIds) {
+        lastId = await crear({
+          condominioId,
+          unidadId: uid as Id<"unidades">,
+          nombre,
+          documento,
+          tipoDocumento,
+          tipo,
+          placa: placa.trim() || undefined,
+          fechaVisita: fecha,
+        });
+      }
+      if (lastId) onCreated(lastId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "No se pudo autorizar.");
       setBusy(false);
@@ -388,13 +416,47 @@ function VisitanteForm({
           </Field>
 
           {unidades.length > 1 && (
-            <Field label="Unidad">
-              <select value={unidadId} onChange={(e) => setUnidadId(e.target.value)} className={inputCls}>
-                {unidades.map((u) => (
-                  <option key={u._id} value={u._id}>Unidad {u.numero}</option>
-                ))}
-              </select>
-            </Field>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-medium text-muted-foreground">
+                  Unidades ({unidadIds.length})
+                </span>
+                <button
+                  type="button"
+                  onClick={toggleTodas}
+                  className="text-xs font-medium text-brand hover:underline"
+                >
+                  {unidadIds.length === unidades.length
+                    ? "Solo una"
+                    : "Seleccionar todas"}
+                </button>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {unidades.map((u) => {
+                  const active = unidadIds.includes(u._id);
+                  return (
+                    <button
+                      key={u._id}
+                      type="button"
+                      onClick={() => toggleUnidad(u._id)}
+                      className={cn(
+                        "inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm font-medium transition-colors",
+                        active
+                          ? "border-brand/40 bg-brand/10 text-foreground"
+                          : "border-border bg-card text-muted-foreground hover:bg-accent/50",
+                      )}
+                      aria-pressed={active}
+                    >
+                      {active ? <Check className="h-3.5 w-3.5 text-brand" /> : null}
+                      {etiquetaUnidad(u)}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                Se genera un QR por cada unidad seleccionada.
+              </p>
+            </div>
           )}
 
           {error && <p className="text-sm text-red-600">{error}</p>}
@@ -413,7 +475,9 @@ function VisitanteForm({
               className="inline-flex h-10 items-center gap-2 rounded-lg bg-brand px-5 text-sm font-semibold text-brand-foreground shadow-sm transition-colors hover:bg-brand/90 disabled:opacity-60"
             >
               {busy && <Loader2 className="h-4 w-4 animate-spin" />}
-              Autorizar y generar QR
+              {unidadIds.length > 1
+                ? `Autorizar (${unidadIds.length})`
+                : "Autorizar y generar QR"}
             </button>
           </div>
         </form>

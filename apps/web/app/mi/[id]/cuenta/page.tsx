@@ -14,10 +14,31 @@ import {
 } from "lucide-react";
 import { Spinner } from "@/components/ui/spinner";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { LiquidGlassCard } from "@/components/portal/liquid-glass-card";
+import { PortalPayButton } from "@/components/portal/portal-pay-button";
 import { cop, cn } from "@/lib/utils";
-import { ESTADO_FACTURA, fechaLarga } from "@/components/portal/portal-ui";
+import {
+  ESTADO_FACTURA,
+  etiquetaUnidad,
+  fechaLarga,
+  periodoHumano,
+} from "@/components/portal/portal-ui";
 
 const FECHA_MIN = 946684800000;
+
+function montoAPagarHoy(f: {
+  totalAPagar: number;
+  totalConDescuento?: number;
+  fechaVencimiento: number;
+}, ahora = Date.now()) {
+  const conDescuento =
+    typeof f.totalConDescuento === "number" &&
+    f.totalConDescuento < f.totalAPagar &&
+    f.fechaVencimiento > FECHA_MIN &&
+    ahora <= f.fechaVencimiento;
+  return conDescuento ? f.totalConDescuento! : f.totalAPagar;
+}
 
 type LineaFactura = {
   codigo: number;
@@ -29,7 +50,9 @@ type LineaFactura = {
 
 type Factura = {
   _id: Id<"facturas">;
+  unidadId: Id<"unidades">;
   numeroFactura: string;
+  periodo?: string;
   periodoLabel: string;
   estado: "pendiente" | "pagada" | "vencida" | "abonada" | "saldo_a_favor";
   totalAPagar: number;
@@ -38,7 +61,33 @@ type Factura = {
   fechaVencimiento: number;
   pdfUrl?: string;
   lineas: LineaFactura[];
+  unidadNumero?: string;
+  unidadTipo?: string;
+  unidadTorre?: string | null;
 };
+
+function esPendientePago(f: Factura) {
+  return (
+    f.estado === "pendiente" ||
+    f.estado === "vencida" ||
+    f.estado === "abonada"
+  );
+}
+
+/** Una factura pagable por unidad (la más reciente sin pagar consolida el saldo). */
+function facturasPagables(conDeuda: Factura[]): Factura[] {
+  const byUnit = new Map<string, Factura>();
+  for (const f of conDeuda) {
+    const key = String(f.unidadId);
+    const cur = byUnit.get(key);
+    if (!cur || f.fechaVencimiento > cur.fechaVencimiento) {
+      byUnit.set(key, f);
+    }
+  }
+  return [...byUnit.values()].sort(
+    (a, b) => b.fechaVencimiento - a.fechaVencimiento,
+  );
+}
 
 export default function MisFacturas() {
   const { id } = useParams<{ id: string }>();
@@ -49,15 +98,23 @@ export default function MisFacturas() {
   const home = useQuery(api.portal.home, { condominioId });
   const avalPortalUrl =
     home && home.allowed ? (home.condominio.avalPortalUrl ?? null) : null;
+  const unidades = home?.allowed ? home.unidades : [];
+  const multiUnidad = unidades.length > 1;
 
-  const lista = facturas ?? [];
-  const conDeuda = lista.filter((f) => f.estado !== "pagada");
+  const [unidadFiltro, setUnidadFiltro] = useState<Id<"unidades"> | "">("");
+
+  const listaAll = facturas ?? [];
+  const lista =
+    unidadFiltro === ""
+      ? listaAll
+      : listaAll.filter((f) => String(f.unidadId) === String(unidadFiltro));
+
+  const conDeuda = lista.filter(esPendientePago);
   const tieneVencidas = conDeuda.some((f) => f.estado === "vencida");
   const estaAlDia = conDeuda.length === 0;
-  // Deuda actual = factura más reciente sin pagar (su total consolida el saldo).
-  const proximo = [...conDeuda].sort(
-    (a, b) => b.fechaVencimiento - a.fechaVencimiento,
-  )[0];
+  const pagables = facturasPagables(conDeuda);
+  const pagableIds = new Set(pagables.map((f) => f._id));
+  const deudaTotal = pagables.reduce((s, f) => s + montoAPagarHoy(f), 0);
 
   function scrollToFacturas() {
     document.getElementById("facturas")?.scrollIntoView({ behavior: "smooth" });
@@ -74,43 +131,109 @@ export default function MisFacturas() {
         </p>
       </div>
 
+      {multiUnidad ? (
+        <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1 [scrollbar-width:thin]">
+          <button
+            type="button"
+            onClick={() => setUnidadFiltro("")}
+            className={cn(
+              "inline-flex h-10 shrink-0 items-center gap-2 rounded-full border px-3.5 text-sm font-medium transition-colors",
+              unidadFiltro === ""
+                ? "border-foreground/20 bg-foreground text-background"
+                : "border-border bg-card text-foreground hover:bg-accent/50",
+            )}
+          >
+            Todas
+            <span
+              className={cn(
+                "tabular-nums text-xs",
+                unidadFiltro === ""
+                  ? "text-background/70"
+                  : "text-muted-foreground",
+              )}
+            >
+              {listaAll.length}
+            </span>
+          </button>
+          {unidades.map((u) => {
+            const uid = u._id as Id<"unidades">;
+            const active = String(unidadFiltro) === String(uid);
+            const count = listaAll.filter(
+              (f) => String(f.unidadId) === String(uid),
+            ).length;
+            return (
+              <button
+                key={u._id}
+                type="button"
+                onClick={() => setUnidadFiltro(uid)}
+                className={cn(
+                  "inline-flex h-10 shrink-0 items-center gap-2 rounded-full border px-3.5 text-sm font-medium transition-colors",
+                  active
+                    ? "border-brand/40 bg-brand/10 text-foreground"
+                    : "border-border bg-card text-foreground hover:bg-accent/50",
+                )}
+                aria-pressed={active}
+              >
+                <span className="max-w-[11rem] truncate">
+                  {etiquetaUnidad(u)}
+                </span>
+                <span className="tabular-nums text-xs text-muted-foreground">
+                  {count}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+
       {/* Resumen: estado actual + factura pendiente */}
       <div className="grid grid-cols-1 items-stretch gap-6 md:grid-cols-2">
         <ResumenActual
           loading={facturas === undefined}
           estaAlDia={estaAlDia}
           tieneVencidas={tieneVencidas}
-          conteo={conDeuda.length}
-          deuda={proximo?.totalAPagar ?? 0}
+          conteo={pagables.length}
+          deuda={deudaTotal}
+          multiUnidad={multiUnidad && unidadFiltro === ""}
           onVerDetalle={scrollToFacturas}
         />
         <ProximoPagoCard
           loading={facturas === undefined}
-          factura={proximo ?? null}
+          facturas={pagables}
           avalPortalUrl={avalPortalUrl}
+          multiUnidad={multiUnidad}
         />
       </div>
 
       {/* Lista de facturas */}
       <div id="facturas" className="scroll-mt-24">
         <div className="mb-4">
-          <h2 className="text-lg font-semibold text-foreground sm:text-xl">Facturas</h2>
+          <h2 className="text-lg font-semibold text-foreground sm:text-xl">
+            Facturas
+          </h2>
           <p className="mt-1 text-xs text-muted-foreground sm:text-sm">
             {facturas === undefined
               ? "Cargando…"
-              : `${lista.length} factura${lista.length !== 1 ? "s" : ""} en total`}
+              : unidadFiltro
+                ? `${lista.length} factura${lista.length !== 1 ? "s" : ""} de esta unidad`
+                : `${lista.length} factura${lista.length !== 1 ? "s" : ""} en total`}
           </p>
         </div>
 
         {facturas === undefined ? (
           <div className="space-y-3">
             {[0, 1, 2, 3].map((i) => (
-              <div key={i} className="h-20 animate-pulse rounded-lg border border-border bg-muted/40" />
+              <div
+                key={i}
+                className="h-20 animate-pulse rounded-lg border border-border bg-muted/40"
+              />
             ))}
           </div>
         ) : lista.length === 0 ? (
           <div className="rounded-lg border border-border py-12 text-center text-sm text-muted-foreground">
-            No hay facturas disponibles.
+            {unidadFiltro
+              ? "No hay facturas para esta unidad."
+              : "No hay facturas disponibles."}
           </div>
         ) : (
           <div className="space-y-3">
@@ -119,7 +242,8 @@ export default function MisFacturas() {
                 key={f._id}
                 factura={f}
                 avalPortalUrl={avalPortalUrl}
-                pagable={f._id === proximo?._id}
+                pagable={pagableIds.has(f._id)}
+                showUnidad={multiUnidad && unidadFiltro === ""}
               />
             ))}
           </div>
@@ -129,7 +253,7 @@ export default function MisFacturas() {
   );
 }
 
-/* ───────────────────────── Resumen: Estado actual (ámbar) ───────────────────────── */
+/* ───────────────────────── Resumen: Estado actual ───────────────────────── */
 
 function ResumenActual({
   loading,
@@ -137,6 +261,7 @@ function ResumenActual({
   tieneVencidas,
   conteo,
   deuda,
+  multiUnidad,
   onVerDetalle,
 }: {
   loading: boolean;
@@ -144,22 +269,28 @@ function ResumenActual({
   tieneVencidas: boolean;
   conteo: number;
   deuda: number;
+  multiUnidad: boolean;
   onVerDetalle: () => void;
 }) {
-  const badge = estaAlDia
-    ? { label: "Al día", cls: "bg-emerald-100 text-emerald-700" }
+  const badgeTone = estaAlDia
+    ? ("success" as const)
     : tieneVencidas
-      ? { label: "Vencida", cls: "bg-red-100 text-red-700" }
-      : { label: "Pendiente", cls: "bg-amber-100 text-amber-700" };
+      ? ("destructive" as const)
+      : ("warning" as const);
+  const badgeLabel = estaAlDia
+    ? "Al día"
+    : tieneVencidas
+      ? "Vencida"
+      : "Pendiente";
 
   return (
-    <div className="flex min-h-[180px] w-full flex-col justify-between rounded-xl border border-border bg-linear-to-br from-amber-200/40 via-card to-card p-5 shadow-md sm:p-6">
-      <div>
-        <div className="mb-3 flex items-center justify-between">
-          <span className="text-sm font-semibold text-foreground">Estado actual</span>
-          <span className={cn("rounded-md px-2 py-1 text-xs font-medium", badge.cls)}>
-            {badge.label}
+    <LiquidGlassCard className="relative flex min-h-[180px] w-full flex-col justify-between overflow-hidden p-5 sm:p-6">
+      <div className="relative z-1">
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <span className="text-sm font-semibold text-foreground">
+            Estado actual
           </span>
+          <Badge tone={badgeTone}>{badgeLabel}</Badge>
         </div>
         {loading ? (
           <div className="h-8 w-40 animate-pulse rounded bg-muted" />
@@ -169,77 +300,154 @@ function ResumenActual({
           </p>
         ) : (
           <>
-            <p className="text-2xl font-bold tabular-nums text-foreground">{cop(deuda)}</p>
+            <p className="text-2xl font-bold tabular-nums tracking-tight text-foreground">
+              {cop(deuda)}
+            </p>
             <p className="mt-1 text-sm text-muted-foreground">
-              {conteo} factura{conteo !== 1 ? "s" : ""} por pagar
+              {multiUnidad
+                ? `${conteo} unidad${conteo !== 1 ? "es" : ""} con saldo`
+                : `${conteo} factura${conteo !== 1 ? "s" : ""} por pagar`}
             </p>
           </>
         )}
       </div>
-      {!estaAlDia && (
-        <div>
-          <button
-            onClick={onVerDetalle}
-            className="inline-flex items-center gap-2 rounded-md bg-amber-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-amber-700"
-          >
+      {!estaAlDia ? (
+        <div className="relative z-1 mt-4">
+          <Button variant="outline" onClick={onVerDetalle} className="min-h-10">
             Ver detalle
-          </button>
+          </Button>
         </div>
-      )}
-    </div>
+      ) : null}
+    </LiquidGlassCard>
   );
 }
 
-/* ───────────────────────── Resumen: Factura pendiente (rojo) ───────────────────────── */
+/* ───────────────────────── Resumen: Factura pendiente ───────────────────────── */
 
 function ProximoPagoCard({
   loading,
-  factura,
+  facturas,
   avalPortalUrl,
+  multiUnidad,
 }: {
   loading: boolean;
-  factura: Factura | null;
+  facturas: Factura[];
   avalPortalUrl: string | null;
+  multiUnidad: boolean;
 }) {
   if (loading) {
     return (
-      <div className="flex min-h-[180px] w-full items-center justify-center rounded-xl border border-border bg-linear-to-br from-red-200/40 via-card to-card p-6 shadow-md">
+      <LiquidGlassCard className="flex min-h-[180px] w-full items-center justify-center p-6">
         <Spinner className="h-5 w-5" />
-      </div>
+      </LiquidGlassCard>
     );
   }
 
-  if (!factura) {
+  if (facturas.length === 0) {
     return (
-      <div className="flex min-h-[180px] w-full flex-col items-center justify-center gap-2 rounded-xl border border-border bg-linear-to-br from-emerald-200/40 via-card to-card p-6 text-center shadow-md">
-        <CheckCircle2 className="h-9 w-9 text-emerald-600" />
-        <p className="text-lg font-bold text-emerald-700">Estás al día</p>
-        <p className="text-sm text-muted-foreground">No tienes pagos pendientes.</p>
-      </div>
+      <LiquidGlassCard className="flex min-h-[180px] w-full flex-col items-center justify-center gap-2 p-6 text-center">
+        <CheckCircle2 className="h-9 w-9 text-emerald-600 dark:text-emerald-400" />
+        <p className="text-lg font-bold text-foreground">Estás al día</p>
+        <p className="text-sm text-muted-foreground">
+          No tienes pagos pendientes.
+        </p>
+      </LiquidGlassCard>
     );
   }
 
+  if (facturas.length > 1) {
+    return (
+      <LiquidGlassCard className="flex min-h-[180px] w-full flex-col justify-between gap-3 p-5 sm:p-6">
+        <div>
+          <span className="text-sm font-semibold text-foreground">
+            Pagos pendientes
+          </span>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Cada unidad se paga por separado.
+          </p>
+        </div>
+        <ul className="space-y-2">
+          {facturas.map((f) => (
+            <li
+              key={f._id}
+              className="flex flex-wrap items-center justify-between gap-2 border-t border-border/60 pt-2 first:border-0 first:pt-0"
+            >
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-foreground">
+                  {etiquetaUnidad(f)}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {periodoHumano(f.periodo || f.periodoLabel)}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-bold tabular-nums text-foreground">
+                  {cop(montoAPagarHoy(f))}
+                </span>
+                <PortalPayButton
+                  facturaId={f._id}
+                  avalPortalUrl={avalPortalUrl}
+                  label="Pagar"
+                  size="sm"
+                />
+              </div>
+            </li>
+          ))}
+        </ul>
+      </LiquidGlassCard>
+    );
+  }
+
+  const factura = facturas[0]!;
   const meta = ESTADO_FACTURA[factura.estado];
-  const venc = factura.fechaVencimiento > FECHA_MIN ? fechaLarga(factura.fechaVencimiento) : null;
+  const venc =
+    factura.fechaVencimiento > FECHA_MIN
+      ? fechaLarga(factura.fechaVencimiento)
+      : null;
 
   return (
-    <div className="flex min-h-[180px] w-full flex-col justify-between gap-4 rounded-xl border border-border bg-linear-to-br from-red-200/40 via-card to-card p-5 shadow-md sm:flex-row sm:items-center sm:p-6">
+    <LiquidGlassCard className="flex min-h-[180px] w-full flex-col justify-between gap-4 p-5 sm:flex-row sm:items-center sm:p-6">
       <div className="min-w-0">
-        <div className="mb-1 flex items-center gap-2">
-          <span className="text-sm font-semibold text-foreground">Factura pendiente</span>
-          {meta && <Badge tone={meta.tone}>{meta.label}</Badge>}
+        <div className="mb-1 flex flex-wrap items-center gap-2">
+          <span className="text-sm font-semibold text-foreground">
+            Factura pendiente
+          </span>
+          {meta ? <Badge tone={meta.tone}>{meta.label}</Badge> : null}
         </div>
-        <p className="text-sm text-foreground">Cuenta de {factura.periodoLabel}</p>
+        {multiUnidad ? (
+          <p className="text-sm font-medium text-foreground">
+            {etiquetaUnidad(factura)}
+          </p>
+        ) : null}
+        <p className="text-sm text-foreground">
+          Cuenta de {periodoHumano(factura.periodo || factura.periodoLabel)}
+        </p>
         <p className="text-xs text-muted-foreground">{factura.numeroFactura}</p>
-        {venc && <p className="mt-1 text-xs text-muted-foreground">Vence: {venc}</p>}
+        {venc ? (
+          <p className="mt-1 text-xs text-muted-foreground">Vence: {venc}</p>
+        ) : null}
       </div>
       <div className="flex shrink-0 flex-col items-start gap-2 sm:items-end">
-        <span className="text-xl font-bold tabular-nums text-foreground sm:text-2xl">
-          {cop(factura.totalAPagar)}
+        <span className="text-xl font-bold tabular-nums tracking-tight text-foreground sm:text-2xl">
+          {cop(montoAPagarHoy(factura))}
         </span>
-        <PayButton factura={factura} avalPortalUrl={avalPortalUrl} className="w-full sm:w-auto" />
+        {typeof factura.totalConDescuento === "number" &&
+        factura.totalConDescuento < factura.totalAPagar &&
+        factura.fechaVencimiento > FECHA_MIN &&
+        Date.now() <= factura.fechaVencimiento ? (
+          <p className="text-xs text-muted-foreground">
+            Sin descuento después: {cop(factura.totalAPagar)}
+          </p>
+        ) : null}
+        <PortalPayButton
+          facturaId={factura._id}
+          avalPortalUrl={avalPortalUrl}
+          label="Pagar"
+          showArrow
+          className="w-full sm:w-auto"
+        />
       </div>
-    </div>
+    </LiquidGlassCard>
   );
 }
 
@@ -249,15 +457,18 @@ function FacturaRow({
   factura,
   avalPortalUrl,
   pagable,
+  showUnidad,
 }: {
   factura: Factura;
   avalPortalUrl: string | null;
   pagable: boolean;
+  showUnidad: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const meta = ESTADO_FACTURA[factura.estado];
   const isPagada = factura.estado === "pagada";
   const venc = factura.fechaVencimiento > FECHA_MIN ? fechaLarga(factura.fechaVencimiento) : null;
+  const periodo = periodoHumano(factura.periodo || factura.periodoLabel);
 
   return (
     <div className="overflow-hidden rounded-lg border border-border transition-colors">
@@ -268,7 +479,9 @@ function FacturaRow({
       >
         <div className="min-w-0 flex-1">
           <div className="mb-1.5 flex flex-wrap items-center gap-2">
-            <span className="text-base font-semibold text-foreground">{factura.numeroFactura}</span>
+            <span className="text-base font-semibold text-foreground">
+              {periodo}
+            </span>
             {meta && <Badge tone={meta.tone}>{meta.label}</Badge>}
             {isPagada && (
               <span className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground">
@@ -276,7 +489,14 @@ function FacturaRow({
               </span>
             )}
           </div>
-          <p className="mb-1 text-sm text-muted-foreground">Cuenta de {factura.periodoLabel}</p>
+          {showUnidad ? (
+            <p className="mb-1 text-sm font-medium text-foreground">
+              {etiquetaUnidad(factura)}
+            </p>
+          ) : null}
+          <p className="mb-1 text-sm text-muted-foreground">
+            {factura.numeroFactura}
+          </p>
           {venc && (
             <p className="text-xs font-medium text-muted-foreground">Vence: {venc}</p>
           )}
@@ -428,7 +648,7 @@ function PayButton({
       onClick={pagar}
       disabled={loading}
       className={cn(
-        "inline-flex items-center justify-center gap-2 rounded-md bg-red-600 font-semibold text-white transition-colors hover:bg-red-700 disabled:opacity-60",
+        "inline-flex items-center justify-center gap-2 rounded-md bg-brand font-semibold text-brand-foreground shadow-[0_4px_10px_hsl(var(--brand)/0.28)] transition-colors hover:bg-brand/90 disabled:opacity-60",
         size === "sm" ? "h-8 px-3 text-sm" : "h-10 px-5 text-sm",
         className,
       )}

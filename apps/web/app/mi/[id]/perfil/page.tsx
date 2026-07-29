@@ -25,7 +25,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { initials } from "@/lib/utils";
 import { VINCULO_LABEL } from "@/components/portal/portal-ui";
 import { authClient } from "@/lib/auth-client";
-import { uploadToS3 } from "@/lib/upload-s3";
+import { useUploadToS3 } from "@/hooks/use-upload-s3";
 
 const ROL_LABEL: Record<string, string> = {
   propietario: "Propietario",
@@ -172,7 +172,7 @@ export default function Perfil() {
 }
 
 function AvatarEditor({ image, name }: { image: string | null; name: string }) {
-  const generateUploadUrl = useAction(api.files.generateUploadUrl);
+  const uploadFile = useUploadToS3();
   const setAvatar = useMutation(api.users.setMyAvatar);
   const clearAvatar = useMutation(api.users.clearMyAvatar);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -201,7 +201,7 @@ function AvatarEditor({ image, name }: { image: string | null; name: string }) {
     setPreview(localUrl);
     setBroken(false);
     try {
-      const { url, key } = await uploadToS3(generateUploadUrl, file, "avatars");
+      const { url, key } = await uploadFile(file, "avatars");
       await setAvatar({ url, s3Key: key });
     } catch (err) {
       setPreview(null);
@@ -286,7 +286,7 @@ function EliminarCuenta() {
     try {
       await deleteMyAccount({});
       await authClient.signOut().catch(() => {});
-      router.replace("/");
+      router.replace("/login");
     } catch (e) {
       setBusy(false);
       setError(

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
 import { LogOut, ChevronLeft } from "lucide-react";
-import { PORTAL_NAV } from "./portal-nav-config";
+import { portalNavForRoles } from "./portal-nav-config";
 import { authClient } from "@/lib/auth-client";
 import { initials, cn } from "@/lib/utils";
 import { UserAvatar } from "@/components/ui/user-avatar";
@@ -22,6 +22,7 @@ export function PortalTopNav({
   userImage,
   userEmail,
   isPlatform,
+  roles = [],
 }: {
   base: string;
   name: string;
@@ -30,14 +31,16 @@ export function PortalTopNav({
   userImage?: string | null;
   userEmail: string;
   isPlatform: boolean;
+  roles?: string[];
 }) {
   const router = useRouter();
   const pathname = usePathname();
   const [menuOpen, setMenuOpen] = useState(false);
+  const nav = portalNavForRoles(roles);
 
   async function signOut() {
     await authClient.signOut();
-    router.replace("/");
+    router.replace("/login");
   }
 
   return (
@@ -124,7 +127,7 @@ export function PortalTopNav({
       {/* Pestañas (solo desktop) */}
       <div className="hidden py-3 md:block">
         <nav className="flex items-center gap-1 overflow-x-auto">
-          {PORTAL_NAV.map((item) => {
+          {nav.map((item) => {
             const href = item.segment ? `${base}/${item.segment}` : base;
             const active = item.segment
               ? pathname === href || pathname.startsWith(`${href}/`)

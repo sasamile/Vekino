@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useQuery, useMutation, useAction } from "convex/react";
+import { useQuery, useMutation } from "convex/react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
 import {
@@ -26,7 +26,7 @@ import {
   descargarPoderesZIP,
 } from "@/lib/asamblea-auditoria";
 import { VotacionEnVivoTab, DetalleVotosTab } from "./votacion-en-vivo";
-import { uploadToS3 } from "@/lib/upload-s3";
+import { useUploadToS3 } from "@/hooks/use-upload-s3";
 
 type Estado = "programada" | "en_curso" | "finalizada" | "cancelada";
 const ESTADO_META: Record<Estado, { label: string; tone: React.ComponentProps<typeof Badge>["tone"] }> = {
@@ -685,7 +685,7 @@ function PoderesTab({ asambleaId }: { asambleaId: Id<"asambleas"> }) {
   const responder = useMutation(api.asambleas.responderPoder);
   const revocar = useMutation(api.asambleas.revocarPoder);
   const otorgar = useMutation(api.asambleas.otorgarPoder);
-  const generateUploadUrl = useAction(api.files.generateUploadUrl);
+  const uploadFile = useUploadToS3();
   const [unidadId, setUnidadId] = useState("");
   const [modo, setModo] = useState<"propietario" | "externo">("propietario");
   const [rep, setRep] = useState<{ _id: Id<"users">; name: string } | null>(null);
@@ -748,8 +748,7 @@ function PoderesTab({ asambleaId }: { asambleaId: Id<"asambleas"> }) {
     try {
       let documentoUrl: string | undefined;
       if (file) {
-        const uploaded = await uploadToS3(
-          generateUploadUrl,
+        const uploaded = await uploadFile(
           file,
           `condominios/asambleas/${a?.condominioId ?? "unknown"}/poderes`,
         );

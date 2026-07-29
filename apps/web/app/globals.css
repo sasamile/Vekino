@@ -133,6 +133,20 @@
 
   --shadow-soft: var(--shadow-soft-value);
   --shadow-floating: var(--shadow-floating-value);
+
+  /* ── Landing (marketing) ──────────────────────────────────────────────
+   * Paleta fija derivada del logo Vekino: naranja #f6560b + azul #042046.
+   * No sigue el tema claro/oscuro de la app: la landing es una pieza de
+   * marca con contraste controlado por sección. */
+  --color-ink: #042046;
+  --color-ink-deep: #021229;
+  --color-ink-soft: #0b3266;
+  --color-flame: #f6560b;
+  --color-flame-soft: #ff8244;
+  --color-flame-tint: #fff1e9;
+  --color-sky: #1e5fbf;
+  --color-mist: #f4f6fa;
+  --color-slate-ink: #5a6b85;
 }
 
 html,
@@ -189,6 +203,77 @@ body {
 .animate-fade-in { animation: fade-in 0.15s ease-out; }
 .animate-scale-in { animation: scale-in 0.15s ease-out; }
 .animate-slide-up { animation: slide-up 0.2s ease-out; }
+
+/* ── Láminas de la landing ────────────────────────────────────────────────
+ * Cada sección (menos el hero) se monta sobre la anterior con esquinas
+ * redondeadas y sombra en el filo. Va en CSS y no en GSAP a propósito: la
+ * separación visual entre secciones no debe depender de que las animaciones
+ * lleguen a ejecutarse (pestaña en segundo plano, movimiento reducido, JS
+ * caído). GSAP solo añade encima la animación de salida. */
+.landing-main .section-slot > section {
+  position: relative;
+  border-top-left-radius: 44px;
+  border-top-right-radius: 44px;
+  box-shadow: 0 -30px 60px -30px rgba(4, 32, 70, 0.4);
+}
+
+/* Cada sección ocupa al menos una pantalla y centra su contenido. Así el
+ * reposo del scroll (ver section-parallax.tsx) siempre aterriza en una
+ * composición completa, nunca a media sección. `100svh` —la altura MÁS
+ * pequeña del viewport— garantiza que la sección nunca supere lo visible,
+ * incluso con las barras del navegador móvil desplegadas. */
+.landing-main .section-slot > section {
+  min-height: 100svh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+/* Nota: aquí había `content-visibility: auto` por rendimiento, pero es
+ * incompatible con el pare por sección: ScrollTrigger necesita la altura REAL
+ * de cada sección para saber dónde fijarla, y `content-visibility` le entrega
+ * la altura estimada de `contain-intrinsic-size`. El pin quedaba desfasado.
+ * El rendimiento se sostiene con lo demás: sin `backdrop-filter` y con los
+ * desenfoques recortados. */
+
+/* El hero queda FUERA de todo lo anterior: su composición (título, botones y
+ * la captura inclinada) está calibrada a mano y el centrado a pantalla la
+ * descuadra. Conserva su layout original. */
+.landing-main > section:first-child {
+  display: block;
+  min-height: 0;
+}
+
+/* El `body` hereda el tema de la app administrativa y en modo oscuro es casi
+ * negro. Como las secciones se encogen al salir, ese negro asomaba por los
+ * bordes. La landing tiene paleta propia y fija, así que mientras esté en
+ * pantalla el fondo de página también lo es. */
+body:has(.landing-main) {
+  background-color: var(--color-mist);
+}
+
+/* SplitText con máscara recorta los descendentes (g, j, p, y). El padding
+ * ensancha la caja de recorte y el margen negativo devuelve el interlineado. */
+.hero-line {
+  padding-bottom: 0.14em;
+  margin-bottom: -0.14em;
+}
+
+/* Marquee de testimonios: se detiene con movimiento reducido y al pasar el cursor. */
+@keyframes marquee-x {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+.marquee-track {
+  animation: marquee-x 48s linear infinite;
+}
+.marquee-root:hover .marquee-track,
+.marquee-root:focus-within .marquee-track {
+  animation-play-state: paused;
+}
+@media (prefers-reduced-motion: reduce) {
+  .marquee-track { animation: none; }
+}
 
 @media (prefers-reduced-motion: reduce) {
   *,

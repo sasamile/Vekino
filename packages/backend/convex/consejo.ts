@@ -8,7 +8,14 @@ import {
   hasPlatformRole,
 } from "./model/authz";
 import { displayNameFromUser } from "./model/displayName";
-import { scheduleDeleteS3Keys } from "./model/s3";
+import { scheduleDeleteS3Keys, s3KeyFromPublicUrl } from "./model/s3";
+
+function resolveS3Key(
+  s3Key: string | null | undefined,
+  fileUrl: string | null | undefined,
+): string | null {
+  return s3Key?.trim() || s3KeyFromPublicUrl(fileUrl) || null;
+}
 
 const VIEW_ROLES = ["administrador", "contadora", "junta_directiva"] as const;
 const UPLOAD_ROLES = ["administrador", "contadora"] as const;
@@ -161,12 +168,59 @@ export const listCategorias = query({
   },
 });
 
+const iconTypeValidator = v.union(
+  v.literal("lucide"),
+  v.literal("emoji"),
+  v.literal("svg"),
+  v.literal("image"),
+);
+
+function normalizeCategoriaIcon(args: {
+  iconType?: "lucide" | "emoji" | "svg" | "image";
+  iconValue?: string;
+  iconKey?: string;
+  colorKey?: string;
+}) {
+  const iconType = args.iconType ?? "lucide";
+  let iconValue = (args.iconValue ?? args.iconKey ?? "folder").trim();
+  if (!iconValue) iconValue = "folder";
+  if (iconType === "svg") {
+    if (iconValue.length > 12_000) {
+      throw new Error("El SVG es demasiado grande (máx. ~12 KB).");
+    }
+    iconValue = iconValue
+      .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, "")
+      .replace(/<foreignObject[\s\S]*?>[\s\S]*?<\/foreignObject>/gi, "")
+      .replace(/\son\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "")
+      .replace(/javascript:/gi, "");
+    if (!iconValue.toLowerCase().includes("<svg")) {
+      throw new Error("El SVG no es válido.");
+    }
+  }
+  if (iconType === "emoji" && iconValue.length > 16) {
+    throw new Error("El emoji no es válido.");
+  }
+  if (iconType === "image") {
+    if (!/^https?:\/\//i.test(iconValue) && !iconValue.startsWith("/")) {
+      throw new Error("La imagen debe ser una URL válida.");
+    }
+  }
+  return {
+    iconType,
+    iconValue,
+    iconKey: iconType === "lucide" ? iconValue : args.iconKey ?? "folder",
+    colorKey: args.colorKey ?? "slate",
+  };
+}
+
 export const createCategoria = mutation({
   args: {
     condominioId: v.id("condominios"),
     nombre: v.string(),
     iconKey: v.optional(v.string()),
     colorKey: v.optional(v.string()),
+    iconType: v.optional(iconTypeValidator),
+    iconValue: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     await requireConsejoAccess(ctx, args.condominioId, ADMIN_ROLES);
@@ -177,13 +231,13 @@ export const createCategoria = mutation({
       .query("consejoCategorias")
       .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
       .collect();
+    const icon = normalizeCategoriaIcon(args);
     const now = Date.now();
     return await ctx.db.insert("consejoCategorias", {
       condominioId: args.condominioId,
       nombre,
       slug,
-      iconKey: args.iconKey ?? "folder",
-      colorKey: args.colorKey ?? "teal",
+      ...icon,
       orden: existing.length,
       activo: true,
       createdAt: now,
@@ -196,6 +250,10 @@ export const updateCategoria = mutation({
   args: {
     id: v.id("consejoCategorias"),
     nombre: v.string(),
+    iconKey: v.optional(v.string()),
+    colorKey: v.optional(v.string()),
+    iconType: v.optional(iconTypeValidator),
+    iconValue: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const cat = await ctx.db.get(args.id);
@@ -204,11 +262,37 @@ export const updateCategoria = mutation({
     const nombre = args.nombre.trim();
     if (!nombre) throw new Error("El nombre es obligatorio.");
     const slug = await uniqueSlug(ctx, cat.condominioId, nombre, args.id);
-    await ctx.db.patch(args.id, {
+    const patch: {
+      nombre: string;
+      slug: string;
+      updatedAt: number;
+      iconType?: "lucide" | "emoji" | "svg" | "image";
+      iconValue?: string;
+      iconKey?: string;
+      colorKey?: string;
+    } = {
       nombre,
       slug,
       updatedAt: Date.now(),
-    });
+    };
+    if (
+      args.iconType !== undefined ||
+      args.iconValue !== undefined ||
+      args.iconKey !== undefined ||
+      args.colorKey !== undefined
+    ) {
+      const icon = normalizeCategoriaIcon({
+        iconType: args.iconType ?? cat.iconType,
+        iconValue: args.iconValue ?? cat.iconValue ?? cat.iconKey,
+        iconKey: args.iconKey ?? cat.iconKey,
+        colorKey: args.colorKey ?? cat.colorKey,
+      });
+      patch.iconType = icon.iconType;
+      patch.iconValue = icon.iconValue;
+      patch.iconKey = icon.iconKey;
+      patch.colorKey = icon.colorKey;
+    }
+    await ctx.db.patch(args.id, patch);
   },
 });
 
@@ -282,7 +366,11 @@ export const getDocumento = query({
   handler: async (ctx, args) => {
     const doc = await ctx.db.get(args.id);
     if (!doc) return null;
-    await requireConsejoAccess(ctx, doc.condominioId, VIEW_ROLES);
+    const { user } = await requireConsejoAccess(
+      ctx,
+      doc.condominioId,
+      VIEW_ROLES,
+    );
     const cat = await ctx.db.get(doc.categoriaId);
     const versiones = await ctx.db
       .query("consejoDocumentoVersiones")
@@ -292,13 +380,41 @@ export const getDocumento = query({
       .query("consejoDocumentoComentarios")
       .withIndex("by_documento", (q) => q.eq("documentoId", args.id))
       .collect();
+    const activos = comentarios
+      .filter((c) => c.activo)
+      .sort((a, b) => a.createdAt - b.createdAt);
+
+    const enriched = await Promise.all(
+      activos.map(async (c) => {
+        const reacciones = await ctx.db
+          .query("consejoComentarioReacciones")
+          .withIndex("by_comentario", (q) => q.eq("comentarioId", c._id))
+          .collect();
+        const byEmoji = new Map<string, { count: number; mine: boolean }>();
+        for (const r of reacciones) {
+          const cur = byEmoji.get(r.emoji) ?? { count: 0, mine: false };
+          cur.count += 1;
+          if (r.userId === user._id) cur.mine = true;
+          byEmoji.set(r.emoji, cur);
+        }
+        return {
+          ...c,
+          reacciones: [...byEmoji.entries()].map(([emoji, v]) => ({
+            emoji,
+            count: v.count,
+            mine: v.mine,
+          })),
+          esMio: c.userId === user._id,
+        };
+      }),
+    );
+
     return {
       ...doc,
       categoriaNombre: cat?.nombre ?? "—",
       versiones: versiones.sort((a, b) => b.version - a.version),
-      comentarios: comentarios
-        .filter((c) => c.activo)
-        .sort((a, b) => a.createdAt - b.createdAt),
+      comentarios: enriched,
+      viewerUserId: user._id as string,
     };
   },
 });
@@ -341,7 +457,7 @@ export const createDocumento = mutation({
       sizeBytes: args.sizeBytes,
       s3Key: args.s3Key,
       version: 1,
-      estado: "pendiente",
+      estado: "aprobado",
       createdByUserId: user._id,
       createdByNombre: displayNameFromUser(user),
       createdAt: now,
@@ -390,7 +506,7 @@ export const nuevaVersion = mutation({
       sizeBytes: args.sizeBytes,
       s3Key: args.s3Key,
       version: doc.version + 1,
-      estado: "pendiente",
+      estado: "aprobado",
       descripcion: args.nota?.trim()
         ? `${doc.descripcion ? doc.descripcion + "\n" : ""}[v${doc.version + 1}] ${args.nota.trim()}`
         : doc.descripcion,
@@ -466,6 +582,68 @@ export const removeDocumento = mutation({
   },
 });
 
+/**
+ * Borra una versión archivada (historial) o la versión actual.
+ * - Archivada: solo elimina esa fila + S3.
+ * - Actual: restaura la versión anterior del historial (si existe);
+ *   si no hay historial, elimina el documento completo.
+ */
+export const removeVersion = mutation({
+  args: {
+    documentoId: v.id("consejoDocumentos"),
+    /** Si se omite, borra la versión actual. */
+    versionId: v.optional(v.id("consejoDocumentoVersiones")),
+  },
+  handler: async (ctx, args) => {
+    const doc = await ctx.db.get(args.documentoId);
+    if (!doc) throw new Error("Documento no encontrado.");
+    await requireConsejoAccess(ctx, doc.condominioId, UPLOAD_ROLES);
+
+    // Versión archivada
+    if (args.versionId) {
+      const ver = await ctx.db.get(args.versionId);
+      if (!ver || ver.documentoId !== doc._id) {
+        throw new Error("Versión no encontrada.");
+      }
+      await scheduleDeleteS3Keys(ctx, [
+        resolveS3Key(ver.s3Key, ver.fileUrl),
+      ]);
+      await ctx.db.delete(ver._id);
+      return { kind: "archived" as const };
+    }
+
+    // Versión actual → restaurar anterior o borrar documento
+    const versiones = await ctx.db
+      .query("consejoDocumentoVersiones")
+      .withIndex("by_documento", (q) => q.eq("documentoId", doc._id))
+      .collect();
+    versiones.sort((a, b) => b.version - a.version);
+
+    if (versiones.length === 0) {
+      await deleteDocumentoCascade(ctx, doc);
+      return { kind: "documento" as const };
+    }
+
+    const prev = versiones[0]!;
+    await scheduleDeleteS3Keys(ctx, [
+      resolveS3Key(doc.s3Key, doc.fileUrl),
+    ]);
+    await ctx.db.patch(doc._id, {
+      fileUrl: prev.fileUrl,
+      fileName: prev.fileName,
+      mimeType: prev.mimeType,
+      sizeBytes: prev.sizeBytes,
+      s3Key: prev.s3Key,
+      version: prev.version,
+      createdByUserId: prev.subidoPorUserId,
+      createdByNombre: prev.subidoPorNombre,
+      updatedAt: Date.now(),
+    });
+    await ctx.db.delete(prev._id);
+    return { kind: "restored" as const, version: prev.version };
+  },
+});
+
 async function deleteDocumentoCascade(
   ctx: MutationCtx,
   doc: Doc<"consejoDocumentos">,
@@ -479,20 +657,30 @@ async function deleteDocumentoCascade(
     .withIndex("by_documento", (q) => q.eq("documentoId", doc._id))
     .collect();
   await scheduleDeleteS3Keys(ctx, [
-    doc.s3Key,
-    ...versiones.map((v) => v.s3Key),
+    resolveS3Key(doc.s3Key, doc.fileUrl),
+    ...versiones.map((v) => resolveS3Key(v.s3Key, v.fileUrl)),
   ]);
-  for (const c of comentarios) await ctx.db.delete(c._id);
+  for (const c of comentarios) {
+    const reacciones = await ctx.db
+      .query("consejoComentarioReacciones")
+      .withIndex("by_comentario", (q) => q.eq("comentarioId", c._id))
+      .collect();
+    for (const r of reacciones) await ctx.db.delete(r._id);
+    await ctx.db.delete(c._id);
+  }
   for (const v of versiones) await ctx.db.delete(v._id);
   await ctx.db.delete(doc._id);
 }
 
 // ─── Comentarios ──────────────────────────────────────────────
 
+const REACCION_EMOJIS = ["👍", "❤️", "😮", "😂"] as const;
+
 export const addComentario = mutation({
   args: {
     documentoId: v.id("consejoDocumentos"),
     contenido: v.string(),
+    parentId: v.optional(v.id("consejoDocumentoComentarios")),
   },
   handler: async (ctx, args) => {
     const doc = await ctx.db.get(args.documentoId);
@@ -504,6 +692,19 @@ export const addComentario = mutation({
     );
     const contenido = args.contenido.trim();
     if (!contenido) throw new Error("El comentario no puede estar vacío.");
+    if (args.parentId) {
+      const parent = await ctx.db.get(args.parentId);
+      if (
+        !parent ||
+        !parent.activo ||
+        parent.documentoId !== args.documentoId
+      ) {
+        throw new Error("El comentario al que respondes no existe.");
+      }
+      if (parent.parentId) {
+        throw new Error("Solo se puede responder al comentario principal.");
+      }
+    }
     const now = Date.now();
     return await ctx.db.insert("consejoDocumentoComentarios", {
       condominioId: doc.condominioId,
@@ -511,10 +712,108 @@ export const addComentario = mutation({
       userId: user._id,
       autorNombre: displayNameFromUser(user),
       contenido,
+      parentId: args.parentId,
       activo: true,
       createdAt: now,
       updatedAt: now,
     });
+  },
+});
+
+export const updateComentario = mutation({
+  args: {
+    id: v.id("consejoDocumentoComentarios"),
+    contenido: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const c = await ctx.db.get(args.id);
+    if (!c || !c.activo) throw new Error("Comentario no encontrado.");
+    const { user } = await requireConsejoAccess(
+      ctx,
+      c.condominioId,
+      VIEW_ROLES,
+    );
+    const isAdmin =
+      hasPlatformRole(user, "superadmin", "admin") ||
+      (await getMembership(ctx, user._id, c.condominioId))?.roles.includes(
+        "administrador",
+      );
+    if (c.userId !== user._id && !isAdmin) {
+      throw new Error("Solo puedes editar tus comentarios.");
+    }
+    const contenido = args.contenido.trim();
+    if (!contenido) throw new Error("El comentario no puede estar vacío.");
+    await ctx.db.patch(args.id, { contenido, updatedAt: Date.now() });
+  },
+});
+
+export const removeComentario = mutation({
+  args: { id: v.id("consejoDocumentoComentarios") },
+  handler: async (ctx, args) => {
+    const c = await ctx.db.get(args.id);
+    if (!c || !c.activo) throw new Error("Comentario no encontrado.");
+    const { user } = await requireConsejoAccess(
+      ctx,
+      c.condominioId,
+      VIEW_ROLES,
+    );
+    const membership = await getMembership(ctx, user._id, c.condominioId);
+    const isAdmin =
+      hasPlatformRole(user, "superadmin", "admin") ||
+      membership?.roles.includes("administrador");
+    if (c.userId !== user._id && !isAdmin) {
+      throw new Error("Solo puedes eliminar tus comentarios.");
+    }
+    const now = Date.now();
+    await ctx.db.patch(args.id, { activo: false, updatedAt: now });
+    // Soft-delete respuestas directas
+    const replies = await ctx.db
+      .query("consejoDocumentoComentarios")
+      .withIndex("by_parent", (q) => q.eq("parentId", args.id))
+      .collect();
+    for (const r of replies) {
+      if (r.activo) await ctx.db.patch(r._id, { activo: false, updatedAt: now });
+    }
+  },
+});
+
+export const toggleReaccion = mutation({
+  args: {
+    comentarioId: v.id("consejoDocumentoComentarios"),
+    emoji: v.string(),
+  },
+  handler: async (ctx, args) => {
+    if (!(REACCION_EMOJIS as readonly string[]).includes(args.emoji)) {
+      throw new Error("Reacción no válida.");
+    }
+    const c = await ctx.db.get(args.comentarioId);
+    if (!c || !c.activo) throw new Error("Comentario no encontrado.");
+    const { user } = await requireConsejoAccess(
+      ctx,
+      c.condominioId,
+      VIEW_ROLES,
+    );
+    const existing = await ctx.db
+      .query("consejoComentarioReacciones")
+      .withIndex("by_comentario_user_emoji", (q) =>
+        q
+          .eq("comentarioId", args.comentarioId)
+          .eq("userId", user._id)
+          .eq("emoji", args.emoji),
+      )
+      .unique();
+    if (existing) {
+      await ctx.db.delete(existing._id);
+      return { added: false };
+    }
+    await ctx.db.insert("consejoComentarioReacciones", {
+      condominioId: c.condominioId,
+      comentarioId: args.comentarioId,
+      userId: user._id,
+      emoji: args.emoji,
+      createdAt: Date.now(),
+    });
+    return { added: true };
   },
 });
 

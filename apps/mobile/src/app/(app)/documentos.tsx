@@ -50,7 +50,7 @@ export default function DocumentosScreen() {
 }
 
 function Inner() {
-  const { condominioId, condominioName } = useCondominio();
+  const { condominioId, condominioName, theme } = useCondominio();
   const me = useQuery(api.users.me);
   const data = useQuery(
     api.documentos.listByCondominio,
@@ -75,7 +75,7 @@ function Inner() {
         showsVerticalScrollIndicator={false}
       >
         {data === undefined ? (
-          <ActivityIndicator color={SoftUI.blue} style={{ marginTop: 30 }} />
+          <ActivityIndicator color={theme.accent} style={{ marginTop: 30 }} />
         ) : data.length === 0 ? (
           <GlassCard style={styles.emptyCard}>
             <Ionicons
@@ -98,11 +98,16 @@ function Inner() {
                 >
                   <GlassCard style={styles.card}>
                     <View style={styles.row}>
-                      <View style={styles.iconWrap}>
+                      <View
+                        style={[
+                          styles.iconWrap,
+                          { backgroundColor: theme.accentSoft },
+                        ]}
+                      >
                         <Ionicons
                           name="document-text"
                           size={22}
-                          color={SoftUI.blue}
+                          color={theme.accent}
                         />
                       </View>
                       <View style={styles.body}>
@@ -119,11 +124,16 @@ function Inner() {
                           label={CAT_LABEL[d.categoria] ?? d.categoria}
                           tone="blue"
                         />
-                        <View style={styles.downloadBtn}>
+                        <View
+                          style={[
+                            styles.downloadBtn,
+                            { backgroundColor: theme.accentSoft },
+                          ]}
+                        >
                           <Ionicons
                             name="download-outline"
                             size={16}
-                            color={SoftUI.blue}
+                            color={theme.accent}
                           />
                         </View>
                       </View>

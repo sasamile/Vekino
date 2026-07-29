@@ -1,17 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useQuery } from "convex/react";
-import {
-  CircleDollarSign,
-  Wallet,
-  DoorOpen,
-  UsersRound,
-  Download,
-  Upload,
-} from "lucide-react";
+import { CircleDollarSign, Wallet, DoorOpen, Upload, Clock, AlertTriangle, FolderOpen, ChartColumn, Users, Receipt } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
 import { PageContainer } from "@/components/layout/page-container";
@@ -31,11 +24,11 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { DonutChart } from "@/components/charts/donut-chart";
 import { TwinBars } from "@/components/charts/twin-bars";
+import { DonutChart } from "@/components/charts/donut-chart";
 import { CHART } from "@/components/charts/chart-colors";
 import { usePersistedPeriodo } from "@/hooks/use-persisted-periodo";
-import { cop, initials } from "@/lib/utils";
+import { cop, initials, cn } from "@/lib/utils";
 
 const MES_CORTO = [
   "Ene",
@@ -111,11 +104,12 @@ export default function CondominioHome() {
 
   const pagosRecientes = useQuery(
     api.facturas.listRecentByPeriodo,
-    periodo ? { condominioId, periodo, limit: 5 } : "skip",
+    periodo ? { condominioId, periodo, limit: 6 } : "skip",
   );
 
   const periodosKey = (periodos ?? []).join("|");
 
+  // Un solo CTA primario: Cargar facturas. Exportar vive en Reportes.
   useTopbarActions(
     <>
       <PeriodoSelect
@@ -123,12 +117,6 @@ export default function CondominioHome() {
         options={periodos ?? []}
         onChange={setPeriodo}
       />
-      <Button variant="secondary" className="hidden sm:inline-flex" asChild>
-        <Link href={`${base}/reportes`}>
-          <Download className="h-3.75 w-3.75" aria-hidden />
-          Exportar
-        </Link>
-      </Button>
       <Button variant="brand" asChild>
         <Link href={`${base}/finanzas`}>
           <Upload className="h-3.75 w-3.75" aria-hidden />
@@ -143,6 +131,11 @@ export default function CondominioHome() {
     return <DashboardSkeleton />;
   }
 
+  const isContadoraOnly =
+    !home.isPlatform &&
+    home.myRoles.includes("contadora") &&
+    !home.myRoles.includes("administrador");
+
   const recaudo = current?.sumaPagado ?? 0;
   const carteraPendiente = current
     ? Math.max(0, current.sumaTotalAPagar - current.sumaPagado)
@@ -151,6 +144,10 @@ export default function CondominioHome() {
   const totalFacturas = current?.total ?? 0;
   const pctAlDia =
     totalFacturas > 0 ? Math.round((alDia / totalFacturas) * 100) : 0;
+  const pctRecaudo =
+    current && current.sumaTotalAPagar > 0
+      ? Math.round((recaudo / current.sumaTotalAPagar) * 1000) / 10
+      : 0;
 
   const recaudoDelta =
     prev && prev.sumaPagado > 0
@@ -177,42 +174,63 @@ export default function CondominioHome() {
     }),
   );
 
-  const actividad = (pagosRecientes ?? []).map((f) => ({
-    text:
-      f.estado === "pagada"
-        ? `${f.apto ? `Apto ${f.apto}` : f.residenteNombre} pagó su factura`
-        : f.estado === "vencida"
-          ? `${f.apto ? `Apto ${f.apto}` : f.residenteNombre} quedó en mora`
-          : `Factura de ${f.residenteNombre} · ${ESTADO_LABEL[f.estado] ?? f.estado}`,
-    ts: f.updatedAt,
-    color:
-      f.estado === "pagada"
-        ? "bg-brand"
-        : f.estado === "vencida"
-          ? "bg-[#B1D459]"
-          : "bg-[#c9e07a]",
-  }));
-
   const periodoLabelTxt = periodo ? formatPeriodoLabel(periodo) : null;
+  const rawName = home.userName?.trim() ?? "";
+  const firstName = rawName.split(/\s+/)[0] || "";
+  const greeting = firstName ? `Hola, ${firstName}` : "Hola";
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <PageContainer>
-        <div className="grid grid-cols-12 gap-4">
+        <div className="flex flex-col gap-6">
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight text-foreground">
+              {greeting}{" "}
+              <span aria-hidden>👋</span>
+            </h1>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {isContadoraOnly
+                ? `Resumen financiero · ${home.condominio.name}`
+                : `Resumen de ${home.condominio.name}`}
+              {periodoLabelTxt ? ` · ${periodoLabelTxt}` : ""}
+            </p>
+          </div>
+
           {/* KPIs */}
-          <div className="col-span-12 grid grid-cols-2 gap-4 lg:grid-cols-4">
+          <div
+            className={cn(
+              "grid grid-cols-1 gap-4",
+              isContadoraOnly
+                ? "sm:grid-cols-2 xl:grid-cols-4"
+                : "sm:grid-cols-3",
+            )}
+          >
             <StatCard
               icon={CircleDollarSign}
               tone="brand"
-              label="Recaudo del mes"
-              value={current ? compactCop(recaudo) : "—"}
+              label={isContadoraOnly ? "% Recaudo del mes" : "Recaudo del mes"}
+              value={
+                isContadoraOnly
+                  ? current
+                    ? `${pctRecaudo}%`
+                    : "—"
+                  : current
+                    ? compactCop(recaudo)
+                    : "—"
+              }
               badge={
-                recaudoDelta != null
-                  ? `${recaudoDelta >= 0 ? "↑" : "↓"} ${Math.abs(recaudoDelta)}%`
-                  : undefined
+                isContadoraOnly
+                  ? current
+                    ? `${compactCop(recaudo)} de ${compactCop(current.sumaTotalAPagar)}`
+                    : undefined
+                  : recaudoDelta != null
+                    ? `${recaudoDelta >= 0 ? "↑" : "↓"} ${Math.abs(recaudoDelta)}%`
+                    : undefined
               }
               badgeTone={
-                recaudoDelta != null && recaudoDelta < 0
+                !isContadoraOnly &&
+                recaudoDelta != null &&
+                recaudoDelta < 0
                   ? "negative"
                   : "positive"
               }
@@ -220,127 +238,196 @@ export default function CondominioHome() {
             />
             <StatCard
               icon={Wallet}
-              tone="warning"
-              label="Cartera pendiente"
-              value={current ? compactCop(carteraPendiente) : "—"}
+              tone="neutral"
+              label={isContadoraOnly ? "Total facturado" : "Cartera pendiente"}
+              value={
+                current
+                  ? compactCop(
+                      isContadoraOnly
+                        ? current.sumaTotalAPagar
+                        : carteraPendiente,
+                    )
+                  : "—"
+              }
               badge={
-                carteraDelta != null
-                  ? `${carteraDelta >= 0 ? "↑" : "↓"} ${Math.abs(carteraDelta)}%`
-                  : undefined
+                isContadoraOnly
+                  ? periodoLabelTxt ?? undefined
+                  : carteraDelta != null
+                    ? `${carteraDelta >= 0 ? "↑" : "↓"} ${Math.abs(carteraDelta)}%`
+                    : undefined
               }
               badgeTone={
-                carteraDelta != null && carteraDelta > 0
+                !isContadoraOnly &&
+                carteraDelta != null &&
+                carteraDelta > 0
                   ? "negative"
                   : "positive"
               }
               href={`${base}/finanzas`}
             />
-            <StatCard
-              icon={DoorOpen}
-              tone="brand"
-              label="Unidades al día"
-              value={
-                current && detail
-                  ? `${alDia}/${detail.unidadCount || totalFacturas}`
-                  : current
-                    ? `${alDia}/${totalFacturas}`
-                    : "—"
-              }
-              badge={current ? `${pctAlDia}%` : undefined}
-              badgeTone="positive"
-              href={`${base}/unidades`}
-            />
-            <StatCard
-              icon={UsersRound}
-              tone="neutral"
-              label="Residentes"
-              value={detail?.memberCount ?? "—"}
-              badge="registrados"
-              badgeTone="positive"
-              href={`${base}/residentes`}
-            />
+            {isContadoraOnly ? (
+              <>
+                <StatCard
+                  icon={Clock}
+                  tone="warning"
+                  label="Facturas pendientes"
+                  value={current ? current.pendientes + current.abonadas : "—"}
+                  badge="Por cobrar"
+                  badgeTone="pending"
+                  href={`${base}/finanzas`}
+                />
+                <StatCard
+                  icon={AlertTriangle}
+                  tone="destructive"
+                  label="Facturas vencidas"
+                  value={current ? current.vencidas : "—"}
+                  badge="Con mora"
+                  badgeTone="negative"
+                  href={`${base}/finanzas`}
+                />
+              </>
+            ) : (
+              <StatCard
+                icon={DoorOpen}
+                tone="neutral"
+                label="Unidades al día"
+                value={
+                  current && detail
+                    ? `${alDia}/${detail.unidadCount || totalFacturas}`
+                    : current
+                      ? `${alDia}/${totalFacturas}`
+                      : "—"
+                }
+                badge={current ? `${pctAlDia}%` : undefined}
+                badgeTone="positive"
+                href={`${base}/unidades`}
+              />
+            )}
           </div>
 
-          {/* Barras */}
-          <Card className="col-span-12 lg:col-span-8">
-            <CardHeader className="mb-0 flex-row items-start justify-between gap-3">
-              <div>
-                <CardTitle>Recaudo vs. cartera vencida</CardTitle>
+          {isContadoraOnly ? (
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              {(
+                [
+                  {
+                    href: `${base}/finanzas`,
+                    label: "Finanzas",
+                    hint: "Facturas y cartera",
+                    icon: Receipt,
+                  },
+                  {
+                    href: `${base}/reportes`,
+                    label: "Reportes",
+                    hint: "Indicadores",
+                    icon: ChartColumn,
+                  },
+                  {
+                    href: `${base}/documentos`,
+                    label: "Documentos",
+                    hint: "Archivos",
+                    icon: FolderOpen,
+                  },
+                  {
+                    href: `${base}/consejo`,
+                    label: "Consejo",
+                    hint: "Junta directiva",
+                    icon: Users,
+                  },
+                ] as const
+              ).map((a) => (
+                <Link
+                  key={a.href}
+                  href={a.href}
+                  className="group flex items-center gap-3 rounded-2xl border border-border bg-card px-3.5 py-3 transition-colors hover:bg-accent/40"
+                >
+                  <span className="grid h-9 w-9 place-items-center rounded-xl bg-muted text-foreground/70 transition-colors group-hover:bg-brand/10 group-hover:text-brand">
+                    <a.icon className="h-4 w-4" aria-hidden />
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm font-medium text-foreground">
+                      {a.label}
+                    </span>
+                    <span className="block truncate text-xs text-muted-foreground">
+                      {a.hint}
+                    </span>
+                  </span>
+                </Link>
+              ))}
+            </div>
+          ) : null}
+
+          {/* ~70% líneas + ~30% estado */}
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-10">
+            <Card className="lg:col-span-7">
+              <CardHeader className="mb-0">
+                <CardTitle>Cobrado vs. por cobrar</CardTitle>
                 <CardDescription>
                   {periodoLabelTxt
                     ? `Hasta ${periodoLabelTxt} · últimos ${barData.length || 6} meses`
-                    : "Últimos 6 meses"}
+                    : "Comparación mes a mes"}
                 </CardDescription>
-              </div>
-              <div className="inline-flex h-8 items-center gap-0.5 rounded-full border border-border/60 bg-muted p-0.75">
-                <span className="inline-flex h-6.5 items-center gap-1.5 rounded-full bg-card px-2.5 text-[11.5px] font-medium text-foreground shadow-soft">
-                  <span className="h-1.5 w-1.5 rounded-full bg-brand" />
-                  Recaudo
-                </span>
-                <span className="inline-flex h-6.5 items-center gap-1.5 rounded-full px-2.5 text-[11.5px] font-medium text-muted-foreground">
-                  <span className="h-1.5 w-1.5 rounded-full bg-[#B1D459]" />
-                  Vencida
-                </span>
-              </div>
-            </CardHeader>
-            <CardContent>
-              {serie === undefined ? (
-                <Skeleton className="mt-4 h-57.5 w-full rounded-xl" />
-              ) : barData.length === 0 ? (
-                <p className="py-16 text-center text-sm text-muted-foreground">
-                  Aún no hay facturas cargadas.
-                </p>
-              ) : (
-                <TwinBars data={barData} />
-              )}
-            </CardContent>
-          </Card>
+              </CardHeader>
+              <CardContent>
+                {serie === undefined ? (
+                  <Skeleton className="mt-4 h-57.5 w-full rounded-xl" />
+                ) : barData.length === 0 ? (
+                  <p className="py-16 text-center text-sm text-muted-foreground">
+                    Aún no hay facturas cargadas.
+                  </p>
+                ) : (
+                  <TwinBars data={barData} />
+                )}
+              </CardContent>
+            </Card>
 
-          {/* Donut */}
-          <Card className="col-span-12 lg:col-span-4">
-            <CardHeader className="mb-0 flex-row items-center justify-between">
-              <CardTitle>Estado de cartera</CardTitle>
-            </CardHeader>
-            <CardContent>
-              {serie === undefined ? (
-                <div className="mt-2 flex flex-col items-center gap-4">
-                  <Skeleton className="h-37.5 w-37.5 rounded-full" />
-                  <Skeleton className="h-20 w-full" />
-                </div>
-              ) : current ? (
-                <DonutChart
-                  size={150}
-                  thickness={18}
-                  centerValue={`${pctAlDia}%`}
-                  centerLabel="al día"
-                  data={[
-                    {
-                      label: "Al día",
-                      value: current.pagadas,
-                      color: CHART.brand,
-                    },
-                    {
-                      label: "Pendientes",
-                      value: current.pendientes + current.abonadas,
-                      color: CHART.pending,
-                    },
-                    {
-                      label: "Vencidas",
-                      value: current.vencidas,
-                      color: CHART.debt,
-                    },
-                  ]}
-                />
-              ) : (
-                <p className="py-16 text-center text-sm text-muted-foreground">
-                  Sin datos.
-                </p>
-              )}
-            </CardContent>
-          </Card>
+            <Card className="lg:col-span-3">
+              <CardHeader className="mb-0">
+                <CardTitle>Estado de cartera</CardTitle>
+                <CardDescription>
+                  {periodoLabelTxt ?? "Período actual"}
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {serie === undefined ? (
+                  <div className="mt-2 flex flex-col items-center gap-4">
+                    <Skeleton className="h-36 w-36 rounded-full" />
+                    <Skeleton className="h-16 w-full" />
+                  </div>
+                ) : current ? (
+                  <DonutChart
+                    size={140}
+                    thickness={16}
+                    centerValue={`${pctAlDia}%`}
+                    centerLabel="al día"
+                    data={[
+                      {
+                        label: "Al día",
+                        value: current.pagadas,
+                        color: CHART.primary,
+                      },
+                      {
+                        label: "Pendientes",
+                        value: current.pendientes + current.abonadas,
+                        color: CHART.slate,
+                      },
+                      {
+                        label: "Vencidas",
+                        value: current.vencidas,
+                        color: CHART.danger,
+                      },
+                    ]}
+                  />
+                ) : (
+                  <p className="py-16 text-center text-sm text-muted-foreground">
+                    Sin datos.
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+          </div>
 
-          {/* Tabla pagos */}
-          <Card className="col-span-12 lg:col-span-8">
+          {/* Una sola lista de acción */}
+          <Card>
             <CardHeader className="mb-3 flex-row items-center justify-between gap-3">
               <div>
                 <CardTitle>Pagos recientes</CardTitle>
@@ -350,7 +437,7 @@ export default function CondominioHome() {
                     : "…"}
                 </CardDescription>
               </div>
-              <Button variant="secondary" size="sm" asChild>
+              <Button variant="ghost" size="sm" asChild>
                 <Link href={`${base}/finanzas`}>Ver todos</Link>
               </Button>
             </CardHeader>
@@ -364,8 +451,8 @@ export default function CondominioHome() {
               ) : (
                 <div className="overflow-hidden">
                   <table className="w-full table-fixed border-collapse text-[12px]">
-                    <thead className="bg-brand/[0.07]">
-                      <tr>
+                    <thead>
+                      <tr className="border-b border-border/70">
                         <th className="w-[28%] px-2 py-2.5 text-left text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
                           Factura
                         </th>
@@ -384,9 +471,9 @@ export default function CondominioHome() {
                       {pagosRecientes.map((f, i) => (
                         <tr
                           key={f._id}
-                          className="border-b border-border/60 last:border-b-0 even:bg-brand/[0.035]"
+                          className="border-b border-border/50 last:border-b-0"
                         >
-                          <td className="max-w-0 px-2 py-2.5 align-middle">
+                          <td className="max-w-0 px-2 py-3 align-middle">
                             <p
                               className="truncate font-medium text-foreground"
                               title={f.numeroFactura}
@@ -397,7 +484,7 @@ export default function CondominioHome() {
                               {f.apto ? `Apto ${f.apto}` : f.numeroInterno}
                             </p>
                           </td>
-                          <td className="max-w-0 px-2 py-2.5 align-middle">
+                          <td className="max-w-0 px-2 py-3 align-middle">
                             <div className="flex min-w-0 items-center gap-2">
                               <div
                                 className={`grid h-6 w-6 shrink-0 place-items-center rounded-full text-[9px] font-semibold text-white ${AVATAR_COLORS[i % AVATAR_COLORS.length]}`}
@@ -412,10 +499,10 @@ export default function CondominioHome() {
                               </p>
                             </div>
                           </td>
-                          <td className="whitespace-nowrap px-2 py-2.5 text-right font-medium tabular-nums text-foreground">
+                          <td className="whitespace-nowrap px-2 py-3 text-right font-medium tabular-nums text-foreground">
                             {cop(f.totalAPagar)}
                           </td>
-                          <td className="px-2 py-2.5 align-middle">
+                          <td className="px-2 py-3 align-middle">
                             <Badge
                               tone={ESTADO_TONE[f.estado] ?? "neutral"}
                               className="max-w-full truncate text-[10px]"
@@ -431,87 +518,24 @@ export default function CondominioHome() {
               )}
             </CardContent>
           </Card>
-
-          {/* Actividad */}
-          <Card className="col-span-12 lg:col-span-4">
-            <CardHeader className="mb-3">
-              <CardTitle>Actividad reciente</CardTitle>
-            </CardHeader>
-            <CardContent>
-              {actividad.length === 0 ? (
-                <p className="py-8 text-center text-sm text-muted-foreground">
-                  Sin actividad reciente.
-                </p>
-              ) : (
-                <ul className="flex flex-col gap-3.5">
-                  {actividad.map((a, i) => (
-                    <li key={i} className="flex gap-2.5">
-                      <span
-                        className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${a.color}`}
-                      />
-                      <div>
-                        <p className="text-[12.5px] leading-4.25 text-foreground">
-                          {a.text}
-                        </p>
-                        <p className="mt-0.5 text-[11px] text-muted-foreground">
-                          <RelativeTime ts={a.ts} />
-                        </p>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </CardContent>
-          </Card>
         </div>
       </PageContainer>
     </div>
   );
 }
 
-function formatFechaCorta(ts: number) {
-  return new Intl.DateTimeFormat("es-CO", {
-    day: "numeric",
-    month: "short",
-    hour: "numeric",
-    minute: "2-digit",
-    timeZone: "America/Bogota",
-  }).format(new Date(ts));
-}
-
-function formatRelativo(ts: number, now: number) {
-  const mins = Math.round((now - ts) / 60_000);
-  if (mins < 1) return "Ahora";
-  if (mins < 60) return `Hace ${mins} min`;
-  const h = Math.round(mins / 60);
-  if (h < 24) return `Hace ${h} h`;
-  const d = Math.round(h / 24);
-  return `Hace ${d} d`;
-}
-
-function RelativeTime({ ts }: { ts: number }) {
-  const [label, setLabel] = useState(() => formatFechaCorta(ts));
-  useEffect(() => {
-    setLabel(formatRelativo(ts, Date.now()));
-  }, [ts]);
-  return <span suppressHydrationWarning>{label}</span>;
-}
-
 function DashboardSkeleton() {
   return (
     <div className="flex flex-col">
-      <div className="flex h-18 items-center border-b border-border px-7">
-        <Skeleton className="h-8 w-64" />
-      </div>
       <PageContainer>
-        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <Skeleton key={i} className="h-19 rounded-[14px]" />
-          ))}
-        </div>
-        <div className="mt-4 grid gap-4 lg:grid-cols-3">
-          <Skeleton className="h-80 rounded-[14px] lg:col-span-2" />
-          <Skeleton className="h-80 rounded-[14px]" />
+        <div className="flex flex-col gap-6">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <Skeleton key={i} className="h-19 rounded-[14px]" />
+            ))}
+          </div>
+          <Skeleton className="h-72 w-full rounded-[14px]" />
+          <Skeleton className="h-64 w-full rounded-[14px]" />
         </div>
       </PageContainer>
     </div>

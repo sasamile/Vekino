@@ -1,5 +1,7 @@
 import { v } from "convex/values";
 import { query, mutation, internalMutation } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
+import type { QueryCtx, MutationCtx } from "./_generated/server";
 import {
   getCurrentAppUser,
   getMembership,
@@ -10,6 +12,52 @@ import {
 } from "./model/authz";
 import { subscriptionPlanValidator } from "./model/roles";
 import { displayNameFromUser } from "./model/displayName";
+import { resolveUserImage } from "./model/userImage";
+
+/** Admins operativos únicos de un condominio (sin duplicados por userId). */
+async function listCondoAdmins(
+  ctx: QueryCtx | MutationCtx,
+  condominioId: Id<"condominios">,
+) {
+  const memberships = await ctx.db
+    .query("memberships")
+    .withIndex("by_condominio", (q) => q.eq("condominioId", condominioId))
+    .collect();
+
+  const active = memberships.filter((m) => m.isActive);
+  const seen = new Set<string>();
+  const admins: Array<{
+    _id: Id<"users">;
+    membershipId: Id<"memberships">;
+    name: string;
+    email: string;
+    image: string | null;
+    telefono: string | null;
+    roles: string[];
+  }> = [];
+
+  for (const m of active) {
+    if (!m.roles.includes("administrador")) continue;
+    if (seen.has(m.userId)) continue;
+    seen.add(m.userId);
+
+    const u = await ctx.db.get(m.userId);
+    if (!u || !u.active) continue;
+
+    admins.push({
+      _id: u._id,
+      membershipId: m._id,
+      name: u.name,
+      email: u.email,
+      image: await resolveUserImage(ctx, u),
+      telefono: u.telefono ?? null,
+      roles: m.roles,
+    });
+  }
+
+  admins.sort((a, b) => a.name.localeCompare(b.name, "es"));
+  return { admins, activeCount: active.length };
+}
 
 /**
  * Condominios visibles para el usuario actual:
@@ -55,7 +103,7 @@ export const adminHome = query({
 
     const isPlatform = hasPlatformRole(user, "superadmin", "admin");
     const membership = await getMembership(ctx, user._id, args.condominioId);
-    const ADMIN_ROLES = ["administrador", "junta_directiva", "contadora"];
+    const ADMIN_ROLES = ["administrador", "contadora"];
     const canAdmin =
       isPlatform ||
       (!!membership &&
@@ -80,6 +128,7 @@ export const adminHome = query({
         city: condominio.city ?? null,
         nit: condominio.nit ?? null,
         logo: condominio.logo ?? null,
+        coverImage: condominio.coverImage ?? null,
         primaryColor: condominio.primaryColor ?? null,
         subscriptionPlan: condominio.subscriptionPlan ?? null,
         isActive: condominio.isActive,
@@ -96,7 +145,21 @@ export const listAll = query({
   handler: async (ctx, args) => {
     await requirePlatformStaff(ctx);
     const all = await ctx.db.query("condominios").order("desc").collect();
-    return args.onlyActive ? all.filter((c) => c.isActive) : all;
+    const filtered = args.onlyActive ? all.filter((c) => c.isActive) : all;
+
+    return await Promise.all(
+      filtered.map(async (c) => {
+        const { admins, activeCount } = await listCondoAdmins(ctx, c._id);
+        return {
+          ...c,
+          memberCount: activeCount,
+          adminCount: admins.length,
+          admins: admins.map(
+            ({ membershipId: _m, telefono: _t, roles: _r, ...a }) => a,
+          ),
+        };
+      }),
+    );
   },
 });
 
@@ -116,12 +179,6 @@ export const detail = query({
     const condominio = await ctx.db.get(args.condominioId);
     if (!condominio) return null;
 
-    const memberships = await ctx.db
-      .query("memberships")
-      .withIndex("by_condominio", (q) =>
-        q.eq("condominioId", args.condominioId),
-      )
-      .collect();
     const unidades = await ctx.db
       .query("unidades")
       .withIndex("by_condominio", (q) =>
@@ -130,12 +187,17 @@ export const detail = query({
       .collect();
 
     const occupiedCount = unidades.filter((u) => u.estado === "ocupada").length;
+    const { admins, activeCount } = await listCondoAdmins(
+      ctx,
+      args.condominioId,
+    );
 
     return {
       condominio,
-      memberCount: memberships.length,
+      memberCount: activeCount,
       unidadCount: unidades.length,
       occupiedCount,
+      admins,
     };
   },
 });
@@ -177,7 +239,10 @@ export const update = mutation({
       nit: v.optional(v.string()),
       address: v.optional(v.string()),
       city: v.optional(v.string()),
+      /** String vacía = quitar logo. */
       logo: v.optional(v.string()),
+      /** String vacía = quitar foto destacada. */
+      coverImage: v.optional(v.string()),
       primaryColor: v.optional(v.string()),
       subscriptionPlan: v.optional(subscriptionPlanValidator),
       unitLimit: v.optional(v.number()),
@@ -187,10 +252,44 @@ export const update = mutation({
   },
   handler: async (ctx, args) => {
     await requirePlatformStaff(ctx);
-    await ctx.db.patch(args.condominioId, {
-      ...args.patch,
+    const condo = await ctx.db.get(args.condominioId);
+    if (!condo) throw new Error("Condominio no encontrado.");
+
+    const p = args.patch;
+    const next = {
+      ...condo,
+      ...(p.name !== undefined ? { name: p.name.trim() } : {}),
+      ...(p.subdomain !== undefined
+        ? { subdomain: p.subdomain.trim() || undefined }
+        : {}),
+      ...(p.nit !== undefined ? { nit: p.nit.trim() || undefined } : {}),
+      ...(p.address !== undefined
+        ? { address: p.address.trim() || undefined }
+        : {}),
+      ...(p.city !== undefined ? { city: p.city.trim() || undefined } : {}),
+      ...(p.logo !== undefined ? { logo: p.logo.trim() || undefined } : {}),
+      ...(p.coverImage !== undefined
+        ? { coverImage: p.coverImage.trim() || undefined }
+        : {}),
+      ...(p.primaryColor !== undefined
+        ? { primaryColor: p.primaryColor.trim() || undefined }
+        : {}),
+      ...(p.subscriptionPlan !== undefined
+        ? { subscriptionPlan: p.subscriptionPlan }
+        : {}),
+      ...(p.unitLimit !== undefined ? { unitLimit: p.unitLimit } : {}),
+      ...(p.activeModules !== undefined
+        ? { activeModules: p.activeModules }
+        : {}),
+      ...(p.avalPortalUrl !== undefined
+        ? { avalPortalUrl: p.avalPortalUrl.trim() || undefined }
+        : {}),
       updatedAt: Date.now(),
-    });
+    };
+
+    // replace para poder limpiar campos opcionales (logo, city, etc.)
+    const { _id, _creationTime, ...body } = next;
+    await ctx.db.replace(args.condominioId, body);
   },
 });
 

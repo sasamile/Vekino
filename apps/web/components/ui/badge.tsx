@@ -15,10 +15,10 @@ const tones: Record<Tone, string> = {
   neutral: "bg-muted text-muted-foreground",
   primary: "bg-primary/10 text-primary dark:bg-primary/20",
   brand: "bg-brand/10 text-brand",
-  success: "bg-brand/10 text-brand",
-  warning: "bg-[#B1D459]/15 text-[#6b8a28] dark:text-[#c9e07a]",
+  success: "bg-emerald-500/12 text-emerald-700 dark:text-emerald-400",
+  warning: "bg-amber-500/12 text-amber-700 dark:text-amber-400",
   destructive: "bg-red-500/10 text-red-600 dark:text-red-400",
-  info: "bg-brand/10 text-brand",
+  info: "bg-sky-500/12 text-sky-700 dark:text-sky-400",
   violet: "bg-muted text-muted-foreground",
 };
 
