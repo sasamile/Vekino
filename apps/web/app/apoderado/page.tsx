@@ -138,7 +138,6 @@ function Sala({
           <p className="text-xs capitalize text-muted-foreground">
             Asamblea {data.asamblea.tipo} · {data.asamblea.fecha} · {data.asamblea.hora}
             {data.asamblea.estado === "en_curso" && <span className="ml-2 inline-flex items-center gap-1 font-medium normal-case text-emerald-600"><Radio className="h-3 w-3 animate-pulse" /> En vivo</span>}
-            {data.asamblea.estado === "finalizada" && <span className="ml-2 rounded-md bg-muted px-1.5 py-0.5 font-medium normal-case text-muted-foreground">Finalizada</span>}
           </p>
         </div>
         <div className="mt-3">

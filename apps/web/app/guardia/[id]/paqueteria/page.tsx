@@ -20,7 +20,10 @@ import { PageHeader } from "@/components/layout/page-header";
 import { cn } from "@/lib/utils";
 import { useUploadToS3 } from "@/hooks/use-upload-s3";
 
-type Paq = Doc<"paquetes"> & { fotoUrl: string | null; fotoEntregaUrl: string | null };
+type Paq = Omit<Doc<"paquetes">, "fotoUrl" | "fotoEntregaUrl"> & {
+  fotoUrl: string | null;
+  fotoEntregaUrl: string | null;
+};
 type TipoPaq = Doc<"paquetes">["tipo"];
 
 const TIPO_LABEL: Record<TipoPaq, string> = {

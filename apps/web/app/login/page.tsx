@@ -13,17 +13,15 @@ const APPLE_WEB_ENABLED = process.env.NEXT_PUBLIC_APPLE_WEB_LOGIN === "1";
 
 export default function Home() {
   return (
-    <div
-      className="relative min-h-screen w-full overflow-hidden bg-flame-tint p-0 sm:p-6 lg:p-10"
-    >
-      {/* PatternCraft-style: grid suave con acento de marca */}
+    <div className="relative min-h-screen w-full overflow-hidden bg-[#f7f5f3] p-0 sm:p-6 lg:p-10">
+      {/* PatternCraft-style: grid muy suave */}
       <div
         aria-hidden
         className="pointer-events-none absolute inset-0"
         style={{
           backgroundImage: `
-            linear-gradient(to right, rgba(246, 86, 11, 0.07) 1px, transparent 1px),
-            linear-gradient(to bottom, rgba(246, 86, 11, 0.07) 1px, transparent 1px)
+            linear-gradient(to right, rgba(4, 32, 70, 0.045) 1px, transparent 1px),
+            linear-gradient(to bottom, rgba(4, 32, 70, 0.045) 1px, transparent 1px)
           `,
           backgroundSize: "28px 28px",
           maskImage:
@@ -51,7 +49,7 @@ export default function Home() {
   );
 }
 
-/** Panel izquierdo: preview + degradado naranja transparente → sólido. */
+/** Panel izquierdo: preview + velo cálido suave (sin naranja sólido). */
 function Showcase() {
   return (
     <div className="relative hidden w-1/2 overflow-hidden bg-[#e8eef5] lg:block">
@@ -65,14 +63,14 @@ function Showcase() {
         aria-hidden
       />
 
-      {/* Degradado naranja: transparente arriba → marca abajo */}
+      {/* Toque cálido ligero + oscurecido abajo para el copy */}
       <div
         aria-hidden
-        className="pointer-events-none absolute inset-0 bg-linear-to-b from-transparent via-[#f6560b]/15 to-[#f6560b]/90"
+        className="pointer-events-none absolute inset-0 bg-linear-to-b from-transparent via-[#f6560b]/08 to-[#042046]/55"
       />
       <div
         aria-hidden
-        className="pointer-events-none absolute inset-x-0 bottom-0 h-[42%] bg-linear-to-t from-[#c2410c]/85 via-[#f6560b]/45 to-transparent"
+        className="pointer-events-none absolute inset-x-0 bottom-0 h-[48%] bg-linear-to-t from-[#042046]/80 via-[#042046]/35 to-transparent"
       />
 
       <div className="relative flex h-full flex-col justify-between p-10 xl:p-12">
@@ -91,7 +89,7 @@ function Showcase() {
             <br />
             conjunto, en un solo lugar.
           </h1>
-          <p className="max-w-md text-sm leading-relaxed text-white/90 xl:text-base">
+          <p className="max-w-md text-sm leading-relaxed text-white/85 xl:text-base">
             Cuentas de cobro, reservas, visitantes, asambleas y comunicación con
             tus residentes.
           </p>
@@ -346,7 +344,7 @@ function SubmitButton({
     <button
       type="submit"
       disabled={loading}
-      className="h-14 w-full rounded-full bg-flame text-sm font-semibold text-white shadow-[0_4px_14px_rgba(246,86,11,0.35)] transition-colors hover:bg-[#e04d06] disabled:opacity-60"
+      className="h-14 w-full rounded-full bg-flame text-sm font-semibold text-white shadow-[0_4px_12px_rgba(246,86,11,0.22)] transition-colors hover:bg-[#e04d06] disabled:opacity-60"
     >
       {loading ? "…" : children}
     </button>
