@@ -50,6 +50,7 @@ export function shouldSkipIntro() {
   return typeof document !== "undefined" && document.hidden;
 }
 
+
 /**
  * ScrollTrigger mide alturas al crear los triggers. Si las fuentes web cargan
  * después, todo queda desfasado. Llamar una vez desde el layout de la landing.

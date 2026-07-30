@@ -206,15 +206,11 @@ body {
 
 /* ── Láminas de la landing ────────────────────────────────────────────────
  * Cada sección (menos el hero) se monta sobre la anterior con esquinas
- * redondeadas y sombra en el filo. Va en CSS y no en GSAP a propósito: la
- * separación visual entre secciones no debe depender de que las animaciones
- * lleguen a ejecutarse (pestaña en segundo plano, movimiento reducido, JS
- * caído). GSAP solo añade encima la animación de salida. */
+ * redondeadas. Sin sombra pesada en el filo: se leía como una franja negra. */
 .landing-main .section-slot > section {
   position: relative;
   border-top-left-radius: 44px;
   border-top-right-radius: 44px;
-  box-shadow: 0 -30px 60px -30px rgba(4, 32, 70, 0.4);
 }
 
 /* Cada sección ocupa al menos una pantalla y centra su contenido. Así el

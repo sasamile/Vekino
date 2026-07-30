@@ -10,10 +10,10 @@ import {
 
 /* ── Transiciones entre secciones ────────────────────────────────────────
  * Cada sección entra como una lámina con esquinas redondeadas que se monta
- * sobre la anterior (solape de 56 px + z-index creciente + sombra en el
- * filo). Lo que VARÍA es cómo se despide la sección anterior: cuatro salidas
- * distintas que se rotan para que ningún cambio de sección se sienta igual
- * al anterior. Solo transform/opacity — todo compositor, nada de repintado. */
+ * sobre la anterior (z-index creciente). Lo que VARÍA es
+ * cómo se despide la sección anterior: tres salidas que se rotan para que
+ * ningún cambio de sección se sienta igual al anterior. Solo transform y
+ * opacity — todo compositor, nada de repintado. */
 type Salida = (el: HTMLElement) => gsap.TweenVars;
 
 /* Solo `y`, `scale` y `opacity`. Antes había una salida con `rotation` y otra
