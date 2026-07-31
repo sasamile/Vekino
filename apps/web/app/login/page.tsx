@@ -13,7 +13,7 @@ const APPLE_WEB_ENABLED = process.env.NEXT_PUBLIC_APPLE_WEB_LOGIN === "1";
 
 export default function Home() {
   return (
-    <div className="relative min-h-screen w-full overflow-hidden bg-[#f7f5f3] p-0 sm:p-6 lg:p-10">
+    <div className="force-light relative min-h-screen w-full overflow-hidden bg-[#f7f5f3] p-0 sm:p-6 lg:p-10">
       {/* PatternCraft-style: grid muy suave */}
       <div
         aria-hidden
@@ -30,9 +30,9 @@ export default function Home() {
             "radial-gradient(ellipse 80% 70% at 50% 40%, #000 35%, transparent 100%)",
         }}
       />
-      <div className="relative mx-auto flex min-h-screen w-full max-w-6xl overflow-hidden bg-card shadow-floating sm:min-h-[calc(100vh-3rem)] sm:rounded-[28px] sm:ring-1 sm:ring-border lg:min-h-[calc(100vh-5rem)]">
+      <div className="relative mx-auto flex min-h-screen w-full max-w-6xl overflow-hidden bg-card text-card-foreground shadow-floating sm:min-h-[calc(100vh-3rem)] sm:rounded-[28px] sm:ring-1 sm:ring-border lg:min-h-[calc(100vh-5rem)]">
         <Showcase />
-        <div className="flex w-full flex-col justify-center px-6 py-10 sm:px-10 lg:w-1/2 lg:px-16">
+        <div className="flex w-full flex-col justify-center bg-card px-6 py-10 sm:px-10 lg:w-1/2 lg:px-16">
           {/* Formulario desde el primer paint: sin skeleton ni pantalla vacía. */}
           <AuthLoading>
             <LoginPanel />
