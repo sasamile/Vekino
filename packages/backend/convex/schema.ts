@@ -568,6 +568,15 @@ export default defineSchema({
     descripcion: v.optional(v.string()),
     actaStorageId: v.optional(v.id("_storage")), // legacy
     actaUrl: v.optional(v.string()),
+    /**
+     * Semilla del código rotativo de asistencia (asambleas virtuales).
+     *
+     * SECRETA: solo se entrega al administrador, que es quien proyecta el
+     * código en la pantalla compartida. De ella se deriva un código distinto
+     * cada 60 s sin escribir en la base de datos. Ver
+     * `convex/lib/codigoAsistencia.ts`.
+     */
+    codigoAsistenciaSemilla: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),
   })

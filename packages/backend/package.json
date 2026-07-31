@@ -16,6 +16,10 @@
     "./dataModel": {
       "types": "./convex/_generated/dataModel.d.ts",
       "default": "./convex/_generated/dataModel.js"
+    },
+    "./codigoAsistencia": {
+      "types": "./convex/lib/codigoAsistencia.ts",
+      "default": "./convex/lib/codigoAsistencia.ts"
     }
   },
   "dependencies": {

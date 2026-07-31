@@ -9,6 +9,13 @@ import {
   getMembership,
 } from "./model/authz";
 import { resolveMediaUrl } from "./model/files";
+import {
+  codigoActual,
+  codigoEsValido,
+  msRestantes,
+  nuevaSemilla,
+  VENTANA_MS,
+} from "./lib/codigoAsistencia";
 
 const WRITE_ROLES = ["administrador", "junta_directiva", "representante_asamblea"] as const;
 
@@ -343,6 +350,145 @@ export const registrarAsistencia = mutation({
     if (asamblea.estado === "finalizada" || asamblea.estado === "cancelada") {
       throw new Error("La asamblea ya no está activa.");
     }
+    /* En asambleas virtuales la asistencia SIEMPRE exige el código que el
+     * administrador proyecta en la reunión. Sin esto, cualquiera marcaría
+     * asistencia desde su casa sin conectarse y el quórum quedaría inflado.
+     * Ver `registrarAsistenciaConCodigoAsamblea`. */
+    if (asamblea.modalidad === "virtual") {
+      throw new Error(
+        "Esta asamblea es virtual: escribe el código que muestra la administración en la reunión.",
+      );
+    }
+    const user = await requireAppUser(ctx);
+    const { filas, poderesRecibidos } = await filasAsistenciaPersona(ctx, {
+      asambleaId: args.asambleaId,
+      condominioId: asamblea.condominioId,
+      userId: user._id,
+      userNombre: user.name,
+    });
+    if (filas.length === 0) {
+      throw new Error(
+        "No tienes unidades para registrar. Si delegaste tu poder, el apoderado usa su código en sala.",
+      );
+    }
+    await validarPoderesAlRegistrar(ctx, poderesRecibidos);
+    const registradas = await insertarAsistencias(ctx, {
+      condominioId: asamblea.condominioId,
+      asambleaId: args.asambleaId,
+      filas,
+    });
+    return { registradas, unidades: filas.length };
+  },
+});
+
+/* ─── Código rotativo de asistencia (asambleas virtuales) ─────────────────
+ *
+ * Flujo:
+ *   1. El admin abre el modo presentación → `iniciarCodigoAsistencia` crea la
+ *      semilla (una sola vez por asamblea).
+ *   2. `semillaAsistencia` le entrega la semilla al admin. Con ella el panel
+ *      calcula el código de cada minuto EN EL NAVEGADOR, sin volver a pedir
+ *      nada: una consulta de Convex no se re-ejecuta sola cada segundo.
+ *   3. El residente escribe (o escanea) el código y llama a
+ *      `registrarAsistenciaConCodigoAsamblea`, que valida recalculando.
+ *
+ * La semilla NUNCA se le devuelve a un residente: si la tuviera, podría
+ * generar los códigos de todos los minutos siguientes sin estar en la
+ * reunión, que es justo lo que esto evita.
+ */
+
+/** Crea la semilla si aún no existe. Solo administración. */
+export const iniciarCodigoAsistencia = mutation({
+  args: { asambleaId: v.id("asambleas") },
+  handler: async (ctx, args) => {
+    const asamblea = await ctx.db.get(args.asambleaId);
+    if (!asamblea) throw new Error("Asamblea no encontrada.");
+    await requireCondominioRole(ctx, asamblea.condominioId, [...WRITE_ROLES]);
+
+    if (asamblea.codigoAsistenciaSemilla) {
+      return { semilla: asamblea.codigoAsistenciaSemilla, creada: false };
+    }
+    const semilla = nuevaSemilla();
+    await ctx.db.patch(args.asambleaId, {
+      codigoAsistenciaSemilla: semilla,
+      updatedAt: Date.now(),
+    });
+    return { semilla, creada: true };
+  },
+});
+
+/**
+ * Invalida todos los códigos anteriores generando una semilla nueva.
+ * Útil si el admin sospecha que alguien difundió el código fuera de la sala.
+ */
+export const rotarCodigoAsistencia = mutation({
+  args: { asambleaId: v.id("asambleas") },
+  handler: async (ctx, args) => {
+    const asamblea = await ctx.db.get(args.asambleaId);
+    if (!asamblea) throw new Error("Asamblea no encontrada.");
+    await requireCondominioRole(ctx, asamblea.condominioId, [...WRITE_ROLES]);
+
+    const semilla = nuevaSemilla();
+    await ctx.db.patch(args.asambleaId, {
+      codigoAsistenciaSemilla: semilla,
+      updatedAt: Date.now(),
+    });
+    return { semilla };
+  },
+});
+
+/**
+ * Semilla + código vigente, SOLO para administración.
+ *
+ * Devuelve también el código actual y cuánto le queda, para que el panel
+ * pueda pintar algo aunque todavía no haya arrancado su propio reloj.
+ */
+export const semillaAsistencia = query({
+  args: { asambleaId: v.id("asambleas") },
+  handler: async (ctx, args) => {
+    const asamblea = await ctx.db.get(args.asambleaId);
+    if (!asamblea) return null;
+    await requireCondominioRole(ctx, asamblea.condominioId, [...WRITE_ROLES]);
+
+    const semilla = asamblea.codigoAsistenciaSemilla;
+    if (!semilla) return { semilla: null, codigo: null, msRestantes: 0 };
+
+    const ahora = Date.now();
+    return {
+      semilla,
+      codigo: codigoActual(semilla, ahora),
+      msRestantes: msRestantes(ahora),
+      ventanaMs: VENTANA_MS,
+    };
+  },
+});
+
+/**
+ * El residente registra su asistencia con el código proyectado en la reunión.
+ *
+ * Hace exactamente lo mismo que `registrarAsistencia` una vez validado el
+ * código: registra sus unidades y las de los poderes que haya recibido.
+ */
+export const registrarAsistenciaConCodigoAsamblea = mutation({
+  args: { asambleaId: v.id("asambleas"), codigo: v.string() },
+  handler: async (ctx, args) => {
+    const asamblea = await ctx.db.get(args.asambleaId);
+    if (!asamblea) throw new Error("Asamblea no encontrada.");
+    if (asamblea.estado === "finalizada" || asamblea.estado === "cancelada") {
+      throw new Error("La asamblea ya no está activa.");
+    }
+    const semilla = asamblea.codigoAsistenciaSemilla;
+    if (!semilla) {
+      throw new Error(
+        "La administración todavía no ha abierto el registro de asistencia.",
+      );
+    }
+    if (!codigoEsValido(semilla, args.codigo, Date.now())) {
+      throw new Error(
+        "Código incorrecto o vencido. Mira el que aparece ahora en pantalla.",
+      );
+    }
+
     const user = await requireAppUser(ctx);
     const { filas, poderesRecibidos } = await filasAsistenciaPersona(ctx, {
       asambleaId: args.asambleaId,
@@ -1908,8 +2054,29 @@ export const votarConCodigo = mutation({
     ).filter((p) => p.validado && p.asambleaId === votacion.asambleaId);
     if (poderes.length === 0) throw new Error("Código inválido o poderes no validados.");
 
-    const now = Date.now();
+    /* Sin asistencia no se vota — también por esta vía.
+     *
+     * `validado` NO implica presencia: un poder creado por la administración
+     * nace validado (ver `otorgarPoder`), y al aceptarlo el otorgante también
+     * queda validado. Sin este filtro, un apoderado podía votar sin haberse
+     * registrado nunca en la asamblea. Solo votan las unidades que tengan
+     * asistencia registrada. */
+    const presentes: typeof poderes = [];
     for (const p of poderes) {
+      const asistencia = await ctx.db
+        .query("asambleaAsistentes")
+        .withIndex("by_asamblea_unidad", (q) =>
+          q.eq("asambleaId", votacion.asambleaId).eq("unidadId", p.unidadId),
+        )
+        .first();
+      if (asistencia) presentes.push(p);
+    }
+    if (presentes.length === 0) {
+      throw new Error("Registra tu asistencia antes de votar.");
+    }
+
+    const now = Date.now();
+    for (const p of presentes) {
       const ex = await ctx.db
         .query("votosAsamblea")
         .withIndex("by_votacion_unidad", (q) =>

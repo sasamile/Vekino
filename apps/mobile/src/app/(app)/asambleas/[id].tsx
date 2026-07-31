@@ -329,7 +329,9 @@ function Inner() {
       {tab === "detalle" && isAdmin ? <AdminDetalleVotosTab asambleaId={asambleaId} /> : null}
       {tab === "tabla" && isAdmin ? <AdminTablaTab asambleaId={asambleaId} /> : null}
       {tab === "reps" && isAdmin ? <AdminRepresentantesTab asambleaId={asambleaId} /> : null}
-      {tab === "asistencia" ? <AsistenciaTab asambleaId={asambleaId} mi={mi} /> : null}
+      {tab === "asistencia" ? (
+        <AsistenciaTab asambleaId={asambleaId} modalidad={a?.modalidad} mi={mi} />
+      ) : null}
       {tab === "resultados" ? <ResultadosTab asambleaId={asambleaId} mi={mi} /> : null}
     </Section>
   );

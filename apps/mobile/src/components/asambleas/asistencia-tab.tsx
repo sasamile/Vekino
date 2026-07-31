@@ -47,6 +47,15 @@ function friendlyError(e: unknown): string {
   if (/asamblea ya no está activa/i.test(msg)) {
     return "La asamblea ya no está activa.";
   }
+  if (/incorrecto o vencido/i.test(msg)) {
+    return "Código incorrecto o vencido. Mira el que aparece ahora en pantalla.";
+  }
+  if (/todavía no ha abierto el registro/i.test(msg)) {
+    return "La administración aún no ha abierto el registro de asistencia.";
+  }
+  if (/es virtual/i.test(msg)) {
+    return "Esta asamblea es virtual: usa el código que muestra la administración.";
+  }
   if (/código no encontrado|código inválido/i.test(msg)) {
     return "Código no válido para esta asamblea.";
   }
@@ -83,9 +92,12 @@ const ATTENDANCE_ROLES = [
 
 export function AsistenciaTab({
   asambleaId,
+  modalidad,
   mi,
 }: {
   asambleaId: Id<"asambleas">;
+  /** En "virtual" la asistencia SOLO se registra con el código de la reunión. */
+  modalidad?: string;
   mi: {
     presente: boolean;
     unidades: string[];
@@ -107,6 +119,12 @@ export function AsistenciaTab({
     canRegister ? { asambleaId } : "skip",
   );
   const registrarSelf = useMutation(api.asambleas.registrarAsistencia);
+  const registrarConCodigo = useMutation(
+    api.asambleas.registrarAsistenciaConCodigoAsamblea,
+  );
+  const esVirtual = modalidad === "virtual";
+  const [codigoAsamblea, setCodigoAsamblea] = useState("");
+  const [scanCodigoOpen, setScanCodigoOpen] = useState(false);
   const [busySelf, setBusySelf] = useState(false);
   const [modo, setModo] = useState<ModoAdmin | null>(null);
   const [scanOpen, setScanOpen] = useState(false);
@@ -136,6 +154,34 @@ export function AsistenciaTab({
   function notify(text: string, ok = true) {
     setMsg(text);
     setMsgOk(ok);
+  }
+
+  /**
+   * Registro con el código que la administración proyecta en la reunión.
+   *
+   * El QR lleva un enlace `.../asamblea/{id}?c=CODIGO`, así que aceptamos
+   * tanto el código suelto como el enlace completo: el usuario no tiene por
+   * qué saber la diferencia.
+   */
+  async function confirmarConCodigo(valor?: string) {
+    const bruto = (valor ?? codigoAsamblea).trim();
+    const deEnlace = bruto.match(/[?&]c=([A-Za-z0-9]+)/);
+    const codigo = (deEnlace?.[1] ?? bruto).toUpperCase();
+    if (codigo.length < 4) {
+      notify("Escribe el código que aparece en la pantalla.", false);
+      return;
+    }
+    setBusySelf(true);
+    setMsg(null);
+    try {
+      await registrarConCodigo({ asambleaId, codigo });
+      setCodigoAsamblea("");
+      notify("Asistencia registrada.");
+    } catch (e) {
+      notify(friendlyError(e), false);
+    } finally {
+      setBusySelf(false);
+    }
   }
 
   async function confirmarYo() {
@@ -227,38 +273,150 @@ export function AsistenciaTab({
               <Text style={{ color: C.text, fontFamily: AuthUI.font.semibold, fontSize: 15 }}>
                 Tu asistencia
               </Text>
-              <Tap onPress={confirmarYo} disabled={busySelf} style={{ alignSelf: "stretch" }}>
-                <View
-                  style={{
-                    height: 44,
-                    borderRadius: 11,
-                    backgroundColor: AuthUI.text,
-                    alignItems: "center",
-                    justifyContent: "center",
-                    opacity: busySelf ? 0.6 : 1,
-                  }}
-                >
-                  {busySelf ? (
-                    <ActivityIndicator color="#fff" />
-                  ) : (
-                    <Text style={{ color: "#fff", fontFamily: AuthUI.font.semibold, fontSize: 13 }}>
-                      Marcar mi asistencia
-                    </Text>
-                  )}
-                </View>
-              </Tap>
-              {qrPayload ? (
+
+              {esVirtual ? (
+                /* Asamblea virtual: el propietario se registra con el código
+                 * que la administración proyecta en la reunión. El botón
+                 * directo no existe aquí a propósito — si existiera, se
+                 * podría marcar asistencia sin haberse conectado. */
                 <>
-                  <Text style={{ color: C.textMuted, fontSize: 12, textAlign: "center", marginTop: 4 }}>
-                    Muestra este QR para que te registren
+                  <Text
+                    style={{
+                      color: C.textMuted,
+                      fontSize: 13,
+                      textAlign: "center",
+                      marginBottom: 2,
+                    }}
+                  >
+                    Escribe el código que aparece en la reunión, o escanea el QR.
+                    Cambia cada minuto.
                   </Text>
-                  <Image
-                    source={{ uri: qrUrl(qrPayload) }}
-                    style={{ width: 180, height: 180, borderRadius: 12, backgroundColor: "#fff" }}
-                    resizeMode="contain"
+
+                  <TextInput
+                    value={codigoAsamblea}
+                    onChangeText={(t) => setCodigoAsamblea(t.toUpperCase())}
+                    placeholder="A1B2C3"
+                    placeholderTextColor={C.textMuted}
+                    autoCapitalize="characters"
+                    autoCorrect={false}
+                    maxLength={6}
+                    onSubmitEditing={() => confirmarConCodigo()}
+                    returnKeyType="done"
+                    style={{
+                      alignSelf: "stretch",
+                      height: 52,
+                      borderRadius: 12,
+                      borderWidth: 1,
+                      borderColor: C.border,
+                      backgroundColor: C.card,
+                      color: C.text,
+                      textAlign: "center",
+                      fontSize: 24,
+                      letterSpacing: 6,
+                      fontFamily: AuthUI.font.semibold,
+                    }}
                   />
+
+                  <Tap
+                    onPress={() => confirmarConCodigo()}
+                    disabled={busySelf || codigoAsamblea.trim().length < 4}
+                    style={{ alignSelf: "stretch" }}
+                  >
+                    <View
+                      style={{
+                        height: 44,
+                        borderRadius: 11,
+                        backgroundColor: AuthUI.text,
+                        alignItems: "center",
+                        justifyContent: "center",
+                        opacity:
+                          busySelf || codigoAsamblea.trim().length < 4 ? 0.5 : 1,
+                      }}
+                    >
+                      {busySelf ? (
+                        <ActivityIndicator color="#fff" />
+                      ) : (
+                        <Text
+                          style={{
+                            color: "#fff",
+                            fontFamily: AuthUI.font.semibold,
+                            fontSize: 13,
+                          }}
+                        >
+                          Registrar mi asistencia
+                        </Text>
+                      )}
+                    </View>
+                  </Tap>
+
+                  <Tap
+                    onPress={() => {
+                      setMsg(null);
+                      setScanCodigoOpen(true);
+                    }}
+                    style={{ alignSelf: "stretch" }}
+                  >
+                    <View
+                      style={{
+                        height: 44,
+                        borderRadius: 11,
+                        borderWidth: 1,
+                        borderColor: C.border,
+                        flexDirection: "row",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        gap: 8,
+                      }}
+                    >
+                      <Ionicons name="qr-code-outline" size={18} color={C.text} />
+                      <Text
+                        style={{
+                          color: C.text,
+                          fontFamily: AuthUI.font.semibold,
+                          fontSize: 13,
+                        }}
+                      >
+                        Escanear QR de la reunión
+                      </Text>
+                    </View>
+                  </Tap>
                 </>
-              ) : null}
+              ) : (
+                <>
+                  <Tap onPress={confirmarYo} disabled={busySelf} style={{ alignSelf: "stretch" }}>
+                    <View
+                      style={{
+                        height: 44,
+                        borderRadius: 11,
+                        backgroundColor: AuthUI.text,
+                        alignItems: "center",
+                        justifyContent: "center",
+                        opacity: busySelf ? 0.6 : 1,
+                      }}
+                    >
+                      {busySelf ? (
+                        <ActivityIndicator color="#fff" />
+                      ) : (
+                        <Text style={{ color: "#fff", fontFamily: AuthUI.font.semibold, fontSize: 13 }}>
+                          Marcar mi asistencia
+                        </Text>
+                      )}
+                    </View>
+                  </Tap>
+                  {qrPayload ? (
+                    <>
+                      <Text style={{ color: C.textMuted, fontSize: 12, textAlign: "center", marginTop: 4 }}>
+                        Muestra este QR para que te registren
+                      </Text>
+                      <Image
+                        source={{ uri: qrUrl(qrPayload) }}
+                        style={{ width: 180, height: 180, borderRadius: 12, backgroundColor: "#fff" }}
+                        resizeMode="contain"
+                      />
+                    </>
+                  ) : null}
+                </>
+              )}
             </>
           )}
           {msg && !canRegister ? (
@@ -397,6 +555,17 @@ export function AsistenciaTab({
           ) : null}
         </View>
       </BottomSheet>
+
+      {/* Escáner del PROPIETARIO: lee el QR que la administración proyecta.
+          Es distinto del de abajo, que es el del admin leyendo a la gente. */}
+      <ScanCodigoReunionModal
+        visible={scanCodigoOpen}
+        onClose={() => setScanCodigoOpen(false)}
+        onCodigo={(codigo) => {
+          setScanCodigoOpen(false);
+          void confirmarConCodigo(codigo);
+        }}
+      />
 
       <ScanQrModal
         visible={scanOpen}
@@ -634,6 +803,112 @@ function BuscarForm({
         )
       ) : null}
     </View>
+  );
+}
+
+/**
+ * Escáner del propietario para asambleas virtuales.
+ *
+ * Solo extrae el código y lo devuelve; el registro lo hace quien lo usa. El
+ * QR de la reunión lleva un enlace `.../asamblea/{id}?c=CODIGO`, pero también
+ * aceptamos un código suelto por si se genera de otra forma.
+ */
+function ScanCodigoReunionModal({
+  visible,
+  onClose,
+  onCodigo,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  onCodigo: (codigo: string) => void;
+}) {
+  const [permission, requestPermission] = useCameraPermissions();
+  const [scanning, setScanning] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const lock = useRef(false);
+
+  useEffect(() => {
+    if (visible) {
+      lock.current = false;
+      setScanning(true);
+      setError(null);
+    }
+  }, [visible]);
+
+  const onScan = useCallback(
+    ({ data }: { data: string }) => {
+      if (!scanning || lock.current) return;
+      const bruto = (data ?? "").trim();
+      const deEnlace = bruto.match(/[?&]c=([A-Za-z0-9]+)/);
+      const codigo = (deEnlace?.[1] ?? bruto)
+        .toUpperCase()
+        .replace(/[^A-Z0-9]/g, "");
+      if (codigo.length < 4) {
+        setError("Ese QR no es el de la asamblea.");
+        return;
+      }
+      lock.current = true;
+      setScanning(false);
+      onCodigo(codigo);
+    },
+    [onCodigo, scanning],
+  );
+
+  return (
+    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
+      <View style={styles.modalRoot}>
+        <View style={styles.modalHeader}>
+          <Text style={{ color: "#fff", fontFamily: AuthUI.font.semibold, fontSize: 17 }}>
+            Escanear código
+          </Text>
+          <Pressable onPress={onClose} hitSlop={12}>
+            <Ionicons name="close" size={26} color="#fff" />
+          </Pressable>
+        </View>
+
+        {!permission?.granted ? (
+          <View style={{ flex: 1, alignItems: "center", justifyContent: "center", gap: 14, padding: 24 }}>
+            <Ionicons name="camera-outline" size={40} color="#fff" />
+            <Text style={{ color: "#fff", textAlign: "center", fontSize: 14 }}>
+              Necesitamos la cámara para leer el código de la reunión.
+            </Text>
+            <Tap onPress={() => void requestPermission()}>
+              <View
+                style={{
+                  paddingHorizontal: 20,
+                  height: 44,
+                  borderRadius: 11,
+                  backgroundColor: "#fff",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <Text style={{ color: "#000", fontFamily: AuthUI.font.semibold, fontSize: 13 }}>
+                  Permitir cámara
+                </Text>
+              </View>
+            </Tap>
+          </View>
+        ) : (
+          <View style={{ flex: 1 }}>
+            <CameraView
+              style={{ flex: 1 }}
+              facing="back"
+              barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
+              onBarcodeScanned={scanning ? onScan : undefined}
+            />
+            <View style={{ position: "absolute", bottom: 40, left: 0, right: 0, alignItems: "center", gap: 8 }}>
+              <Text style={{ color: "#fff", fontSize: 13, textAlign: "center" }}>
+                Apunta al QR que muestra la administración
+              </Text>
+              {error ? (
+                <Text style={{ color: "#ff8a80", fontSize: 13, textAlign: "center" }}>{error}</Text>
+              ) : null}
+            </View>
+          </View>
+        )}
+      </View>
+    </Modal>
   );
 }
 

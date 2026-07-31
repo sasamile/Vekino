@@ -24,6 +24,7 @@ import type * as guardia from "../guardia.js";
 import type * as historial from "../historial.js";
 import type * as http from "../http.js";
 import type * as lib_brevo from "../lib/brevo.js";
+import type * as lib_codigoAsistencia from "../lib/codigoAsistencia.js";
 import type * as memberships from "../memberships.js";
 import type * as migrations from "../migrations.js";
 import type * as model_authz from "../model/authz.js";
@@ -71,6 +72,7 @@ declare const fullApi: ApiFromModules<{
   historial: typeof historial;
   http: typeof http;
   "lib/brevo": typeof lib_brevo;
+  "lib/codigoAsistencia": typeof lib_codigoAsistencia;
   memberships: typeof memberships;
   migrations: typeof migrations;
   "model/authz": typeof model_authz;

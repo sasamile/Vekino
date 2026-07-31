@@ -35,7 +35,7 @@ export default function RootLayout({
     >
       <body suppressHydrationWarning>
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
-        <ThemeProvider>
+        <ThemeProvider defaultTheme="light">
           <ConvexClientProvider>{children}</ConvexClientProvider>
         </ThemeProvider>
       </body>

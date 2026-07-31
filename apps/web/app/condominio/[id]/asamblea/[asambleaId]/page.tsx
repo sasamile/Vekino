@@ -11,8 +11,9 @@ import {
   XCircle, Vote, ListOrdered, Scale, Save, Plus, Trash2, ChevronUp, ChevronDown,
   Lock, LayoutDashboard, Table2, TrendingUp, UserPlus,
   UserSquare, QrCode, Mail, Search, Download, Wifi, KeyRound, ClipboardList, X,
-  FileText, FileArchive,
+  FileText, FileArchive, MonitorPlay,
 } from "lucide-react";
+import { MostrarCodigoAsistencia } from "@/components/asamblea/mostrar-codigo-asistencia";
 import { PageContainer } from "@/components/layout/page-container";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -137,7 +138,13 @@ export default function AsambleaAdmin() {
       {tab === "resultados" && <ResultadosTab asambleaId={asambleaId} />}
       {tab === "poderes" && <PoderesTab asambleaId={asambleaId} />}
       {tab === "representantes" && <RepresentantesTab asambleaId={asambleaId} />}
-      {tab === "qr" && <RegistrarTab asambleaId={asambleaId} condominioId={condominioId} />}
+      {tab === "qr" && (
+        <RegistrarTab
+          asambleaId={asambleaId}
+          condominioId={condominioId}
+          modalidad={a.modalidad}
+        />
+      )}
     </PageContainer>
   );
 }
@@ -1116,13 +1123,25 @@ function RepresentantesTab({ asambleaId }: { asambleaId: Id<"asambleas"> }) {
 }
 
 /* ───────── Registrar asistencia (QR / código / búsqueda) ───────── */
-type ModoAsistencia = "qr" | "codigo" | "buscar";
+type ModoAsistencia = "mostrar" | "qr" | "codigo" | "buscar";
 
-function RegistrarTab({ asambleaId, condominioId }: { asambleaId: Id<"asambleas">; condominioId: Id<"condominios"> }) {
+function RegistrarTab({
+  asambleaId,
+  condominioId,
+  modalidad,
+}: {
+  asambleaId: Id<"asambleas">;
+  condominioId: Id<"condominios">;
+  modalidad: string;
+}) {
   const det = useQuery(api.asambleas.asistentesDetallado, { asambleaId });
   const quorum = useQuery(api.asambleas.quorum, { asambleaId });
   const quitar = useMutation(api.asambleas.quitarAsistencia);
-  const [modo, setModo] = useState<ModoAsistencia>("qr");
+  /* En virtual el flujo es al revés que en presencial: aquí el admin
+   * PROYECTA el código y el propietario se registra solo. */
+  const [modo, setModo] = useState<ModoAsistencia>(
+    modalidad === "virtual" ? "mostrar" : "qr",
+  );
   const [msg, setMsg] = useState<string | null>(null);
   const presentes = (det?.filas ?? []).filter((f) => f.presente);
 
@@ -1150,12 +1169,15 @@ function RegistrarTab({ asambleaId, condominioId }: { asambleaId: Id<"asambleas"
           <QrCode className="h-5 w-5 text-brand" /> Registrar asistencia
         </h2>
         <p className="mb-4 text-sm text-muted-foreground">
-          Escanea el QR del propietario, ingresa el código del apoderado o búscalo por nombre.
+          {modalidad === "virtual"
+            ? "Proyecta el código en la reunión: los propietarios lo escriben o escanean el QR para registrarse."
+            : "Escanea el QR del propietario, ingresa el código del apoderado o búscalo por nombre."}
         </p>
 
         <div className="mb-4 flex flex-wrap gap-2">
           {(
             [
+              { key: "mostrar" as const, label: "Mostrar código", icon: MonitorPlay },
               { key: "qr" as const, label: "Escanear QR", icon: QrCode },
               { key: "codigo" as const, label: "Código", icon: KeyRound },
               { key: "buscar" as const, label: "Buscar", icon: Search },
@@ -1181,6 +1203,9 @@ function RegistrarTab({ asambleaId, condominioId }: { asambleaId: Id<"asambleas"
           })}
         </div>
 
+        {modo === "mostrar" ? (
+          <MostrarCodigoAsistencia asambleaId={asambleaId} />
+        ) : null}
         {modo === "qr" ? (
           <WebQrScanner
             asambleaId={asambleaId}
