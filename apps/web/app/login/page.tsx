@@ -367,7 +367,7 @@ function SocialButton({
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className="flex h-14 flex-1 items-center justify-center gap-3 rounded-full border border-border text-sm font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-60"
+      className="flex h-14 w-full appearance-none items-center justify-center gap-3 rounded-full bg-white text-sm font-medium text-neutral-900 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.12)] outline-none transition-colors [-webkit-tap-highlight-color:transparent] hover:bg-neutral-50 disabled:opacity-60 sm:flex-1"
     >
       {icon}
       Continuar con {label}
