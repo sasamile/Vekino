@@ -24,6 +24,16 @@ const appleBundleId = process.env.APPLE_BUNDLE_ID?.trim() || "com.vekino.app";
 const appleServicesId = process.env.APPLE_SERVICES_ID?.trim() ?? "";
 const appleClientSecret = process.env.APPLE_CLIENT_SECRET?.trim() ?? "";
 
+/** Orígenes extra (coma-separados), p. ej. previews de Vercel. */
+function extraTrustedOrigins(): string[] {
+  const raw = process.env.AUTH_TRUSTED_ORIGINS?.trim() ?? "";
+  if (!raw) return [];
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 export const authComponent = createClient<DataModel>(components.betterAuth);
 
 export const createAuth = (ctx: GenericCtx<DataModel>) => {
@@ -35,6 +45,9 @@ export const createAuth = (ctx: GenericCtx<DataModel>) => {
     trustedOrigins: [
       siteUrl,
       convexSiteUrl,
+      // Previews / dominio de Vercel si SITE_URL apunta a otro host canónico.
+      "https://*.vercel.app",
+      ...extraTrustedOrigins(),
       `${appScheme}://`,
       `${appScheme}://*`,
       "exp://",

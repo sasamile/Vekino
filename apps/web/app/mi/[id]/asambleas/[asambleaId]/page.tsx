@@ -140,6 +140,9 @@ function VotarTab({
   const home = useQuery(api.portal.home, { condominioId });
   const otorgados = useQuery(api.asambleas.poderesOtorgados, { asambleaId });
   const registrar = useMutation(api.asambleas.registrarAsistencia);
+  const registrarConCodigo = useMutation(
+    api.asambleas.registrarAsistenciaConCodigoAsamblea,
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ordenOpen, setOrdenOpen] = useState(false);
@@ -155,6 +158,10 @@ function VotarTab({
   const delegoTodo = misUnidades.length > 0 && propiasVotables === 0;
   const nombreApoderado = (otorgados ?? [])[0]?.representanteNombre;
   const esPresencial = a.modalidad === "presencial";
+  /* En virtual la asistencia SOLO se registra con el código que la
+   * administración proyecta en la reunión. Sin eso, cualquiera confirmaría
+   * asistencia desde su casa sin conectarse y el quórum quedaría inflado. */
+  const esVirtual = a.modalidad === "virtual";
   const abiertas = (votaciones ?? []).filter((v) => v.estado === "abierta");
   const puntos = a.ordenDia ?? a.agenda.map((t) => ({ titulo: t, descripcion: undefined, votacionId: undefined, hecho: undefined as boolean | undefined }));
   const hechos = puntos.filter((p) => p.hecho).length;
@@ -168,6 +175,19 @@ function VotarTab({
     finally { setBusy(false); }
   }
 
+  /** Registro con el código de la reunión (asambleas virtuales). */
+  async function asistirConCodigo(valor: string) {
+    const limpio = valor.trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+    if (limpio.length < 4) {
+      setError("Escribe el código que aparece en la reunión.");
+      return;
+    }
+    setBusy(true); setError(null);
+    try { await registrarConCodigo({ asambleaId, codigo: limpio }); }
+    catch (e) { setError(e instanceof Error ? e.message : "No se pudo registrar."); }
+    finally { setBusy(false); }
+  }
+
   return (
     <div className="space-y-5">
       {presente ? (
@@ -176,6 +196,12 @@ function VotarTab({
           {mi && mi.unidades.length > 0 && <p className="mt-0.5 text-xs text-muted-foreground">Tu(s) casa(s): {mi.unidades.join(", ")}</p>}
           {representa.length > 0 && <p className="mt-0.5 text-xs text-brand">También votas por poder por: {representa.join(", ")}</p>}
         </div>
+      ) : activa && esVirtual ? (
+        <CodigoAsistenciaCard
+          busy={busy}
+          error={error}
+          onSubmit={asistirConCodigo}
+        />
       ) : activa && !esPresencial ? (
         <Card className="border-brand/30 bg-brand/3 p-8 text-center">
           <div className="mx-auto mb-3 flex h-16 w-16 items-center justify-center rounded-full bg-brand/10 text-brand"><Users className="h-8 w-8" /></div>
@@ -645,5 +671,84 @@ function UserSearch({
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Registro de asistencia con el código de la reunión (asambleas virtuales).
+ *
+ * El código lo proyecta la administración y cambia cada minuto. Si el usuario
+ * llegó escaneando el QR, el código viene en la URL (`?c=XXXXXX`) y se
+ * precarga: no tiene que teclear nada.
+ */
+function CodigoAsistenciaCard({
+  busy,
+  error,
+  onSubmit,
+}: {
+  busy: boolean;
+  error: string | null;
+  onSubmit: (codigo: string) => void;
+}) {
+  const [codigo, setCodigo] = useState("");
+  const [autoEnviado, setAutoEnviado] = useState(false);
+
+  // Código traído por el QR: lo ponemos y lo enviamos una sola vez.
+  useEffect(() => {
+    if (autoEnviado) return;
+    const params = new URLSearchParams(window.location.search);
+    const delQr = params.get("c");
+    if (!delQr) return;
+    setAutoEnviado(true);
+    setCodigo(delQr.toUpperCase());
+    onSubmit(delQr);
+    // Limpiamos la URL para que al recargar no reintente un código ya vencido.
+    const limpia = window.location.pathname;
+    window.history.replaceState(null, "", limpia);
+  }, [autoEnviado, onSubmit]);
+
+  return (
+    <Card className="border-brand/30 bg-brand/3 p-8 text-center">
+      <div className="mx-auto mb-3 flex h-16 w-16 items-center justify-center rounded-full bg-brand/10 text-brand">
+        <KeyRound className="h-8 w-8" />
+      </div>
+      <p className="text-lg font-semibold text-foreground">
+        Escribe el código de la reunión
+      </p>
+      <p className="mx-auto mt-1 max-w-sm text-sm text-muted-foreground">
+        La administración lo muestra en pantalla. Cambia cada minuto.
+      </p>
+
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          onSubmit(codigo);
+        }}
+        className="mx-auto mt-5 w-full max-w-sm space-y-3"
+      >
+        <input
+          value={codigo}
+          onChange={(e) => setCodigo(e.target.value.toUpperCase())}
+          placeholder="A1B2C3"
+          maxLength={6}
+          autoCapitalize="characters"
+          autoCorrect="off"
+          spellCheck={false}
+          inputMode="text"
+          aria-label="Código de asistencia"
+          className="h-16 w-full rounded-xl border border-border bg-card text-center text-3xl font-bold tracking-[0.4em] text-foreground placeholder:text-muted-foreground/40 focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/25"
+        />
+        <button
+          type="submit"
+          disabled={busy || codigo.trim().length < 4}
+          className="flex h-14 w-full items-center justify-center gap-2 rounded-xl bg-brand text-base font-bold text-brand-foreground shadow-sm hover:bg-brand/90 disabled:opacity-60"
+        >
+          {busy ? <Loader2 className="h-5 w-5 animate-spin" /> : <Check className="h-5 w-5" />}
+          Registrar mi asistencia
+        </button>
+      </form>
+
+      {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+    </Card>
   );
 }
