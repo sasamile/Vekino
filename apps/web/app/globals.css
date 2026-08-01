@@ -160,10 +160,9 @@
   --shadow-soft: var(--shadow-soft-value);
   --shadow-floating: var(--shadow-floating-value);
 
-  /* ── Landing (marketing) ──────────────────────────────────────────────
-   * Paleta fija derivada del logo Vekino: naranja #f6560b + azul #042046.
-   * No sigue el tema claro/oscuro de la app: la landing es una pieza de
-   * marca con contraste controlado por sección. */
+  /* ── Marca heredada ───────────────────────────────────────────────────
+   * Paleta del logo Vekino: naranja #f6560b + azul #042046. La sigue usando
+   * la app (login, paneles). La landing tiene la suya, más abajo. */
   --color-ink: #042046;
   --color-ink-deep: #021229;
   --color-ink-soft: #0b3266;
@@ -173,6 +172,66 @@
   --color-sky: #1e5fbf;
   --color-mist: #f4f6fa;
   --color-slate-ink: #5a6b85;
+
+  /* ── Landing (marketing) ──────────────────────────────────────────────
+   * Sistema propio: blanco cálido, naranja de acento y tinta casi negra.
+   * NO sigue el tema claro/oscuro de la app: la landing es una pieza de
+   * marca con contraste fijo. Prefijo visual en clases: `lp-`.
+   *
+   * Regla de uso del naranja: botones primarios, métricas destacadas,
+   * estados activos, iconos puntuales, palabras clave de titulares y
+   * gráficas. Nunca como fondo de superficies grandes, salvo el plan
+   * destacado de precios. */
+  --color-brand-50: #fff7f2;
+  --color-brand-100: #ffebdd;
+  --color-brand-200: #ffd5bd;
+  --color-brand-300: #ffb68a;
+  --color-brand-400: #ff8c4a;
+  --color-brand-500: #ff5a0a;
+  --color-brand-600: #f04c00;
+  --color-brand-700: #c93c00;
+
+  --color-carbon: #151515;
+  --color-heading: #181818;
+  --color-body: #515151;
+  --color-subtle: #777772;
+  --color-placeholder: #a4a49f;
+
+  --color-canvas: #f8f8f6;
+  --color-surface: #ffffff;
+  --color-surface-soft: #fcfcfa;
+  --color-surface-warm: #fff8f3;
+
+  --color-line: #e8e8e3;
+  --color-line-soft: #eeeeea;
+  --color-line-strong: #d8d8d2;
+  --color-dash: #ddddd8;
+
+  --color-ok: #25ae63;
+  --color-ok-soft: #e9f8ef;
+  --color-warn: #ffb047;
+  --color-warn-soft: #fff4e3;
+  --color-bad: #d95656;
+  --color-bad-soft: #fdeeee;
+
+  /* Acentos decorativos: solo etiquetas flotantes y series secundarias. */
+  --color-violet: #9478f3;
+  --color-magenta: #e66be5;
+  --color-lime: #37b968;
+  --color-indigo: #6d78e8;
+
+  --color-night: #21150f;
+  --color-night-muted: #cfc4bd;
+
+  --radius-btn: 10px;
+  --radius-card: 14px;
+  --radius-panel: 20px;
+
+  --shadow-card: 0 8px 30px rgb(20 20 20 / 0.045);
+  --shadow-lift: 0 12px 36px rgb(20 20 20 / 0.08);
+  --shadow-brand: 0 8px 20px rgb(255 90 10 / 0.28);
+
+  --font-landing: var(--font-inter), "Manrope", Arial, sans-serif;
 }
 
 html,
@@ -230,71 +289,329 @@ body {
 .animate-scale-in { animation: scale-in 0.15s ease-out; }
 .animate-slide-up { animation: slide-up 0.2s ease-out; }
 
-/* ── Láminas de la landing ────────────────────────────────────────────────
- * Cada sección (menos el hero) se monta sobre la anterior con esquinas
- * redondeadas. Sin sombra pesada en el filo: se leía como una franja negra. */
-.landing-main .section-slot > section {
+/* ═══════════════════════════════════════════════════════════════════════
+ * LANDING · estructura visual
+ *
+ * El sitio está enmarcado por dos líneas verticales punteadas que corren de
+ * arriba abajo. Fuera de ellas, un rayado diagonal casi imperceptible. Entre
+ * secciones, líneas punteadas horizontales. Ese marco es la identidad del
+ * sistema: no se simplifica ni se elimina en responsive, solo se recorta el
+ * rayado cuando ya no hay margen exterior que rayar.
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+.landing-main {
+  --lp-container: 1200px;
+  font-family: var(--font-landing);
+  background-color: var(--color-canvas);
+  color: var(--color-body);
   position: relative;
-  border-top-left-radius: 44px;
-  border-top-right-radius: 44px;
+  isolation: isolate;
 }
 
-/* Cada sección ocupa al menos una pantalla y centra su contenido. Así el
- * reposo del scroll (ver section-parallax.tsx) siempre aterriza en una
- * composición completa, nunca a media sección. `100svh` —la altura MÁS
- * pequeña del viewport— garantiza que la sección nunca supere lo visible,
- * incluso con las barras del navegador móvil desplegadas. */
-.landing-main .section-slot > section {
-  min-height: 100svh;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-}
-
-/* Nota: aquí había `content-visibility: auto` por rendimiento, pero es
- * incompatible con el pare por sección: ScrollTrigger necesita la altura REAL
- * de cada sección para saber dónde fijarla, y `content-visibility` le entrega
- * la altura estimada de `contain-intrinsic-size`. El pin quedaba desfasado.
- * El rendimiento se sostiene con lo demás: sin `backdrop-filter` y con los
- * desenfoques recortados. */
-
-/* El hero queda FUERA de todo lo anterior: su composición (título, botones y
- * la captura inclinada) está calibrada a mano y el centrado a pantalla la
- * descuadra. Conserva su layout original. */
-.landing-main > section:first-child {
-  display: block;
-  min-height: 0;
-}
-
-/* El `body` hereda el tema de la app administrativa y en modo oscuro es casi
- * negro. Como las secciones se encogen al salir, ese negro asomaba por los
- * bordes. La landing tiene paleta propia y fija, así que mientras esté en
- * pantalla el fondo de página también lo es. */
-body:has(.landing-main) {
-  background-color: var(--color-mist);
-}
-
-/* SplitText con máscara recorta los descendentes (g, j, p, y). El padding
- * ensancha la caja de recorte y el margen negativo devuelve el interlineado. */
-.hero-line {
-  padding-bottom: 0.14em;
-  margin-bottom: -0.14em;
-}
-
-/* Marquee de testimonios: se detiene con movimiento reducido y al pasar el cursor. */
-@keyframes marquee-x {
-  from { transform: translateX(0); }
-  to { transform: translateX(-50%); }
-}
-.marquee-track {
-  animation: marquee-x 48s linear infinite;
-}
-.marquee-root:hover .marquee-track,
-.marquee-root:focus-within .marquee-track {
-  animation-play-state: paused;
+/* Desplazamiento suave al saltar a un ancla del menú. Solo cuando la landing
+ * está en pantalla: la app administrativa no lo quiere. */
+html:has(.landing-main) {
+  scroll-behavior: smooth;
 }
 @media (prefers-reduced-motion: reduce) {
-  .marquee-track { animation: none; }
+  html:has(.landing-main) {
+    scroll-behavior: auto;
+  }
+}
+
+/* Elevación al pasar el cursor, compartida por todas las tarjetas. */
+.lp-card-hover {
+  transition:
+    transform 200ms ease-out,
+    box-shadow 200ms ease-out,
+    border-color 200ms ease-out;
+}
+.lp-card-hover:hover {
+  transform: translateY(-3px);
+  box-shadow: var(--shadow-lift);
+}
+@media (prefers-reduced-motion: reduce) {
+  .lp-card-hover:hover {
+    transform: none;
+  }
+}
+
+/* El `body` hereda el tema de la app administrativa (y en oscuro es casi
+ * negro). La landing tiene paleta propia y fija: mientras esté en pantalla,
+ * el fondo del documento también lo es. */
+body:has(.landing-main) {
+  background-color: var(--color-canvas);
+  color-scheme: light;
+}
+
+/* Rieles punteados + rayado diagonal. Vive fijo detrás del contenido: así la
+ * línea no se corta entre secciones ni se repite por sección. */
+.lp-frame {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+
+/* Además de los rieles, esta capa PINTA la columna central. Es la única
+ * superficie con color: las secciones van transparentes encima. Si cada
+ * sección pintara su propio fondo a todo el ancho, taparía los rieles —que
+ * viven detrás— y el marco desaparecería. */
+.lp-frame__rails {
+  margin: 0 auto;
+  height: 100%;
+  max-width: var(--lp-container);
+  background-color: var(--color-surface-soft);
+  border-left: 1px dashed var(--color-dash);
+  border-right: 1px dashed var(--color-dash);
+}
+
+/* Rayado exterior: solo en los márgenes, nunca sobre el contenido. */
+.lp-frame__hatch {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: max(0px, calc((100% - var(--lp-container)) / 2));
+  background-image: repeating-linear-gradient(
+    -45deg,
+    rgb(20 20 20 / 0.018) 0px,
+    rgb(20 20 20 / 0.018) 1px,
+    transparent 1px,
+    transparent 7px
+  );
+}
+.lp-frame__hatch--left { left: 0; }
+.lp-frame__hatch--right { right: 0; }
+
+/* El contenido va por encima del marco (que vive en z-index 0).
+ *
+ * Se listan las etiquetas en vez de usar `.landing-main > *`: ese selector
+ * alcanzaba también a `.lp-frame` y le pisaba el `position: fixed` con
+ * `relative`, dejando los rieles con 0 px de alto (invisibles).
+ *
+ * El `header` queda FUERA a propósito: trae su propio `sticky z-40` de
+ * Tailwind, y este selector —más específico que una clase— se lo pisaba.
+ * Perdía el pegado y, ya en z-index 1 como el `main`, el panel del menú
+ * móvil quedaba por debajo del hero. */
+.landing-main > main,
+.landing-main > footer {
+  position: relative;
+  z-index: 1;
+}
+
+.lp-container {
+  margin: 0 auto;
+  width: 100%;
+  max-width: var(--lp-container);
+  padding-inline: 18px;
+}
+@media (min-width: 768px) {
+  .lp-container { padding-inline: 24px; }
+}
+@media (min-width: 1024px) {
+  .lp-container { padding-inline: 32px; }
+}
+
+/* Sección: solo el separador punteado. El fondo lo pone `.lp-frame__rails`.
+ * `scroll-margin-top` deja libre la altura de la barra fija: sin él, al
+ * saltar a un ancla el encabezado de la sección queda debajo del header. */
+.lp-section {
+  border-top: 1px dashed var(--color-dash);
+  padding-block: 56px;
+  scroll-margin-top: 84px;
+}
+@media (min-width: 768px) {
+  .lp-section { padding-block: 80px; }
+}
+@media (min-width: 1024px) {
+  .lp-section { padding-block: 104px; }
+}
+.lp-section:first-of-type { border-top: 0; }
+
+/* El lienzo central se pinta a lo ancho del riel, no del viewport. */
+.lp-canvas {
+  margin: 0 auto;
+  max-width: var(--lp-container);
+}
+
+/* Línea punteada suelta (dentro de una sección). */
+.lp-divider {
+  border: 0;
+  border-top: 1px dashed var(--color-dash);
+  margin: 0;
+}
+
+/* ── Entrada al viewport ────────────────────────────────────────────────
+ * Sin librería de animación: un IntersectionObserver marca `is-visible`
+ * (ver components/landing/ui/reveal.tsx). */
+.lp-reveal {
+  /* Casi todos los reveal son celdas de una retícula. Sin esto heredan
+   * `min-width: auto` y una tarjeta con contenido ancho (una tabla, una
+   * gráfica) se desborda de su columna y saca scroll horizontal en móvil. */
+  min-width: 0;
+  opacity: 0;
+  transform: translateY(20px);
+  transition:
+    opacity 620ms cubic-bezier(0.16, 1, 0.3, 1),
+    transform 620ms cubic-bezier(0.16, 1, 0.3, 1);
+  transition-delay: var(--lp-delay, 0ms);
+}
+.lp-reveal.is-visible {
+  opacity: 1;
+  transform: none;
+}
+
+/* Etiquetas flotantes del hero: flotación muy lenta y desfasada. */
+@keyframes lp-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-7px); }
+}
+.lp-float {
+  animation: lp-float 5.5s ease-in-out infinite;
+  animation-delay: var(--lp-delay, 0ms);
+}
+
+/* Acordeón: alto animado sin `max-height` a ojo.
+ *
+ * El truco es la retícula: la fila pasa de `0fr` a `1fr` y el navegador
+ * interpola el alto REAL del contenido. Con `max-height` habría que adivinar
+ * un tope y, si el texto crece, se corta. El hijo lleva `overflow: hidden`
+ * porque a `0fr` el contenido sigue midiendo lo suyo.
+ *
+ * Cerrado también lleva `inert` en el JSX: sin eso el contenido quedaría a
+ * cero de alto pero seguiría siendo enfocable y visible para un lector de
+ * pantalla. */
+.lp-collapse {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 280ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.lp-collapse[data-abierto="true"] {
+  grid-template-rows: 1fr;
+}
+.lp-collapse > * {
+  overflow: hidden;
+  opacity: 0;
+  transition: opacity 200ms ease-out;
+}
+.lp-collapse[data-abierto="true"] > * {
+  opacity: 1;
+  transition-delay: 60ms;
+}
+
+/* ── Documento legal ────────────────────────────────────────────────────
+ * Tipografía de lectura larga para `/legal/*`. Va por selector de
+ * descendencia y no por clases en cada etiqueta: así el texto se edita como
+ * HTML plano y sigue viéndose bien, que es la única forma de que alguien lo
+ * mantenga. */
+.legal-doc h2 {
+  margin-top: 40px;
+  font-size: 20px;
+  font-weight: 650;
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+  color: var(--color-heading);
+}
+.legal-doc h2:first-child {
+  margin-top: 0;
+}
+.legal-doc h3 {
+  margin-top: 26px;
+  font-size: 15.5px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--color-heading);
+}
+.legal-doc p,
+.legal-doc li {
+  font-size: 15px;
+  line-height: 1.65;
+  color: var(--color-body);
+}
+.legal-doc p {
+  margin-top: 14px;
+}
+.legal-doc ul,
+.legal-doc ol {
+  margin-top: 14px;
+  padding-left: 20px;
+  list-style: disc;
+}
+.legal-doc ol {
+  list-style: decimal;
+}
+.legal-doc li {
+  margin-top: 7px;
+  padding-left: 4px;
+}
+.legal-doc li::marker {
+  color: var(--color-brand-400);
+}
+.legal-doc a {
+  font-weight: 600;
+  color: var(--color-brand-600);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.legal-doc a:hover {
+  color: var(--color-brand-700);
+}
+.legal-doc strong {
+  font-weight: 600;
+  color: var(--color-heading);
+}
+/* Aviso destacado (revisión legal pendiente, datos de contacto, etc.) */
+.legal-doc .legal-nota {
+  margin-top: 24px;
+  border: 1px solid var(--color-brand-100);
+  border-radius: var(--radius-card);
+  background-color: var(--color-brand-50);
+  padding: 16px 18px;
+}
+.legal-doc .legal-nota p {
+  margin-top: 0;
+  font-size: 14px;
+}
+
+/* Subrayado animado de los enlaces del header. */
+.lp-navlink::after {
+  content: "";
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 5px;
+  height: 1.5px;
+  border-radius: 999px;
+  background-color: var(--color-brand-500);
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform 220ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.lp-navlink:hover::after,
+.lp-navlink:focus-visible::after {
+  transform: scaleX(1);
+}
+
+/* Carrusel de testimonios: scroll horizontal con imán, sin autoplay. */
+.lp-rail {
+  display: flex;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  scroll-behavior: smooth;
+  scrollbar-width: none;
+}
+.lp-rail::-webkit-scrollbar { display: none; }
+.lp-rail > * { scroll-snap-align: start; }
+
+@media (prefers-reduced-motion: reduce) {
+  .lp-reveal {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+  .lp-float,
+  .lp-grow { animation: none; }
+  .lp-rail { scroll-behavior: auto; }
 }
 
 @media (prefers-reduced-motion: reduce) {

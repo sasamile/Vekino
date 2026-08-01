@@ -1,83 +1,113 @@
 # Landing de Vekino (`/`)
 
-La landing vive en `app/page.tsx` (server component, dueño de los metadatos SEO).
-El login se movió a `/login`.
+La landing vive en `app/page.tsx` (server component, dueño de los metadatos
+SEO y del JSON-LD). El login está en `/login`.
+
+## Sistema visual
+
+SaaS claro y editorial: blanco cálido, naranja de acento y tinta casi negra.
+Los tokens están en `app/globals.css`, dentro de `@theme inline`, bajo el
+comentario «Landing (marketing)». **No** siguen el tema claro/oscuro de la
+app: la landing es una pieza de marca con contraste fijo.
+
+| Token | Uso |
+|---|---|
+| `brand-50…700` | Naranja. Solo acentos: botones primarios, métricas, estados activos, palabras clave de titulares y gráficas. Nunca superficies grandes, salvo el plan destacado. |
+| `heading` / `body` / `subtle` / `placeholder` | Escala de texto |
+| `canvas` / `surface` / `surface-soft` / `surface-warm` | Fondos |
+| `line` / `line-soft` / `line-strong` / `dash` | Bordes y punteados |
+| `ok` / `warn` / `bad` (+ `-soft`) | Estados |
+| `violet` / `magenta` / `lime` / `indigo` | Solo etiquetas flotantes decorativas |
+| `night` / `night-muted` | Barra CTA oscura del FAQ |
+
+Clases estructurales (`.lp-*`, también en `globals.css`):
+
+- `.lp-frame` — rieles verticales punteados + rayado diagonal de los
+  márgenes. Va `fixed` detrás del contenido y **pinta la columna central**.
+  Por eso las secciones van transparentes: si cada una pintara su fondo a
+  todo el ancho, taparía los rieles.
+- `.lp-container` — 1200 px máx., padding 18/24/32 px.
+- `.lp-section` — separador punteado superior + ritmo vertical + `scroll-margin`.
+- `.lp-reveal` — entrada al viewport (`ui/reveal.tsx`).
+- `.lp-collapse` — acordeón con alto animado vía `grid-template-rows`.
+- `.lp-card-hover` — elevación de 3 px al pasar el cursor.
+- `.lp-rail` — carrusel horizontal con imán.
+- `.lp-navlink` — subrayado animado del menú.
 
 ## Estructura
 
 | Orden | Componente | Ancla |
 |---|---|---|
-| 1 | `navbar.tsx` | — |
+| 1 | `header.tsx` | — |
 | 2 | `hero-section.tsx` | — |
-| 3 | `manifesto-section.tsx` | `#producto` |
-| 4 | `connected-experience.tsx` | `#soluciones` |
-| 5 | `features-section.tsx` | `#beneficios` |
-| 6 | `download-app-section.tsx` | `#aplicacion` |
-| 7 | `metrics-section.tsx` | — |
-| 8 | `testimonials-section.tsx` | — |
-| 9 | `ecosystem-section.tsx` | — |
-| 10 | `final-cta.tsx` | `#contacto` |
-| 11 | `footer.tsx` | — |
+| 3 | `logo-cloud.tsx` | — |
+| 4 | `stats-section.tsx` | — |
+| 5 | `features-grid.tsx` | `#funcionalidades` |
+| 6 | `feature-accordion.tsx` | `#modulos` |
+| 7 | `app-section.tsx` | `#aplicacion` |
+| 8 | `pricing-section.tsx` | `#planes` |
+| 9 | `testimonials-carousel.tsx` | — |
+| 10 | `faq-section.tsx` | `#preguntas` |
+| 11 | `cta-section.tsx` | — |
+| 12 | `contact-section.tsx` | `#contacto` |
+| 13 | `newsletter-section.tsx` | `#novedades` |
+| 14 | `footer.tsx` | — |
 
-## Cómo reemplazar los mockups por capturas reales
+`page-frame.tsx` monta el marco una sola vez para toda la página.
 
-Hoy las pantallas son **réplicas en DOM** con datos ficticios, en
-`ui/app-screens.tsx`. No hay ni una imagen de producto todavía.
+Piezas compartidas en `ui/`: `button`, `badge`, `charts`, `count-up`,
+`crosshair`, `dashboard-preview`, `cropped-phone`, `reveal`, `store-buttons`,
+`use-in-view`.
 
-1. Guarda las capturas en `public/landing/` (WebP o AVIF).
-   - Panel admin: 2560×1600
-   - App móvil: 1290×2796
-   - Vigilancia: 2560×1600
-2. En `ui/app-screens.tsx`, reemplaza el cuerpo del componente correspondiente
-   por un `<Image>` de `next/image` con `width`/`height` reales (evita layout
-   shift) y `priority` solo en el del hero.
-3. No toques `ui/mockups.tsx`: los marcos (`PhoneMockup`, `BrowserMockup`)
-   siguen sirviendo igual con imágenes dentro.
+## Imágenes vs. DOM
 
-Los datos ficticios están centralizados en la constante `DEMO` de
-`ui/mockups.tsx`. **Nunca pongas datos reales de residentes o conjuntos.**
+- **Hero y CTA**: el panel del hero es DOM (`ui/dashboard-preview.tsx`), no
+  una captura. Se lee nítido en cualquier pantalla y no envejece cuando
+  cambia el producto. El CTA sí usa `propietario-dashboard.png`.
+- **App móvil**: capturas reales de `public/landing/`. `ui/cropped-phone.tsx`
+  recorta el fondo del generador que viene pegado al PNG; si reemplazas una
+  captura hay que volver a medir los porcentajes de recorte.
 
-## Enlaces de App Store y Google Play
+## Animación
 
-Están en `ui/store-buttons.tsx`, en la constante `STORE_LINKS`. Hoy apuntan a
-`#app-store-placeholder` y `#play-store-placeholder`. Reemplaza ambos por las
-URLs oficiales cuando la app esté publicada.
+Sin librería. Un `IntersectionObserver` por pieza (`ui/use-in-view.ts`) y
+transiciones CSS.
 
-El QR de descarga de `download-app-section.tsx` es un patrón decorativo, **no
-un QR funcional**. Genera uno real que apunte al enlace de la tienda y ponlo
-como imagen.
+Tres reglas que hay que respetar al agregar algo:
 
-## Formulario de demostración
+1. **El contenido nunca puede quedarse invisible o en cero.** Si no hay
+   `IntersectionObserver`, si la pestaña está en segundo plano o si la
+   persona pidió menos movimiento, el estado final debe estar ya en el HTML.
+   Los contadores (`ui/count-up.tsx`) renderizan su valor real y la animación
+   los lleva de 0 hasta ahí, nunca al revés.
+2. **Lo que está sobre la línea de flotación usa `immediate`.** Un `Reveal`
+   que espera scroll deja un hueco en blanco al recargar la página.
+3. **Solo `transform`, `opacity`, `stroke-dasharray` y `grid-template-rows`.**
+   Son las propiedades baratas; animar `filter` o `box-shadow` en scroll
+   traba el hilo principal.
 
-`lib/demo-request.ts` es el único punto de integración. Hoy lanza
-`INTEGRACION_PENDIENTE` a propósito: el formulario muestra el estado de error
-porque todavía no hay backend conectado. El archivo trae el ejemplo de cómo
-conectarlo.
+Las líneas de las gráficas se dibujan con `pathLength="1"`, que normaliza el
+largo del trazo y evita medir el path en JavaScript.
 
-## Animaciones
+## Pendientes antes de publicar
 
-Todo con GSAP (`lib/gsap.ts` registra los plugins una sola vez). Duraciones y
-curvas compartidas en la constante `MOTION`; breakpoints en `MEDIA`.
-
-Tres cosas a tener en cuenta al editar:
-
-- **`shouldSkipIntro()`**: en una pestaña en segundo plano `requestAnimationFrame`
-  no corre y las timelines se congelan en el frame 0, dejando el contenido
-  invisible. Cada sección animada consulta este helper y muestra el estado
-  final. Si agregas una sección nueva, haz lo mismo.
-- **Valores finales en el HTML**: los contadores renderizan su valor real en el
-  markup y la animación los lleva de 0 hasta ahí. Nunca renderices `0` y
-  dependas de la animación para mostrar el dato.
-- **Plugins de pago**: `DrawSVG` y `MotionPath` NO están disponibles.
-  `SplitText` y `ScrollTrigger` sí (gratuitos desde GSAP 3.13). Para dibujar
-  trazos usamos `strokeDashoffset` a mano.
-
-## Recursos pendientes
-
-- [ ] Capturas reales del panel, la app y la vista de vigilancia
-- [ ] Video corto del flujo "registrar visitante" (sección 5), WebM + MP4
-- [ ] Imagen Open Graph 1200×630
-- [ ] QR real de descarga
-- [ ] Enlaces oficiales de las tiendas
-- [ ] Testimonios reales con autorización de uso (los actuales son ejemplos)
-- [ ] Páginas legales `/legal/privacidad` y `/legal/terminos`
+- [ ] **`logo-cloud.tsx`** — nombres y cifra de clientes son marcadores de
+      posición. Reemplazar por conjuntos que hayan autorizado el uso de su
+      nombre, o eliminar la sección. Publicar clientes inventados es una
+      afirmación falsa.
+- [ ] **`pricing-section.tsx`** — precios y topes de unidades son de ejemplo.
+      Un precio publicado es una oferta comercial: confirmarlos o quitar la
+      sección.
+- [ ] **`testimonials-carousel.tsx`** — testimonios de ejemplo. Reemplazar
+      cuando existan con autorización de uso.
+- [ ] `lib/demo-request.ts` y `lib/newsletter.ts` — hoy lanzan
+      `INTEGRACION_PENDIENTE` a propósito. Cada uno es el único punto de
+      integración: conectarlos es cambiar el cuerpo de una función.
+- [ ] `ui/store-buttons.tsx` — enlaces oficiales de App Store y Google Play.
+- [ ] Imagen Open Graph 1200×630.
+- [ ] **`app/legal/datos.ts`** — razón social, NIT, domicilio y teléfono. Hoy
+      salen como `«…»` a propósito: un NIT inventado en una política de datos
+      es un problema legal, no una errata.
+- [ ] **`app/legal/privacidad` y `app/legal/terminos`** — borradores sobre la
+      Ley 1581 de 2012 y la Ley 675 de 2001. No son asesoría legal: falta
+      revisión jurídica y cuadrar los plazos con el contrato real.

@@ -86,6 +86,29 @@ export const createAuth = (ctx: GenericCtx<DataModel>) => {
         trustedProviders: ["google", "apple"],
         requireLocalEmailVerified: false,
       },
+
+      /* OAuth entre dominios distintos (arreglo de `state_mismatch`).
+       *
+       * El auth HTTP vive en …convex.site y la app en localhost / Vercel, así
+       * que el POST que inicia el flujo social es cross-site. Better Auth
+       * guarda el `state` en DOS sitios —la tabla `verification` y una cookie
+       * firmada— y al volver de Google compara ambos. Esa cookie se emite en
+       * un contexto de tercero: los navegadores que bloquean cookies de
+       * terceros (Edge y Chrome por defecto hoy) no la guardan, y al volver
+       * el chequeo falla con `state_security_mismatch`, que se le muestra al
+       * usuario como `state_mismatch`.
+       *
+       * `skipStateCookieCheck` desactiva SOLO esa segunda comprobación. El
+       * `state` se sigue verificando contra la base: es un nonce de un solo
+       * uso con 10 minutos de vida, y Google usa además PKCE. Es lo mismo que
+       * hace el plugin `crossDomain` de @convex-dev/better-auth; lo ponemos
+       * aquí en vez de montar el plugin entero porque ese además cambia el
+       * manejo de sesión y obligaría a tocar los clientes de web y móvil.
+       *
+       * Lo que se pierde: no podemos impedir que un flujo iniciado en un
+       * navegador se complete en otro. */
+      storeStateStrategy: "database",
+      skipStateCookieCheck: true,
     },
     emailAndPassword: {
       enabled: true,

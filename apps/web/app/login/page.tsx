@@ -2,97 +2,113 @@
 
 import { useEffect, useState } from "react";
 import Image from "next/image";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Authenticated, Unauthenticated, AuthLoading } from "convex/react";
 import { ArrowLeft, Eye, EyeOff } from "lucide-react";
 import { authClient } from "@/lib/auth-client";
+import { cn } from "@/lib/utils";
 
 /** El botón de Apple en web requiere un Services ID + client secret de Apple.
  *  Mientras no esté configurado se oculta para no mostrar un botón que falla. */
 const APPLE_WEB_ENABLED = process.env.NEXT_PUBLIC_APPLE_WEB_LOGIN === "1";
 
-export default function Home() {
+/**
+ * Login en dos columnas: a la izquierda el acceso, a la derecha una imagen
+ * del producto. Mismo sistema visual que la landing (tokens `brand-*`,
+ * `heading`, `line`…), no el tema claro/oscuro de la app: quien llega aquí
+ * viene de la web pública y la transición debe ser continua.
+ *
+ * `force-light` fija `color-scheme: light` — sin eso, el navegador pinta los
+ * controles nativos en oscuro si el sistema lo está.
+ */
+export default function LoginPage() {
   return (
-    <div className="force-light relative min-h-screen w-full overflow-hidden bg-[#f7f5f3] p-0 sm:p-6 lg:p-10">
-      {/* PatternCraft-style: grid muy suave */}
-      <div
-        aria-hidden
-        className="pointer-events-none absolute inset-0"
-        style={{
-          backgroundImage: `
-            linear-gradient(to right, rgba(4, 32, 70, 0.045) 1px, transparent 1px),
-            linear-gradient(to bottom, rgba(4, 32, 70, 0.045) 1px, transparent 1px)
-          `,
-          backgroundSize: "28px 28px",
-          maskImage:
-            "radial-gradient(ellipse 80% 70% at 50% 40%, #000 35%, transparent 100%)",
-          WebkitMaskImage:
-            "radial-gradient(ellipse 80% 70% at 50% 40%, #000 35%, transparent 100%)",
-        }}
-      />
-      <div className="relative mx-auto flex min-h-screen w-full max-w-6xl overflow-hidden bg-card text-card-foreground shadow-floating sm:min-h-[calc(100vh-3rem)] sm:rounded-[28px] sm:ring-1 sm:ring-border lg:min-h-[calc(100vh-5rem)]">
-        <Showcase />
-        <div className="flex w-full flex-col justify-center bg-card px-6 py-10 sm:px-10 lg:w-1/2 lg:px-16">
-          {/* Formulario desde el primer paint: sin skeleton ni pantalla vacía. */}
-          <AuthLoading>
-            <LoginPanel />
-          </AuthLoading>
-          <Unauthenticated>
-            <LoginPanel />
-          </Unauthenticated>
-          <Authenticated>
-            <RedirectToDashboard />
-          </Authenticated>
+    /* En escritorio la pantalla se fija al viewport (`lg:h-svh` + recorte):
+     * un login que scrollea se siente roto. En móvil NO se fija — con el
+     * teclado abierto la altura visible se parte a la mitad y recortar
+     * dejaría el botón fuera de alcance. */
+    /* `grid-rows-[minmax(0,1fr)]` es lo que fija la altura de verdad: una
+     * fila `auto` crece con la columna más alta —la del panel— y empujaba el
+     * formulario fuera de la pantalla. El `minmax(0,…)` le permite encogerse
+     * por debajo del contenido; el recorte lo hace cada columna. */
+    <div className="force-light grid min-h-svh bg-canvas lg:h-svh lg:grid-cols-2 lg:grid-rows-[minmax(0,1fr)] lg:overflow-hidden">
+      {/* ── Columna de acceso ─────────────────────────────────────────── */}
+      <div className="relative flex min-h-0 flex-col px-6 py-8 sm:px-10 lg:px-14 lg:py-7 xl:px-20">
+        <Link
+          href="/"
+          className="inline-flex w-fit items-center gap-2 rounded-btn focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-brand-500"
+        >
+          <span className="flex h-8 w-8 items-center justify-center rounded-[9px] bg-brand-500 shadow-[0_4px_12px_rgb(255_90_10/0.24)]">
+            <Image
+              src="/logos/isotipo-vekino.svg"
+              alt=""
+              width={18}
+              height={18}
+              className="h-[18px] w-[18px] brightness-0 invert"
+              priority
+            />
+          </span>
+          <span className="text-[17px] font-semibold tracking-[-0.02em] text-heading">
+            Vekino
+          </span>
+        </Link>
+
+        {/* `min-h-0` + `overflow-y-auto`: si la pantalla es muy baja, el que
+            scrollea es este bloque y no la página entera, así el logo y el
+            pie legal se quedan siempre visibles. */}
+        <div className="flex min-h-0 flex-1 items-center justify-center py-8 lg:overflow-y-auto">
+          <div className="w-full max-w-[400px]">
+            {/* Formulario desde el primer paint: sin skeleton ni pantalla vacía. */}
+            <AuthLoading>
+              <LoginPanel />
+            </AuthLoading>
+            <Unauthenticated>
+              <LoginPanel />
+            </Unauthenticated>
+            <Authenticated>
+              <RedirectToDashboard />
+            </Authenticated>
+          </div>
+        </div>
+
+        <div className="flex flex-col items-center gap-x-4 gap-y-1.5 text-[11.5px] text-placeholder sm:flex-row sm:justify-between">
+          <span>© {new Date().getFullYear()} Vekino</span>
+          <span className="flex items-center gap-4">
+            <Link
+              href="/legal/privacidad"
+              className="transition-colors hover:text-heading"
+            >
+              Privacidad
+            </Link>
+            <Link
+              href="/legal/terminos"
+              className="transition-colors hover:text-heading"
+            >
+              Términos
+            </Link>
+            <Link href="/" className="transition-colors hover:text-heading">
+              Inicio
+            </Link>
+          </span>
         </div>
       </div>
-    </div>
-  );
-}
 
-/** Panel izquierdo: preview + velo cálido suave (sin naranja sólido). */
-function Showcase() {
-  return (
-    <div className="relative hidden w-1/2 overflow-hidden bg-[#e8eef5] lg:block">
-      <Image
-        src="/login/dashboard-preview.png"
-        alt=""
-        fill
-        priority
-        sizes="50vw"
-        className="object-cover object-[center_35%]"
-        aria-hidden
-      />
-
-      {/* Toque cálido ligero + oscurecido abajo para el copy */}
-      <div
-        aria-hidden
-        className="pointer-events-none absolute inset-0 bg-linear-to-b from-transparent via-[#f6560b]/08 to-[#042046]/55"
-      />
-      <div
-        aria-hidden
-        className="pointer-events-none absolute inset-x-0 bottom-0 h-[48%] bg-linear-to-t from-[#042046]/80 via-[#042046]/35 to-transparent"
-      />
-
-      <div className="relative flex h-full flex-col justify-between p-10 xl:p-12">
-        <Image
-          src="/logos/isotipo-vekino.svg"
-          alt="Vekino"
-          width={56}
-          height={56}
-          className="h-14 w-14 shrink-0 drop-shadow-md"
-          priority
-        />
-
-        <div className="shrink-0 space-y-3 pb-1">
-          <h1 className="text-3xl font-semibold leading-tight tracking-tight text-white xl:text-4xl">
-            La administración de tu
-            <br />
-            conjunto, en un solo lugar.
-          </h1>
-          <p className="max-w-md text-sm leading-relaxed text-white/85 xl:text-base">
-            Cuentas de cobro, reservas, visitantes, asambleas y comunicación con
-            tus residentes.
-          </p>
+      {/* ── Vista del producto ───────────────────────────────────────────
+          Solo la imagen, a sangre dentro del panel. `fill` + `object-cover`
+          la hacen cubrir la altura de la pantalla sea cual sea; el marco
+          cálido de debajo solo asoma si la imagen no llega a los bordes. */}
+      <div className="hidden p-3 lg:block">
+        <div className="relative h-full w-full overflow-hidden rounded-panel border border-line bg-surface-warm">
+          <Image
+            src="/login/dashboard-preview-naranja.png"
+            alt=""
+            fill
+            priority
+            sizes="50vw"
+            className="object-cover object-center"
+            aria-hidden
+          />
         </div>
       </div>
     </div>
@@ -186,61 +202,46 @@ function LoginPanel() {
 
   const forgot = view === "forgot";
 
-  return (
-    <div className="mx-auto w-full max-w-md">
-      <Image
-        src="/logos/isotipo-vekino.svg"
-        alt="Vekino"
-        width={48}
-        height={48}
-        className="mb-8 h-12 w-12 lg:hidden"
-        priority
-      />
+  function volver() {
+    setView("signin");
+    setError(null);
+    setSuccess(null);
+  }
 
+  return (
+    <div>
       {forgot ? (
         <button
           type="button"
-          onClick={() => {
-            setView("signin");
-            setError(null);
-            setSuccess(null);
-          }}
-          className="mb-6 -ml-1 flex h-9 w-9 items-center justify-center rounded-full text-foreground transition-colors hover:bg-accent"
-          aria-label="Volver"
+          onClick={volver}
+          className="mb-5 -ml-2 flex h-9 items-center gap-1.5 rounded-btn px-2 text-[13px] font-medium text-body transition-colors hover:bg-[#f4f4f1] hover:text-heading focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-500"
         >
-          <ArrowLeft className="h-5 w-5" />
+          <ArrowLeft className="h-4 w-4" strokeWidth={1.8} aria-hidden />
+          Volver
         </button>
       ) : null}
 
-      <h2 className="text-4xl font-semibold tracking-tight text-foreground sm:text-[2.75rem]">
-        {forgot ? "Recuperar acceso" : "Iniciar sesión"}
-      </h2>
-      <p className="mt-2 text-sm text-muted-foreground">
+      <h1 className="text-[clamp(1.85rem,3.4vw,2.35rem)] font-[660] leading-[1.05] tracking-[-0.04em] text-heading">
+        {forgot ? (
+          "Recuperar acceso"
+        ) : (
+          <>
+            Bienvenido de <span className="text-brand-500">vuelta</span>
+          </>
+        )}
+      </h1>
+      <p className="mt-2.5 text-[14px] leading-[1.5] text-body">
         {forgot
           ? "Te enviaremos un enlace a tu correo para crear una contraseña nueva."
-          : "Accede a tu conjunto residencial."}
+          : "Entra a la plataforma de tu conjunto residencial."}
       </p>
 
-      {forgot ? (
-        <form onSubmit={submitForgot} className="mt-8 space-y-5">
-          <Field
-            label="Correo electrónico"
-            value={email}
-            onChange={setEmail}
-            placeholder="tu@correo.com"
-            type="email"
-            autoComplete="email"
-          />
-
-          {error ? <Alert tone="error">{error}</Alert> : null}
-          {success ? <Alert tone="success">{success}</Alert> : null}
-
-          <SubmitButton loading={loading}>Enviar enlace</SubmitButton>
-        </form>
-      ) : (
-        <>
-          <form onSubmit={submitSignIn} className="mt-8 space-y-5">
-            <Field
+      {/* Tarjeta de acceso */}
+      <div className="mt-6 rounded-panel border border-line bg-surface p-5 shadow-card">
+        {forgot ? (
+          <form onSubmit={submitForgot} className="space-y-4">
+            <Campo
+              id="correo-recuperar"
               label="Correo electrónico"
               value={email}
               onChange={setEmail}
@@ -249,91 +250,156 @@ function LoginPanel() {
               autoComplete="email"
             />
 
-            <div>
-              <label
-                htmlFor="password"
-                className="text-sm font-medium text-foreground"
+            {error ? <Alerta tono="error">{error}</Alerta> : null}
+            {success ? <Alerta tono="ok">{success}</Alerta> : null}
+
+            <BotonPrimario loading={loading}>Enviar enlace</BotonPrimario>
+          </form>
+        ) : (
+          <>
+            {/* Acceso social primero: es un clic contra cuatro campos */}
+            <div className="flex flex-col gap-2.5">
+              <BotonSocial
+                onClick={() => void signInWithSocial("google")}
+                disabled={loading}
+                icon={<GoogleIcon />}
               >
-                Contraseña
-              </label>
-              <div className="relative mt-2">
-                <input
-                  id="password"
-                  type={showPassword ? "text" : "password"}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Tu contraseña"
-                  autoComplete="current-password"
-                  required
-                  className="h-14 w-full rounded-full border border-border bg-muted/50 pl-5 pr-12 text-sm text-foreground transition placeholder:text-muted-foreground focus:border-ring focus:bg-background focus:outline-none focus:ring-2 focus:ring-ring/30"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword((v) => !v)}
-                  className="absolute right-4 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground"
-                  aria-label={
-                    showPassword ? "Ocultar contraseña" : "Mostrar contraseña"
-                  }
+                Continuar con Google
+              </BotonSocial>
+              {APPLE_WEB_ENABLED ? (
+                <BotonSocial
+                  onClick={() => void signInWithSocial("apple")}
+                  disabled={loading}
+                  icon={<AppleIcon />}
                 >
-                  {showPassword ? (
-                    <EyeOff className="h-5 w-5" />
-                  ) : (
-                    <Eye className="h-5 w-5" />
-                  )}
-                </button>
-              </div>
+                  Continuar con Apple
+                </BotonSocial>
+              ) : null}
             </div>
 
-            {error ? <Alert tone="error">{error}</Alert> : null}
+            <Separador />
 
-            <SubmitButton loading={loading}>Iniciar sesión</SubmitButton>
-          </form>
-
-          <button
-            type="button"
-            onClick={() => {
-              setView("forgot");
-              setError(null);
-              setSuccess(null);
-            }}
-            className="mt-4 block w-full text-center text-sm font-medium text-muted-foreground underline underline-offset-4 transition-colors hover:text-foreground"
-          >
-            ¿Olvidaste tu contraseña?
-          </button>
-
-          <div className="my-7 flex items-center gap-4">
-            <span className="h-px flex-1 bg-border" />
-            <span className="text-xs text-muted-foreground">o continúa con</span>
-            <span className="h-px flex-1 bg-border" />
-          </div>
-
-          <div className="flex flex-col gap-3 sm:flex-row">
-            <SocialButton
-              onClick={() => void signInWithSocial("google")}
-              disabled={loading}
-              icon={<GoogleIcon />}
-              label="Google"
-            />
-            {APPLE_WEB_ENABLED ? (
-              <SocialButton
-                onClick={() => void signInWithSocial("apple")}
-                disabled={loading}
-                icon={<AppleIcon />}
-                label="Apple"
+            <form onSubmit={submitSignIn} className="space-y-4">
+              <Campo
+                id="correo"
+                label="Correo electrónico"
+                value={email}
+                onChange={setEmail}
+                placeholder="tu@correo.com"
+                type="email"
+                autoComplete="email"
               />
-            ) : null}
-          </div>
 
-          <p className="mt-8 text-center text-xs leading-relaxed text-muted-foreground">
-            ¿No tienes cuenta? La crea la administración de tu conjunto.
-          </p>
-        </>
-      )}
+              <div>
+                <div className="mb-[7px] flex items-baseline justify-between gap-3">
+                  <label
+                    htmlFor="password"
+                    className="text-[13.5px] font-medium text-[#30302e]"
+                  >
+                    Contraseña
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setView("forgot");
+                      setError(null);
+                      setSuccess(null);
+                    }}
+                    className="rounded text-[12.5px] font-medium text-brand-600 transition-colors hover:text-brand-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-500"
+                  >
+                    ¿La olvidaste?
+                  </button>
+                </div>
+
+                <div className="relative">
+                  <input
+                    id="password"
+                    type={showPassword ? "text" : "password"}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="Tu contraseña"
+                    autoComplete="current-password"
+                    required
+                    className={cn(CONTROL, "h-[46px] pr-11")}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((v) => !v)}
+                    className="absolute right-1 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-btn text-subtle transition-colors hover:bg-[#f4f4f1] hover:text-heading focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-500"
+                    aria-label={
+                      showPassword ? "Ocultar contraseña" : "Mostrar contraseña"
+                    }
+                  >
+                    {showPassword ? (
+                      <EyeOff className="h-[17px] w-[17px]" strokeWidth={1.8} />
+                    ) : (
+                      <Eye className="h-[17px] w-[17px]" strokeWidth={1.8} />
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {error ? <Alerta tono="error">{error}</Alerta> : null}
+
+              <BotonPrimario loading={loading}>Iniciar sesión</BotonPrimario>
+            </form>
+
+            <p className="mt-3.5 text-center text-[11.5px] leading-[1.45] text-placeholder">
+              Al continuar aceptas los{" "}
+              <Link
+                href="/legal/terminos"
+                className="underline underline-offset-2 transition-colors hover:text-body"
+              >
+                Términos
+              </Link>{" "}
+              y la{" "}
+              <Link
+                href="/legal/privacidad"
+                className="underline underline-offset-2 transition-colors hover:text-body"
+              >
+                Política de Privacidad
+              </Link>{" "}
+              de Vekino.
+            </p>
+          </>
+        )}
+      </div>
+
+      <p className="mt-4 text-center text-[12.5px] leading-relaxed text-subtle">
+        ¿No tienes cuenta? La crea la administración de tu conjunto.{" "}
+        <Link
+          href="/#contacto"
+          className="font-semibold text-brand-600 underline underline-offset-2 transition-colors hover:text-brand-700"
+        >
+          Solicitar una demostración
+        </Link>
+      </p>
     </div>
   );
 }
 
-function SubmitButton({
+/* ── Piezas ────────────────────────────────────────────────────────────── */
+
+/** Estilo compartido de inputs. Mismo control que los formularios de la landing. */
+const CONTROL = cn(
+  "w-full rounded-btn border border-[#deded9] bg-surface px-4 text-[14.5px] text-heading",
+  "transition-[border-color,box-shadow] duration-150 placeholder:text-placeholder",
+  "focus:border-brand-500 focus:outline-none focus:ring-[3px] focus:ring-brand-500/12",
+);
+
+/** Línea punteada con un círculo al centro, como el resto de separadores. */
+function Separador() {
+  return (
+    <div aria-hidden className="relative my-5 flex items-center justify-center">
+      <span className="absolute inset-x-0 top-1/2 border-t border-dashed border-dash" />
+      <span className="relative flex h-6 w-6 items-center justify-center rounded-full border border-line bg-surface text-[10px] font-semibold text-placeholder">
+        o
+      </span>
+    </div>
+  );
+}
+
+function BotonPrimario({
   loading,
   children,
 }: {
@@ -344,58 +410,82 @@ function SubmitButton({
     <button
       type="submit"
       disabled={loading}
-      className="h-14 w-full rounded-full bg-flame text-sm font-semibold text-white shadow-[0_4px_12px_rgba(246,86,11,0.22)] transition-colors hover:bg-[#e04d06] disabled:opacity-60"
+      className={cn(
+        "inline-flex h-12 w-full items-center justify-center rounded-btn bg-brand-500",
+        "text-[14.5px] font-semibold text-white shadow-brand",
+        "transition-[transform,background-color,box-shadow] duration-200 ease-out",
+        "hover:-translate-y-0.5 hover:bg-brand-600 active:translate-y-0 active:scale-[0.985]",
+        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-500",
+        "disabled:pointer-events-none disabled:opacity-60",
+        "motion-reduce:transform-none motion-reduce:transition-none",
+      )}
     >
-      {loading ? "…" : children}
+      {loading ? "Un momento…" : children}
     </button>
   );
 }
 
-function SocialButton({
+function BotonSocial({
   onClick,
   disabled,
   icon,
-  label,
+  children,
 }: {
   onClick: () => void;
   disabled: boolean;
   icon: React.ReactNode;
-  label: string;
+  children: React.ReactNode;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className="flex h-14 w-full appearance-none items-center justify-center gap-3 rounded-full bg-white text-sm font-medium text-neutral-900 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.12)] outline-none transition-colors [-webkit-tap-highlight-color:transparent] hover:bg-neutral-50 disabled:opacity-60 sm:flex-1"
+      className={cn(
+        "inline-flex h-12 w-full items-center justify-center gap-2.5 rounded-btn",
+        "border border-line-strong bg-surface text-[14.5px] font-semibold text-heading",
+        "shadow-[0_1px_2px_rgb(20_20_20/0.04)]",
+        "transition-[transform,box-shadow] duration-200 ease-out",
+        "hover:-translate-y-0.5 hover:shadow-card active:translate-y-0",
+        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-500",
+        "disabled:pointer-events-none disabled:opacity-60",
+        "motion-reduce:transform-none motion-reduce:transition-none",
+      )}
     >
       {icon}
-      Continuar con {label}
+      {children}
     </button>
   );
 }
 
-function Alert({
-  tone,
+/**
+ * Mensaje de estado. `role="alert"` solo en el error: el éxito ya llega tras
+ * una acción explícita de la persona y no necesita interrumpir al lector.
+ */
+function Alerta({
+  tono,
   children,
 }: {
-  tone: "error" | "success";
+  tono: "error" | "ok";
   children: React.ReactNode;
 }) {
   return (
     <p
-      className={
-        tone === "error"
-          ? "text-sm text-destructive"
-          : "text-sm text-success"
-      }
+      role={tono === "error" ? "alert" : undefined}
+      className={cn(
+        "rounded-btn border px-3.5 py-2.5 text-[13px] leading-snug",
+        tono === "error"
+          ? "border-[#f2d4d4] bg-bad-soft text-[#a83f3f]"
+          : "border-[#cdeedc] bg-ok-soft text-[#1b8b4d]",
+      )}
     >
       {children}
     </p>
   );
 }
 
-function Field({
+function Campo({
+  id,
   label,
   value,
   onChange,
@@ -403,6 +493,7 @@ function Field({
   type,
   autoComplete,
 }: {
+  id: string;
   label: string;
   value: string;
   onChange: (v: string) => void;
@@ -410,10 +501,12 @@ function Field({
   type: string;
   autoComplete?: string;
 }) {
-  const id = `field-${type}`;
   return (
     <div>
-      <label htmlFor={id} className="text-sm font-medium text-foreground">
+      <label
+        htmlFor={id}
+        className="mb-[7px] block text-[13.5px] font-medium text-[#30302e]"
+      >
         {label}
       </label>
       <input
@@ -424,7 +517,7 @@ function Field({
         placeholder={placeholder}
         autoComplete={autoComplete}
         required
-        className="mt-2 h-14 w-full rounded-full border border-border bg-muted/50 px-5 text-sm text-foreground transition placeholder:text-muted-foreground focus:border-ring focus:bg-background focus:outline-none focus:ring-2 focus:ring-ring/30"
+        className={cn(CONTROL, "h-[46px]")}
       />
     </div>
   );
@@ -432,7 +525,7 @@ function Field({
 
 function GoogleIcon() {
   return (
-    <svg viewBox="0 0 24 24" className="h-5 w-5" aria-hidden>
+    <svg viewBox="0 0 24 24" className="h-[18px] w-[18px]" aria-hidden>
       <path
         fill="#4285F4"
         d="M23.06 12.25c0-.85-.08-1.67-.22-2.45H12v4.63h6.2a5.3 5.3 0 0 1-2.3 3.48v2.9h3.72c2.18-2 3.44-4.96 3.44-8.56Z"
@@ -455,7 +548,12 @@ function GoogleIcon() {
 
 function AppleIcon() {
   return (
-    <svg viewBox="0 0 24 24" className="h-5 w-5" fill="currentColor" aria-hidden>
+    <svg
+      viewBox="0 0 24 24"
+      className="h-[18px] w-[18px]"
+      fill="currentColor"
+      aria-hidden
+    >
       <path d="M16.36 12.72c-.02-2.3 1.88-3.4 1.96-3.46-1.07-1.56-2.73-1.78-3.32-1.8-1.41-.14-2.76.83-3.48.83-.72 0-1.83-.81-3-.79-1.55.02-2.98.9-3.77 2.28-1.61 2.79-.41 6.92 1.15 9.19.77 1.11 1.68 2.35 2.87 2.31 1.15-.05 1.59-.74 2.98-.74 1.39 0 1.78.74 3 .72 1.24-.02 2.02-1.13 2.78-2.24.87-1.28 1.23-2.52 1.25-2.59-.03-.01-2.4-.92-2.42-3.65ZM14.1 5.96c.63-.77 1.06-1.83.94-2.9-.91.04-2.02.61-2.67 1.37-.58.68-1.09 1.77-.95 2.81 1.02.08 2.05-.52 2.68-1.28Z" />
     </svg>
   );

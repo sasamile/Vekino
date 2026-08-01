@@ -1,17 +1,19 @@
 import type { Metadata } from "next";
-import { ConnectedExperience } from "@/components/landing/connected-experience";
-import { DownloadAppSection } from "@/components/landing/download-app-section";
-import { EcosystemSection } from "@/components/landing/ecosystem-section";
-import { FeaturesSection } from "@/components/landing/features-section";
-import { FinalCTA } from "@/components/landing/final-cta";
+import { AppSection } from "@/components/landing/app-section";
+import { ContactSection } from "@/components/landing/contact-section";
+import { CtaSection } from "@/components/landing/cta-section";
+import { FaqSection } from "@/components/landing/faq-section";
+import { FeatureAccordion } from "@/components/landing/feature-accordion";
+import { FeaturesGrid } from "@/components/landing/features-grid";
 import { Footer } from "@/components/landing/footer";
+import { Header } from "@/components/landing/header";
 import { HeroSection } from "@/components/landing/hero-section";
-import { ManifestoSection } from "@/components/landing/manifesto-section";
-import { Navbar } from "@/components/landing/navbar";
-import { ScrollTriggerRefresh } from "@/components/landing/scroll-trigger-refresh";
-import { SectionParallax } from "@/components/landing/section-parallax";
-import { SmoothViewport } from "@/components/landing/smooth-viewport";
-import { TestimonialsSection } from "@/components/landing/testimonials-section";
+import { LogoCloud } from "@/components/landing/logo-cloud";
+import { NewsletterSection } from "@/components/landing/newsletter-section";
+import { PageFrame } from "@/components/landing/page-frame";
+import { PricingSection } from "@/components/landing/pricing-section";
+import { StatsSection } from "@/components/landing/stats-section";
+import { TestimonialsCarousel } from "@/components/landing/testimonials-carousel";
 
 export const metadata: Metadata = {
   title: "Vekino | Plataforma para administrar conjuntos residenciales",
@@ -56,6 +58,14 @@ const JSON_LD = {
   inLanguage: "es-CO",
 };
 
+/**
+ * Landing de Vekino.
+ *
+ * Orden de lectura: promesa → prueba → qué hace → cómo se ve → cuánto cuesta
+ * → quién lo dice → dudas → contacto. Cada sección es una pieza independiente
+ * en `components/landing/`; el marco punteado y el rayado lateral los pone
+ * `PageFrame` una sola vez para toda la página.
+ */
 export default function LandingPage() {
   return (
     <>
@@ -63,44 +73,29 @@ export default function LandingPage() {
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(JSON_LD) }}
       />
-      <SectionParallax />
-      <ScrollTriggerRefresh />
-      {/* El navbar es fixed: debe quedar FUERA del contenedor suavizado. */}
-      <Navbar />
-      <SmoothViewport>
-        <main className="landing-main">
+
+      <div className="landing-main">
+        <PageFrame />
+        <Header />
+
+        <main>
           {/* El único h1 de la página vive dentro del hero. */}
           <HeroSection />
-
-          {/* Cada sección va dentro de su propio "slot". Es lo que permite
-              que el pare y la transición convivan: ScrollTrigger fija el
-              slot, y la animación de salida transforma la sección de adentro.
-              Sobre el mismo elemento se pisaban —dentro de ScrollSmoother el
-              pin también usa `transform`— y una anulaba a la otra. */}
-          <div className="section-slot">
-            <ManifestoSection />
-          </div>
-          <div className="section-slot">
-            <ConnectedExperience />
-          </div>
-          <div className="section-slot">
-            <FeaturesSection />
-          </div>
-          <div className="section-slot">
-            <DownloadAppSection />
-          </div>
-          <div className="section-slot">
-            <TestimonialsSection />
-          </div>
-          <div className="section-slot">
-            <EcosystemSection />
-          </div>
-          <div className="section-slot">
-            <FinalCTA />
-          </div>
+          <LogoCloud />
+          <StatsSection />
+          <FeaturesGrid />
+          <FeatureAccordion />
+          <AppSection />
+          <PricingSection />
+          <TestimonialsCarousel />
+          <FaqSection />
+          <CtaSection />
+          <ContactSection />
+          <NewsletterSection />
         </main>
+
         <Footer />
-      </SmoothViewport>
+      </div>
     </>
   );
 }
