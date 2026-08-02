@@ -15,6 +15,7 @@ import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import { useMutation, useQuery, useAction, Authenticated } from "convex/react";
+import type { FunctionReturnType } from "convex/server";
 import { api } from "@vekino/backend/api";
 import type { Doc, Id } from "@vekino/backend/dataModel";
 import { useCondominio } from "@/context/condominio-context";
@@ -24,10 +25,14 @@ import { AuthUI } from "@/lib/auth-ui";
 import { C } from "@/lib/theme";
 import { uploadLocalFile } from "@/lib/guardia-upload";
 
-type Paq = Doc<"paquetes"> & {
-  fotoUrl: string | null;
-  fotoEntregaUrl: string | null;
-};
+/**
+ * El tipo sale de lo que DEVUELVE la query, no de una intersección escrita a
+ * mano. `listPaquetes` resuelve las URLs de las fotos a `string | null`,
+ * mientras que en el esquema son `v.optional(v.string())`; describir eso con
+ * `Doc<"paquetes"> & { fotoUrl: string | null }` daba un tipo que no
+ * coincidía con el real y rompía `setEntregarPaq`. Así no puede desalinearse.
+ */
+type Paq = FunctionReturnType<typeof api.guardia.listPaquetes>[number];
 type TipoPaq = Doc<"paquetes">["tipo"];
 
 const TIPOS: { key: TipoPaq; label: string }[] = [

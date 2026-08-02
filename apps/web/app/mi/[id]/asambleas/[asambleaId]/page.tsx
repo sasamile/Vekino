@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useQuery, useMutation } from "convex/react";
@@ -9,7 +9,7 @@ import type { Id } from "@vekino/backend/dataModel";
 import {
   ArrowLeft, Users, Loader2, CheckCircle2, Vote, ListOrdered, Radio, Check,
   UserPlus, X, Trash2, Copy, ChevronDown, ThumbsUp, TrendingUp, QrCode, Search,
-  KeyRound, XCircle,
+  KeyRound, XCircle, Camera, FileUp, MessageCircle,
 } from "lucide-react";
 import { PageContainer } from "@/components/layout/page-container";
 import { Card } from "@/components/ui/card";
@@ -19,6 +19,8 @@ import { fechaISO, etiquetaUnidad } from "@/components/portal/portal-ui";
 import { cn } from "@/lib/utils";
 import { useUploadToS3 } from "@/hooks/use-upload-s3";
 import { AsambleaTabsTour } from "@/components/portal/asamblea-tabs-tour";
+import { IndicadorSala } from "@/components/asamblea/indicador-sala";
+import { ensurePoderPdf } from "@/lib/poder-documento";
 
 function qrUrl(data: string) {
   return `https://api.qrserver.com/v1/create-qr-code/?size=220x220&margin=10&data=${encodeURIComponent(data)}`;
@@ -76,6 +78,23 @@ export default function AsambleaSala() {
           {fechaISO(a.fecha)} · {a.hora} · <span className="capitalize">{a.modalidad}</span>
           {a.estado === "en_curso" && <span className="ml-2 inline-flex items-center gap-1 font-medium text-emerald-600"><Radio className="h-3.5 w-3.5 animate-pulse" /> En vivo</span>}
         </p>
+
+        {/* Además de informar, este componente es el que MANTIENE la conexión:
+            monta el latido mientras la pantalla esté abierta. Si se quita,
+            se deja de medir la permanencia. */}
+        <div className="mt-3 flex flex-wrap items-center justify-center gap-3">
+          <IndicadorSala asambleaId={asambleaId} />
+          {a.estado === "en_curso" &&
+          a.modalidad !== "presencial" &&
+          !(mi?.delegoTodo && (mi?.representa?.length ?? 0) === 0) ? (
+            <Link
+              href={`/sala/${condominioId}/${asambleaId}`}
+              className="inline-flex h-11 items-center gap-2 rounded-xl bg-brand px-5 text-sm font-semibold text-brand-foreground shadow-sm transition-colors hover:bg-brand/90"
+            >
+              <Radio className="h-4 w-4" /> Entrar a la sala
+            </Link>
+          ) : null}
+        </div>
       </div>
 
       {/* Estado cerrado */}
@@ -119,7 +138,14 @@ export default function AsambleaSala() {
       ) : null}
 
       {tab === "votar" && <VotarTab a={a} asambleaId={asambleaId} condominioId={condominioId} mi={mi} userId={home?.allowed ? (home.userId as string) : ""} />}
-      {tab === "poderes" && poderPublicoAbierto && <PoderesSection asambleaId={asambleaId} condominioId={condominioId} mi={mi} />}
+      {tab === "poderes" && poderPublicoAbierto && (
+        <PoderesSection
+          asambleaId={asambleaId}
+          condominioId={condominioId}
+          mi={mi}
+          asambleaTitulo={a.titulo}
+        />
+      )}
       {tab === "resultados" && <ResultadosTab asambleaId={asambleaId} mi={mi} />}
     </PageContainer>
   );
@@ -156,6 +182,12 @@ function VotarTab({
   const delegadasIds = new Set((otorgados ?? []).map((p) => p.unidadId as string));
   const propiasVotables = misUnidades.filter((u) => !delegadasIds.has(u._id)).length;
   const delegoTodo = misUnidades.length > 0 && propiasVotables === 0;
+  /* Delegó TODO y no representa a nadie: no tiene ninguna unidad que marcar.
+   * El backend ya lo rechaza (`filas.length === 0`), así que mostrarle el
+   * formulario era ofrecerle una acción condenada a fallar. Si además es
+   * apoderado de otras unidades, sí debe registrarse: por eso no basta con
+   * `delegoTodo`. */
+  const sinNadaQueRegistrar = delegoTodo && representa.length === 0;
   const nombreApoderado = (otorgados ?? [])[0]?.representanteNombre;
   const esPresencial = a.modalidad === "presencial";
   /* En virtual la asistencia SOLO se registra con el código que la
@@ -196,13 +228,13 @@ function VotarTab({
           {mi && mi.unidades.length > 0 && <p className="mt-0.5 text-xs text-muted-foreground">Tu(s) casa(s): {mi.unidades.join(", ")}</p>}
           {representa.length > 0 && <p className="mt-0.5 text-xs text-brand">También votas por poder por: {representa.join(", ")}</p>}
         </div>
-      ) : activa && esVirtual ? (
+      ) : activa && esVirtual && !sinNadaQueRegistrar ? (
         <CodigoAsistenciaCard
           busy={busy}
           error={error}
           onSubmit={asistirConCodigo}
         />
-      ) : activa && !esPresencial ? (
+      ) : activa && !esPresencial && !sinNadaQueRegistrar ? (
         <Card className="border-brand/30 bg-brand/3 p-8 text-center">
           <div className="mx-auto mb-3 flex h-16 w-16 items-center justify-center rounded-full bg-brand/10 text-brand"><Users className="h-8 w-8" /></div>
           <p className="text-lg font-semibold text-foreground">¿Estás en la asamblea?</p>
@@ -246,7 +278,7 @@ function VotarTab({
           <p className="mt-1 text-sm text-muted-foreground">Cuando abran una pregunta, aparecerá aquí para que votes.</p>
         </Card>
       )}
-      {!presente && activa && <p className="text-center text-sm text-muted-foreground">Regístrate arriba para poder votar.</p>}
+      {!presente && activa && !sinNadaQueRegistrar && <p className="text-center text-sm text-muted-foreground">Regístrate arriba para poder votar.</p>}
 
       {quorum && (
         <div className="rounded-xl border border-border bg-card p-4">
@@ -397,12 +429,155 @@ function ResultadosTab({
 /* ───────── Tab PODERES ───────── */
 const inputCls = "h-10 w-full rounded-lg border border-input bg-card px-3 text-sm text-foreground outline-none transition-colors focus:border-brand focus:ring-2 focus:ring-brand/20";
 
+function apoderadoLink(codigo: string) {
+  const origin =
+    typeof window !== "undefined" ? window.location.origin : "https://vekino.co";
+  return `${origin}/apoderado?codigo=${encodeURIComponent(codigo)}`;
+}
+
+function mensajePoderWhatsApp(opts: {
+  codigo: string;
+  nombre: string;
+  asambleaTitulo: string;
+  unidadesLabel?: string;
+}) {
+  const link = apoderadoLink(opts.codigo);
+  const unidades = opts.unidadesLabel ? `\nUnidad(es): ${opts.unidadesLabel}` : "";
+  return (
+    `Hola ${opts.nombre},\n\n` +
+    `Te otorgué poder para votar en la asamblea "${opts.asambleaTitulo}".${unidades}\n\n` +
+    `Código: ${opts.codigo}\n` +
+    `Enlace: ${link}\n\n` +
+    `Abre el enlace e ingresa con ese código. ¡Gracias!`
+  );
+}
+
+/** Normaliza celular Colombia → dígitos con 57. */
+function telefonoWa(raw: string): string | null {
+  const digits = raw.replace(/\D/g, "");
+  if (digits.length < 10) return null;
+  if (digits.startsWith("57") && digits.length >= 12) return digits;
+  if (digits.length === 10) return `57${digits}`;
+  return digits;
+}
+
+function PoderCompartir({
+  codigo,
+  nombre,
+  asambleaTitulo,
+  unidadesLabel,
+}: {
+  codigo: string;
+  nombre: string;
+  asambleaTitulo: string;
+  unidadesLabel?: string;
+}) {
+  const [tel, setTel] = useState("");
+  const [feedback, setFeedback] = useState<string | null>(null);
+
+  function flash(msg: string) {
+    setFeedback(msg);
+    window.setTimeout(() => setFeedback(null), 1800);
+  }
+
+  const mensaje = mensajePoderWhatsApp({
+    codigo,
+    nombre,
+    asambleaTitulo,
+    unidadesLabel,
+  });
+  const link = apoderadoLink(codigo);
+
+  async function copiar(texto: string, ok: string) {
+    try {
+      await navigator.clipboard.writeText(texto);
+      flash(ok);
+    } catch {
+      flash("No se pudo copiar");
+    }
+  }
+
+  function abrirWhatsApp() {
+    const phone = telefonoWa(tel);
+    const q = encodeURIComponent(mensaje);
+    const url = phone
+      ? `https://wa.me/${phone}?text=${q}`
+      : `https://wa.me/?text=${q}`;
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
+
+  return (
+    <div className="mt-3 space-y-2.5 text-left">
+      <div className="flex flex-wrap justify-center gap-2">
+        <button
+          type="button"
+          onClick={() => void copiar(codigo, "Código copiado")}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-sm font-medium text-foreground hover:bg-accent"
+        >
+          <Copy className="h-4 w-4" /> Copiar código
+        </button>
+        <button
+          type="button"
+          onClick={() => void copiar(link, "Enlace copiado")}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-sm font-medium text-foreground hover:bg-accent"
+        >
+          <Copy className="h-4 w-4" /> Copiar enlace
+        </button>
+        <button
+          type="button"
+          onClick={() => void copiar(mensaje, "Mensaje copiado")}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-sm font-medium text-foreground hover:bg-accent"
+        >
+          <Copy className="h-4 w-4" /> Copiar mensaje
+        </button>
+      </div>
+
+      <div className="rounded-lg border border-border bg-card/80 p-3">
+        <p className="mb-2 text-xs font-medium text-muted-foreground">
+          Enviar por WhatsApp
+        </p>
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <input
+            value={tel}
+            onChange={(e) => setTel(e.target.value)}
+            placeholder="Celular (opcional) ej. 3001234567"
+            inputMode="tel"
+            className={cn(inputCls, "sm:flex-1")}
+          />
+          <button
+            type="button"
+            onClick={abrirWhatsApp}
+            className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-lg bg-[#25D366] px-4 text-sm font-semibold text-white hover:bg-[#1ebe5d]"
+          >
+            <MessageCircle className="h-4 w-4" />
+            {tel.trim() ? "Abrir WhatsApp" : "WhatsApp (elegir chat)"}
+          </button>
+        </div>
+        <p className="mt-1.5 text-[11px] text-muted-foreground">
+          Si dejas el número vacío, WhatsApp te deja elegir el contacto. El
+          mensaje incluye el código y el enlace.
+        </p>
+      </div>
+
+      {feedback ? (
+        <p className="text-center text-xs font-medium text-emerald-600">
+          {feedback}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function PoderesSection({
-  asambleaId, condominioId, mi,
+  asambleaId,
+  condominioId,
+  mi,
+  asambleaTitulo,
 }: {
   asambleaId: Id<"asambleas">;
   condominioId: Id<"condominios">;
   mi: { representa: string[] } | null | undefined;
+  asambleaTitulo: string;
 }) {
   const home = useQuery(api.portal.home, { condominioId });
   const otorgados = useQuery(api.asambleas.poderesOtorgados, { asambleaId });
@@ -422,10 +597,31 @@ function PoderesSection({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [nuevo, setNuevo] = useState<{ codigo: string; nombre: string; esPropietario: boolean; unidades: number } | null>(null);
-  const [copiado, setCopiado] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const cameraRef = useRef<HTMLInputElement>(null);
 
   const delegadasIds = new Set((otorgados ?? []).map((p) => String(p.unidadId)));
   const disponibles = unidades.filter((u) => !delegadasIds.has(String(u._id)));
+
+  const puedeOtorgar =
+    !busy &&
+    !!file &&
+    unidadIds.length > 0 &&
+    (modo === "propietario" ? !!rep : nombre.trim().length > 0);
+
+  async function onPoderFile(raw: File | null) {
+    if (!raw) {
+      setFile(null);
+      return;
+    }
+    setError(null);
+    try {
+      setFile(await ensurePoderPdf(raw));
+    } catch {
+      setError("No se pudo procesar el archivo. Usa PDF, JPG o PNG.");
+      setFile(null);
+    }
+  }
 
   const grupos = new Map<string, { nombre: string; codigo: string; esProp: boolean; poderes: { _id: Id<"poderesAsamblea">; unidadNumero: string }[] }>();
   for (const p of otorgados ?? []) {
@@ -483,7 +679,6 @@ function PoderesSection({
     } catch (e) { setError(e instanceof Error ? e.message : "No se pudo otorgar."); }
     finally { setBusy(false); }
   }
-  function copiar(c: string) { navigator.clipboard?.writeText(c); setCopiado(true); setTimeout(() => setCopiado(false), 1500); }
 
   return (
     <div className="space-y-5">
@@ -527,12 +722,20 @@ function PoderesSection({
               <> · <b className="text-foreground">{nuevo.unidades} unidades</b></>
             ) : null}
           </p>
-          {nuevo.esPropietario && <p className="mt-2 text-sm text-foreground">Es propietario del conjunto: verá tus unidades en su cuenta y su voto contará por todas. También puede usar este código:</p>}
-          <p className="my-2 select-all font-mono text-3xl font-bold tracking-[0.3em] text-emerald-700 dark:text-emerald-400">{nuevo.codigo}</p>
-          <button onClick={() => copiar(nuevo.codigo)} className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-sm font-medium text-foreground hover:bg-accent">
-            {copiado ? <><Check className="h-4 w-4 text-emerald-600" /> Copiado</> : <><Copy className="h-4 w-4" /> Copiar código</>}
-          </button>
-          <p className="mt-2 text-xs text-muted-foreground">El apoderado entra en <b>{typeof window !== "undefined" ? window.location.host : ""}/apoderado</b> con este código.</p>
+          {nuevo.esPropietario && (
+            <p className="mt-2 text-sm text-foreground">
+              Es propietario del conjunto: verá tus unidades en su cuenta y su
+              voto contará por todas. También puede usar este código:
+            </p>
+          )}
+          <p className="my-2 select-all font-mono text-3xl font-bold tracking-[0.3em] text-emerald-700 dark:text-emerald-400">
+            {nuevo.codigo}
+          </p>
+          <PoderCompartir
+            codigo={nuevo.codigo}
+            nombre={nuevo.nombre}
+            asambleaTitulo={asambleaTitulo}
+          />
         </div>
       )}
 
@@ -542,24 +745,53 @@ function PoderesSection({
           {[...grupos.values()].map((g) => (
             <Card key={g.codigo} className="p-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="text-sm font-semibold text-foreground">{g.nombre} {g.esProp && <Badge tone="brand" className="ml-1">Propietario</Badge>}</p>
-                <button onClick={() => copiar(g.codigo)} className="inline-flex items-center gap-1.5 rounded-lg bg-muted px-2.5 py-1 font-mono text-sm font-bold tracking-widest text-foreground hover:bg-accent">{g.codigo} <Copy className="h-3.5 w-3.5 text-muted-foreground" /></button>
+                <p className="text-sm font-semibold text-foreground">
+                  {g.nombre}{" "}
+                  {g.esProp && (
+                    <Badge tone="brand" className="ml-1">
+                      Propietario
+                    </Badge>
+                  )}
+                </p>
+                <span className="rounded-lg bg-muted px-2.5 py-1 font-mono text-sm font-bold tracking-widest text-foreground">
+                  {g.codigo}
+                </span>
               </div>
               <div className="mt-2 space-y-1">
                 {g.poderes.map((p) => (
-                  <div key={p._id} className="flex items-center justify-between text-sm">
-                    <span className="text-muted-foreground">Unidad {p.unidadNumero}</span>
-                    <button onClick={() => revocar({ poderId: p._id }).catch(() => {})} className="rounded p-1 text-muted-foreground hover:text-red-600" aria-label="Revocar"><Trash2 className="h-3.5 w-3.5" /></button>
+                  <div
+                    key={p._id}
+                    className="flex items-center justify-between text-sm"
+                  >
+                    <span className="text-muted-foreground">
+                      Unidad {p.unidadNumero}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        revocar({ poderId: p._id }).catch(() => {})
+                      }
+                      className="rounded p-1 text-muted-foreground hover:text-red-600"
+                      aria-label="Revocar"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
                   </div>
                 ))}
               </div>
+              <PoderCompartir
+                codigo={g.codigo}
+                nombre={g.nombre}
+                asambleaTitulo={asambleaTitulo}
+                unidadesLabel={g.poderes.map((p) => p.unidadNumero).join(", ")}
+              />
             </Card>
           ))}
         </div>
       )}
 
       {disponibles.length > 0 ? (
-        <Card className="space-y-3 p-5">
+        <Card className="relative z-10 space-y-3 overflow-visible p-5">
           <p className="text-sm font-semibold text-foreground">Delegar mi voto a otra persona</p>
           <div className="flex gap-2">
             <button onClick={() => setModo("propietario")} className={cn("flex-1 rounded-lg border py-2 text-sm font-medium", modo === "propietario" ? "border-brand bg-brand/10 text-brand" : "border-border text-muted-foreground")}>Propietario del conjunto</button>
@@ -608,10 +840,16 @@ function PoderesSection({
             </div>
           </div>
           {modo === "propietario" ? (
-            <label className="block space-y-1.5">
-              <span className="text-xs font-medium text-muted-foreground">Buscar propietario</span>
-              <UserSearch condominioId={condominioId} value={rep} onChange={setRep} />
-            </label>
+            <div className="space-y-1.5">
+              <p className="text-xs font-medium text-muted-foreground">
+                Buscar propietario
+              </p>
+              <UserSearch
+                condominioId={condominioId}
+                value={rep}
+                onChange={setRep}
+              />
+            </div>
           ) : (
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="block space-y-1.5"><span className="text-xs font-medium text-muted-foreground">Nombre</span><input value={nombre} onChange={(e) => setNombre(e.target.value)} placeholder="Nombre completo" className={inputCls} /></label>
@@ -619,18 +857,76 @@ function PoderesSection({
             </div>
           )}
           <label className="block space-y-1.5">
-            <span className="text-xs font-medium text-muted-foreground">Documento del poder (obligatorio) — PDF o foto</span>
-            <input type="file" accept="application/pdf,image/*" onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-              className="block w-full text-sm text-muted-foreground file:mr-3 file:rounded-lg file:border-0 file:bg-brand/10 file:px-3 file:py-2 file:text-sm file:font-medium file:text-brand hover:file:bg-brand/20" />
-            {file && <span className="text-xs text-emerald-600">✓ {file.name}</span>}
+            <span className="text-xs font-medium text-muted-foreground">
+              Documento del poder (obligatorio) — PDF o foto
+            </span>
+            <input
+              ref={fileRef}
+              type="file"
+              accept="application/pdf,image/*"
+              className="hidden"
+              onChange={(e) => {
+                void onPoderFile(e.target.files?.[0] ?? null);
+                e.target.value = "";
+              }}
+            />
+            <input
+              ref={cameraRef}
+              type="file"
+              accept="image/*"
+              capture="environment"
+              className="hidden"
+              onChange={(e) => {
+                void onPoderFile(e.target.files?.[0] ?? null);
+                e.target.value = "";
+              }}
+            />
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => fileRef.current?.click()}
+                className="inline-flex h-10 items-center gap-2 rounded-lg border border-border bg-card px-3 text-sm font-medium text-foreground hover:bg-accent"
+              >
+                <FileUp className="h-4 w-4" />
+                Seleccionar archivo
+              </button>
+              <button
+                type="button"
+                onClick={() => cameraRef.current?.click()}
+                className="inline-flex h-10 items-center gap-2 rounded-lg border border-border bg-card px-3 text-sm font-medium text-foreground hover:bg-accent"
+              >
+                <Camera className="h-4 w-4" />
+                Tomar foto
+              </button>
+            </div>
+            {file ? (
+              <p className="text-xs text-emerald-600">
+                ✓ {file.name}
+                {file.type === "application/pdf" ? " (PDF listo para subir)" : ""}
+              </p>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                Desde el celular puedes tomar una foto: se convierte a PDF automáticamente.
+              </p>
+            )}
           </label>
           {error && <p className="text-sm text-red-600">{error}</p>}
-          <button onClick={darPoder} disabled={busy} className="inline-flex h-10 items-center gap-2 rounded-lg bg-brand px-4 text-sm font-semibold text-brand-foreground shadow-sm hover:bg-brand/90 disabled:opacity-60">
+          <button
+            type="button"
+            onClick={() => void darPoder()}
+            disabled={!puedeOtorgar}
+            className="inline-flex h-10 items-center gap-2 rounded-lg bg-brand px-4 text-sm font-semibold text-brand-foreground shadow-sm hover:bg-brand/90 disabled:cursor-not-allowed disabled:opacity-50"
+          >
             {busy && <Loader2 className="h-4 w-4 animate-spin" />}{" "}
             {unidadIds.length > 1
               ? `Otorgar poder (${unidadIds.length} unidades)`
               : "Otorgar poder"}
           </button>
+          {!file ? (
+            <p className="text-xs text-muted-foreground">
+              Adjunta el poder firmado para habilitar el botón.
+            </p>
+          ) : null}
         </Card>
       ) : unidades.length > 0 ? (
         <p className="rounded-lg bg-muted/40 p-4 text-center text-sm text-muted-foreground">Ya delegaste todas tus unidades.</p>
@@ -648,28 +944,83 @@ function UserSearch({
 }) {
   const [term, setTerm] = useState("");
   const [open, setOpen] = useState(false);
-  const results = useQuery(api.asambleas.buscarUsuarios, term.trim().length >= 2 ? { condominioId, search: term } : "skip");
+  const results = useQuery(
+    api.asambleas.buscarUsuarios,
+    term.trim().length >= 2 ? { condominioId, search: term } : "skip",
+  );
+
   if (value) {
     return (
-      <div className="flex h-10 items-center justify-between gap-2 rounded-lg border border-input bg-card px-3 text-sm">
-        <span className="truncate text-foreground">{value.name}</span>
-        <button onClick={() => onChange(null)} aria-label="Quitar" className="text-muted-foreground hover:text-red-600"><X className="h-4 w-4" /></button>
+      <div className="flex min-h-11 items-center justify-between gap-2 rounded-lg border-2 border-brand/50 bg-brand/10 px-3 py-2 text-sm">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-brand text-[11px] font-bold text-brand-foreground">
+            ✓
+          </span>
+          <div className="min-w-0">
+            <p className="truncate font-semibold text-foreground">{value.name}</p>
+            <p className="text-[11px] font-medium text-brand">
+              Seleccionado · toca la X para cambiar
+            </p>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => onChange(null)}
+          aria-label="Quitar selección"
+          className="shrink-0 rounded-md p-1.5 text-muted-foreground hover:bg-card hover:text-red-600"
+        >
+          <X className="h-4 w-4" />
+        </button>
       </div>
     );
   }
+
   return (
     <div className="relative">
       <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-      <input value={term} onChange={(e) => { setTerm(e.target.value); setOpen(true); }} onFocus={() => setOpen(true)} placeholder="Nombre o correo…" className={cn(inputCls, "pl-9")} />
-      {open && term.trim().length >= 2 && (
-        <div className="absolute z-20 mt-1 max-h-56 w-full overflow-auto rounded-lg border border-border bg-card p-1 shadow-lg">
-          {results === undefined ? <p className="px-3 py-2 text-sm text-muted-foreground">Buscando…</p> : results.length === 0 ? <p className="px-3 py-2 text-sm text-muted-foreground">Sin resultados.</p> : results.map((u) => (
-            <button key={u._id} onClick={() => { onChange({ _id: u._id, name: u.name }); setOpen(false); setTerm(""); }} className="block w-full rounded-md px-3 py-2 text-left text-sm hover:bg-accent">
-              <span className="font-medium text-foreground">{u.name}</span> <span className="text-xs text-muted-foreground">{u.email}</span>
-            </button>
-          ))}
+      <input
+        value={term}
+        onChange={(e) => {
+          setTerm(e.target.value);
+          setOpen(true);
+        }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => {
+          // Retraso: permite el click del resultado (mousedown) antes de cerrar.
+          window.setTimeout(() => setOpen(false), 150);
+        }}
+        placeholder="Nombre o correo…"
+        className={cn(inputCls, "pl-9")}
+        autoComplete="off"
+      />
+      {open && term.trim().length >= 2 ? (
+        <div className="absolute z-30 mt-1 max-h-56 w-full overflow-auto rounded-lg border border-border bg-card p-1 shadow-lg">
+          {results === undefined ? (
+            <p className="px-3 py-2 text-sm text-muted-foreground">Buscando…</p>
+          ) : results.length === 0 ? (
+            <p className="px-3 py-2 text-sm text-muted-foreground">Sin resultados.</p>
+          ) : (
+            results.map((u) => (
+              <button
+                key={u._id}
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => {
+                  onChange({ _id: u._id, name: u.name });
+                  setOpen(false);
+                  setTerm("");
+                }}
+                className="block w-full rounded-md px-3 py-2.5 text-left text-sm hover:bg-accent"
+              >
+                <span className="font-medium text-foreground">{u.name}</span>{" "}
+                <span className="text-xs text-muted-foreground">{u.email}</span>
+              </button>
+            ))
+          )}
         </div>
-      )}
+      ) : term.trim().length > 0 && term.trim().length < 2 ? (
+        <p className="mt-1 text-xs text-muted-foreground">Escribe al menos 2 letras.</p>
+      ) : null}
     </div>
   );
 }
@@ -713,10 +1064,12 @@ function CodigoAsistenciaCard({
         <KeyRound className="h-8 w-8" />
       </div>
       <p className="text-lg font-semibold text-foreground">
-        Escribe el código de la reunión
+        ¿Sigues la reunión por fuera?
       </p>
       <p className="mx-auto mt-1 max-w-sm text-sm text-muted-foreground">
-        La administración lo muestra en pantalla. Cambia cada minuto.
+        Si estás en la sala de Vekino, tu asistencia se registra sola al
+        entrar. Este código es solo para quien sigue la reunión por Meet o
+        Zoom: la administración lo proyecta y cambia cada minuto.
       </p>
 
       <form

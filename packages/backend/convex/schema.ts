@@ -577,6 +577,29 @@ export default defineSchema({
      * `convex/lib/codigoAsistencia.ts`.
      */
     codigoAsistenciaSemilla: v.optional(v.string()),
+    /**
+     * Enlace externo de la reunión (Meet, Zoom…) mientras el video propio no
+     * está integrado. Solo https; lo sanea `saneaEnlaceReunion`.
+     */
+    enlaceReunion: v.optional(v.string()),
+    /**
+     * Momentos reales de inicio y cierre, no la hora programada.
+     *
+     * La permanencia se mide contra esta ventana: si la asamblea estaba
+     * citada a las 18:00 pero arrancó 18:40, quien llegó 18:35 estuvo el
+     * 100 % del tiempo, no el 90 %. Los pone `setEstado`.
+     */
+    iniciadaEn: v.optional(v.number()),
+    finalizadaEn: v.optional(v.number()),
+    /**
+     * Si es true, para votar hay que tener una conexión ABIERTA en la sala
+     * (ver `asambleaSesiones`), no basta con haber marcado asistencia.
+     *
+     * Por defecto va apagado a propósito: mientras el frontend de la sala no
+     * envíe latidos, todas las conexiones se cerrarían por inactividad y
+     * nadie podría votar. Se enciende cuando la sala esté en producción.
+     */
+    exigirConexionParaVotar: v.optional(v.boolean()),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
@@ -603,12 +626,126 @@ export default defineSchema({
     .index("by_asamblea_user", ["asambleaId", "userId"]),
 
   // ─────────────────────────────────────────────────────────────
+  // Conexiones a la sala de la asamblea (permanencia y quórum instantáneo)
+  //
+  // `asambleaAsistentes` responde "¿entró?" con una sola marca de tiempo.
+  // Esta tabla responde "¿cuánto estuvo?" y "¿estaba conectado a las 19:42,
+  // cuando se votó el punto 4?" — que es lo que sostiene un acta cuando
+  // alguien la impugna.
+  //
+  // Una fila = UN TRAMO continuo de conexión. Quien se cae y vuelve genera
+  // dos filas; la permanencia es la suma de los tramos, no la resta entre la
+  // primera entrada y la última salida.
+  // ─────────────────────────────────────────────────────────────
+  asambleaSesiones: defineTable({
+    condominioId: v.id("condominios"),
+    asambleaId: v.id("asambleas"),
+    unidadId: v.id("unidades"),
+    unidadNumero: v.string(),
+    /** Quién estaba conectado por esa unidad: el dueño o su apoderado. */
+    userId: v.id("users"),
+    userNombre: v.string(),
+    coeficiente: v.optional(v.number()),
+    esPoder: v.optional(v.boolean()),
+
+    entroEn: v.number(),
+    salioEn: v.optional(v.number()),
+    /**
+     * Duplica `salioEn === undefined`, pero como booleano indexable.
+     * Convex necesita un campo concreto para filtrar por índice, y buscar
+     * las conexiones abiertas es la consulta más caliente de toda la sala.
+     * Se escriben SIEMPRE juntos, en la misma mutación.
+     */
+    abierta: v.boolean(),
+    motivoSalida: v.optional(
+      v.union(
+        v.literal("salida"),          // cerró la sala a propósito
+        v.literal("inactividad"),     // dejó de latir: se le cayó la conexión
+        v.literal("retirada_admin"),  // la mesa le quitó la asistencia
+        v.literal("cierre_asamblea")  // se acabó la asamblea con él dentro
+      )
+    ),
+    origen: v.union(
+      v.literal("codigo"),        // código rotativo de la asamblea virtual
+      v.literal("sala"),          // entró (o reconectó) por la sala de Vekino
+      v.literal("manual_admin"),  // la mesa lo registró
+      v.literal("poder_codigo"),  // apoderado con el código de su poder
+      v.literal("presencial")     // asistencia presencial sin sala virtual
+    ),
+    /** Última señal de vida. El cron cierra lo que lleva rato mudo. */
+    ultimoLatido: v.number(),
+  })
+    .index("by_asamblea", ["asambleaId"])
+    .index("by_asamblea_unidad", ["asambleaId", "unidadId"])
+    .index("by_asamblea_abierta", ["asambleaId", "abierta"])
+    // Para el cron, que barre TODAS las asambleas a la vez.
+    .index("by_abierta_latido", ["abierta", "ultimoLatido"]),
+
+  // ─────────────────────────────────────────────────────────────
   // Poderes de asamblea (delegación de voto por unidad)
   //
   // Un propietario (otorgante) delega su unidad a un representante para una
   // asamblea. Debe ser validado por el representante para contar. Una unidad
   // tiene máximo un poder por asamblea.
   // ─────────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────
+  // Video propio de la sala (WebRTC, señalización por Convex)
+  //
+  // Sin Meet, sin Zoom, sin proveedor: la mesa publica cámara/pantalla desde
+  // su navegador y cada asistente se conecta punto a punto. Convex solo
+  // transporta la señalización (ofertas SDP, respuestas, candidatos ICE);
+  // el video NUNCA pasa por la base de datos.
+  // ─────────────────────────────────────────────────────────────
+  salaEmisores: defineTable({
+    condominioId: v.id("condominios"),
+    asambleaId: v.id("asambleas"),
+    /** Identidad de la PESTAÑA emisora (uuid por sesión de navegador). */
+    clienteId: v.string(),
+    userId: v.id("users"),
+    nombre: v.string(),
+    medio: v.union(v.literal("camara"), v.literal("pantalla")),
+    /** Cámara deshabilitada (frames negros): el espectador pinta avatar. */
+    camApagada: v.optional(v.boolean()),
+    /** Micrófono en silencio: el espectador pinta el tachado. */
+    micApagado: v.optional(v.boolean()),
+    /** El emisor late; sin latido ~90 s, el cron lo retira. */
+    ultimoLatido: v.number(),
+    createdAt: v.number(),
+  })
+    .index("by_asamblea", ["asambleaId"])
+    .index("by_asamblea_cliente", ["asambleaId", "clienteId"]),
+
+  /**
+   * La palabra: el residente levanta la mano, la mesa la concede y con eso
+   * puede encender micrófono/cámara (equivalente al "unmute" de una reunión
+   * grande). Una fila por persona y asamblea.
+   */
+  salaPalabra: defineTable({
+    condominioId: v.id("condominios"),
+    asambleaId: v.id("asambleas"),
+    userId: v.id("users"),
+    nombre: v.string(),
+    estado: v.union(v.literal("pedida"), v.literal("concedida")),
+    createdAt: v.number(),
+  })
+    .index("by_asamblea", ["asambleaId"])
+    .index("by_asamblea_user", ["asambleaId", "userId"]),
+
+  salaSenales: defineTable({
+    asambleaId: v.id("asambleas"),
+    deClienteId: v.string(),
+    paraClienteId: v.string(),
+    tipo: v.union(
+      v.literal("oferta"),
+      v.literal("respuesta"),
+      v.literal("ice"),
+      v.literal("lleno") // el emisor alcanzó su tope de conexiones P2P
+    ),
+    /** SDP o candidato ICE, en JSON. Se borra al ser consumida. */
+    datos: v.string(),
+    createdAt: v.number(),
+  }).index("by_asamblea_para", ["asambleaId", "paraClienteId"]),
+
   poderesAsamblea: defineTable({
     condominioId: v.id("condominios"),
     asambleaId: v.id("asambleas"),
@@ -665,6 +802,13 @@ export default defineSchema({
     estado: v.union(v.literal("abierta"), v.literal("cerrada")),
     /** true si alguna vez se abrió (para resultados: ocultar puntos nunca abiertos). */
     abiertaAlgunaVez: v.optional(v.boolean()),
+    /**
+     * Ventana real de la votación. Sin estas dos fechas no se puede
+     * reconstruir el quórum del instante en que se decidió el punto, que es
+     * exactamente lo que se discute cuando se impugna un acta.
+     */
+    abiertaEn: v.optional(v.number()),
+    cerradaEn: v.optional(v.number()),
     createdAt: v.number(),
     updatedAt: v.number(),
   })

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Link from "next/link";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
@@ -17,9 +18,20 @@ export default function ApoderadoPage() {
   const [restaurado, setRestaurado] = useState(false);
   const data = useQuery(api.asambleas.accederConCodigo, codigo ? { codigo } : "skip");
 
-  // Restaura la sesión guardada al montar (sobrevive a recargas).
+  // Restaura la sesión al montar. ?codigo= en la URL (WhatsApp) tiene prioridad.
   useEffect(() => {
-    const guardado = typeof window !== "undefined" ? window.localStorage.getItem(STORAGE_KEY) : null;
+    const fromUrl = new URLSearchParams(window.location.search)
+      .get("codigo")
+      ?.trim()
+      .toUpperCase();
+    if (fromUrl && fromUrl.length >= 4) {
+      window.localStorage.setItem(STORAGE_KEY, fromUrl);
+      setCodigo(fromUrl);
+      setInput(fromUrl);
+      setRestaurado(true);
+      return;
+    }
+    const guardado = window.localStorage.getItem(STORAGE_KEY);
     if (guardado) setCodigo(guardado);
     setRestaurado(true);
   }, []);
@@ -113,15 +125,15 @@ function Sala({
   codigo: string;
   onSalir: () => void;
 }) {
-  const registrar = useMutation(api.asambleas.registrarAsistenciaConCodigo);
-  const [regBusy, setRegBusy] = useState(false);
-  const [regErr, setRegErr] = useState<string | null>(null);
   const activa = data.asamblea.estado === "programada" || data.asamblea.estado === "en_curso";
   const q = data.quorum;
   const alcanzado = q.pct >= q.quorumRequerido;
   const abiertas = data.votaciones.filter((vt) => vt.estado === "abierta");
   // Solo resultados de votaciones que se abrieron alguna vez (nunca abiertas = sin resultados).
   const cerradas = data.votaciones.filter((vt) => vt.estado === "cerrada" && vt.abiertaAlgunaVez);
+  const puedeEntrarSala =
+    data.asamblea.estado === "en_curso" &&
+    data.asamblea.modalidad !== "presencial";
   return (
     <div className="space-y-5">
       {/* Encabezado del apoderado */}
@@ -151,6 +163,15 @@ function Sala({
           </div>
           {!data.validado && <p className="mt-2 text-xs text-amber-600">Algún poder está pendiente de validación por la administración.</p>}
         </div>
+
+        {puedeEntrarSala ? (
+          <Link
+            href="/apoderado/sala"
+            className="mt-4 flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-primary text-sm font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-primary/90"
+          >
+            <Radio className="h-4 w-4" /> Entrar a la sala
+          </Link>
+        ) : null}
       </div>
 
       {/* Registro de asistencia */}
@@ -164,24 +185,23 @@ function Sala({
             </div>
           </div>
         ) : data.asamblea.modalidad === "virtual" ? (
-          /* Virtual: el apoderado sí puede auto-registrarse. */
           <div className="rounded-2xl border border-brand/30 bg-brand/5 p-4">
-            <p className="text-sm font-semibold text-foreground">Confirma tu asistencia</p>
-            <p className="mt-0.5 text-xs text-muted-foreground">Registra tu presencia para que tu casa cuente en el quórum.</p>
-            {regErr && <p className="mt-2 rounded-lg bg-red-500/10 p-2 text-xs text-red-600">{regErr}</p>}
-            <button
-              onClick={async () => {
-                setRegBusy(true); setRegErr(null);
-                try { await registrar({ codigo }); }
-                catch (e) { setRegErr(e instanceof Error ? e.message : "No se pudo registrar."); }
-                finally { setRegBusy(false); }
-              }}
-              disabled={regBusy}
-              className="mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-primary text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
-            >
-              {regBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-              Confirmar mi asistencia
-            </button>
+            <p className="text-sm font-semibold text-foreground">Asistencia en la sala</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              Entra a la sala virtual y escribe el código que proyecta la administración (o escanea el QR).
+            </p>
+            {puedeEntrarSala ? (
+              <Link
+                href="/apoderado/sala"
+                className="mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-primary text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
+              >
+                <Radio className="h-4 w-4" /> Entrar a la sala
+              </Link>
+            ) : (
+              <p className="mt-3 text-xs text-amber-700">
+                La sala se habilita cuando la administración inicia la asamblea.
+              </p>
+            )}
           </div>
         ) : (
           /* Presencial / mixta: el admin corrobora. El apoderado muestra su código. */

@@ -16,6 +16,21 @@ import {
   nuevaSemilla,
   VENTANA_MS,
 } from "./lib/codigoAsistencia";
+import {
+  duracionVentana,
+  formatearDuracion,
+  fusionarTramos,
+  msConectados,
+  pctPermanencia,
+  type Tramo,
+} from "./lib/permanencia";
+import {
+  abrirSesiones,
+  cerrarSesionesAsamblea,
+  cerrarSesionesUnidad,
+  tieneConexionAbierta,
+  type FilaSesion,
+} from "./asambleaSala";
 
 const WRITE_ROLES = ["administrador", "junta_directiva", "representante_asamblea"] as const;
 
@@ -47,7 +62,12 @@ export const listByCondominio = query({
           .withIndex("by_asamblea", (q) => q.eq("asambleaId", a._id))
           .collect();
         const actaUrl = a.actaStorageId ? await ctx.storage.getUrl(a.actaStorageId) : null;
-        return { ...a, votacionesCount: votaciones.length, actaUrl };
+        /* La semilla del código JAMÁS sale hacia un residente: con ella se
+         * calculan todos los códigos futuros sin estar en la reunión. Estos
+         * dos queries los lee cualquier miembro, así que se quita aquí. La
+         * mesa la obtiene por `semillaAsistencia` (solo WRITE_ROLES). */
+        const { codigoAsistenciaSemilla: _semilla, ...pub } = a;
+        return { ...pub, votacionesCount: votaciones.length, actaUrl };
       })
     );
   },
@@ -61,7 +81,8 @@ export const get = query({
     if (!a) return null;
     await requireCondominioRole(ctx, a.condominioId, []);
     const actaUrl = a.actaStorageId ? await ctx.storage.getUrl(a.actaStorageId) : null;
-    return { ...a, actaUrl };
+    const { codigoAsistenciaSemilla: _semilla, ...pub } = a;
+    return { ...pub, actaUrl };
   },
 });
 
@@ -112,12 +133,16 @@ export const update = mutation({
     quorumAlcanzado: v.optional(v.number()),
     agenda: v.optional(v.array(v.string())),
     descripcion: v.optional(v.string()),
+    enlaceReunion: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const existing = await ctx.db.get(args.id);
     if (!existing) throw new Error("Asamblea no encontrada.");
     await requireCondominioRole(ctx, existing.condominioId, [...WRITE_ROLES]);
     const { id, ...rest } = args;
+    if (rest.enlaceReunion !== undefined) {
+      rest.enlaceReunion = saneaEnlaceReunion(rest.enlaceReunion);
+    }
     await ctx.db.patch(id, {
       ...rest,
       titulo: rest.titulo?.trim() ?? existing.titulo,
@@ -137,11 +162,39 @@ export const setEstado = mutation({
     const existing = await ctx.db.get(args.id);
     if (!existing) throw new Error("Asamblea no encontrada.");
     await requireCondominioRole(ctx, existing.condominioId, [...WRITE_ROLES]);
+    const ahora = Date.now();
+
+    /* Marcas reales de la asamblea. La permanencia se mide contra esta
+     * ventana, no contra la hora citada: si arrancó 40 min tarde, quien
+     * llegó antes de arrancar estuvo el 100 % del tiempo. `iniciadaEn` solo
+     * se escribe la primera vez — reabrir una asamblea no debe reiniciar el
+     * cronómetro y borrar la permanencia ya acumulada. */
+    const iniciadaEn =
+      args.estado === "en_curso" ? (existing.iniciadaEn ?? ahora) : existing.iniciadaEn;
+
+    /* La semilla del código se crea AQUÍ y no al abrir el panel de
+     * proyección: el apoderado externo y la app móvil registran asistencia
+     * contra ella, y si la mesa nunca abría ese panel se quedaban ante un
+     * "todavía no ha abierto el registro" sin salida. */
+    if (args.estado === "en_curso" && !existing.codigoAsistenciaSemilla) {
+      await ctx.db.patch(args.id, { codigoAsistenciaSemilla: nuevaSemilla() });
+    }
+    const finalizadaEn =
+      args.estado === "finalizada" ? ahora : existing.finalizadaEn;
+
     await ctx.db.patch(args.id, {
       estado: args.estado,
       quorumAlcanzado: args.quorumAlcanzado ?? existing.quorumAlcanzado,
-      updatedAt: Date.now(),
+      ...(iniciadaEn !== undefined ? { iniciadaEn } : {}),
+      ...(finalizadaEn !== undefined ? { finalizadaEn } : {}),
+      updatedAt: ahora,
     });
+
+    /* Al salir de "en_curso" nadie puede seguir conectado: si quedaran
+     * tramos abiertos, la permanencia crecería sola para siempre. */
+    if (args.estado !== "en_curso") {
+      await cerrarSesionesAsamblea(ctx, args.id);
+    }
     // Fuera de "en_curso" no debe haber votaciones abiertas al público.
     if (args.estado !== "en_curso") {
       const votaciones = await ctx.db
@@ -267,10 +320,15 @@ export const toggleVotacion = mutation({
         throw new Error("Inicia la asamblea antes de abrir una votación.");
       }
     }
+    const ahora = Date.now();
     await ctx.db.patch(args.id, {
       estado: abrir ? "abierta" : "cerrada",
-      ...(abrir ? { abiertaAlgunaVez: true } : {}),
-      updatedAt: Date.now(),
+      // `abiertaEn` se refresca en cada apertura: si un punto se reabre, la
+      // ventana que vale para el quórum es la última, no la primera.
+      ...(abrir
+        ? { abiertaAlgunaVez: true, abiertaEn: ahora }
+        : { cerradaEn: ahora }),
+      updatedAt: ahora,
     });
   },
 });
@@ -356,7 +414,7 @@ export const registrarAsistencia = mutation({
      * Ver `registrarAsistenciaConCodigoAsamblea`. */
     if (asamblea.modalidad === "virtual") {
       throw new Error(
-        "Esta asamblea es virtual: escribe el código que muestra la administración en la reunión.",
+        "Esta asamblea es virtual: entra a la sala para registrar tu asistencia, o usa el código que proyecta la administración.",
       );
     }
     const user = await requireAppUser(ctx);
@@ -371,13 +429,156 @@ export const registrarAsistencia = mutation({
         "No tienes unidades para registrar. Si delegaste tu poder, el apoderado usa su código en sala.",
       );
     }
-    await validarPoderesAlRegistrar(ctx, poderesRecibidos);
     const registradas = await insertarAsistencias(ctx, {
+      origen: "presencial",
       condominioId: asamblea.condominioId,
       asambleaId: args.asambleaId,
       filas,
     });
     return { registradas, unidades: filas.length };
+  },
+});
+
+/**
+ * Entrar a la sala de Vekino = registrar asistencia. Sin código.
+ *
+ * Es una mutation pública: la garantía NO es "solo se llama desde la
+ * pantalla de la sala" (eso no existe en un backend), sino lo que se valida
+ * aquí dentro: membresía, asamblea EN CURSO —más estricto que el código, que
+ * permitía registrarse antes de iniciar— y las mismas unidades que
+ * `filasAsistenciaPersona` (propias no delegadas + poderes ACEPTADOS). La
+ * mesa controla la ventana (abre/cierra la asamblea), ve los conectados en
+ * vivo y la conexión queda en `asambleaSesiones` con su permanencia, que es
+ * más prueba de la que el código dio nunca.
+ *
+ * El código rotativo sigue vivo como vía para quien sigue la reunión por
+ * fuera (Meet/Zoom, app móvil): posee el código quien ve la pantalla.
+ */
+/**
+ * Solo https y sin espacios: un enlace de reunión es un link que TODA la
+ * comunidad va a abrir con un clic; aceptar `javascript:` o `http:` aquí
+ * sería regalar el vector.
+ */
+function saneaEnlaceReunion(valor: string): string {
+  const limpio = valor.trim();
+  if (limpio === "") return "";
+  let url: URL;
+  try {
+    url = new URL(limpio);
+  } catch {
+    throw new Error("El enlace de la reunión no es una URL válida.");
+  }
+  if (url.protocol !== "https:") {
+    throw new Error("El enlace de la reunión debe empezar por https://");
+  }
+  return url.toString();
+}
+
+/** La mesa fija (o quita, con "") el enlace externo de la reunión. */
+export const setEnlaceReunion = mutation({
+  args: { asambleaId: v.id("asambleas"), enlace: v.string() },
+  handler: async (ctx, args) => {
+    const asamblea = await ctx.db.get(args.asambleaId);
+    if (!asamblea) throw new Error("Asamblea no encontrada.");
+    await requireCondominioRole(ctx, asamblea.condominioId, [...WRITE_ROLES]);
+    const enlace = saneaEnlaceReunion(args.enlace);
+    await ctx.db.patch(args.asambleaId, {
+      enlaceReunion: enlace === "" ? undefined : enlace,
+      updatedAt: Date.now(),
+    });
+    return { enlace };
+  },
+});
+
+/**
+ * Versión del apoderado (con o sin cuenta): el código del PODER ya es la
+ * prueba de posesión — pedirle además el código proyectado dentro de la sala
+ * de Vekino era el mismo círculo que se quitó para el residente. El código
+ * rotativo le queda a quien sigue la reunión por fuera.
+ */
+export const entrarYRegistrarConPoder = mutation({
+  args: { codigo: v.string() },
+  handler: async (ctx, args) => {
+    const codigo = args.codigo.trim().toUpperCase();
+    if (codigo.length < 4) throw new Error("Código inválido.");
+
+    const poderes = await ctx.db
+      .query("poderesAsamblea")
+      .withIndex("by_codigo", (q) => q.eq("codigoAcceso", codigo))
+      .collect();
+    if (poderes.length === 0) throw new Error("Código no encontrado.");
+
+    const asamblea = await ctx.db.get(poderes[0]!.asambleaId);
+    if (!asamblea) throw new Error("Asamblea no encontrada.");
+    if (asamblea.modalidad === "presencial") {
+      throw new Error(
+        "En asambleas presenciales el administrador registra la asistencia con tu código.",
+      );
+    }
+    if (asamblea.estado !== "en_curso") {
+      throw new Error("La sala aún no está abierta.");
+    }
+
+    const now = Date.now();
+    const filas: FilaSesion[] = [];
+    for (const p of poderes) {
+      // Posesión del código = aceptación del poder (igual que la vía rotativa).
+      if (!p.validado) await ctx.db.patch(p._id, { validado: true, updatedAt: now });
+      filas.push({
+        unidadId: p.unidadId,
+        unidadNumero: p.unidadNumero,
+        userId: p.representanteUserId ?? p.otorganteUserId,
+        userNombre: p.representanteNombre,
+        coeficiente: p.coeficiente,
+        esPoder: true,
+      });
+    }
+    const registradas = await insertarAsistencias(ctx, {
+      origen: "poder_codigo",
+      condominioId: asamblea.condominioId,
+      asambleaId: asamblea._id,
+      filas,
+    });
+    return { registradas, unidades: poderes.map((p) => p.unidadNumero) };
+  },
+});
+
+export const entrarYRegistrar = mutation({
+  args: { asambleaId: v.id("asambleas") },
+  handler: async (ctx, args) => {
+    const asamblea = await ctx.db.get(args.asambleaId);
+    if (!asamblea) throw new Error("Asamblea no encontrada.");
+    if (asamblea.modalidad === "presencial") {
+      /* En presencial la asistencia la corrobora la mesa (QR en el punto de
+       * registro). Auto-registrarse desde la casa inflaría el quórum. */
+      throw new Error(
+        "Esta asamblea es presencial: la asistencia se registra en el punto de control.",
+      );
+    }
+    if (asamblea.estado !== "en_curso") {
+      throw new Error("La sala aún no está abierta.");
+    }
+    const user = await requireAppUser(ctx);
+    await requireCondominioRole(ctx, asamblea.condominioId, []);
+
+    const { filas } = await filasAsistenciaPersona(ctx, {
+      asambleaId: args.asambleaId,
+      condominioId: asamblea.condominioId,
+      userId: user._id,
+      userNombre: user.name,
+    });
+    if (filas.length === 0) {
+      throw new Error(
+        "No tienes unidades para registrar. Si delegaste tu poder, tu apoderado representa tu unidad.",
+      );
+    }
+    const registradas = await insertarAsistencias(ctx, {
+      origen: "sala",
+      condominioId: asamblea.condominioId,
+      asambleaId: args.asambleaId,
+      filas,
+    });
+    return { registradas, unidades: filas.map((f) => f.unidadNumero) };
   },
 });
 
@@ -501,8 +702,8 @@ export const registrarAsistenciaConCodigoAsamblea = mutation({
         "No tienes unidades para registrar. Si delegaste tu poder, el apoderado usa su código en sala.",
       );
     }
-    await validarPoderesAlRegistrar(ctx, poderesRecibidos);
     const registradas = await insertarAsistencias(ctx, {
+      origen: "codigo",
       condominioId: asamblea.condominioId,
       asambleaId: args.asambleaId,
       filas,
@@ -622,6 +823,7 @@ export const miParticipacion = query({
 
     return {
       presente: misAsistencias.length > 0,
+      nombre: user.name,
       unidades: misAsistencias.map((a) => a.unidadNumero),
       representa,
       delegoTodo,
@@ -659,6 +861,26 @@ export const votar = mutation({
       )
       .first();
     if (!asistencia) throw new Error("Registra tu asistencia antes de votar.");
+
+    /* Presencia EN EL MOMENTO de votar, no "alguna vez entró".
+     *
+     * Va detrás de una bandera por asamblea y apagada por defecto: si el
+     * frontend de la sala todavía no manda latidos, el cron cierra todas las
+     * conexiones a los 90 s y esto dejaría a la asamblea entera sin poder
+     * votar. Se enciende cuando la sala esté en producción
+     * (`asambleaSala.exigirConexionParaVotar`). */
+    if (asamblea.exigirConexionParaVotar) {
+      const conectado = await tieneConexionAbierta(
+        ctx,
+        votacion.asambleaId,
+        asistencia.unidadId,
+      );
+      if (!conectado) {
+        throw new Error(
+          "Perdiste la conexión con la sala. Vuelve a entrar para poder votar.",
+        );
+      }
+    }
 
     // Poderes de la asamblea: unidades que delegué (no las voto) y las que me delegaron.
     const poderes = await ctx.db
@@ -871,6 +1093,12 @@ export const otorgarPoder = mutation({
       }
       const rep = await ctx.db.get(args.representanteUserId);
       if (!rep) throw new Error("Propietario no encontrado.");
+      /* Sin esto se podía nombrar representante a CUALQUIER usuario de la
+       * plataforma, aunque no perteneciera al condominio. */
+      const mRep = await getMembership(ctx, rep._id, asamblea.condominioId);
+      if (!mRep?.isActive) {
+        throw new Error("El apoderado debe ser miembro de este conjunto.");
+      }
       nombre = rep.name;
       documento = rep.numeroDocumento ?? undefined;
       representanteExistente = rep._id;
@@ -964,7 +1192,10 @@ export const responderPoder = mutation({
 
     if (args.aceptar) {
       await ctx.db.patch(args.poderId, { validado: true, updatedAt: Date.now() });
-      // Si el apoderado ya hizo check-in, suma ya la unidad al quórum.
+      /* Si el apoderado ya está presente (check-in físico o sala virtual),
+       * aceptar el poder suma la unidad al quórum en cualquier modalidad.
+       * La exclusión de virtual venía de cuando la única prueba era el
+       * código proyectado; hoy la conexión a la sala es prueba más fuerte. */
       if (poder.representanteUserId) {
         const yaPresente = await ctx.db
           .query("asambleaAsistentes")
@@ -974,6 +1205,7 @@ export const responderPoder = mutation({
           .first();
         if (yaPresente) {
           await insertarAsistencias(ctx, {
+            origen: "poder_codigo",
             condominioId: poder.condominioId,
             asambleaId: poder.asambleaId,
             filas: [
@@ -1244,6 +1476,92 @@ export const paqueteAuditoria = query({
             tieneVotacion: false,
           }));
 
+    /* Permanencia por unidad. Va en el paquete de auditoría, no en una
+     * pantalla aparte: cuando alguien impugna un acta, lo que pide es UN
+     * documento con quién estuvo, cuánto y en qué momento se decidió cada
+     * punto. Si la asamblea no usó sala virtual, `sesiones` viene vacío y
+     * este bloque sale en null en vez de con ceros, que se leerían como
+     * "nadie asistió". */
+    const sesiones = await ctx.db
+      .query("asambleaSesiones")
+      .withIndex("by_asamblea", (q) => q.eq("asambleaId", args.asambleaId))
+      .collect();
+
+    let permanencia: {
+      iniciadaEn: number;
+      finalizadaEn: number | null;
+      duracionTotal: string;
+      pctPromedio: number;
+      unidades: {
+        unidadNumero: string;
+        personas: string;
+        duracion: string;
+        pct: number;
+        reconexiones: number;
+        sigueConectada: boolean;
+      }[];
+    } | null = null;
+
+    if (sesiones.length > 0) {
+      const ahora = Date.now();
+      const desde =
+        asamblea.iniciadaEn ?? Math.min(...sesiones.map((x) => x.entroEn));
+      const ventana = { desde, hasta: asamblea.finalizadaEn ?? null };
+      const msTotales = duracionVentana(ventana, ahora);
+
+      const porUnidad = new Map<
+        string,
+        { numero: string; nombres: Set<string>; tramos: Tramo[] }
+      >();
+      for (const x of sesiones) {
+        const key = x.unidadId as string;
+        const acc = porUnidad.get(key);
+        const tr: Tramo = { entroEn: x.entroEn, salioEn: x.salioEn ?? null };
+        if (acc) {
+          acc.tramos.push(tr);
+          acc.nombres.add(x.userNombre);
+        } else {
+          porUnidad.set(key, {
+            numero: x.unidadNumero,
+            nombres: new Set([x.userNombre]),
+            tramos: [tr],
+          });
+        }
+      }
+
+      const filas = [...porUnidad.values()]
+        .map((u) => {
+          const tramos = fusionarTramos(u.tramos, ahora);
+          const ms = msConectados(tramos, ventana, ahora);
+          return {
+            unidadNumero: u.numero,
+            personas: [...u.nombres].join(", "),
+            duracion: formatearDuracion(ms),
+            pct: pctPermanencia(ms, msTotales),
+            reconexiones: Math.max(0, tramos.length - 1),
+            sigueConectada: tramos.some((t) => t.salioEn === null),
+          };
+        })
+        .sort((a, b) =>
+          a.unidadNumero.localeCompare(b.unidadNumero, undefined, {
+            numeric: true,
+          }),
+        );
+
+      permanencia = {
+        iniciadaEn: desde,
+        finalizadaEn: asamblea.finalizadaEn ?? null,
+        duracionTotal: formatearDuracion(msTotales),
+        pctPromedio:
+          filas.length > 0
+            ? Math.round(
+                (filas.reduce((acc, f) => acc + f.pct, 0) / filas.length) * 100,
+              ) / 100
+            : 0,
+        unidades: filas,
+      };
+    }
+
     return {
       condominioNombre: condominio?.name ?? "Condominio",
       asamblea: {
@@ -1255,10 +1573,13 @@ export const paqueteAuditoria = query({
         hora: asamblea.hora,
         lugar: asamblea.lugar ?? null,
         quorumRequerido: asamblea.quorumRequerido ?? 51,
+        iniciadaEn: asamblea.iniciadaEn ?? null,
+        finalizadaEn: asamblea.finalizadaEn ?? null,
       },
       ordenDia,
       poderes: poderesOut,
       resultados,
+      permanencia,
       generadoEn: Date.now(),
     };
   },
@@ -1271,19 +1592,22 @@ export const paqueteAuditoria = query({
 /**
  * Inserta filas de asistencia (idempotente). Devuelve cuántas se crearon.
  */
+/**
+ * Registra la asistencia de cada unidad y abre su tramo de conexión.
+ *
+ * Ojo con la asimetría: la asistencia es idempotente (una unidad presente no
+ * se registra dos veces), pero el tramo NO se salta para las ya presentes.
+ * Quien se cae y vuelve a entrar el código sigue teniendo una sola marca de
+ * asistencia y un tramo nuevo — que es justo lo que mide la permanencia.
+ * `abrirSesiones` se encarga de no duplicar tramos ya abiertos.
+ */
 async function insertarAsistencias(
   ctx: MutationCtx,
   args: {
     condominioId: Id<"condominios">;
     asambleaId: Id<"asambleas">;
-    filas: {
-      unidadId: Id<"unidades">;
-      unidadNumero: string;
-      userId: Id<"users">;
-      userNombre: string;
-      coeficiente?: number;
-      esPoder?: boolean;
-    }[];
+    origen: "codigo" | "sala" | "manual_admin" | "poder_codigo" | "presencial";
+    filas: FilaSesion[];
   },
 ) {
   const now = Date.now();
@@ -1309,6 +1633,14 @@ async function insertarAsistencias(
     });
     registradas++;
   }
+
+  await abrirSesiones(ctx, {
+    condominioId: args.condominioId,
+    asambleaId: args.asambleaId,
+    origen: args.origen,
+    filas: args.filas,
+  });
+
   return registradas;
 }
 
@@ -1338,8 +1670,14 @@ async function filasAsistenciaPersona(
   const propias = (await misUnidades(ctx, args.userId, args.condominioId)).filter(
     (u) => !delegadasAway.has(u._id as string),
   );
-  // Incluye pendientes: al registrarse en sala, el apoderado asume esos poderes.
-  const recibidos = poderes.filter((p) => p.representanteUserId === args.userId);
+  /* SOLO poderes aceptados (`validado`). Antes entraban también los
+   * pendientes y el registro los auto-validaba: bastaba que el "apoderado"
+   * se registrara para capturar la unidad del otorgante sin que este pudiera
+   * revocar (fuera de "programada" solo revoca la administración). Aceptar
+   * un poder es un acto explícito: `responderPoder`. */
+  const recibidos = poderes.filter(
+    (p) => p.validado && p.representanteUserId === args.userId,
+  );
 
   const filas: {
     unidadId: Id<"unidades">;
@@ -1371,19 +1709,6 @@ async function filasAsistenciaPersona(
     });
   }
   return { filas, poderesRecibidos: recibidos };
-}
-
-/** Marca como validados los poderes que la persona acaba de ejercer en sala. */
-async function validarPoderesAlRegistrar(
-  ctx: MutationCtx,
-  poderes: { _id: Id<"poderesAsamblea">; validado: boolean }[],
-) {
-  const now = Date.now();
-  for (const p of poderes) {
-    if (!p.validado) {
-      await ctx.db.patch(p._id, { validado: true, updatedAt: now });
-    }
-  }
 }
 
 /**
@@ -1431,8 +1756,8 @@ export const registrarAsistenciaAdmin = mutation({
         "Esta persona no tiene unidades propias ni poderes para registrar. Si solo es apoderado externo, usa su código.",
       );
     }
-    await validarPoderesAlRegistrar(ctx, poderesRecibidos);
     const registradas = await insertarAsistencias(ctx, {
+      origen: "manual_admin",
       condominioId: asamblea.condominioId,
       asambleaId: args.asambleaId,
       filas,
@@ -1448,6 +1773,12 @@ export const quitarAsistencia = mutation({
     const a = await ctx.db.get(args.asistenteId);
     if (!a) return;
     await requireCondominioRole(ctx, a.condominioId, [...WRITE_ROLES]);
+    // Cerrar ANTES de borrar: el tramo ya recorrido es prueba y se conserva.
+    await cerrarSesionesUnidad(ctx, {
+      asambleaId: a.asambleaId,
+      unidadId: a.unidadId,
+      motivo: "retirada_admin",
+    });
     await ctx.db.delete(args.asistenteId);
   },
 });
@@ -1526,6 +1857,7 @@ export const registrarAsistenciaPorCodigo = mutation({
     }
 
     const registradas = await insertarAsistencias(ctx, {
+      origen: "poder_codigo",
       condominioId: asamblea.condominioId,
       asambleaId: args.asambleaId,
       filas,
@@ -1912,13 +2244,19 @@ export const accederConCodigo = query({
       .query("poderesAsamblea")
       .withIndex("by_asamblea", (q) => q.eq("asambleaId", asamblea._id))
       .collect();
+    // Asistencia del apoderado = check-in real de sus unidades (fila en
+    // asambleaAsistentes). No usamos sumarUnidadesPorPoderPresente aquí: eso
+    // infla el quórum si el representante ya está presente por otra casa, pero
+    // no implica que el apoderado haya entrado a la sala con el código.
+    const idsAsistentes = new Set(asistentes.map((a) => a.unidadId as string));
+    const asistenciaRegistrada = poderes.every((p) =>
+      idsAsistentes.has(p.unidadId as string),
+    );
     sumarUnidadesPorPoderPresente(
       presentes,
       asistentes,
       poderesAsamblea,
     );
-    // ¿Ya están registradas como presentes TODAS las unidades de este apoderado?
-    const asistenciaRegistrada = poderes.every((p) => presentes.has(p.unidadId as string));
     const totalCoef = unidadesCond.reduce((s, u) => s + (u.coeficiente ?? 0), 0);
     const presenteCoef = [...presentes.values()].reduce((s, c) => s + c, 0);
     const pctQuorum =
@@ -1945,6 +2283,7 @@ export const accederConCodigo = query({
       apoderadoNombre: poderes[0]!.representanteNombre,
       asamblea: {
         _id: asamblea._id,
+        condominioId: asamblea.condominioId,
         titulo: asamblea.titulo,
         tipo: asamblea.tipo,
         modalidad: asamblea.modalidad,
@@ -1975,12 +2314,17 @@ export const accederConCodigo = query({
 });
 
 /**
- * El apoderado registra su asistencia con el código (página pública `/apoderado`).
- * El código es la credencial: marca presentes las casas que representa y valida
- * los poderes. Sirve para asambleas presenciales/mixtas donde se toma asistencia.
+ * El apoderado registra asistencia en asamblea virtual (página `/apoderado`).
+ *
+ * Necesita dos códigos:
+ * - `codigo`: credencial del poder (entra a la sala del apoderado)
+ * - `codigoSala`: código rotativo que la administración proyecta (igual que
+ *   residentes). Sin él cualquiera marcaría asistencia sin estar en la reunión.
+ *
+ * En presencial/mixta el admin registra; esta mutación no aplica.
  */
 export const registrarAsistenciaConCodigo = mutation({
-  args: { codigo: v.string() },
+  args: { codigo: v.string(), codigoSala: v.string() },
   handler: async (ctx, args) => {
     const codigo = args.codigo.trim().toUpperCase();
     if (codigo.length < 4) throw new Error("Código inválido.");
@@ -1996,36 +2340,43 @@ export const registrarAsistenciaConCodigo = mutation({
     if (asamblea.estado === "finalizada" || asamblea.estado === "cancelada") {
       throw new Error("La asamblea ya no está activa.");
     }
-    // En presenciales/mixtas la asistencia la corrobora el administrador; el
-    // apoderado solo puede auto-registrarse en asambleas virtuales.
     if (asamblea.modalidad !== "virtual") {
-      throw new Error("En asambleas presenciales el administrador registra la asistencia con tu código.");
+      throw new Error(
+        "En asambleas presenciales el administrador registra la asistencia con tu código.",
+      );
+    }
+
+    const semilla = asamblea.codigoAsistenciaSemilla;
+    if (!semilla) {
+      throw new Error(
+        "La administración todavía no ha abierto el registro de asistencia.",
+      );
+    }
+    if (!codigoEsValido(semilla, args.codigoSala, Date.now())) {
+      throw new Error(
+        "Código de la reunión incorrecto o vencido. Mira el que aparece ahora en pantalla.",
+      );
     }
 
     const now = Date.now();
-    let registradas = 0;
+    const filas = [];
     for (const p of poderes) {
       if (!p.validado) await ctx.db.patch(p._id, { validado: true, updatedAt: now });
-      const ex = await ctx.db
-        .query("asambleaAsistentes")
-        .withIndex("by_asamblea_unidad", (q) =>
-          q.eq("asambleaId", asamblea._id).eq("unidadId", p.unidadId),
-        )
-        .first();
-      if (ex) continue;
-      await ctx.db.insert("asambleaAsistentes", {
-        condominioId: asamblea.condominioId,
-        asambleaId: asamblea._id,
+      filas.push({
         unidadId: p.unidadId,
         unidadNumero: p.unidadNumero,
         userId: p.representanteUserId ?? p.otorganteUserId,
         userNombre: p.representanteNombre,
         coeficiente: p.coeficiente,
-        esPoder: true,
-        createdAt: now,
+        esPoder: true as const,
       });
-      registradas++;
     }
+    const registradas = await insertarAsistencias(ctx, {
+      origen: "poder_codigo",
+      condominioId: asamblea.condominioId,
+      asambleaId: asamblea._id,
+      filas,
+    });
     return { registradas, unidades: poderes.map((p) => p.unidadNumero) };
   },
 });

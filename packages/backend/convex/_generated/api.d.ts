@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as asambleaSala from "../asambleaSala.js";
 import type * as asambleas from "../asambleas.js";
 import type * as auth from "../auth.js";
 import type * as authMigrate from "../authMigrate.js";
@@ -25,6 +26,7 @@ import type * as historial from "../historial.js";
 import type * as http from "../http.js";
 import type * as lib_brevo from "../lib/brevo.js";
 import type * as lib_codigoAsistencia from "../lib/codigoAsistencia.js";
+import type * as lib_permanencia from "../lib/permanencia.js";
 import type * as memberships from "../memberships.js";
 import type * as migrations from "../migrations.js";
 import type * as model_authz from "../model/authz.js";
@@ -43,6 +45,7 @@ import type * as platform from "../platform.js";
 import type * as portal from "../portal.js";
 import type * as pqrs from "../pqrs.js";
 import type * as reservas from "../reservas.js";
+import type * as salaVideo from "../salaVideo.js";
 import type * as soporte from "../soporte.js";
 import type * as unidades from "../unidades.js";
 import type * as users from "../users.js";
@@ -56,6 +59,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  asambleaSala: typeof asambleaSala;
   asambleas: typeof asambleas;
   auth: typeof auth;
   authMigrate: typeof authMigrate;
@@ -73,6 +77,7 @@ declare const fullApi: ApiFromModules<{
   http: typeof http;
   "lib/brevo": typeof lib_brevo;
   "lib/codigoAsistencia": typeof lib_codigoAsistencia;
+  "lib/permanencia": typeof lib_permanencia;
   memberships: typeof memberships;
   migrations: typeof migrations;
   "model/authz": typeof model_authz;
@@ -91,6 +96,7 @@ declare const fullApi: ApiFromModules<{
   portal: typeof portal;
   pqrs: typeof pqrs;
   reservas: typeof reservas;
+  salaVideo: typeof salaVideo;
   soporte: typeof soporte;
   unidades: typeof unidades;
   users: typeof users;

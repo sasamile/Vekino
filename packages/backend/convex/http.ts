@@ -5,7 +5,20 @@ import { authComponent, createAuth } from "./auth";
 
 const http = httpRouter();
 
-authComponent.registerRoutes(http, createAuth);
+/* `cors: true` es obligatorio desde que la web llama a estas rutas DIRECTO
+ * desde el navegador (ver `lib/auth-client.ts`). Antes todo pasaba por el
+ * proxy de Next —servidor a servidor, sin CORS— y por eso nunca hizo falta.
+ *
+ * Sin esto el navegador ni siquiera llega a la petición: el preflight
+ * `OPTIONS` responde 404 porque no hay ruta registrada para ese método, y la
+ * promesa revienta con un `TypeError: Failed to fetch` que no dice nada.
+ *
+ * Los valores por defecto ya traen lo que necesita el flujo cross-domain:
+ * los orígenes salen de `trustedOrigins` (auth.ts + AUTH_TRUSTED_ORIGINS),
+ * `Better-Auth-Cookie` va en las cabeceras permitidas y
+ * `Set-Better-Auth-Cookie` en las expuestas — esta última es la que el
+ * cliente tiene que poder LEER para guardar la sesión. */
+authComponent.registerRoutes(http, createAuth, { cors: true });
 
 // ─────────────────────────────────────────────────────────────
 // Retorno de la Pasarela de Pagos Aval

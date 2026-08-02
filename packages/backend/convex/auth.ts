@@ -1,5 +1,5 @@
 import { createClient, type GenericCtx } from "@convex-dev/better-auth";
-import { convex } from "@convex-dev/better-auth/plugins";
+import { convex, crossDomain } from "@convex-dev/better-auth/plugins";
 import { betterAuth } from "better-auth/minimal";
 import { verifyPassword } from "better-auth/crypto";
 import { expo } from "@better-auth/expo";
@@ -137,6 +137,25 @@ export const createAuth = (ctx: GenericCtx<DataModel>) => {
         },
       },
     },
-    plugins: [expo(), convex({ authConfig })],
+    /* `crossDomain` resuelve el "entro con Google y me devuelve al login".
+     *
+     * `baseURL` es …convex.site, así que Google redirige el navegador
+     * DIRECTAMENTE ahí (redirect_uri = …convex.site/api/auth/callback/google)
+     * saltándose el proxy de Next. La cookie de sesión queda entonces en
+     * .convex.site, y la app en localhost/vekino.co nunca la ve: pregunta
+     * "¿hay sesión?", le dicen que no, y el guard del dashboard rebota al
+     * login.
+     *
+     * El plugin cierra ese hueco: al terminar el callback genera un token de
+     * un solo uso (3 min) y lo cuelga del redirect como `?ott=…`. Del otro
+     * lado, `ConvexBetterAuthProvider` —que ya está montado— lo canjea por la
+     * sesión. A partir de ahí la sesión viaja en la cabecera
+     * `Better-Auth-Cookie` en vez de en una cookie de tercero, que es lo que
+     * los navegadores bloquean.
+     *
+     * Va antes de `convex()`: este último cierra la configuración. Las
+     * peticiones nativas de Expo llevan la cabecera `expo-origin` y el plugin
+     * las deja pasar sin tocarlas, así que la app móvil no se ve afectada. */
+    plugins: [expo(), crossDomain({ siteUrl }), convex({ authConfig })],
   });
 };

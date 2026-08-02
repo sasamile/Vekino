@@ -66,10 +66,10 @@ export function SidebarContent({
         />
 
         <div className="mt-auto flex shrink-0 flex-col gap-2.5 pt-1">
-          <div className="relative rounded-xl border border-border bg-muted/90 p-3 shadow-soft backdrop-blur-xl backdrop-saturate-150 dark:border-white/12 dark:bg-[#1a1c1a]/75 supports-backdrop-filter:bg-muted/75 dark:supports-backdrop-filter:bg-[#1a1c1a]/60">
+          <div className="relative rounded-xl border border-brand/20 bg-brand/[0.07] p-3 shadow-soft dark:border-brand/25 dark:bg-brand/10">
             <div className="mb-1.5 flex items-center gap-1.5">
               <Headphones
-                className="h-3.5 w-3.5 shrink-0 stroke-[1.5] text-foreground"
+                className="h-3.5 w-3.5 shrink-0 stroke-[1.5] text-brand"
                 aria-hidden
               />
               <p className="text-[12.5px] font-medium text-foreground">
@@ -88,7 +88,7 @@ export function SidebarContent({
             <Button
               variant="outline"
               size="sm"
-              className="h-8 w-full rounded-full border-border bg-card text-[12px] font-medium shadow-soft dark:border-white/15 dark:bg-card/60"
+              className="h-8 w-full rounded-full border-brand/25 bg-card/80 text-[12px] font-medium shadow-soft hover:bg-card dark:border-brand/30 dark:bg-card/50"
               asChild
             >
               <Link href={`${base}/soporte`} onClick={onNavigate}>

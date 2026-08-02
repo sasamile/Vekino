@@ -11,9 +11,10 @@ import {
   XCircle, Vote, ListOrdered, Scale, Save, Plus, Trash2, ChevronUp, ChevronDown,
   Lock, LayoutDashboard, Table2, TrendingUp, UserPlus,
   UserSquare, QrCode, Mail, Search, Download, Wifi, KeyRound, ClipboardList, X,
-  FileText, FileArchive, MonitorPlay,
+  FileText, FileArchive, MonitorPlay, Radio, Camera, FileUp,
 } from "lucide-react";
 import { MostrarCodigoAsistencia } from "@/components/asamblea/mostrar-codigo-asistencia";
+import { SalaTab } from "@/components/asamblea/sala-tab";
 import { PageContainer } from "@/components/layout/page-container";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -26,6 +27,7 @@ import {
   descargarPoderesCSV,
   descargarPoderesZIP,
 } from "@/lib/asamblea-auditoria";
+import { ensurePoderPdf } from "@/lib/poder-documento";
 import { VotacionEnVivoTab, DetalleVotosTab } from "./votacion-en-vivo";
 import { useUploadToS3 } from "@/hooks/use-upload-s3";
 
@@ -49,6 +51,7 @@ function fmtHora(ts: number | null) {
 
 const TABS = [
   { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { key: "sala", label: "Sala", icon: Radio },
   { key: "orden", label: "Orden", icon: ListOrdered },
   { key: "votacion", label: "En vivo", icon: Vote },
   { key: "detalle_votos", label: "Detalle", icon: ClipboardList },
@@ -131,6 +134,30 @@ export default function AsambleaAdmin() {
       </nav>
 
       {tab === "dashboard" && <DashboardTab asambleaId={asambleaId} estado={a.estado} />}
+      {tab === "sala" && (
+        <div className="space-y-5">
+          {a.modalidad !== "presencial" ? (
+            <Card className="flex flex-wrap items-center justify-between gap-4 p-6">
+              <div>
+                <h2 className="flex items-center gap-2 text-base font-semibold text-foreground">
+                  <MonitorPlay className="h-5 w-5 text-brand" /> Sala de la asamblea
+                </h2>
+                <p className="mt-1 max-w-lg text-sm text-muted-foreground">
+                  Ahí se proyecta el código de asistencia y se sigue la reunión.
+                  Ábrela en una pantalla aparte para compartirla.
+                </p>
+              </div>
+              <Link
+                href={`/sala/${condominioId}/${asambleaId}`}
+                className="inline-flex h-11 items-center gap-2 rounded-lg bg-brand px-5 text-sm font-semibold text-brand-foreground shadow-sm transition-colors hover:bg-brand/90"
+              >
+                <Radio className="h-4 w-4" /> Entrar a la sala
+              </Link>
+            </Card>
+          ) : null}
+          <SalaTab asambleaId={asambleaId} estado={a.estado} modalidad={a.modalidad} />
+        </div>
+      )}
       {tab === "orden" && <OrdenDelDia asambleaId={asambleaId} puntos={a.ordenDia ?? a.agenda.map((t) => ({ titulo: t }))} />}
       {tab === "votacion" && <VotacionEnVivoTab asambleaId={asambleaId} agenda={a.agenda} />}
       {tab === "detalle_votos" && <DetalleVotosTab asambleaId={asambleaId} />}
@@ -704,6 +731,22 @@ function PoderesTab({ asambleaId }: { asambleaId: Id<"asambleas"> }) {
   const [exportError, setExportError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [okMsg, setOkMsg] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const cameraRef = useRef<HTMLInputElement>(null);
+
+  async function onPoderFile(raw: File | null) {
+    if (!raw) {
+      setFile(null);
+      return;
+    }
+    setError(null);
+    try {
+      setFile(await ensurePoderPdf(raw));
+    } catch {
+      setError("No se pudo procesar el archivo. Usa PDF, JPG o PNG.");
+      setFile(null);
+    }
+  }
 
   const ocupadas = new Set((poderes ?? []).map((p) => p.unidadId as string));
   const disponibles = (unidades ?? [])
@@ -892,14 +935,14 @@ function PoderesTab({ asambleaId }: { asambleaId: Id<"asambleas"> }) {
               </select>
             </label>
             {modo === "propietario" && a ? (
-              <label className="block space-y-1">
-                <span className="text-xs text-muted-foreground">Buscar propietario</span>
+              <div className="space-y-1">
+                <p className="text-xs text-muted-foreground">Buscar propietario</p>
                 <AdminUserSearch
                   condominioId={a.condominioId}
                   value={rep}
                   onChange={setRep}
                 />
-              </label>
+              </div>
             ) : (
               <>
                 <label className="block space-y-1">
@@ -923,18 +966,60 @@ function PoderesTab({ asambleaId }: { asambleaId: Id<"asambleas"> }) {
               </>
             )}
           </div>
-          <label className="block space-y-1">
+          <div className="space-y-1.5">
             <span className="text-xs text-muted-foreground">
               Documento del poder (PDF o foto) — recomendado
             </span>
             <input
+              ref={fileRef}
               type="file"
               accept="application/pdf,image/*"
-              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-              className="block w-full text-sm text-muted-foreground file:mr-3 file:rounded-lg file:border-0 file:bg-brand/10 file:px-3 file:py-2 file:text-sm file:font-medium file:text-brand hover:file:bg-brand/20"
+              className="hidden"
+              onChange={(e) => {
+                void onPoderFile(e.target.files?.[0] ?? null);
+                e.target.value = "";
+              }}
             />
-            {file ? <span className="text-xs text-emerald-600">✓ {file.name}</span> : null}
-          </label>
+            <input
+              ref={cameraRef}
+              type="file"
+              accept="image/*"
+              capture="environment"
+              className="hidden"
+              onChange={(e) => {
+                void onPoderFile(e.target.files?.[0] ?? null);
+                e.target.value = "";
+              }}
+            />
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => fileRef.current?.click()}
+                className="inline-flex h-10 items-center gap-2 rounded-lg border border-border bg-card px-3 text-sm font-medium text-foreground hover:bg-accent"
+              >
+                <FileUp className="h-4 w-4" />
+                Seleccionar archivo
+              </button>
+              <button
+                type="button"
+                onClick={() => cameraRef.current?.click()}
+                className="inline-flex h-10 items-center gap-2 rounded-lg border border-border bg-card px-3 text-sm font-medium text-foreground hover:bg-accent"
+              >
+                <Camera className="h-4 w-4" />
+                Tomar foto
+              </button>
+            </div>
+            {file ? (
+              <p className="text-xs text-emerald-600">
+                ✓ {file.name}
+                {file.type === "application/pdf" ? " (PDF listo para subir)" : ""}
+              </p>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                Desde el celular puedes tomar una foto: se convierte a PDF automáticamente.
+              </p>
+            )}
+          </div>
           {error ? <p className="text-sm text-red-600">{error}</p> : null}
           {okMsg ? (
             <p className="rounded-lg bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800">
@@ -1037,13 +1122,16 @@ function AdminUserSearch({
   );
   if (value) {
     return (
-      <div className="flex h-9 items-center justify-between gap-2 rounded-lg border border-border bg-background px-2 text-sm">
-        <span className="truncate text-foreground">{value.name}</span>
+      <div className="flex min-h-9 items-center justify-between gap-2 rounded-lg border-2 border-brand/50 bg-brand/10 px-2.5 py-1.5 text-sm">
+        <div className="min-w-0">
+          <p className="truncate font-semibold text-foreground">{value.name}</p>
+          <p className="text-[10px] font-medium text-brand">Seleccionado</p>
+        </div>
         <button
           type="button"
           onClick={() => onChange(null)}
           aria-label="Quitar"
-          className="text-muted-foreground hover:text-red-600"
+          className="shrink-0 text-muted-foreground hover:text-red-600"
         >
           <X className="h-4 w-4" />
         </button>
@@ -1060,11 +1148,15 @@ function AdminUserSearch({
           setOpen(true);
         }}
         onFocus={() => setOpen(true)}
+        onBlur={() => {
+          window.setTimeout(() => setOpen(false), 150);
+        }}
         placeholder="Nombre o correo…"
         className={cn(poderInputCls, "pl-8")}
+        autoComplete="off"
       />
       {open && term.trim().length >= 2 && (
-        <div className="absolute z-20 mt-1 max-h-56 w-full overflow-auto rounded-lg border border-border bg-card p-1 shadow-lg">
+        <div className="absolute z-30 mt-1 max-h-56 w-full overflow-auto rounded-lg border border-border bg-card p-1 shadow-lg">
           {results === undefined ? (
             <p className="px-3 py-2 text-sm text-muted-foreground">Buscando…</p>
           ) : results.length === 0 ? (
@@ -1074,6 +1166,7 @@ function AdminUserSearch({
               <button
                 key={u._id}
                 type="button"
+                onMouseDown={(e) => e.preventDefault()}
                 onClick={() => {
                   onChange({ _id: u._id, name: u.name });
                   setOpen(false);
