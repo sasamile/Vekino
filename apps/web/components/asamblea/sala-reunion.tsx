@@ -647,7 +647,9 @@ function SalaCerrada({
 }
 
 /* ── Quórum + personas (un bloque, sin cajas sueltas) ─────────────────── */
-type SalaEnVivo = FunctionReturnType<typeof api.asambleaSala.salaEnVivo>;
+type SalaEnVivo = NonNullable<
+  FunctionReturnType<typeof api.asambleaSala.salaEnVivo>
+>;
 
 type PersonaSala = {
   nombre: string;
@@ -686,7 +688,7 @@ function personasDeSala(sala: SalaEnVivo): PersonaSala[] {
   return [...porPersona.values()];
 }
 
-function ResumenSala({ sala }: { sala: SalaEnVivo | undefined }) {
+function ResumenSala({ sala }: { sala: SalaEnVivo | null | undefined }) {
   if (!sala) return null;
   const personas = personasDeSala(sala);
 
