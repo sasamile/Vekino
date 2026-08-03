@@ -664,6 +664,7 @@ export const salaEnVivo = query({
         .sort((a, b) => b.ultimoLatido - a.ultimoLatido)
         .slice(0, 100)
         .map((p) => ({
+          userId: p.userId ?? null,
           nombre: p.nombre,
           esMesa: p.esMesa,
           imageUrl: p.imageUrl ?? null,

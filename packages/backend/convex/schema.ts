@@ -600,6 +600,12 @@ export default defineSchema({
      * nadie podría votar. Se enciende cuando la sala esté en producción.
      */
     exigirConexionParaVotar: v.optional(v.boolean()),
+    /**
+     * Presidente de esta asamblea (para acta / bitácora).
+     * Lo asigna la mesa; no implica rol de sistema.
+     */
+    presidenteUserId: v.optional(v.id("users")),
+    presidenteNombre: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
@@ -796,9 +802,10 @@ export default defineSchema({
       v.literal("voto"),
       v.literal("chat"),
       v.literal("reaccion"),
-      v.literal("grabacion_inicio"),
-      v.literal("grabacion_fin"),
-    ),
+  v.literal("grabacion_inicio"),
+  v.literal("grabacion_fin"),
+  v.literal("presidente_asignado"),
+),
     nombre: v.string(),
     detalle: v.optional(v.string()),
     userId: v.optional(v.id("users")),

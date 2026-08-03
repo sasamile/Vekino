@@ -26,6 +26,7 @@ const tipoBitacora = v.union(
   v.literal("reaccion"),
   v.literal("grabacion_inicio"),
   v.literal("grabacion_fin"),
+  v.literal("presidente_asignado"),
 );
 
 export type TipoBitacora =
@@ -39,7 +40,8 @@ export type TipoBitacora =
   | "chat"
   | "reaccion"
   | "grabacion_inicio"
-  | "grabacion_fin";
+  | "grabacion_fin"
+  | "presidente_asignado";
 
 /** Inserta un evento de bitácora (uso interno desde otras mutaciones). */
 export async function registrarBitacora(

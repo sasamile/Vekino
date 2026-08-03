@@ -9,6 +9,7 @@ import type { FunctionReturnType } from "convex/server";
 import {
   ArrowLeft,
   CheckCircle2,
+  Crown,
   Hand,
   Clock,
   ListOrdered,
@@ -118,6 +119,7 @@ export function SalaReunion({
     useState<Id<"votaciones"> | null>(null);
   const [modalOrden, setModalOrden] = useState(false);
   const [chatAbierto, setChatAbierto] = useState(false);
+  const [modalPresidente, setModalPresidente] = useState(false);
   const [avisoVoto, setAvisoVoto] = useState(false);
   const autoVotoVisto = useRef(new Set<string>());
 
@@ -223,6 +225,13 @@ export function SalaReunion({
           <p className="truncate text-xs text-white/60 drop-shadow">
             {a.fecha} · {a.hora} ·{" "}
             <span className="capitalize">{a.modalidad}</span>
+            {a.presidenteNombre ? (
+              <>
+                {" "}
+                · Presidente:{" "}
+                <span className="text-white/80">{a.presidenteNombre}</span>
+              </>
+            ) : null}
           </p>
         </div>
         <div className="pointer-events-auto flex shrink-0 items-center gap-2">
@@ -238,10 +247,31 @@ export function SalaReunion({
           {esMesa && enCurso ? (
             <button
               type="button"
+              onClick={() => setModalPresidente(true)}
+              aria-label="Asignar presidente"
+              title={
+                a.presidenteNombre
+                  ? `Presidente: ${a.presidenteNombre}`
+                  : "Asignar presidente de la asamblea"
+              }
+              className={cn(
+                "flex h-10 w-10 items-center justify-center rounded-full transition-colors",
+                a.presidenteNombre
+                  ? "bg-amber-500/25 text-amber-200 hover:bg-amber-500/35"
+                  : "bg-white/10 text-white/80 hover:bg-white/20 hover:text-white",
+              )}
+            >
+              <Crown className="h-4 w-4" aria-hidden />
+            </button>
+          ) : null}
+          {esMesa && enCurso ? (
+            <button
+              type="button"
               onClick={() => {
                 const filas = bitacora ?? [];
                 const lineas = [
                   `Bitácora · ${a.titulo}`,
+                  `Presidente: ${a.presidenteNombre ?? "(sin asignar)"}`,
                   `Generada: ${new Date().toLocaleString()}`,
                   "",
                   ...filas.map((f) => {
@@ -593,6 +623,22 @@ export function SalaReunion({
           puntos={puntos}
           votaciones={votaciones ?? []}
           onClose={() => setModalOrden(false)}
+        />
+      ) : null}
+
+      {modalPresidente && esMesa ? (
+        <ModalAsignarPresidente
+          asambleaId={asambleaId}
+          presidenteNombre={a.presidenteNombre ?? null}
+          presidenteUserId={(a.presidenteUserId as Id<"users"> | undefined) ?? null}
+          candidatos={(sala?.personas ?? [])
+            .filter((p) => p.userId)
+            .map((p) => ({
+              userId: p.userId as Id<"users">,
+              nombre: p.nombre,
+              esMesa: !!p.esMesa,
+            }))}
+          onClose={() => setModalPresidente(false)}
         />
       ) : null}
 
@@ -1139,6 +1185,187 @@ function CronometroDesde({ desde }: { desde: number }) {
       <Timer className="h-4 w-4" aria-hidden />
       {formatearRestante(now - desde)}
     </span>
+  );
+}
+
+/** Asignar presidente de la asamblea (mesa). */
+function ModalAsignarPresidente({
+  asambleaId,
+  presidenteNombre,
+  presidenteUserId,
+  candidatos,
+  onClose,
+}: {
+  asambleaId: Id<"asambleas">;
+  presidenteNombre: string | null;
+  presidenteUserId: Id<"users"> | null;
+  candidatos: { userId: Id<"users">; nombre: string; esMesa?: boolean }[];
+  onClose: () => void;
+}) {
+  const asignar = useMutation(api.asambleas.asignarPresidente);
+  const [nombreLibre, setNombreLibre] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function elegir(userId?: Id<"users">, nombre?: string) {
+    setBusy(true);
+    setError(null);
+    try {
+      await asignar({
+        asambleaId,
+        userId,
+        nombre: nombre?.trim() || undefined,
+      });
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudo asignar.");
+      setBusy(false);
+    }
+  }
+
+  const unicos = new Map<string, (typeof candidatos)[number]>();
+  for (const c of candidatos) {
+    if (!unicos.has(c.userId as string)) unicos.set(c.userId as string, c);
+  }
+  const lista = [...unicos.values()].sort((a, b) =>
+    a.nombre.localeCompare(b.nombre, undefined, { sensitivity: "base" }),
+  );
+
+  return (
+    <div className="fixed inset-0 z-[70] flex items-end justify-center sm:items-center">
+      <button
+        type="button"
+        aria-label="Cerrar"
+        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+        onClick={onClose}
+      />
+      <div
+        role="dialog"
+        aria-modal
+        aria-labelledby="modal-presidente-titulo"
+        className="relative z-10 flex max-h-[85vh] w-full max-w-md flex-col overflow-hidden rounded-t-2xl border border-white/10 bg-[#14161b] text-white shadow-2xl sm:rounded-2xl"
+      >
+        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-white/10 px-5 py-3">
+          <h2
+            id="modal-presidente-titulo"
+            className="flex items-center gap-2 text-base font-semibold"
+          >
+            <Crown className="h-5 w-5 text-amber-300" aria-hidden />
+            Presidente de la asamblea
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg p-1.5 text-white/50 hover:bg-white/10 hover:text-white"
+          >
+            <X className="h-5 w-5" aria-hidden />
+          </button>
+        </div>
+
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
+          <p className="text-sm text-white/55">
+            Queda registrado en la bitácora y en el encabezado de la sala.
+          </p>
+
+          {presidenteNombre ? (
+            <div className="rounded-xl border border-amber-400/25 bg-amber-500/10 px-3 py-2.5">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-200/80">
+                Actual
+              </p>
+              <p className="mt-0.5 text-sm font-semibold text-white">
+                {presidenteNombre}
+              </p>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void elegir()}
+                className="mt-2 text-xs font-semibold text-amber-200/80 hover:text-amber-100 disabled:opacity-50"
+              >
+                Quitar asignación
+              </button>
+            </div>
+          ) : null}
+
+          <div>
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-white/45">
+              Personas en la sala
+            </p>
+            {lista.length === 0 ? (
+              <p className="text-sm text-white/40">
+                Nadie con cuenta conectado todavía. Puedes escribir el nombre
+                abajo.
+              </p>
+            ) : (
+              <ul className="space-y-1.5">
+                {lista.map((c) => {
+                  const activo = presidenteUserId === c.userId;
+                  return (
+                    <li key={c.userId as string}>
+                      <button
+                        type="button"
+                        disabled={busy || activo}
+                        onClick={() => void elegir(c.userId, c.nombre)}
+                        className={cn(
+                          "flex w-full items-center justify-between gap-2 rounded-xl px-3 py-2.5 text-left text-sm transition-colors disabled:opacity-60",
+                          activo
+                            ? "bg-amber-500/20 text-amber-100"
+                            : "bg-white/[0.04] text-white/90 hover:bg-white/10",
+                        )}
+                      >
+                        <span className="min-w-0 truncate">
+                          {c.nombre}
+                          {c.esMesa ? (
+                            <span className="ml-1.5 text-[10px] text-white/40">
+                              mesa
+                            </span>
+                          ) : null}
+                        </span>
+                        {activo ? (
+                          <Crown className="h-3.5 w-3.5 shrink-0 text-amber-300" />
+                        ) : (
+                          <span className="shrink-0 text-[11px] font-semibold text-white/40">
+                            Asignar
+                          </span>
+                        )}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+
+          <div className="space-y-2 border-t border-white/10 pt-4">
+            <p className="text-xs font-semibold uppercase tracking-wide text-white/45">
+              O escribir el nombre
+            </p>
+            <div className="flex gap-2">
+              <input
+                value={nombreLibre}
+                onChange={(e) => setNombreLibre(e.target.value)}
+                placeholder="Nombre del presidente"
+                maxLength={120}
+                className="min-w-0 flex-1 rounded-xl border border-white/10 bg-black/30 px-3 py-2.5 text-base text-white placeholder:text-white/35 outline-none focus:border-white/25"
+              />
+              <button
+                type="button"
+                disabled={busy || !nombreLibre.trim()}
+                onClick={() => void elegir(undefined, nombreLibre)}
+                className="shrink-0 rounded-xl bg-amber-500 px-3 py-2 text-sm font-semibold text-black hover:bg-amber-400 disabled:opacity-40"
+              >
+                Guardar
+              </button>
+            </div>
+          </div>
+
+          {error ? (
+            <p className="text-sm text-red-300" role="alert">
+              {error}
+            </p>
+          ) : null}
+        </div>
+      </div>
+    </div>
   );
 }
 

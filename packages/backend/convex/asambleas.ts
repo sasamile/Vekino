@@ -155,6 +155,70 @@ export const update = mutation({
   },
 });
 
+/**
+ * Asigna (o quita) el presidente de esta asamblea para acta / bitácora.
+ * Solo mesa / administración.
+ */
+export const asignarPresidente = mutation({
+  args: {
+    asambleaId: v.id("asambleas"),
+    userId: v.optional(v.id("users")),
+    /** Si no hay userId, se puede fijar solo el nombre (p. ej. invitado). */
+    nombre: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const asamblea = await ctx.db.get(args.asambleaId);
+    if (!asamblea) throw new Error("Asamblea no encontrada.");
+    await requireCondominioRole(ctx, asamblea.condominioId, [...WRITE_ROLES]);
+
+    let nombre = args.nombre?.trim() || "";
+    let userId = args.userId;
+
+    if (userId) {
+      const usr = await ctx.db.get(userId);
+      if (!usr) throw new Error("Usuario no encontrado.");
+      const membership = await getMembership(ctx, userId, asamblea.condominioId);
+      if (!membership || !membership.isActive) {
+        throw new Error("Esa persona no pertenece a este condominio.");
+      }
+      nombre = usr.name;
+    }
+
+    if (!userId && !nombre) {
+      await ctx.db.patch(args.asambleaId, {
+        presidenteUserId: undefined,
+        presidenteNombre: undefined,
+        updatedAt: Date.now(),
+      });
+      await registrarBitacora(ctx, {
+        condominioId: asamblea.condominioId,
+        asambleaId: args.asambleaId,
+        tipo: "presidente_asignado",
+        nombre: "—",
+        detalle: "Se quitó la asignación de presidente",
+      });
+      return { ok: true as const, presidenteNombre: null };
+    }
+
+    if (!nombre) throw new Error("Indica el nombre del presidente.");
+
+    await ctx.db.patch(args.asambleaId, {
+      presidenteUserId: userId,
+      presidenteNombre: nombre,
+      updatedAt: Date.now(),
+    });
+    await registrarBitacora(ctx, {
+      condominioId: asamblea.condominioId,
+      asambleaId: args.asambleaId,
+      tipo: "presidente_asignado",
+      nombre,
+      detalle: "Designado como presidente de la asamblea",
+      userId,
+    });
+    return { ok: true as const, presidenteNombre: nombre };
+  },
+});
+
 export const setEstado = mutation({
   args: {
     id: v.id("asambleas"),
