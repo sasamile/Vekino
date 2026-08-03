@@ -16,18 +16,19 @@ import {
   WifiOff,
 } from "lucide-react";
 import { useVideoSala, type EmisorRemoto } from "@/hooks/use-video-sala";
+import { useAudioHablando } from "@/hooks/use-audio-hablando";
 import { cn } from "@/lib/utils";
 
 const REACCION_EMOJIS = ["👍", "👏", "❤️", "😂", "😮", "🎉"] as const;
 
-/* Paleta de avatares: color estable por nombre, como en cualquier reunión. */
+/* Paleta del círculo de avatar (el tile es siempre oscuro, como Meet). */
 const COLORES_AVATAR = [
   "#1a73e8",
   "#188038",
   "#c5221f",
   "#e37400",
   "#9334e6",
-  "#0b8043",
+  "#00786a",
 ];
 function colorDe(nombre: string) {
   let h = 0;
@@ -35,7 +36,10 @@ function colorDe(nombre: string) {
   return COLORES_AVATAR[Math.abs(h) % COLORES_AVATAR.length]!;
 }
 
-/** Fondo de avatar tipo Meet: color + foto circular (o inicial). */
+/**
+ * Tile sin cámara, estilo Meet: fondo oscuro + círculo (foto o inicial
+ * con color estable por nombre). El color NO llena el tile entero.
+ */
 function AvatarCover({
   nombre,
   imageUrl,
@@ -48,10 +52,7 @@ function AvatarCover({
   const color = colorDe(nombre);
   const inicial = nombre.trim().charAt(0).toUpperCase() || "?";
   return (
-    <div
-      className="absolute inset-0 flex items-center justify-center"
-      style={{ backgroundColor: color }}
-    >
+    <div className="absolute inset-0 flex items-center justify-center bg-[#202124]">
       {imageUrl ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img
@@ -59,16 +60,17 @@ function AvatarCover({
           alt=""
           referrerPolicy="no-referrer"
           className={cn(
-            "rounded-full object-cover shadow-lg ring-2 ring-white/25",
+            "rounded-full object-cover shadow-lg",
             principal ? "h-28 w-28 sm:h-36 sm:w-36" : "h-14 w-14",
           )}
         />
       ) : (
         <span
           className={cn(
-            "flex items-center justify-center rounded-full bg-white/25 font-semibold text-white",
-            principal ? "h-28 w-28 text-5xl" : "h-14 w-14 text-2xl",
+            "flex items-center justify-center rounded-full font-semibold text-white",
+            principal ? "h-28 w-28 text-5xl sm:h-36 sm:w-36" : "h-14 w-14 text-2xl",
           )}
+          style={{ backgroundColor: color }}
         >
           {inicial}
         </span>
@@ -119,16 +121,26 @@ function CardPersona({
   esYo,
   esMesa,
   silenciado,
+  hablando = false,
 }: {
   nombre: string;
   imageUrl?: string | null;
   esYo?: boolean;
   esMesa?: boolean;
   silenciado?: boolean;
+  /** Borde azul tipo Meet mientras hay voz. */
+  hablando?: boolean;
 }) {
   const label = esYo ? (nombre ? `${nombre} (Tú)` : "Tú") : nombre;
   return (
-    <div className="relative h-full min-h-0 w-full overflow-hidden rounded-2xl">
+    <div
+      className={cn(
+        "relative h-full min-h-0 w-full overflow-hidden rounded-2xl transition-shadow duration-150",
+        hablando
+          ? "shadow-[inset_0_0_0_3px_#8ab4f8]"
+          : "shadow-[inset_0_0_0_0_transparent]",
+      )}
+    >
       <AvatarCover nombre={nombre || "?"} imageUrl={imageUrl} principal />
       {silenciado ? (
         <span className="absolute right-2.5 top-2.5 flex h-7 w-7 items-center justify-center rounded-full bg-black/50">
@@ -175,6 +187,8 @@ function MosaicoPersonas({
   camOn: boolean;
   micOn: boolean;
 }) {
+  const hablandoYo = useAudioHablando(camaraLocal?.stream, micOn);
+
   if (personas.length === 0) {
     return (
       <EsperaMeet enCurso={enCurso} puedoHablar={puedoHablar} nombre={undefined} />
@@ -212,6 +226,7 @@ function MosaicoPersonas({
             esYo={p.esYo}
             esMesa={p.esMesa}
             silenciado={p.esYo ? !micOn : true}
+            hablando={!!p.esYo && hablandoYo}
           />
         );
       })}
@@ -695,6 +710,7 @@ function VideoRemoto({
 }) {
   const ref = useRef<HTMLVideoElement>(null);
   const [silenciado, setSilenciado] = useState(true);
+  const hablando = useAudioHablando(emisor.stream, !emisor.micApagado);
 
   useEffect(() => {
     const el = ref.current;
@@ -738,7 +754,15 @@ function VideoRemoto({
   const camaraApagada = emisor.medio === "camara" && emisor.camApagada;
 
   return (
-    <div className={cn("relative", principal ? "h-full w-full" : "")}>
+    <div
+      className={cn(
+        "relative transition-shadow duration-150",
+        principal ? "h-full w-full" : "",
+        hablando
+          ? "shadow-[inset_0_0_0_3px_#8ab4f8]"
+          : "shadow-[inset_0_0_0_0_transparent]",
+      )}
+    >
       <video
         ref={ref}
         autoPlay
@@ -805,6 +829,7 @@ function PreviewStream({
   imageUrl?: string | null;
 }) {
   const ref = useRef<HTMLVideoElement>(null);
+  const hablando = useAudioHablando(stream, !silenciado);
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
@@ -812,7 +837,15 @@ function PreviewStream({
     void el.play().catch(() => {});
   }, [stream]);
   return (
-    <div className={cn("relative", principal ? "h-full w-full" : "")}>
+    <div
+      className={cn(
+        "relative transition-shadow duration-150",
+        principal ? "h-full w-full" : "",
+        hablando
+          ? "shadow-[inset_0_0_0_3px_#8ab4f8]"
+          : "shadow-[inset_0_0_0_0_transparent]",
+      )}
+    >
       {/* El emisor SIEMPRE se ve en silencio: oír tu propio micrófono acopla. */}
       <video
         ref={ref}
@@ -826,7 +859,11 @@ function PreviewStream({
         )}
       />
       {apagada ? (
-        <AvatarCover nombre={etiqueta.replace(/\s*\(Tú\)\s*$/, "")} imageUrl={imageUrl} principal={principal} />
+        <AvatarCover
+          nombre={etiqueta.replace(/\s*\(Tú\)\s*$/, "")}
+          imageUrl={imageUrl}
+          principal={principal}
+        />
       ) : null}
       <span className="absolute bottom-2 left-2 flex items-center gap-1 rounded-md bg-black/60 px-2 py-0.5 text-[11px] font-medium text-white/90">
         {silenciado ? <MicOff className="h-3 w-3 text-red-400" aria-hidden /> : null}

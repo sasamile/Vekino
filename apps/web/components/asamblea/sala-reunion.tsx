@@ -12,13 +12,17 @@ import {
   Hand,
   ListOrdered,
   Loader2,
+  Lock,
   Maximize2,
+  MicOff,
   Minimize2,
   LogOut,
   MonitorPlay,
   PhoneOff,
+  Plus,
   Radio,
   ShieldCheck,
+  Unlock,
   UserCheck,
   Users,
   Video,
@@ -292,7 +296,22 @@ export function SalaReunion({
                 />
               ) : null}
 
-              <PuntoEnCurso punto={puntoActual} total={puntos.length} />
+              {esMesa ? (
+                <MesaOrdenYPreguntas
+                  asambleaId={asambleaId}
+                  puntos={puntos}
+                  votaciones={votaciones ?? []}
+                />
+              ) : (
+                <PuntoEnCurso punto={puntoActual} total={puntos.length} />
+              )}
+
+              {esMesa && abiertas.length > 0 ? (
+                <MesaSeguimientoVotos
+                  asambleaId={asambleaId}
+                  abiertas={abiertas}
+                />
+              ) : null}
 
               {abiertas.length > 0 &&
               (mi?.presente ?? false) &&
@@ -303,24 +322,34 @@ export function SalaReunion({
                 />
               ) : null}
 
-              {/* Código para quien sigue desde la app móvil o por fuera:
-                  plegado, cero protagonismo. */}
+              {/* Código SOLO para quien sigue por Zoom/Meet/YouTube u otra
+                  plataforma: quien ya está en esta sala quedó registrado al entrar. */}
               {esMesa ? (
                 <section className="rounded-2xl border border-white/10 bg-white/[0.03]">
                   <button
                     type="button"
                     onClick={() => setCodigoAbierto((v) => !v)}
                     aria-expanded={codigoAbierto}
-                    className="flex w-full items-center gap-2 px-4 py-3 text-sm font-semibold text-white/70 hover:text-white"
+                    className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm font-semibold text-white/70 hover:text-white"
                   >
-                    <MonitorPlay className="h-4 w-4" aria-hidden />
-                    Código para quien sigue por fuera
-                    <span className="ml-auto text-xs font-normal text-white/40">
+                    <MonitorPlay className="h-4 w-4 shrink-0" aria-hidden />
+                    <span className="min-w-0 flex-1">
+                      Código para stream externo
+                      <span className="mt-0.5 block text-[11px] font-normal text-white/40">
+                        Zoom, Meet u otra plataforma — no hace falta si ya están aquí
+                      </span>
+                    </span>
+                    <span className="shrink-0 text-xs font-normal text-white/40">
                       {codigoAbierto ? "Ocultar" : "Mostrar"}
                     </span>
                   </button>
                   {codigoAbierto ? (
-                    <div className="border-t border-white/10 p-4">
+                    <div className="space-y-3 border-t border-white/10 p-4">
+                      <p className="text-xs leading-relaxed text-white/50">
+                        Quien entra a esta sala ya queda en asistencia. Este
+                        código es para proyectarlo en un stream externo y que
+                        registren desde fuera.
+                      </p>
                       <div className="rounded-xl bg-white p-4 text-foreground">
                         <MostrarCodigoAsistencia asambleaId={asambleaId} />
                       </div>
@@ -662,6 +691,295 @@ function PuntoEnCurso({
   );
 }
 
+type PuntoSala = {
+  titulo: string;
+  descripcion?: string;
+  votacionId?: Id<"votaciones">;
+  hecho?: boolean;
+};
+
+type VotacionSala = {
+  _id: Id<"votaciones">;
+  pregunta: string;
+  estado: string;
+  opciones: { texto: string }[];
+};
+
+/** Mesa: crear puntos, marcar hechos y abrir/cerrar la votación del punto. */
+function MesaOrdenYPreguntas({
+  asambleaId,
+  puntos,
+  votaciones,
+}: {
+  asambleaId: Id<"asambleas">;
+  puntos: PuntoSala[];
+  votaciones: VotacionSala[];
+}) {
+  const agregar = useMutation(api.asambleas.agregarPunto);
+  const toggleHecho = useMutation(api.asambleas.togglePuntoHecho);
+  const toggleVotacion = useMutation(api.asambleas.toggleVotacion);
+  const crearPregunta = useMutation(api.asambleas.createVotacion);
+
+  const [titulo, setTitulo] = useState("");
+  const [conVotacion, setConVotacion] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const porId = new Map(votaciones.map((v) => [v._id as string, v]));
+
+  async function agregarPunto() {
+    const t = titulo.trim();
+    if (!t || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await agregar({
+        asambleaId,
+        titulo: t,
+        habilitarVotacion: conVotacion,
+      });
+      setTitulo("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudo agregar.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function preguntaRapida() {
+    const t = titulo.trim();
+    if (!t || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await crearPregunta({
+        asambleaId,
+        pregunta: t,
+        opciones: ["A favor", "En contra", "Abstención"],
+      });
+      setTitulo("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudo abrir la pregunta.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
+      <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-white/80">
+        <ListOrdered className="h-4 w-4" aria-hidden /> Orden del día
+      </h2>
+
+      <div className="mb-3 space-y-2">
+        <input
+          value={titulo}
+          onChange={(e) => setTitulo(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") void agregarPunto();
+          }}
+          placeholder="Nuevo punto o pregunta…"
+          className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-sm text-white placeholder:text-white/35 focus:border-white/25 focus:outline-none"
+        />
+        <label className="flex items-center gap-2 text-xs text-white/55">
+          <input
+            type="checkbox"
+            checked={conVotacion}
+            onChange={(e) => setConVotacion(e.target.checked)}
+            className="rounded border-white/30"
+          />
+          Incluir votación (A favor / En contra / Abstención)
+        </label>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            disabled={busy || !titulo.trim()}
+            onClick={() => void agregarPunto()}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-white px-3 py-1.5 text-xs font-semibold text-black hover:bg-white/90 disabled:opacity-40"
+          >
+            {busy ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+            ) : (
+              <Plus className="h-3.5 w-3.5" aria-hidden />
+            )}
+            Agregar punto
+          </button>
+          <button
+            type="button"
+            disabled={busy || !titulo.trim()}
+            onClick={() => void preguntaRapida()}
+            title="Abre la votación de inmediato (sin sumarla al orden)"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-600 disabled:opacity-40"
+          >
+            <Unlock className="h-3.5 w-3.5" aria-hidden />
+            Abrir pregunta ya
+          </button>
+        </div>
+        {error ? (
+          <p className="text-xs text-red-300" role="alert">
+            {error}
+          </p>
+        ) : null}
+      </div>
+
+      {puntos.length === 0 ? (
+        <p className="text-sm text-white/45">Aún no hay puntos.</p>
+      ) : (
+        <ul className="max-h-56 space-y-2 overflow-y-auto pr-1">
+          {puntos.map((p, i) => {
+            const vt = p.votacionId
+              ? porId.get(p.votacionId as string)
+              : undefined;
+            const abierta = vt?.estado === "abierta";
+            return (
+              <li
+                key={`${p.titulo}-${i}`}
+                className="rounded-xl bg-white/[0.04] px-3 py-2"
+              >
+                <div className="flex items-start gap-2">
+                  <button
+                    type="button"
+                    title={p.hecho ? "Marcar pendiente" : "Marcar hecho"}
+                    onClick={() =>
+                      void toggleHecho({ asambleaId, index: i }).catch(() => {})
+                    }
+                    className={cn(
+                      "mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border",
+                      p.hecho
+                        ? "border-emerald-400/50 bg-emerald-500/30 text-emerald-200"
+                        : "border-white/20 text-transparent hover:border-white/40",
+                    )}
+                  >
+                    <CheckCircle2 className="h-3.5 w-3.5" aria-hidden />
+                  </button>
+                  <div className="min-w-0 flex-1">
+                    <p
+                      className={cn(
+                        "text-sm font-medium",
+                        p.hecho ? "text-white/40 line-through" : "text-white/90",
+                      )}
+                    >
+                      {p.titulo}
+                    </p>
+                    {vt ? (
+                      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                        <span
+                          className={cn(
+                            "rounded-full px-2 py-0.5 text-[10px] font-semibold",
+                            abierta
+                              ? "bg-emerald-500/20 text-emerald-300"
+                              : "bg-white/10 text-white/50",
+                          )}
+                        >
+                          {abierta ? "Votación abierta" : "Votación lista"}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void toggleVotacion({ id: vt._id }).catch(() => {})
+                          }
+                          className="inline-flex items-center gap-1 rounded-lg bg-white/10 px-2 py-0.5 text-[11px] font-semibold text-white hover:bg-white/20"
+                        >
+                          {abierta ? (
+                            <>
+                              <Lock className="h-3 w-3" aria-hidden /> Cerrar
+                            </>
+                          ) : (
+                            <>
+                              <Unlock className="h-3 w-3" aria-hidden /> Abrir
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+/** Mesa: quién ya votó / pendientes en cada votación abierta. */
+function MesaSeguimientoVotos({
+  asambleaId,
+  abiertas,
+}: {
+  asambleaId: Id<"asambleas">;
+  abiertas: VotacionSala[];
+}) {
+  const det = useQuery(api.asambleas.asistentesDetallado, { asambleaId });
+  const toggle = useMutation(api.asambleas.toggleVotacion);
+  const filas = det?.filas ?? [];
+  const presentes = filas.filter((f) => f.presente);
+
+  return (
+    <section className="rounded-2xl border border-brand/30 bg-brand/10 p-5">
+      <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-white">
+        <ShieldCheck className="h-4 w-4" aria-hidden /> Seguimiento de votos
+      </h2>
+      <div className="space-y-4">
+        {abiertas.map((vt) => {
+          const id = vt._id as string;
+          const votaron = filas
+            .filter((f) => f.votos[id] != null)
+            .map((f) => f.unidadNumero)
+            .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+          const pendientes = presentes
+            .filter((f) => f.votos[id] == null)
+            .map((f) => f.unidadNumero)
+            .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+          return (
+            <div key={id} className="rounded-xl bg-black/25 p-3">
+              <div className="mb-2 flex items-start justify-between gap-2">
+                <p className="min-w-0 text-sm font-medium text-white/90">
+                  {vt.pregunta}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => void toggle({ id: vt._id }).catch(() => {})}
+                  className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-white/10 px-2 py-1 text-[11px] font-semibold text-white hover:bg-white/20"
+                >
+                  <Lock className="h-3 w-3" aria-hidden /> Cerrar
+                </button>
+              </div>
+              <p className="mb-2 text-[11px] text-white/50">
+                {votaron.length} votaron
+                {pendientes.length > 0
+                  ? ` · ${pendientes.length} pendientes`
+                  : presentes.length > 0
+                    ? " · sin pendientes"
+                    : ""}
+              </p>
+              <div className="grid grid-cols-2 gap-2 text-[11px]">
+                <div>
+                  <p className="mb-1 font-semibold text-emerald-300/90">
+                    Ya votaron
+                  </p>
+                  <p className="leading-relaxed text-white/70">
+                    {votaron.length > 0 ? votaron.join(", ") : "—"}
+                  </p>
+                </div>
+                <div>
+                  <p className="mb-1 font-semibold text-amber-200/90">
+                    Pendientes
+                  </p>
+                  <p className="leading-relaxed text-white/70">
+                    {pendientes.length > 0 ? pendientes.join(", ") : "—"}
+                  </p>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 /* ── Votaciones abiertas ──────────────────────────────────────────────
  *
  * Se vota AQUÍ. Mandar al residente a otra pantalla cortaría su latido y,
@@ -835,9 +1153,11 @@ function ManosLevantadas({
                 <button
                   type="button"
                   onClick={() => onResolver(f.userId, false)}
-                  className="rounded-lg bg-white/10 px-2.5 py-1 text-xs font-semibold text-white hover:bg-white/20"
+                  title="Silenciar y quitar la palabra"
+                  className="inline-flex items-center gap-1 rounded-lg bg-red-500/90 px-2.5 py-1 text-xs font-semibold text-white hover:bg-red-600"
                 >
-                  Quitar
+                  <MicOff className="h-3 w-3" aria-hidden />
+                  Silenciar
                 </button>
               </>
             ) : (
