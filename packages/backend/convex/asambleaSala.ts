@@ -20,6 +20,7 @@ import {
   type Tramo,
   type Ventana,
 } from "./lib/permanencia";
+import { registrarBitacora } from "./salaBitacora";
 
 /**
  * Sala de la asamblea: quién está conectado, cuánto tiempo estuvo y quién
@@ -107,6 +108,14 @@ export async function abrirSesiones(
       ultimoLatido: now,
     });
     abiertas++;
+    await registrarBitacora(ctx, {
+      condominioId: args.condominioId,
+      asambleaId: args.asambleaId,
+      tipo: "entrada",
+      nombre: f.userNombre,
+      detalle: `Unidad ${f.unidadNumero}${f.esPoder ? " · poder" : ""}`,
+      userId: f.userId,
+    });
   }
 
   return abiertas;

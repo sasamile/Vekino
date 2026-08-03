@@ -10,6 +10,7 @@ import {
   getMembership,
   hasPlatformRole,
 } from "./model/authz";
+import { registrarBitacora } from "./salaBitacora";
 
 /**
  * Señalización del video propio de la sala.
@@ -323,6 +324,8 @@ export const resolverPalabra = mutation({
     asambleaId: v.id("asambleas"),
     userId: v.id("users"),
     conceder: v.boolean(),
+    /** Al conceder: segundos de palabra. 0 / omitido = sin límite. */
+    duracionSegundos: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const asamblea = await ctx.db.get(args.asambleaId);
@@ -338,13 +341,123 @@ export const resolverPalabra = mutation({
 
     if (args.conceder) {
       if (!fila) throw new Error("Esa persona no tiene la mano levantada.");
-      await ctx.db.patch(fila._id, { estado: "concedida" });
+      const ahora = Date.now();
+      const dur = Math.max(0, Math.floor(args.duracionSegundos ?? 0));
+      const cierraEn = dur > 0 ? ahora + dur * 1000 : undefined;
+      await ctx.db.patch(fila._id, {
+        estado: "concedida",
+        concedidaEn: ahora,
+        cierraEn,
+      });
       await sincronizarPalabra(ctx, args.asambleaId, args.userId, true);
+      await registrarBitacora(ctx, {
+        condominioId: asamblea.condominioId,
+        asambleaId: args.asambleaId,
+        tipo: "palabra_concedida",
+        nombre: fila.nombre,
+        detalle:
+          dur > 0
+            ? `Tiempo: ${Math.round(dur / 60)} min`
+            : "Sin límite de tiempo",
+        userId: args.userId,
+      });
+      if (cierraEn != null) {
+        await ctx.scheduler.runAfter(
+          cierraEn - ahora,
+          internal.salaVideo.retirarPalabraSiExpiro,
+          {
+            asambleaId: args.asambleaId,
+            userId: args.userId,
+            cierraEn,
+          },
+        );
+      }
       return;
     }
     if (fila) await ctx.db.delete(fila._id);
     await apagarEmisionesDeUsuario(ctx, args.asambleaId, args.userId);
     await revocarEnServidorDeMedios(ctx, args.asambleaId, args.userId);
+    await registrarBitacora(ctx, {
+      condominioId: asamblea.condominioId,
+      asambleaId: args.asambleaId,
+      tipo: "palabra_retirada",
+      nombre: fila?.nombre ?? "Participante",
+      detalle: "Palabra retirada / silenciado",
+      userId: args.userId,
+    });
+  },
+});
+
+/** Suma tiempo a quien está al aire (o reinicia el cronómetro). */
+export const extenderPalabra = mutation({
+  args: {
+    asambleaId: v.id("asambleas"),
+    userId: v.id("users"),
+    segundosExtra: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const asamblea = await ctx.db.get(args.asambleaId);
+    if (!asamblea) throw new Error("Asamblea no encontrada.");
+    await requireCondominioRole(ctx, asamblea.condominioId, [...WRITE_ROLES]);
+    const fila = await ctx.db
+      .query("salaPalabra")
+      .withIndex("by_asamblea_user", (q) =>
+        q.eq("asambleaId", args.asambleaId).eq("userId", args.userId),
+      )
+      .first();
+    if (!fila || fila.estado !== "concedida") {
+      throw new Error("Esa persona no tiene la palabra.");
+    }
+    const extra = Math.max(30, Math.min(Math.floor(args.segundosExtra), 3600));
+    const ahora = Date.now();
+    const base =
+      fila.cierraEn != null ? Math.max(ahora, fila.cierraEn) : ahora;
+    const cierraEn = base + extra * 1000;
+    await ctx.db.patch(fila._id, { cierraEn });
+    await ctx.scheduler.runAfter(
+      cierraEn - ahora,
+      internal.salaVideo.retirarPalabraSiExpiro,
+      {
+        asambleaId: args.asambleaId,
+        userId: args.userId,
+        cierraEn,
+      },
+    );
+    return { cierraEn };
+  },
+});
+
+/** Retira la palabra solo si el `cierraEn` programado sigue vigente. */
+export const retirarPalabraSiExpiro = internalMutation({
+  args: {
+    asambleaId: v.id("asambleas"),
+    userId: v.id("users"),
+    cierraEn: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const fila = await ctx.db
+      .query("salaPalabra")
+      .withIndex("by_asamblea_user", (q) =>
+        q.eq("asambleaId", args.asambleaId).eq("userId", args.userId),
+      )
+      .first();
+    if (!fila || fila.estado !== "concedida") return;
+    if (fila.cierraEn !== args.cierraEn) return;
+    if ((fila.cierraEn ?? 0) > Date.now() + 750) return;
+    const asamblea = await ctx.db.get(args.asambleaId);
+    await ctx.db.delete(fila._id);
+    await apagarEmisionesDeUsuario(ctx, args.asambleaId, args.userId);
+    await revocarEnServidorDeMedios(ctx, args.asambleaId, args.userId);
+    if (asamblea) {
+      await registrarBitacora(ctx, {
+        condominioId: asamblea.condominioId,
+        asambleaId: args.asambleaId,
+        tipo: "palabra_retirada",
+        nombre: fila.nombre,
+        detalle: "Tiempo de palabra agotado",
+        userId: args.userId,
+      });
+    }
   },
 });
 
@@ -409,6 +522,8 @@ export const palabras = query({
         userId: f.userId,
         nombre: f.nombre,
         estado: f.estado,
+        cierraEn: f.cierraEn ?? null,
+        concedidaEn: f.concedidaEn ?? null,
         mia: user ? f.userId === user._id : false,
       }));
   },
@@ -533,6 +648,14 @@ export const enviarReaccion = mutation({
       codigoPoder: codigo || undefined,
       createdAt: Date.now(),
     });
+    await registrarBitacora(ctx, {
+      condominioId: asamblea.condominioId,
+      asambleaId: args.asambleaId,
+      tipo: "reaccion",
+      nombre,
+      detalle: args.emoji,
+      userId: user?._id,
+    });
     return { ok: true as const };
   },
 });
@@ -619,6 +742,14 @@ export const enviarMensaje = mutation({
       userId: user?._id,
       codigoPoder: codigo,
       createdAt: Date.now(),
+    });
+    await registrarBitacora(ctx, {
+      condominioId: asamblea.condominioId,
+      asambleaId: args.asambleaId,
+      tipo: "chat",
+      nombre,
+      detalle: texto.slice(0, 120),
+      userId: user?._id,
     });
     return { ok: true as const };
   },

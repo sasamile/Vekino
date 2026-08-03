@@ -46,6 +46,7 @@ import type * as platform from "../platform.js";
 import type * as portal from "../portal.js";
 import type * as pqrs from "../pqrs.js";
 import type * as reservas from "../reservas.js";
+import type * as salaBitacora from "../salaBitacora.js";
 import type * as salaPermisos from "../salaPermisos.js";
 import type * as salaToken from "../salaToken.js";
 import type * as salaVideo from "../salaVideo.js";
@@ -100,6 +101,7 @@ declare const fullApi: ApiFromModules<{
   portal: typeof portal;
   pqrs: typeof pqrs;
   reservas: typeof reservas;
+  salaBitacora: typeof salaBitacora;
   salaPermisos: typeof salaPermisos;
   salaToken: typeof salaToken;
   salaVideo: typeof salaVideo;

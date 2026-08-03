@@ -1,8 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useMutation, useQuery } from "convex/react";
-import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
 import {
   Gauge,
@@ -10,7 +8,7 @@ import {
   Mic,
   MicOff,
   MonitorUp,
-  SmilePlus,
+  Circle,
   Video,
   VideoOff,
   Volume2,
@@ -23,9 +21,11 @@ import {
   type EmisorRemoto,
 } from "@/hooks/use-video-sala";
 import { useAudioHablando } from "@/hooks/use-audio-hablando";
+import {
+  formatearElapsed,
+  useGrabacionSala,
+} from "@/hooks/use-grabacion-sala";
 import { cn } from "@/lib/utils";
-
-const REACCION_EMOJIS = ["👍", "👏", "❤️", "😂", "😮", "🎉"] as const;
 
 /* Paleta del círculo de avatar (el tile es siempre oscuro, como Meet). */
 const COLORES_AVATAR = [
@@ -259,6 +259,7 @@ export function EscenarioVideo({
   imageUrlLocal,
   calidad = "ahorro",
   onCambiarCalidad,
+  puedoGrabar = false,
   extraControles,
   controlesFin,
 }: {
@@ -277,12 +278,23 @@ export function EscenarioVideo({
   /** Perfil de calidad. Por defecto "ahorro": cabe mucha más gente. */
   calidad?: Calidad;
   onCambiarCalidad?: (c: Calidad) => void;
+  /** Solo la mesa: grabar audio de respaldo + bitácora. */
+  puedoGrabar?: boolean;
   /** Botones extra en la barra (levantar la mano). */
   extraControles?: React.ReactNode;
   /** Cierre de la barra (abrir panel, colgar). */
   controlesFin?: React.ReactNode;
 }) {
   const video = useVideoSala(asambleaId, enCurso, { codigoPoder, calidad });
+  const streamsGrabacion = [
+    ...video.audios.map((a) => a.stream),
+    ...video.locales.map((l) => l.stream),
+    ...video.remotos.map((r) => r.stream).filter((s): s is MediaStream => !!s),
+  ];
+  const grabacion = useGrabacionSala(
+    asambleaId,
+    puedoGrabar ? streamsGrabacion : [],
+  );
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   /* El navegador no deja sonar audio sin un gesto del usuario. `intentoAudio`
@@ -516,10 +528,6 @@ export function EscenarioVideo({
         </span>
       ) : null}
 
-      {enCurso ? (
-        <CapaReacciones asambleaId={asambleaId} codigoPoder={codigoPoder} />
-      ) : null}
-
       {/* ── Barra de controles flotante, centrada ───────────────────────── */}
       {hayBarra ? (
         <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-center px-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-4 sm:pb-5">
@@ -614,11 +622,44 @@ export function EscenarioVideo({
                 <VolumeX className="h-4 w-4 sm:h-5 sm:w-5" aria-hidden />
               )}
             </BotonRedondo>
-            {enCurso ? (
-              <BotonReaccionar
-                asambleaId={asambleaId}
-                codigoPoder={codigoPoder}
-              />
+            {puedoGrabar && enCurso ? (
+              <button
+                type="button"
+                onClick={() =>
+                  void (grabacion.grabando ? grabacion.stop() : grabacion.start())
+                }
+                aria-pressed={grabacion.grabando}
+                aria-label={
+                  grabacion.grabando
+                    ? `Detener grabación · ${formatearElapsed(grabacion.elapsed)}`
+                    : "Grabar la reunión (video y audio)"
+                }
+                title={
+                  grabacion.error ??
+                  (grabacion.grabando
+                    ? `Grabando reunión ${formatearElapsed(grabacion.elapsed)} — tocar para detener y descargar`
+                    : "Grabar reunión completa (elige esta pestaña + audio)")
+                }
+                className={cn(
+                  "relative flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition-colors sm:h-12 sm:w-12",
+                  grabacion.grabando
+                    ? "bg-red-500 text-white hover:bg-red-600"
+                    : "bg-white/10 text-white/85 hover:bg-white/20",
+                )}
+              >
+                <Circle
+                  className={cn(
+                    "h-4 w-4 sm:h-5 sm:w-5",
+                    grabacion.grabando && "fill-current",
+                  )}
+                  aria-hidden
+                />
+                {grabacion.grabando ? (
+                  <span className="absolute -bottom-5 left-1/2 -translate-x-1/2 whitespace-nowrap text-[9px] font-semibold tabular-nums text-red-300">
+                    {formatearElapsed(grabacion.elapsed)}
+                  </span>
+                ) : null}
+              </button>
             ) : null}
             {extraControles}
             {controlesFin}
@@ -634,139 +675,6 @@ export function EscenarioVideo({
           {error}
         </p>
       ) : null}
-    </div>
-  );
-}
-
-/** Selector de emojis + envío a la sala (todos los que están en la llamada). */
-function BotonReaccionar({
-  asambleaId,
-  codigoPoder,
-}: {
-  asambleaId: Id<"asambleas">;
-  codigoPoder?: string;
-}) {
-  const enviar = useMutation(api.salaVideo.enviarReaccion);
-  const [abierto, setAbierto] = useState(false);
-  const wrapRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!abierto) return;
-    function fuera(e: MouseEvent) {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
-        setAbierto(false);
-      }
-    }
-    document.addEventListener("mousedown", fuera);
-    return () => document.removeEventListener("mousedown", fuera);
-  }, [abierto]);
-
-  return (
-    <div ref={wrapRef} className="relative">
-      {abierto ? (
-        <div
-          role="menu"
-          aria-label="Elegir reacción"
-          className="absolute bottom-[calc(100%+10px)] left-1/2 z-30 flex -translate-x-1/2 gap-1 rounded-full bg-[#2a2f38] px-2 py-1.5 shadow-xl animate-scale-in"
-        >
-          {REACCION_EMOJIS.map((emoji) => (
-            <button
-              key={emoji}
-              type="button"
-              role="menuitem"
-              title={emoji}
-              className="flex h-10 w-10 items-center justify-center rounded-full text-xl transition-transform hover:scale-125 hover:bg-white/10"
-              onClick={() => {
-                setAbierto(false);
-                void enviar({
-                  asambleaId,
-                  emoji,
-                  codigoPoder,
-                }).catch(() => {});
-              }}
-            >
-              {emoji}
-            </button>
-          ))}
-        </div>
-      ) : null}
-      <button
-        type="button"
-        onClick={() => setAbierto((v) => !v)}
-        aria-expanded={abierto}
-        aria-label="Reaccionar"
-        title="Reaccionar"
-        className={cn(
-          "flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition-colors sm:h-12 sm:w-12",
-          abierto
-            ? "bg-white/25 text-white"
-            : "bg-white/10 text-white/85 hover:bg-white/20",
-        )}
-      >
-        <SmilePlus className="h-4 w-4 sm:h-5 sm:w-5" aria-hidden />
-      </button>
-    </div>
-  );
-}
-
-/** Emojis flotantes de todos en la sala. */
-function CapaReacciones({
-  asambleaId,
-  codigoPoder,
-}: {
-  asambleaId: Id<"asambleas">;
-  codigoPoder?: string;
-}) {
-  const recientes = useQuery(api.salaVideo.reaccionesRecientes, {
-    asambleaId,
-    codigoPoder,
-  });
-  const vistos = useRef(new Set<string>());
-  const listo = useRef(false);
-  const [flotantes, setFlotantes] = useState<
-    { key: string; emoji: string; left: number }[]
-  >([]);
-
-  useEffect(() => {
-    if (!recientes) return;
-    /* Primera carga: marcar como vistas sin animar (no revivir el pasado). */
-    if (!listo.current) {
-      for (const r of recientes) vistos.current.add(r._id as string);
-      listo.current = true;
-      return;
-    }
-    for (const r of recientes) {
-      const id = r._id as string;
-      if (vistos.current.has(id)) continue;
-      vistos.current.add(id);
-      const item = {
-        key: id,
-        emoji: r.emoji,
-        left: 18 + Math.random() * 64,
-      };
-      setFlotantes((prev) => [...prev, item].slice(-24));
-      window.setTimeout(() => {
-        setFlotantes((prev) => prev.filter((f) => f.key !== id));
-      }, 4000);
-    }
-  }, [recientes]);
-
-  if (flotantes.length === 0) return null;
-
-  return (
-    <div
-      className="pointer-events-none absolute inset-x-0 bottom-28 z-30 h-56 overflow-visible"
-      aria-hidden
-    >
-      {flotantes.map((f) => (
-        <span
-          key={f.key}
-          className="absolute bottom-0 text-3xl drop-shadow-lg animate-reaccion-float sm:text-4xl"
-          style={{ left: `${f.left}%` }}
-        >
-          {f.emoji}
-        </span>
-      ))}
     </div>
   );
 }

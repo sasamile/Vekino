@@ -33,6 +33,7 @@ import {
   tieneConexionAbierta,
   type FilaSesion,
 } from "./asambleaSala";
+import { registrarBitacora } from "./salaBitacora";
 
 const WRITE_ROLES = ["administrador", "junta_directiva", "representante_asamblea"] as const;
 
@@ -327,6 +328,18 @@ export const createVotacion = mutation({
         { id, cierraEn },
       );
     }
+    if (enCurso) {
+      await registrarBitacora(ctx, {
+        condominioId: asamblea.condominioId,
+        asambleaId: args.asambleaId,
+        tipo: "votacion_abierta",
+        nombre: pregunta,
+        detalle:
+          dur > 0
+            ? `Abierta · ${Math.round(dur / 60)} min`
+            : "Abierta · sin límite",
+      });
+    }
     return id;
   },
 });
@@ -381,12 +394,29 @@ export const toggleVotacion = mutation({
           { id: args.id, cierraEn },
         );
       }
+      await registrarBitacora(ctx, {
+        condominioId: existing.condominioId,
+        asambleaId: existing.asambleaId,
+        tipo: "votacion_abierta",
+        nombre: existing.pregunta,
+        detalle:
+          dur > 0
+            ? `Abierta · ${Math.round(dur / 60)} min`
+            : "Abierta · sin límite",
+      });
     } else {
       await ctx.db.patch(args.id, {
         estado: "cerrada",
         cerradaEn: ahora,
         cierraEn: undefined,
         updatedAt: ahora,
+      });
+      await registrarBitacora(ctx, {
+        condominioId: existing.condominioId,
+        asambleaId: existing.asambleaId,
+        tipo: "votacion_cerrada",
+        nombre: existing.pregunta,
+        detalle: "Cerrada por la mesa",
       });
     }
   },
@@ -452,6 +482,13 @@ export const cerrarVotacionSiExpiro = internalMutation({
       cerradaEn: ahora,
       cierraEn: undefined,
       updatedAt: ahora,
+    });
+    await registrarBitacora(ctx, {
+      condominioId: vt.condominioId,
+      asambleaId: vt.asambleaId,
+      tipo: "votacion_cerrada",
+      nombre: vt.pregunta,
+      detalle: "Cerrada por tiempo",
     });
   },
 });
@@ -1096,6 +1133,15 @@ export const votar = mutation({
     }));
     await ctx.db.patch(args.votacionId, { opciones, updatedAt: now });
 
+    await registrarBitacora(ctx, {
+      condominioId: votacion.condominioId,
+      asambleaId: votacion.asambleaId,
+      tipo: "voto",
+      nombre: user.name,
+      detalle: `${votables.map((u) => u.numero).join(", ")} → ${votacion.opciones[args.opcionIndex]?.texto ?? `opción ${args.opcionIndex + 1}`}`,
+      userId: user._id,
+    });
+
     return { ok: true as const };
   },
 });
@@ -1116,6 +1162,7 @@ export const resultadosVotacion = query({
     return {
       estado: votacion.estado,
       pregunta: votacion.pregunta,
+      cierraEn: votacion.cierraEn ?? null,
       opciones: votacion.opciones.map((o, i) => {
         const propios = votos.filter((vt) => vt.opcionIndex === i);
         return {
@@ -1125,6 +1172,79 @@ export const resultadosVotacion = query({
         };
       }),
       totalVotos: votos.length,
+    };
+  },
+});
+
+/**
+ * Quién ya votó / quién falta: visible para cualquiera con acceso al condominio
+ * (misma info de unidades que ve la mesa en la sala).
+ */
+export const seguimientoVoto = query({
+  args: { votacionId: v.id("votaciones") },
+  handler: async (ctx, args) => {
+    const votacion = await ctx.db.get(args.votacionId);
+    if (!votacion) return null;
+    await requireCondominioRole(ctx, votacion.condominioId, []);
+
+    const asamblea = await ctx.db.get(votacion.asambleaId);
+    if (!asamblea) return null;
+
+    const asistentes = await ctx.db
+      .query("asambleaAsistentes")
+      .withIndex("by_asamblea", (q) => q.eq("asambleaId", votacion.asambleaId))
+      .collect();
+    const poderes = (
+      await ctx.db
+        .query("poderesAsamblea")
+        .withIndex("by_asamblea", (q) => q.eq("asambleaId", votacion.asambleaId))
+        .collect()
+    ).filter((p) => p.validado);
+    const votos = await ctx.db
+      .query("votosAsamblea")
+      .withIndex("by_votacion", (q) => q.eq("votacionId", args.votacionId))
+      .collect();
+
+    const presentes = new Map<string, string>(); // unidadId → numero
+    for (const a of asistentes) {
+      presentes.set(a.unidadId as string, a.unidadNumero);
+    }
+    // Unidades de poderes cuyo apoderado ya está presente.
+    const asistenteUsers = new Set(
+      asistentes.map((a) => a.userId as string).filter(Boolean),
+    );
+    const asistenteNombres = new Set(
+      asistentes.map((a) => a.userNombre.trim().toLowerCase()),
+    );
+    for (const p of poderes) {
+      const key = p.unidadId as string;
+      if (presentes.has(key)) continue;
+      const porUser =
+        p.representanteUserId &&
+        asistenteUsers.has(p.representanteUserId as string);
+      const porNombre = asistenteNombres.has(
+        p.representanteNombre.trim().toLowerCase(),
+      );
+      if (porUser || porNombre) {
+        presentes.set(key, p.unidadNumero);
+      }
+    }
+
+    const votaronSet = new Set(votos.map((v) => v.unidadId as string));
+    const votaron = [...new Set(votos.map((v) => v.unidadNumero))].sort((a, b) =>
+      a.localeCompare(b, undefined, { numeric: true }),
+    );
+
+    const pendientes = [...presentes.entries()]
+      .filter(([id]) => !votaronSet.has(id))
+      .map(([, num]) => num)
+      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+
+    return {
+      estado: votacion.estado,
+      cierraEn: votacion.cierraEn ?? null,
+      votaron,
+      pendientes: [...new Set(pendientes)],
     };
   },
 });

@@ -21,6 +21,7 @@ import {
   PhoneOff,
   Plus,
   Radio,
+  ScrollText,
   ShieldCheck,
   Timer,
   Trash2,
@@ -81,7 +82,13 @@ export function SalaReunion({
   const palabras = useQuery(api.salaVideo.palabras, { asambleaId });
   const pedirPalabra = useMutation(api.salaVideo.pedirPalabra);
   const bajarMano = useMutation(api.salaVideo.bajarMano);
-  const resolverPalabra = useMutation(api.salaVideo.resolverPalabra);
+  const grabacionActiva = useQuery(api.salaBitacora.grabacionActiva, {
+    asambleaId,
+  });
+  const bitacora = useQuery(
+    api.salaBitacora.listar,
+    esMesa ? { asambleaId } : "skip",
+  );
   /* Arranca en "ahorro": el tope pasa de ~16 a ~45 espectadores y en una
    * asamblea nadie echa de menos los 24 fps de una cara. La mesa sube a
    * alta calidad si el conjunto es pequeño. */
@@ -184,6 +191,10 @@ export function SalaReunion({
     a.ordenDia ?? a.agenda.map((t) => ({ titulo: t, hecho: false as boolean }));
   const miPalabra = (palabras ?? []).find((f) => f.mia) ?? null;
   const manosLevantadas = (palabras ?? []).filter((f) => !f.mia || esMesa);
+  const palabraAlAire =
+    (palabras ?? []).find((f) => f.estado === "concedida") ?? null;
+  const votacionConTiempo =
+    abiertas.find((v) => v.cierraEn != null) ?? abiertas[0] ?? null;
 
   /* Delegó todas sus unidades y no es apoderado de ninguna otra: no tiene
    * nada que registrar ni que votar. Puede quedarse escuchando, pero no se
@@ -215,8 +226,45 @@ export function SalaReunion({
           </p>
         </div>
         <div className="pointer-events-auto flex shrink-0 items-center gap-2">
+          {grabacionActiva ? (
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-red-500/90 px-2.5 py-1 text-[11px] font-semibold text-white">
+              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-white" />
+              Grabando
+            </span>
+          ) : null}
           {!panelAbierto ? (
             <EstadoConexion latido={latido} enCurso={enCurso} />
+          ) : null}
+          {esMesa && enCurso ? (
+            <button
+              type="button"
+              onClick={() => {
+                const filas = bitacora ?? [];
+                const lineas = [
+                  `Bitácora · ${a.titulo}`,
+                  `Generada: ${new Date().toLocaleString()}`,
+                  "",
+                  ...filas.map((f) => {
+                    const t = new Date(f.createdAt).toLocaleTimeString();
+                    return `[${t}] ${f.tipo} · ${f.nombre}${f.detalle ? ` — ${f.detalle}` : ""}`;
+                  }),
+                ];
+                const blob = new Blob([lineas.join("\n")], {
+                  type: "text/plain;charset=utf-8",
+                });
+                const url = URL.createObjectURL(blob);
+                const el = document.createElement("a");
+                el.href = url;
+                el.download = `bitacora-asamblea-${Date.now()}.txt`;
+                el.click();
+                URL.revokeObjectURL(url);
+              }}
+              aria-label="Descargar bitácora"
+              title="Descargar bitácora (entradas, votos, palabra…)"
+              className="flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-white/80 transition-colors hover:bg-white/20 hover:text-white"
+            >
+              <ScrollText className="h-4 w-4" aria-hidden />
+            </button>
           ) : null}
           {enCurso ? (
             <button
@@ -243,6 +291,7 @@ export function SalaReunion({
             puedoHablar={esMesa || miPalabra?.estado === "concedida"}
             calidad={calidad}
             onCambiarCalidad={esMesa ? setCalidad : undefined}
+            puedoGrabar={esMesa}
             nombreEspera={mi?.nombre ?? undefined}
             imageUrlLocal={mi?.imageUrl ?? undefined}
             personas={sala?.personas}
@@ -288,18 +337,14 @@ export function SalaReunion({
                     <button
                       type="button"
                       onClick={() => {
-                        /* Mesa: prioriza el modal de seguimiento (quién votó). */
+                        /* Mesa: seguimiento. Residente pendiente: votar.
+                         * Ya votó: ver pendientes / resultados (puede cambiar). */
                         if (esMesa && abiertas[0]) {
                           setModalResultadosId(abiertas[0]._id);
                           return;
                         }
-                        /* Residente: abrir para votar o cambiar el voto. */
                         if (puedeVotar && pendientesVoto[0]) {
                           setModalVotoId(pendientesVoto[0]._id);
-                          return;
-                        }
-                        if (puedeVotar && abiertas[0]) {
-                          setModalVotoId(abiertas[0]._id);
                           return;
                         }
                         if (abiertas[0]) setModalResultadosId(abiertas[0]._id);
@@ -443,14 +488,8 @@ export function SalaReunion({
                     ) : null}
                     {esMesa && manosLevantadas.length > 0 ? (
                       <ManosLevantadas
+                        asambleaId={asambleaId}
                         filas={manosLevantadas}
-                        onResolver={(userId, conceder) =>
-                          void resolverPalabra({
-                            asambleaId,
-                            userId,
-                            conceder,
-                          }).catch(() => {})
-                        }
                       />
                     ) : null}
                   </div>
@@ -462,6 +501,54 @@ export function SalaReunion({
           </div>
         ) : null}
       </div>
+
+      {/* Cronómetros del escenario: visibles para TODOS en la sala. */}
+      {enCurso && (votacionConTiempo || palabraAlAire) ? (
+        <div className="pointer-events-none absolute inset-x-0 top-[4.5rem] z-[35] flex flex-col items-center gap-2 px-3 sm:top-20">
+          {palabraAlAire ? (
+            <div className="pointer-events-auto flex max-w-lg items-center gap-2.5 rounded-2xl border border-emerald-400/35 bg-black/75 px-4 py-2.5 shadow-xl backdrop-blur-md">
+              <Hand className="h-4 w-4 shrink-0 text-emerald-400" aria-hidden />
+              <p className="min-w-0 flex-1 truncate text-sm font-semibold text-white">
+                {palabraAlAire.mia
+                  ? "Tienes la palabra"
+                  : `${palabraAlAire.nombre} · al aire`}
+              </p>
+              {palabraAlAire.cierraEn ? (
+                <CuentaRegresivaVoto
+                  cierraEn={palabraAlAire.cierraEn}
+                  grande
+                />
+              ) : (
+                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/20 px-3 py-1.5 text-sm font-semibold text-emerald-200">
+                  <Clock className="h-4 w-4" aria-hidden />
+                  En vivo
+                </span>
+              )}
+            </div>
+          ) : null}
+          {votacionConTiempo ? (
+            <div className="pointer-events-auto flex max-w-lg items-center gap-2.5 rounded-2xl border border-amber-400/30 bg-black/75 px-4 py-2.5 shadow-xl backdrop-blur-md">
+              <Vote className="h-4 w-4 shrink-0 text-amber-300" aria-hidden />
+              <p className="min-w-0 flex-1 truncate text-sm font-semibold text-white">
+                {votacionConTiempo.pregunta}
+              </p>
+              {votacionConTiempo.cierraEn ? (
+                <CuentaRegresivaVoto
+                  cierraEn={votacionConTiempo.cierraEn}
+                  grande
+                />
+              ) : votacionConTiempo.abiertaEn ? (
+                <CronometroDesde desde={votacionConTiempo.abiertaEn} />
+              ) : (
+                <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/20 px-3 py-1.5 text-sm font-semibold text-amber-200">
+                  <Timer className="h-4 w-4" aria-hidden />
+                  Abierta
+                </span>
+              )}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       {/* Aviso flotante: indica el icono de votación en la barra */}
       {enCurso &&
@@ -973,6 +1060,14 @@ const DURACIONES_PREGUNTA: { label: string; segundos: number }[] = [
   { label: "Sin límite", segundos: 0 },
 ];
 
+const DURACIONES_PALABRA: { label: string; segundos: number }[] = [
+  { label: "1 min", segundos: 60 },
+  { label: "2 min", segundos: 120 },
+  { label: "3 min", segundos: 180 },
+  { label: "5 min", segundos: 300 },
+  { label: "Sin límite", segundos: 0 },
+];
+
 function formatearRestante(ms: number): string {
   const s = Math.max(0, Math.ceil(ms / 1000));
   const mm = Math.floor(s / 60);
@@ -980,7 +1075,16 @@ function formatearRestante(ms: number): string {
   return `${mm}:${ss.toString().padStart(2, "0")}`;
 }
 
-function CuentaRegresivaVoto({ cierraEn }: { cierraEn: number }) {
+function CuentaRegresivaVoto({
+  cierraEn,
+  grande = false,
+  claro = false,
+}: {
+  cierraEn: number;
+  grande?: boolean;
+  /** Para fondos claros (modales blancos). */
+  claro?: boolean;
+}) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000);
@@ -989,8 +1093,16 @@ function CuentaRegresivaVoto({ cierraEn }: { cierraEn: number }) {
   const ms = cierraEn - now;
   if (ms <= 0) {
     return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-semibold text-amber-200">
-        <Timer className="h-3 w-3" aria-hidden />
+      <span
+        className={cn(
+          "inline-flex items-center gap-1 rounded-full font-semibold",
+          grande ? "px-3 py-1.5 text-sm" : "px-2 py-0.5 text-[10px]",
+          claro
+            ? "bg-amber-100 text-amber-800"
+            : "bg-amber-500/20 text-amber-200",
+        )}
+      >
+        <Timer className={grande ? "h-4 w-4" : "h-3 w-3"} aria-hidden />
         Cerrando…
       </span>
     );
@@ -998,14 +1110,34 @@ function CuentaRegresivaVoto({ cierraEn }: { cierraEn: number }) {
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold tabular-nums",
-        ms < 30_000
-          ? "bg-red-500/20 text-red-200"
-          : "bg-emerald-500/20 text-emerald-200",
+        "inline-flex items-center gap-1 rounded-full font-semibold tabular-nums",
+        grande ? "px-3 py-1.5 text-base" : "px-2 py-0.5 text-[10px]",
+        claro
+          ? ms < 30_000
+            ? "bg-red-100 text-red-700"
+            : "bg-emerald-100 text-emerald-800"
+          : ms < 30_000
+            ? "bg-red-500/20 text-red-200"
+            : "bg-emerald-500/20 text-emerald-200",
       )}
     >
-      <Clock className="h-3 w-3" aria-hidden />
+      <Clock className={grande ? "h-4 w-4" : "h-3 w-3"} aria-hidden />
       {formatearRestante(ms)}
+    </span>
+  );
+}
+
+/** Cronómetro que cuenta hacia arriba desde un instante (votación sin límite). */
+function CronometroDesde({ desde }: { desde: number }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/20 px-3 py-1.5 text-base font-semibold tabular-nums text-amber-200">
+      <Timer className="h-4 w-4" aria-hidden />
+      {formatearRestante(now - desde)}
     </span>
   );
 }
@@ -1655,6 +1787,7 @@ function ModalVotarSala({
     pregunta: string;
     opciones: { texto: string }[];
     estado?: string;
+    cierraEn?: number | null;
   } | null;
   miVoto: number | undefined;
   onClose: () => void;
@@ -1680,10 +1813,17 @@ function ModalVotarSala({
         className="relative z-10 w-full max-w-md rounded-t-2xl border border-zinc-200 bg-white p-6 text-zinc-900 shadow-xl sm:rounded-2xl"
       >
         <div className="mb-4 flex items-start justify-between gap-3">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-emerald-600">
-              {miVoto !== undefined ? "Puedes cambiar tu voto" : "Votación abierta"}
-            </p>
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-xs font-semibold uppercase tracking-wide text-emerald-600">
+                {miVoto !== undefined
+                  ? "Puedes cambiar tu voto"
+                  : "Votación abierta"}
+              </p>
+              {votacion.cierraEn ? (
+                <CuentaRegresivaVoto cierraEn={votacion.cierraEn} claro />
+              ) : null}
+            </div>
             <h2 className="mt-1 text-lg font-semibold text-zinc-900">
               {votacion.pregunta}
             </h2>
@@ -1772,11 +1912,9 @@ function ModalVotarSala({
   );
 }
 
-/** Popup de resultados + (mesa) pestañas Ya votaron / Pendientes. */
+/** Popup de resultados + pestañas Ya votaron / Pendientes (todos). */
 function ModalResultadosSala({
-  asambleaId,
   votacionId,
-  esMesa,
   onClose,
   onVolverAVotar,
 }: {
@@ -1787,28 +1925,17 @@ function ModalResultadosSala({
   onVolverAVotar?: () => void;
 }) {
   const res = useQuery(api.asambleas.resultadosVotacion, { votacionId });
-  const det = useQuery(
-    api.asambleas.asistentesDetallado,
-    esMesa ? { asambleaId } : "skip",
-  );
+  const seg = useQuery(api.asambleas.seguimientoVoto, { votacionId });
   const [tab, setTab] = useState<"resultados" | "votaron" | "pendientes">(
-    esMesa ? "pendientes" : "resultados",
+    "pendientes",
   );
 
   const totalCoef = res
     ? res.opciones.reduce((s, o) => s + o.coeficiente, 0)
     : 0;
 
-  const filas = det?.filas ?? [];
-  const presentes = filas.filter((f) => f.presente);
-  const votaron = filas
-    .filter((f) => f.votos[votacionId as string] != null)
-    .map((f) => f.unidadNumero)
-    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-  const pendientes = presentes
-    .filter((f) => f.votos[votacionId as string] == null)
-    .map((f) => f.unidadNumero)
-    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  const votaron = seg?.votaron ?? [];
+  const pendientes = seg?.pendientes ?? [];
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
@@ -1825,10 +1952,15 @@ function ModalResultadosSala({
       >
         <div className="flex items-start justify-between gap-3 border-b border-zinc-100 px-6 pb-3 pt-5">
           <div className="min-w-0">
-            <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
-              {esMesa ? "Seguimiento de votos" : "Resultados"}
-              {res?.estado === "abierta" ? " · en vivo" : ""}
-            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                Seguimiento de votos
+                {res?.estado === "abierta" ? " · en vivo" : ""}
+              </p>
+              {res?.cierraEn ? (
+                <CuentaRegresivaVoto cierraEn={res.cierraEn} claro />
+              ) : null}
+            </div>
             <h2 className="mt-1 truncate text-lg font-semibold">
               {res?.pregunta ?? "…"}
             </h2>
@@ -1842,44 +1974,42 @@ function ModalResultadosSala({
           </button>
         </div>
 
-        {esMesa ? (
-          <div className="flex gap-1 border-b border-zinc-100 px-4 pt-2">
-            {(
-              [
-                { id: "resultados" as const, label: "Resultados" },
-                {
-                  id: "votaron" as const,
-                  label: `Ya votaron (${votaron.length})`,
-                },
-                {
-                  id: "pendientes" as const,
-                  label: `Pendientes (${pendientes.length})`,
-                },
-              ] as const
-            ).map((t) => (
-              <button
-                key={t.id}
-                type="button"
-                onClick={() => setTab(t.id)}
-                className={cn(
-                  "rounded-t-lg px-3 py-2 text-xs font-semibold transition-colors",
-                  tab === t.id
-                    ? "bg-zinc-100 text-zinc-900"
-                    : "text-zinc-500 hover:text-zinc-800",
-                )}
-              >
-                {t.label}
-              </button>
-            ))}
-          </div>
-        ) : null}
+        <div className="flex gap-1 border-b border-zinc-100 px-4 pt-2">
+          {(
+            [
+              { id: "resultados" as const, label: "Resultados" },
+              {
+                id: "votaron" as const,
+                label: `Ya votaron (${votaron.length})`,
+              },
+              {
+                id: "pendientes" as const,
+                label: `Pendientes (${pendientes.length})`,
+              },
+            ] as const
+          ).map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => setTab(t.id)}
+              className={cn(
+                "rounded-t-lg px-3 py-2 text-xs font-semibold transition-colors",
+                tab === t.id
+                  ? "bg-zinc-100 text-zinc-900"
+                  : "text-zinc-500 hover:text-zinc-800",
+              )}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
           {!res ? (
             <div className="flex justify-center py-8">
               <Loader2 className="h-6 w-6 animate-spin text-zinc-400" />
             </div>
-          ) : !esMesa || tab === "resultados" ? (
+          ) : tab === "resultados" ? (
             <div className="space-y-3">
               <p className="text-xs text-zinc-500">
                 {res.totalVotos} unidad{res.totalVotos === 1 ? "" : "es"} ·{" "}
@@ -1898,7 +2028,7 @@ function ModalResultadosSala({
                     </div>
                     <div className="h-2 overflow-hidden rounded-full bg-zinc-100">
                       <div
-                        className="h-full rounded-full bg-brand transition-all"
+                        className="h-full rounded-full bg-emerald-500 transition-all"
                         style={{ width: `${Math.min(100, pct)}%` }}
                       />
                     </div>
@@ -1909,7 +2039,7 @@ function ModalResultadosSala({
           ) : tab === "votaron" ? (
             <ListaUnidadesModal
               numeros={votaron}
-              vacio="Nadie ha votado aún."
+              vacio="Nadie ha votado todavía."
               tono="ok"
             />
           ) : (
@@ -1943,38 +2073,6 @@ function ModalResultadosSala({
     </div>
   );
 }
-
-function ListaUnidadesModal({
-  numeros,
-  vacio,
-  tono,
-}: {
-  numeros: string[];
-  vacio: string;
-  tono: "ok" | "pendiente";
-}) {
-  if (numeros.length === 0) {
-    return <p className="text-sm text-zinc-500">{vacio}</p>;
-  }
-  return (
-    <div className="flex flex-wrap gap-2">
-      {numeros.map((n) => (
-        <span
-          key={n}
-          className={cn(
-            "inline-flex rounded-full px-2.5 py-1 text-xs font-semibold tabular-nums",
-            tono === "ok"
-              ? "bg-emerald-100 text-emerald-800"
-              : "bg-amber-100 text-amber-900",
-          )}
-        >
-          {n}
-        </span>
-      ))}
-    </div>
-  );
-}
-
 
 /* ── Levantar la mano (barra del escenario) ──────────────────────────── */
 function BotonMano({
@@ -2015,63 +2113,195 @@ function BotonMano({
 
 /* ── Manos levantadas (panel de la mesa) ─────────────────────────────── */
 function ManosLevantadas({
+  asambleaId,
   filas,
-  onResolver,
 }: {
-  filas: { userId: Id<"users">; nombre: string; estado: "pedida" | "concedida" }[];
-  onResolver: (userId: Id<"users">, conceder: boolean) => void;
+  asambleaId: Id<"asambleas">;
+  filas: {
+    userId: Id<"users">;
+    nombre: string;
+    estado: "pedida" | "concedida";
+    cierraEn?: number | null;
+  }[];
 }) {
+  const resolver = useMutation(api.salaVideo.resolverPalabra);
+  const extender = useMutation(api.salaVideo.extenderPalabra);
+  const [eligiendoId, setEligiendoId] = useState<string | null>(null);
+  const [duracion, setDuracion] = useState(120);
+
   return (
     <section>
       <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-amber-200">
         <Hand className="h-4 w-4" aria-hidden /> Manos levantadas
       </h2>
       <ul className="space-y-2">
-        {filas.map((f) => (
-          <li key={f.userId as string} className="flex items-center gap-2">
-            <span className="min-w-0 flex-1 truncate text-sm text-white/85">
-              {f.nombre}
-            </span>
-            {f.estado === "concedida" ? (
-              <>
-                <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-[11px] font-semibold text-emerald-300">
-                  Al aire
+        {filas.map((f) => {
+          const id = f.userId as string;
+          const eligiendo = eligiendoId === id;
+          return (
+            <li
+              key={id}
+              className="rounded-xl bg-white/[0.04] px-3 py-2"
+            >
+              <div className="flex items-center gap-2">
+                <span className="min-w-0 flex-1 truncate text-sm text-white/85">
+                  {f.nombre}
                 </span>
-                <button
-                  type="button"
-                  onClick={() => onResolver(f.userId, false)}
-                  title="Silenciar y quitar la palabra"
-                  className="inline-flex items-center gap-1 rounded-lg bg-red-500/90 px-2.5 py-1 text-xs font-semibold text-white hover:bg-red-600"
-                >
-                  <MicOff className="h-3 w-3" aria-hidden />
-                  Silenciar
-                </button>
-              </>
-            ) : (
-              <>
-                <button
-                  type="button"
-                  onClick={() => onResolver(f.userId, true)}
-                  className="rounded-lg bg-emerald-500 px-2.5 py-1 text-xs font-semibold text-white hover:bg-emerald-600"
-                >
-                  Dar la palabra
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onResolver(f.userId, false)}
-                  className="rounded-lg bg-white/10 px-2.5 py-1 text-xs font-semibold text-white hover:bg-white/20"
-                >
-                  Bajar
-                </button>
-              </>
-            )}
-          </li>
-        ))}
+                {f.estado === "concedida" ? (
+                  <>
+                    <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-[11px] font-semibold text-emerald-300">
+                      Al aire
+                    </span>
+                    {f.cierraEn ? (
+                      <CuentaRegresivaVoto cierraEn={f.cierraEn} />
+                    ) : null}
+                  </>
+                ) : null}
+              </div>
+              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                {f.estado === "concedida" ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void extender({
+                          asambleaId,
+                          userId: f.userId,
+                          segundosExtra: 60,
+                        }).catch(() => {})
+                      }
+                      className="inline-flex items-center gap-1 rounded-lg bg-white/10 px-2.5 py-1 text-xs font-semibold text-white hover:bg-white/20"
+                    >
+                      <Timer className="h-3 w-3" aria-hidden /> +1 min
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void resolver({
+                          asambleaId,
+                          userId: f.userId,
+                          conceder: false,
+                        }).catch(() => {})
+                      }
+                      title="Silenciar y quitar la palabra"
+                      className="inline-flex items-center gap-1 rounded-lg bg-red-500/90 px-2.5 py-1 text-xs font-semibold text-white hover:bg-red-600"
+                    >
+                      <MicOff className="h-3 w-3" aria-hidden />
+                      Silenciar
+                    </button>
+                  </>
+                ) : eligiendo ? (
+                  <div className="w-full space-y-2">
+                    <p className="text-[11px] text-white/50">
+                      Tiempo para hablar
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {DURACIONES_PALABRA.map((d) => (
+                        <button
+                          key={d.segundos}
+                          type="button"
+                          onClick={() => setDuracion(d.segundos)}
+                          className={cn(
+                            "rounded-full px-2.5 py-1 text-[11px] font-semibold transition-colors",
+                            duracion === d.segundos
+                              ? "bg-emerald-500 text-white"
+                              : "bg-white/10 text-white/70 hover:bg-white/15",
+                          )}
+                        >
+                          {d.label}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setEligiendoId(null)}
+                        className="rounded-lg px-2.5 py-1 text-xs text-white/50 hover:text-white"
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEligiendoId(null);
+                          void resolver({
+                            asambleaId,
+                            userId: f.userId,
+                            conceder: true,
+                            duracionSegundos: duracion,
+                          }).catch(() => {});
+                        }}
+                        className="rounded-lg bg-emerald-500 px-2.5 py-1 text-xs font-semibold text-white hover:bg-emerald-600"
+                      >
+                        Conceder
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDuracion(120);
+                        setEligiendoId(id);
+                      }}
+                      className="rounded-lg bg-emerald-500 px-2.5 py-1 text-xs font-semibold text-white hover:bg-emerald-600"
+                    >
+                      Dar la palabra
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void resolver({
+                          asambleaId,
+                          userId: f.userId,
+                          conceder: false,
+                        }).catch(() => {})
+                      }
+                      className="rounded-lg bg-white/10 px-2.5 py-1 text-xs font-semibold text-white hover:bg-white/20"
+                    >
+                      Bajar
+                    </button>
+                  </>
+                )}
+              </div>
+            </li>
+          );
+        })}
       </ul>
     </section>
   );
 }
 
-
+function ListaUnidadesModal({
+  numeros,
+  vacio,
+  tono,
+}: {
+  numeros: string[];
+  vacio: string;
+  tono: "ok" | "pendiente";
+}) {
+  if (numeros.length === 0) {
+    return <p className="text-sm text-zinc-500">{vacio}</p>;
+  }
+  return (
+    <div className="flex flex-wrap gap-2">
+      {numeros.map((n) => (
+        <span
+          key={n}
+          className={cn(
+            "inline-flex rounded-full px-2.5 py-1 text-xs font-semibold tabular-nums",
+            tono === "ok"
+              ? "bg-emerald-100 text-emerald-800"
+              : "bg-amber-100 text-amber-900",
+          )}
+        >
+          {n}
+        </span>
+      ))}
+    </div>
+  );
+}
 
 /* (lista de personas vive en ResumenSala) */

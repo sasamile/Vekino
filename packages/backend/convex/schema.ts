@@ -748,6 +748,10 @@ export default defineSchema({
     userId: v.id("users"),
     nombre: v.string(),
     estado: v.union(v.literal("pedida"), v.literal("concedida")),
+    /** Instantes de la concesión (auditoría / cronómetro). */
+    concedidaEn: v.optional(v.number()),
+    /** Si hay límite: la palabra se retira sola al llegar. */
+    cierraEn: v.optional(v.number()),
     createdAt: v.number(),
   })
     .index("by_asamblea", ["asambleaId"])
@@ -774,6 +778,43 @@ export default defineSchema({
     codigoPoder: v.optional(v.string()),
     createdAt: v.number(),
   }).index("by_asamblea_created", ["asambleaId", "createdAt"]),
+
+  /**
+   * Bitácora de la sala: entradas, palabra, votos, chat, grabación…
+   * Respaldo textual de lo que pasó, alineado con el audio grabado.
+   */
+  salaBitacora: defineTable({
+    condominioId: v.id("condominios"),
+    asambleaId: v.id("asambleas"),
+    tipo: v.union(
+      v.literal("entrada"),
+      v.literal("salida"),
+      v.literal("palabra_concedida"),
+      v.literal("palabra_retirada"),
+      v.literal("votacion_abierta"),
+      v.literal("votacion_cerrada"),
+      v.literal("voto"),
+      v.literal("chat"),
+      v.literal("reaccion"),
+      v.literal("grabacion_inicio"),
+      v.literal("grabacion_fin"),
+    ),
+    nombre: v.string(),
+    detalle: v.optional(v.string()),
+    userId: v.optional(v.id("users")),
+    createdAt: v.number(),
+  }).index("by_asamblea_created", ["asambleaId", "createdAt"]),
+
+  /** Sesión de grabación activa (la mesa graba en el navegador). */
+  salaGrabacion: defineTable({
+    condominioId: v.id("condominios"),
+    asambleaId: v.id("asambleas"),
+    iniciadaPorUserId: v.id("users"),
+    iniciadaPorNombre: v.string(),
+    estado: v.union(v.literal("activa"), v.literal("terminada")),
+    startedAt: v.number(),
+    endedAt: v.optional(v.number()),
+  }).index("by_asamblea", ["asambleaId"]),
 
   salaSenales: defineTable({
     asambleaId: v.id("asambleas"),
