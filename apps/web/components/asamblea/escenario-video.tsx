@@ -14,6 +14,7 @@ import {
   Video,
   VideoOff,
   Volume2,
+  VolumeX,
   WifiOff,
 } from "lucide-react";
 import {
@@ -289,6 +290,9 @@ export function EscenarioVideo({
   const [audioRechazado, setAudioRechazado] = useState(false);
   const [intentoAudio, setIntentoAudio] = useState(0);
   const marcarAudioBloqueado = useCallback(() => setAudioRechazado(true), []);
+  /* Volumen de la sala, en manos de quien escucha. Sin esto el sonido entra
+   * solo y no hay forma de bajarlo desde la aplicación. */
+  const [sonidoOn, setSonidoOn] = useState(true);
 
   /* Si la mesa retira la palabra en pleno aire, el micrófono se corta AQUÍ,
    * no solo en el servidor: el stream local sigue vivo hasta que se cuelga. */
@@ -377,11 +381,14 @@ export function EscenarioVideo({
 
   const modoPresentacion = !!(principalRemoto || pantallaLocal);
 
-  /* El botón de sonido aparece si el navegador YA rechazó reproducir, o si el
-   * servidor de medios avisa que el audio está bloqueado. No se muestra
-   * cuando no hay nadie hablando: sería un botón que no arregla nada. */
+  /* El letrero sale solo si el navegador RECHAZÓ de verdad reproducir.
+   *
+   * No se usa el aviso del servidor de medios (`audioBloqueado`): ese mira
+   * los elementos que gestiona LiveKit, y aquí el audio se reproduce por
+   * elementos propios. Fiarse de él dejaba un "Activar sonido" permanente
+   * encima de una sala que ya se estaba oyendo. */
   const hayQueActivarSonido =
-    video.audios.length > 0 && (audioRechazado || video.audioBloqueado);
+    video.audios.length > 0 && audioRechazado && sonidoOn;
 
   return (
     <div className="relative h-full w-full overflow-hidden bg-[#0c0e12]">
@@ -420,6 +427,7 @@ export function EscenarioVideo({
           key={a.id}
           stream={a.stream}
           intento={intentoAudio}
+          activo={sonidoOn}
           onBloqueado={marcarAudioBloqueado}
         />
       ))}
@@ -574,6 +582,32 @@ export function EscenarioVideo({
                 </BotonRedondo>
               </>
             ) : null}
+            {/* Bajar el volumen de la sala. Lo ve TODO el mundo, no solo
+                quien puede hablar: el que solo escucha es justamente el que
+                necesita poder silenciar. */}
+            <BotonRedondo
+              encendido={sonidoOn}
+              busy={false}
+              onClick={() => {
+                setSonidoOn((v) => {
+                  // Reactivar cuenta como gesto del usuario: aprovecha para
+                  // desbloquear el audio si el navegador lo tenía frenado.
+                  if (!v) {
+                    void video.desbloquearAudio();
+                    setAudioRechazado(false);
+                    setIntentoAudio((n) => n + 1);
+                  }
+                  return !v;
+                });
+              }}
+              label={sonidoOn ? "Silenciar la sala" : "Activar el sonido de la sala"}
+            >
+              {sonidoOn ? (
+                <Volume2 className="h-5 w-5" aria-hidden />
+              ) : (
+                <VolumeX className="h-5 w-5" aria-hidden />
+              )}
+            </BotonRedondo>
             {enCurso ? (
               <BotonReaccionar
                 asambleaId={asambleaId}
@@ -783,11 +817,14 @@ function BotonRedondo({
 function PistaAudio({
   stream,
   intento,
+  activo,
   onBloqueado,
 }: {
   stream: MediaStream;
   /** Sube cada vez que el usuario pulsa "Activar sonido": fuerza reintentar. */
   intento: number;
+  /** El oyente bajó el volumen de la sala. */
+  activo: boolean;
   onBloqueado: () => void;
 }) {
   const ref = useRef<HTMLAudioElement>(null);
@@ -796,9 +833,14 @@ function PistaAudio({
     const el = ref.current;
     if (!el) return;
     el.srcObject = stream;
-    el.muted = false;
     el.play().catch(() => onBloqueado());
   }, [stream, intento, onBloqueado]);
+
+  /* Efecto aparte: silenciar no debe reiniciar la reproducción. */
+  useEffect(() => {
+    const el = ref.current;
+    if (el) el.muted = !activo;
+  }, [activo]);
 
   return <audio ref={ref} autoPlay playsInline className="hidden" />;
 }
