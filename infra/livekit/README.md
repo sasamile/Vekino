@@ -9,11 +9,31 @@ bien hasta unas decenas de personas— así que nada se rompe si no está.
 | | |
 |---|---|
 | Dominio | `sala.vekino.com` → `45.77.117.222` (Cloudflare, **DNS only**) |
-| Proveedor | Vultr, Miami, instancia `sala-vekino` |
-| Plan | Shared CPU `vc2-1c-2gb` · 1 vCPU · 2 GB · 2 TB/mes · **$10/mes ($0.014/hora)** |
+| Proveedor | Vultr, Miami, instancia `Vekino - Sala de asambleas` |
+| Plan | Cloud Compute · 6 vCPU · 16 GB · 5 TB/mes · **$80/mes ($0.119/hora)** |
 | Acceso | `ssh -i ~/.ssh/vekino_sala root@45.77.117.222` |
 | Instalado en | `/opt/vekino-sala` (LiveKit + Caddy por docker compose) |
 | Llaves | ya cargadas en Convex (`LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`) |
+
+### Capacidad medida (no estimada)
+
+Prueba de carga real contra este servidor, con un emisor de pantalla, dos de
+audio y N espectadores simulados desde otra máquina en Miami:
+
+| Espectadores | Pistas entregadas | Errores | CPU del servidor | Paquetes descartados |
+|---|---|---|---|---|
+| 100 | 300/300 | 0 | — | 0 |
+| **300** | **900/900** | **0** | **45%** | **0** |
+
+Con 300 conectados el servidor iba a menos de la mitad de su CPU, sin
+descartar un solo paquete, sobre un enlace que da 9 Gbps medidos. El 2.2% de
+pérdida que reportaron los espectadores venía de la máquina que generaba la
+carga (82% de CPU haciendo en un equipo lo que en la vida real hacen 300
+teléfonos), no de este servidor.
+
+**500 no está medido.** La aritmética dice que pasaría (~75% de CPU,
+~700 Mbps), pero eso es cálculo. Para comprobarlo hacen falta dos máquinas
+generadoras, porque una sola no da abasto.
 
 El registro DNS **no debe pasar por el proxy de Cloudflare** (la nube gris,
 "Solo DNS"). El proxy no enruta UDP y el video quedaría cargando para siempre
@@ -98,11 +118,55 @@ necesita saberla de antemano.
 En cuanto Convex tenga las tres, la sala pasa sola al servidor de medios. Sin
 ellas `tokenSala` devuelve `null` y la sala sigue en malla P2P.
 
-## Al terminar
+## Apagar entre asambleas
 
-**Destruye la instancia** desde el panel de Vultr. Apagarla no basta: se sigue
-cobrando el disco. Volver a crearla es correr el script otra vez — genera
-llaves nuevas, así que hay que actualizar las tres variables de Convex.
+**Apagar la instancia NO ahorra un peso.** Vultr cobra el plan completo
+mientras exista, encendida o apagada, porque te reserva el disco y la IP. Lo
+único que corta el cobro es **destruirla**. A $0.119/hora, ocho días de
+inactividad son $23 tirados.
+
+### Al terminar una asamblea
+
+```bash
+# 1. Quitar las llaves de Convex ANTES de destruir el servidor.
+#    Si se dejan puestas apuntando a una máquina que ya no existe, la sala
+#    NO cae a la malla: pide un token válido hacia una dirección muerta y se
+#    rompe del todo. Sin ellas, la malla P2P sigue sirviendo a grupos chicos.
+cd packages/backend
+npx convex env remove LIVEKIT_URL
+npx convex env remove LIVEKIT_API_KEY
+npx convex env remove LIVEKIT_API_SECRET
+```
+
+2. Destruir la instancia desde el panel de Vultr (Server Destroy).
+
+El registro DNS `sala.vekino.com` se puede dejar quieto: apunta a una IP
+muerta, pero no molesta a nadie y ahorra un paso al recrear.
+
+### Para la siguiente asamblea (~15 minutos)
+
+Hazlo **el día antes**, no el mismo día.
+
+1. Crear la instancia: Vultr → Deploy → **Cloud Compute**, Miami, **6 vCPU /
+   16 GB**, Ubuntu 24.04 o 26.04, backups **desactivados**, llave SSH
+   `vekino-sala`, sin Firewall Group.
+2. Apuntar el DNS a la IP nueva: Cloudflare → `vekino.com` → registro `sala`
+   → cambiar la IP. **Tiene que quedar en "Solo DNS"** (nube gris): el proxy
+   de Cloudflare no enruta UDP y el video se quedaría cargando sin dar ningún
+   error que lo explique.
+3. Montar el servidor:
+   ```bash
+   scp -i ~/.ssh/vekino_sala infra/livekit/instalar.sh root@LA-IP:/root/
+   ssh -i ~/.ssh/vekino_sala root@LA-IP 'bash /root/instalar.sh sala.vekino.com'
+   ```
+4. Pegar en Convex las tres llaves que imprime el script (`npx convex env set`).
+5. Comprobar antes de que llegue la gente:
+   ```bash
+   curl -sI https://sala.vekino.com | head -1        # debe dar 200
+   ```
+   Y entrar a la sala: en la consola del navegador tiene que aparecer
+   `connected to Livekit Server`. Si no aparece, la sala está en malla P2P y
+   no aguanta cientos de personas.
 
 ## Antes de la primera asamblea real
 
