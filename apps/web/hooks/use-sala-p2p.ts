@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
-import type { Calidad, EmisorRemoto, Medio } from "./sala-tipos";
+import type { AudioRemoto, Calidad, EmisorRemoto, Medio } from "./sala-tipos";
 
 /**
  * Video propio de la sala: WebRTC punto a punto con Convex de señalización.
@@ -458,11 +458,32 @@ export function useSalaP2P(
     };
   }, [activo, detenerEmisor, asambleaId, clienteId]);
 
+  /* En la malla el audio viaja dentro del mismo stream que el video, pero se
+   * extrae igual: el escenario lo reproduce por un elemento aparte para que
+   * un solo botón desbloquee TODO el sonido de la sala de una vez. */
+  const audios: AudioRemoto[] = useMemo(
+    () =>
+      remotos.flatMap((r) => {
+        const pistas = r.stream?.getAudioTracks() ?? [];
+        if (pistas.length === 0 || r.micApagado) return [];
+        const solo = new MediaStream();
+        for (const p of pistas) solo.addTrack(p);
+        return [{ id: `${r.clienteId}|${r.medio}`, stream: solo }];
+      }),
+    [remotos],
+  );
+  const [audioBloqueado, setAudioBloqueado] = useState(false);
+
   return {
     /** Streams que YO emito (para el auto-preview de la mesa). */
     locales,
     /** Emisiones remotas con su estado de conexión. */
     remotos,
+    audios,
+    audioBloqueado,
+    /* Sin servidor de medios no hay nada que "arrancar": basta con que el
+     * escenario reintente reproducir, y eso ya lo dispara el propio botón. */
+    desbloquearAudio: async () => setAudioBloqueado(false),
     espectadores,
     tope: perfil.tope,
     calidad,

@@ -36,7 +36,14 @@ export function useVideoSala(
   const [resuelto, setResuelto] = useState(false);
 
   /* Se pide una vez por sala. El token dura seis horas: más que la asamblea
-   * más larga, así que no hace falta renovarlo en pleno acto. */
+   * más larga, así que no hace falta renovarlo en pleno acto.
+   *
+   * Sin función de limpieza a propósito. Una limpieza corre en CADA cambio de
+   * dependencias, no solo al desmontar, y si cancelara la petición en vuelo el
+   * token llegaría a la basura: la sala se quedaba sin servidor de medios y
+   * sin malla, con pinta de estar bien. La cancelación real se decide
+   * comparando contra `pedido.current`, que solo cambia si cambia la sala.
+   */
   const pedido = useRef<string | null>(null);
   useEffect(() => {
     if (!activo) {
@@ -49,22 +56,27 @@ export function useVideoSala(
     if (pedido.current === clave) return;
     pedido.current = clave;
 
-    let vigente = true;
-    void pedirToken({ asambleaId })
-      .then((r) => {
-        if (!vigente) return;
-        setConexion(r);
-        setResuelto(true);
-      })
-      .catch(() => {
-        // Sin token se sigue por la malla: es degradación, no falla.
-        if (!vigente) return;
-        setConexion(null);
-        setResuelto(true);
-      });
-    return () => {
-      vigente = false;
-    };
+    void (async () => {
+      /* La sesión de Convex puede no haber llegado al backend cuando se monta
+       * la sala. Un solo intento fallido dejaba la asamblea entera en malla
+       * hasta recargar, así que se reintenta con espera creciente. */
+      for (let intento = 0; intento < 5; intento++) {
+        try {
+          const r = await pedirToken({ asambleaId });
+          if (pedido.current !== clave) return;
+          setConexion(r);
+          setResuelto(true);
+          return;
+        } catch {
+          if (pedido.current !== clave) return;
+          await new Promise((r) => setTimeout(r, 400 * (intento + 1)));
+        }
+      }
+      // Sin token se sigue por la malla: es degradación, no falla.
+      if (pedido.current !== clave) return;
+      setConexion(null);
+      setResuelto(true);
+    })();
   }, [activo, asambleaId, pedirToken]);
 
   const usarSfu = resuelto && conexion !== null;
@@ -85,6 +97,9 @@ export function useVideoSala(
 const VACIO: SalaVideo = {
   locales: [],
   remotos: [],
+  audios: [],
+  audioBloqueado: false,
+  desbloquearAudio: async () => {},
   espectadores: 0,
   tope: 0,
   calidad: "normal",

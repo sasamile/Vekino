@@ -11,7 +11,7 @@ import {
   Track,
   type RemoteTrackPublication,
 } from "livekit-client";
-import type { Calidad, EmisorRemoto, Medio } from "./sala-tipos";
+import type { AudioRemoto, Calidad, EmisorRemoto, Medio } from "./sala-tipos";
 
 /**
  * La misma sala, repartida por el servidor de medios en vez de par a par.
@@ -29,14 +29,23 @@ import type { Calidad, EmisorRemoto, Medio } from "./sala-tipos";
 /** Techo del servidor (`max_participants` en livekit.yaml). */
 const TOPE_SALA = 300;
 
+/**
+ * Perfiles de calidad.
+ *
+ * La pantalla NO baja de 15 fps ni en modo ahorro. Con 5 fps —que es lo que
+ * tenía— el puntero del mouse da saltos y todo el mundo cree que la reunión
+ * está trabada; se ahorra ancho de banda a costa de que parezca rota. Lo que
+ * sí se sacrifica en ahorro es la resolución y el bitrate, que es donde el
+ * ahorro no se siente.
+ */
 const PERFILES = {
   normal: {
     camara: { width: 640, height: 360, fps: 24, bitrate: 600_000 },
-    pantalla: { width: 1920, height: 1080, fps: 15, bitrate: 2_500_000 },
+    pantalla: { width: 1920, height: 1080, fps: 24, bitrate: 3_000_000 },
   },
   ahorro: {
     camara: { width: 320, height: 180, fps: 15, bitrate: 150_000 },
-    pantalla: { width: 1600, height: 900, fps: 5, bitrate: 900_000 },
+    pantalla: { width: 1600, height: 900, fps: 15, bitrate: 1_500_000 },
   },
 } as const;
 
@@ -92,6 +101,8 @@ export function useSalaLiveKit(
   const room = useMemo(() => (activo && conexion ? new Room() : null), [activo, conexion]);
 
   const [remotos, setRemotos] = useState<EmisorRemoto[]>([]);
+  const [audios, setAudios] = useState<AudioRemoto[]>([]);
+  const [audioBloqueado, setAudioBloqueado] = useState(false);
   const [locales, setLocales] = useState<{ medio: Medio; stream: MediaStream }[]>([]);
   const [espectadores, setEspectadores] = useState(0);
   const [micOn, setMicOn] = useState(false);
@@ -101,32 +112,48 @@ export function useSalaLiveKit(
   /* ── Espejo del estado de la sala hacia React ────────────────────────── */
   const sincronizar = useCallback((sala: Room) => {
     const lista: EmisorRemoto[] = [];
+    const sonidos: AudioRemoto[] = [];
 
     for (const p of sala.remoteParticipants.values()) {
       for (const [medio, par] of agruparPorMedio(p)) {
-        const stream = new MediaStream();
         const pistaVideo = par.video?.track?.mediaStreamTrack;
         const pistaAudio = par.audio?.track?.mediaStreamTrack;
-        if (pistaVideo) stream.addTrack(pistaVideo);
-        if (pistaAudio) stream.addTrack(pistaAudio);
 
-        /* Sin video suscrito todavía no hay nada que pintar; se muestra
-         * "conectando" en vez de un cuadro negro que parece un fallo. */
-        const tieneAlgo = Boolean(pistaVideo || pistaAudio);
+        /* El audio se reparte SIEMPRE por su propio elemento, tenga o no
+         * video al lado: la mayoría de una asamblea habla con la cámara
+         * apagada y si el sonido dependiera del mosaico, no se oirían. */
+        if (pistaAudio && !par.audio?.isMuted) {
+          const solo = new MediaStream();
+          solo.addTrack(pistaAudio);
+          sonidos.push({ id: `${p.identity}|${medio}`, stream: solo });
+        }
+
+        /* Un mosaico existe solo si hay una PUBLICACIÓN de video. Sin esto,
+         * quien enciende únicamente el micrófono aparecía como si estuviera
+         * transmitiendo y su avatar se tomaba el escenario entero. */
+        if (!par.video) continue;
+
+        const stream = new MediaStream();
+        if (pistaVideo) stream.addTrack(pistaVideo);
+        // El audio también va aquí, pero solo para detectar quién habla y
+        // pintarle el borde: el `<video>` se renderiza siempre en silencio.
+        if (pistaAudio) stream.addTrack(pistaAudio);
 
         lista.push({
           clienteId: `${p.identity}|${medio}`,
           nombre: nombreDe(p),
           medio,
-          camApagada: !par.video || par.video.isMuted || !pistaVideo,
+          camApagada: par.video.isMuted || !pistaVideo,
           micApagado: !par.audio || par.audio.isMuted,
-          stream: tieneAlgo ? stream : null,
-          estado: tieneAlgo ? "activo" : "conectando",
+          stream: pistaVideo ? stream : null,
+          estado: pistaVideo ? "activo" : "conectando",
         });
       }
     }
 
     setRemotos(lista);
+    setAudios(sonidos);
+    setAudioBloqueado(!sala.canPlaybackAudio);
     setEspectadores(sala.remoteParticipants.size);
 
     /* Vista previa local: lo que YO estoy publicando.
@@ -185,7 +212,11 @@ export function useSalaLiveKit(
       .on(RoomEvent.TrackUnmuted, refrescar)
       .on(RoomEvent.LocalTrackPublished, refrescar)
       .on(RoomEvent.LocalTrackUnpublished, refrescar)
-      .on(RoomEvent.ConnectionStateChanged, refrescar);
+      .on(RoomEvent.ConnectionStateChanged, refrescar)
+      .on(RoomEvent.AudioPlaybackStatusChanged, refrescar)
+      /* Si la mesa concede o retira la palabra en pleno aire, el servidor
+       * avisa por aquí y la barra de controles cambia sola. */
+      .on(RoomEvent.ParticipantPermissionsChanged, refrescar);
 
     void room
       .connect(conexion.url, conexion.token, { autoSubscribe: true })
@@ -300,9 +331,23 @@ export function useSalaLiveKit(
     })();
   }, [calidad, room, publicarOpts, sincronizar]);
 
+  /**
+   * Desbloquea el sonido. Safari —y iOS sobre todo— no deja sonar nada que
+   * no venga de un toque del usuario, así que esto tiene que colgar de un
+   * botón real; llamarlo al conectar no sirve de nada.
+   */
+  const desbloquearAudio = useCallback(async () => {
+    if (!room) return;
+    await room.startAudio().catch(() => {});
+    setAudioBloqueado(!room.canPlaybackAudio);
+  }, [room]);
+
   return {
     locales,
     remotos,
+    audios,
+    audioBloqueado,
+    desbloquearAudio,
     espectadores,
     tope: TOPE_SALA,
     calidad,

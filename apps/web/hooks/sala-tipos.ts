@@ -31,10 +31,28 @@ export type EmisorRemoto = {
   estado: "conectando" | "activo" | "lleno" | "fallo";
 };
 
+/**
+ * Audio de alguien más, separado del video a propósito.
+ *
+ * En una asamblea la mayoría habla con la cámara apagada. Si el sonido
+ * viajara únicamente dentro del `<video>` de su mosaico, quien no prende
+ * cámara sería inaudible — que fue exactamente el error que tuvo esto.
+ */
+export type AudioRemoto = {
+  /** Identidad de quien habla: sirve de `key` y evita duplicar elementos. */
+  id: string;
+  stream: MediaStream;
+};
+
 /** Lo que `EscenarioVideo` necesita, venga de donde venga el video. */
 export type SalaVideo = {
   locales: { medio: Medio; stream: MediaStream }[];
   remotos: EmisorRemoto[];
+  /** Pistas que deben SONAR, haya o no algo que pintar. */
+  audios: AudioRemoto[];
+  /** El navegador exige un gesto del usuario antes de dejar sonar nada. */
+  audioBloqueado: boolean;
+  desbloquearAudio: () => Promise<void>;
   espectadores: number;
   tope: number;
   calidad: Calidad;

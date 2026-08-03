@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
@@ -284,6 +284,11 @@ export function EscenarioVideo({
   const video = useVideoSala(asambleaId, enCurso, { codigoPoder, calidad });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /* El navegador no deja sonar audio sin un gesto del usuario. `intentoAudio`
+   * sube al pulsar el botón y obliga a las pistas a reintentar. */
+  const [audioRechazado, setAudioRechazado] = useState(false);
+  const [intentoAudio, setIntentoAudio] = useState(0);
+  const marcarAudioBloqueado = useCallback(() => setAudioRechazado(true), []);
 
   /* Si la mesa retira la palabra en pleno aire, el micrófono se corta AQUÍ,
    * no solo en el servidor: el stream local sigue vivo hasta que se cuelga. */
@@ -321,6 +326,11 @@ export function EscenarioVideo({
     video.remotos.find((r) => r.medio === "camara") ??
     null;
   const secundarios = video.remotos.filter((r) => r !== principalRemoto);
+
+  /* Quién ya está dibujado por su video. La lista de presencia y la de
+   * emisores son fuentes distintas y se solapan: sin esto, quien transmite
+   * salía DOS veces —una con su foto de perfil y otra con su cámara. */
+  const conVideo = new Set(video.remotos.map((r) => r.nombre.trim().toLowerCase()));
 
   const hayBarra =
     enCurso && (puedoHablar || extraControles != null || controlesFin != null);
@@ -367,6 +377,12 @@ export function EscenarioVideo({
 
   const modoPresentacion = !!(principalRemoto || pantallaLocal);
 
+  /* El botón de sonido aparece si el navegador YA rechazó reproducir, o si el
+   * servidor de medios avisa que el audio está bloqueado. No se muestra
+   * cuando no hay nadie hablando: sería un botón que no arregla nada. */
+  const hayQueActivarSonido =
+    video.audios.length > 0 && (audioRechazado || video.audioBloqueado);
+
   return (
     <div className="relative h-full w-full overflow-hidden bg-[#0c0e12]">
       {/* ── Lienzo principal ─────────────────────────────────────────────── */}
@@ -395,11 +411,42 @@ export function EscenarioVideo({
         )}
       </div>
 
+      {/* ── El sonido de la sala ─────────────────────────────────────────────
+          Va por elementos propios, fuera del mosaico. En una asamblea casi
+          nadie prende la cámara: si el audio dependiera de que hubiera un
+          `<video>` que pintar, la mayoría hablaría sin que nadie la oyera. */}
+      {video.audios.map((a) => (
+        <PistaAudio
+          key={a.id}
+          stream={a.stream}
+          intento={intentoAudio}
+          onBloqueado={marcarAudioBloqueado}
+        />
+      ))}
+
+      {/* Un ÚNICO botón para desbloquear todo el sonido, arriba y al centro.
+          Antes vivía encima del video y quedaba tapado por la barra de
+          controles: el usuario veía "Activar sonido" y no lo podía tocar. */}
+      {hayQueActivarSonido ? (
+        <button
+          type="button"
+          onClick={() => {
+            void video.desbloquearAudio();
+            setAudioRechazado(false);
+            setIntentoAudio((n) => n + 1);
+          }}
+          className="absolute left-1/2 top-4 z-30 flex -translate-x-1/2 items-center gap-2 rounded-full bg-white px-4 py-2.5 text-sm font-semibold text-[#0c0e12] shadow-2xl"
+        >
+          <Volume2 className="h-4 w-4" aria-hidden />
+          Activar sonido
+        </button>
+      ) : null}
+
       {/* ── Mosaicos flotantes solo al presentar (como Meet) ─────────────── */}
       {modoPresentacion ? (
         <div className="absolute bottom-24 right-4 z-10 flex max-h-[50%] flex-col items-end gap-2 overflow-y-auto">
           {tiles
-            .filter((t) => !t.esYo)
+            .filter((t) => !t.esYo && !conVideo.has(t.nombre.trim().toLowerCase()))
             .slice(0, 8)
             .map((t, i) => (
               <div
@@ -725,9 +772,40 @@ function BotonRedondo({
   );
 }
 
-/* ── Video remoto con desbloqueo de audio ────────────────────────────────
- * Los navegadores bloquean el autoplay CON sonido sin un gesto del usuario.
- * Se arranca en silencio y, si hace falta, "Activar sonido" sobre el video. */
+/**
+ * Reproduce UNA voz. No pinta nada.
+ *
+ * Existe separado del mosaico porque el sonido de una asamblea no puede
+ * depender de que alguien tenga la cámara encendida. Si el navegador rechaza
+ * reproducir —Safari en iPhone lo hace siempre hasta que el usuario toca la
+ * pantalla— avisa hacia arriba para que aparezca un único botón.
+ */
+function PistaAudio({
+  stream,
+  intento,
+  onBloqueado,
+}: {
+  stream: MediaStream;
+  /** Sube cada vez que el usuario pulsa "Activar sonido": fuerza reintentar. */
+  intento: number;
+  onBloqueado: () => void;
+}) {
+  const ref = useRef<HTMLAudioElement>(null);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.srcObject = stream;
+    el.muted = false;
+    el.play().catch(() => onBloqueado());
+  }, [stream, intento, onBloqueado]);
+
+  return <audio ref={ref} autoPlay playsInline className="hidden" />;
+}
+
+/* ── Video remoto ────────────────────────────────────────────────────────
+ * SIEMPRE en silencio: el sonido lo reparte `PistaAudio`. Si el elemento de
+ * video también sonara, cada voz se oiría dos veces. */
 function VideoRemoto({
   emisor,
   principal = false,
@@ -736,14 +814,12 @@ function VideoRemoto({
   principal?: boolean;
 }) {
   const ref = useRef<HTMLVideoElement>(null);
-  const [silenciado, setSilenciado] = useState(true);
   const hablando = useAudioHablando(emisor.stream, !emisor.micApagado);
 
   useEffect(() => {
     const el = ref.current;
     if (!el || !emisor.stream) return;
     el.srcObject = emisor.stream;
-    el.muted = true;
     void el.play().catch(() => {});
   }, [emisor.stream]);
 
@@ -794,6 +870,7 @@ function VideoRemoto({
         ref={ref}
         autoPlay
         playsInline
+        muted
         className={cn(
           "bg-black",
           principal ? "h-full w-full object-contain" : "aspect-video w-full object-cover",
@@ -813,28 +890,6 @@ function VideoRemoto({
         {emisor.nombre}
         {emisor.medio === "pantalla" ? " · presentando" : ""}
       </span>
-      {silenciado ? (
-        <button
-          type="button"
-          onClick={() => {
-            const el = ref.current;
-            if (!el) return;
-            el.muted = false;
-            setSilenciado(false);
-            void el.play().catch(() => {});
-          }}
-          className={cn(
-            "absolute flex items-center gap-1.5 rounded-full bg-black/70 font-semibold text-white hover:bg-black/85",
-            principal
-              ? "bottom-2 left-1/2 -translate-x-1/2 px-3 py-1.5 text-xs"
-              : "left-2 top-2 p-1.5 text-[10px]",
-          )}
-          aria-label="Activar sonido"
-        >
-          <Volume2 className={principal ? "h-3.5 w-3.5" : "h-3 w-3"} aria-hidden />
-          {principal ? "Activar sonido" : null}
-        </button>
-      ) : null}
     </div>
   );
 }
