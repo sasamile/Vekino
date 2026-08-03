@@ -28,7 +28,7 @@ export const metadata: Metadata = {
     "reservas de zonas comunes",
     "comunicación con residentes",
   ],
-  alternates: { canonical: "https://vekino.co" },
+  alternates: { canonical: "https://vekino.com" },
   openGraph: {
     type: "website",
     locale: "es_CO",
@@ -36,7 +36,7 @@ export const metadata: Metadata = {
     title: "Vekino | Plataforma para administrar conjuntos residenciales",
     description:
       "Todo tu conjunto, conectado en un solo lugar. Administración, pagos, visitas, reservas y comunicación en una sola plataforma.",
-    url: "https://vekino.co",
+    url: "https://vekino.com",
   },
   twitter: {
     card: "summary_large_image",

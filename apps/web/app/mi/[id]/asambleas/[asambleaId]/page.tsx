@@ -429,7 +429,7 @@ const inputCls = "h-10 w-full rounded-lg border border-input bg-card px-3 text-s
 
 function apoderadoLink(codigo: string) {
   const origin =
-    typeof window !== "undefined" ? window.location.origin : "https://vekino.co";
+    typeof window !== "undefined" ? window.location.origin : "https://vekino.com";
   return `${origin}/apoderado?codigo=${encodeURIComponent(codigo)}`;
 }
 

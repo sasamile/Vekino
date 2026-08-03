@@ -5,6 +5,7 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
 import {
+  Gauge,
   Loader2,
   Mic,
   MicOff,
@@ -15,7 +16,11 @@ import {
   Volume2,
   WifiOff,
 } from "lucide-react";
-import { useVideoSala, type EmisorRemoto } from "@/hooks/use-video-sala";
+import {
+  useVideoSala,
+  type Calidad,
+  type EmisorRemoto,
+} from "@/hooks/use-video-sala";
 import { useAudioHablando } from "@/hooks/use-audio-hablando";
 import { cn } from "@/lib/utils";
 
@@ -251,6 +256,8 @@ export function EscenarioVideo({
   nombreEspera,
   personas,
   imageUrlLocal,
+  calidad = "ahorro",
+  onCambiarCalidad,
   extraControles,
   controlesFin,
 }: {
@@ -266,12 +273,15 @@ export function EscenarioVideo({
   personas?: { nombre: string; esMesa?: boolean; imageUrl?: string | null }[];
   /** Foto del usuario local (si aún no llegó en presencia). */
   imageUrlLocal?: string | null;
+  /** Perfil de calidad. Por defecto "ahorro": cabe mucha más gente. */
+  calidad?: Calidad;
+  onCambiarCalidad?: (c: Calidad) => void;
   /** Botones extra en la barra (levantar la mano). */
   extraControles?: React.ReactNode;
   /** Cierre de la barra (abrir panel, colgar). */
   controlesFin?: React.ReactNode;
 }) {
-  const video = useVideoSala(asambleaId, enCurso, { codigoPoder });
+  const video = useVideoSala(asambleaId, enCurso, { codigoPoder, calidad });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -446,7 +456,8 @@ export function EscenarioVideo({
           )}
         >
           {video.espectadores} / {video.tope}
-          {video.espectadores >= video.tope ? " · tope P2P" : ""}
+          {calidad === "ahorro" ? " · ahorro" : ""}
+          {video.espectadores >= video.tope ? " · lleno" : ""}
         </span>
       ) : null}
 
@@ -484,6 +495,22 @@ export function EscenarioVideo({
                     <VideoOff className="h-5 w-5" aria-hidden />
                   )}
                 </BotonRedondo>
+                {onCambiarCalidad ? (
+                  <BotonRedondo
+                    encendido={calidad === "normal"}
+                    busy={busy}
+                    onClick={() =>
+                      onCambiarCalidad(calidad === "ahorro" ? "normal" : "ahorro")
+                    }
+                    label={
+                      calidad === "ahorro"
+                        ? `Modo ahorro: cabe más gente (tope ${video.tope}). Tocar para alta calidad`
+                        : `Alta calidad: tope ${video.tope} personas. Tocar para modo ahorro`
+                    }
+                  >
+                    <Gauge className="h-5 w-5" aria-hidden />
+                  </BotonRedondo>
+                ) : null}
                 <BotonRedondo
                   encendido={compartiendo}
                   busy={busy}

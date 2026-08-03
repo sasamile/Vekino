@@ -943,8 +943,23 @@ export const miSala = query({
           (WRITE_ROLES as readonly string[]).includes(r),
         ));
 
+    /* La palabra: quien la tiene concedida puede publicar en el servidor de
+     * medios. El permiso se resuelve AQUÍ y viaja firmado en el token
+     * (`salaToken.ts`); si se calculara en el cliente, cualquiera se daría
+     * el micrófono editando el JavaScript. */
+    const palabra = await ctx.db
+      .query("salaPalabra")
+      .withIndex("by_asamblea_user", (q) =>
+        q.eq("asambleaId", args.asambleaId).eq("userId", user._id),
+      )
+      .first();
+
     return {
       esMesa,
+      /** Identidad y nombre para el servidor de medios. */
+      identidad: user._id as string,
+      nombre: user.name,
+      tienePalabra: palabra?.estado === "concedida",
       enCurso: asamblea.estado === "en_curso",
       registrado: asistencias.length > 0,
       unidades: asistencias.length,

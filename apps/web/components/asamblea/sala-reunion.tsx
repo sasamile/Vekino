@@ -28,6 +28,7 @@ import {
   Video,
 } from "lucide-react";
 import { EscenarioVideo } from "@/components/asamblea/escenario-video";
+import type { Calidad } from "@/hooks/use-video-sala";
 import { MostrarCodigoAsistencia } from "@/components/asamblea/mostrar-codigo-asistencia";
 import { useSalaLatido } from "@/hooks/use-sala-latido";
 import { cn } from "@/lib/utils";
@@ -78,6 +79,10 @@ export function SalaReunion({
   const bajarMano = useMutation(api.salaVideo.bajarMano);
   const resolverPalabra = useMutation(api.salaVideo.resolverPalabra);
   const [codigoAbierto, setCodigoAbierto] = useState(false);
+  /* Arranca en "ahorro": el tope pasa de ~16 a ~45 espectadores y en una
+   * asamblea nadie echa de menos los 24 fps de una cara. La mesa sube a
+   * alta calidad si el conjunto es pequeño. */
+  const [calidad, setCalidad] = useState<Calidad>("ahorro");
   const [registro, setRegistro] = useState<{
     intentado: boolean;
     error: string | null;
@@ -201,6 +206,8 @@ export function SalaReunion({
             asambleaId={asambleaId}
             enCurso={enCurso}
             puedoHablar={esMesa || miPalabra?.estado === "concedida"}
+            calidad={calidad}
+            onCambiarCalidad={esMesa ? setCalidad : undefined}
             nombreEspera={mi?.nombre ?? undefined}
             imageUrlLocal={mi?.imageUrl ?? undefined}
             personas={sala?.personas}

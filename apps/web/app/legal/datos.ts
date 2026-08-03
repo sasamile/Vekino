@@ -13,7 +13,7 @@ export const DATOS_RESPONSABLE = {
   razonSocial: "«Razón social»",
   nit: "«NIT»",
   direccion: "«Dirección y ciudad»",
-  correo: "hola@vekino.co",
+  correo: "hola@vekino.com",
   telefono: "«Teléfono»",
 } as const;
 

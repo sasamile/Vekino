@@ -1,0 +1,36 @@
+# Servidor de medios de las asambleas de Vekino.
+#
+# Un solo nodo. Sin Redis: éste solo hace falta para repartir una sala entre
+# varias máquinas, y aquí una máquina sobra para una asamblea a la vez.
+#
+# `network_mode: host` NO es opcional. WebRTC negocia sus puertos UDP dentro
+# del SDP; con el puente de Docker (NAT) los candidatos que anuncia el
+# servidor apuntan a la IP interna del contenedor y ningún navegador conecta.
+# Además publicar el rango 50000-60000/udp por el proxy de Docker consume
+# muchísima memoria.
+services:
+  livekit:
+    image: livekit/livekit-server:latest
+    container_name: vekino-livekit
+    restart: unless-stopped
+    network_mode: host
+    command: --config /etc/livekit.yaml
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml:ro
+
+  # TLS y certificado automático. LiveKit puede hacerlo solo, pero Caddy
+  # renueva sin reiniciar el servidor de medios — en mitad de una asamblea
+  # eso importa.
+  caddy:
+    image: caddy:2-alpine
+    container_name: vekino-caddy
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

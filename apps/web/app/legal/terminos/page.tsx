@@ -6,7 +6,7 @@ export const metadata: Metadata = {
   title: "Términos y condiciones | Vekino",
   description:
     "Condiciones de uso de la plataforma Vekino para conjuntos residenciales, administradores y residentes.",
-  alternates: { canonical: "https://vekino.co/legal/terminos" },
+  alternates: { canonical: "https://vekino.com/legal/terminos" },
 };
 
 /**

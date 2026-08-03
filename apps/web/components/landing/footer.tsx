@@ -27,7 +27,7 @@ const COLUMNAS = [
     links: [
       { label: "Preguntas frecuentes", href: "#preguntas" },
       { label: "Novedades", href: "#novedades" },
-      { label: "Soporte", href: "mailto:soporte@vekino.co" },
+      { label: "Soporte", href: "mailto:soporte@vekino.com" },
       { label: "Iniciar sesión", href: "/login" },
     ],
   },
@@ -45,7 +45,7 @@ const COLUMNAS = [
 const REDES = [
   { icon: Instagram, href: "#", label: "Instagram" },
   { icon: Linkedin, href: "#", label: "LinkedIn" },
-  { icon: Mail, href: "mailto:hola@vekino.co", label: "Correo" },
+  { icon: Mail, href: "mailto:hola@vekino.com", label: "Correo" },
 ];
 
 export function Footer() {

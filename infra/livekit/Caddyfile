@@ -1,0 +1,12 @@
+# TLS automático (Let's Encrypt) y proxy al servidor de medios.
+# `SALA_DOMINIO` lo reemplaza `instalar.sh`.
+
+SALA_DOMINIO {
+	reverse_proxy localhost:7880
+}
+
+# TURN sobre TLS en 5349: los navegadores en redes restrictivas solo salen
+# por 443/5349, y este es el camino que los rescata.
+SALA_DOMINIO:5349 {
+	reverse_proxy localhost:5349
+}

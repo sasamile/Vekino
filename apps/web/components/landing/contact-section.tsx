@@ -76,10 +76,10 @@ export function ContactSection() {
             <p className="mt-8 border-t border-dashed border-dash pt-6 text-[13px] text-subtle">
               ¿Prefieres escribirnos directamente?{" "}
               <a
-                href="mailto:hola@vekino.co"
+                href="mailto:hola@vekino.com"
                 className="font-semibold text-brand-600 underline underline-offset-2 hover:text-brand-700"
               >
-                hola@vekino.co
+                hola@vekino.com
               </a>
             </p>
           </Reveal>
@@ -161,10 +161,10 @@ export function ContactSection() {
                       No pudimos enviar tu solicitud. Inténtalo de nuevo o
                       escríbenos a{" "}
                       <a
-                        href="mailto:hola@vekino.co"
+                        href="mailto:hola@vekino.com"
                         className="font-semibold underline underline-offset-2"
                       >
-                        hola@vekino.co
+                        hola@vekino.com
                       </a>
                       .
                     </p>

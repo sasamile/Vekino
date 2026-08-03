@@ -32,7 +32,34 @@ const ICE_SERVERS: RTCIceServer[] = [
   { urls: "stun:stun1.l.google.com:19302" },
 ];
 
-const TOPE_ESPECTADORES = 16;
+/**
+ * Perfiles de calidad. El tope de espectadores NO es una preferencia: es la
+ * subida del emisor dividida entre lo que consume cada espectador. Bajar la
+ * calidad sube el tope de forma proporcional, y en una asamblea la audiencia
+ * necesita OÍR y ver el documento — las caras son un adorno.
+ *
+ *   normal : pantalla 2.5 Mbps + cámara 600 kbps → ~3.1 Mbps por espectador
+ *   ahorro : pantalla 800 kbps + cámara 120 kbps → ~0.9 Mbps por espectador
+ *
+ * De ahí que el tope pase de ~16 a ~45 sin tocar infraestructura.
+ */
+export type Calidad = "normal" | "ahorro";
+
+const PERFILES = {
+  normal: {
+    tope: 16,
+    camara: { width: 640, height: 360, fps: 24, bitrate: 600_000 },
+    // La pantalla de una asamblea son documentos: 30 fps es desperdicio.
+    pantalla: { width: 1920, fps: 15, bitrate: 2_500_000 },
+  },
+  ahorro: {
+    tope: 45,
+    // Miniatura: en la sala la cámara vive en un mosaico de 208 px.
+    camara: { width: 320, height: 180, fps: 15, bitrate: 120_000 },
+    // 5 fps basta para pasar diapositivas y deja la letra nítida.
+    pantalla: { width: 1600, fps: 5, bitrate: 800_000 },
+  },
+} as const;
 
 export type Medio = "camara" | "pantalla";
 
@@ -61,10 +88,12 @@ function useClienteId() {
 export function useVideoSala(
   asambleaId: Id<"asambleas">,
   activo: boolean,
-  opts: { codigoPoder?: string } = {},
+  opts: { codigoPoder?: string; calidad?: Calidad } = {},
 ) {
   const clienteId = useClienteId();
   const codigoPoder = opts.codigoPoder;
+  const calidad: Calidad = opts.calidad ?? "normal";
+  const perfil = PERFILES[calidad];
 
   const emisoresRemotos = useQuery(
     api.salaVideo.emisores,
@@ -116,14 +145,17 @@ export function useVideoSala(
         medio === "camara"
           ? await navigator.mediaDevices.getUserMedia({
               video: {
-                width: { ideal: 640 },
-                height: { ideal: 360 },
-                frameRate: { ideal: 24 },
+                width: { ideal: perfil.camara.width },
+                height: { ideal: perfil.camara.height },
+                frameRate: { ideal: perfil.camara.fps },
               },
               audio: { echoCancellation: true, noiseSuppression: true },
             })
           : await navigator.mediaDevices.getDisplayMedia({
-              video: { frameRate: { ideal: 30 }, width: { ideal: 1920 } },
+              video: {
+                frameRate: { ideal: perfil.pantalla.fps },
+                width: { ideal: perfil.pantalla.width },
+              },
               audio: true, // audio de pestaña, si el navegador lo ofrece
             });
 
@@ -145,7 +177,7 @@ export function useVideoSala(
         void apagarRef.current(medio);
       });
     },
-    [registrarEmisor, asambleaId, clienteId],
+    [registrarEmisor, asambleaId, clienteId, perfil],
   );
 
   const [micOn, setMicOn] = useState(false);
@@ -340,7 +372,7 @@ export function useVideoSala(
             /* Soy emisor y un espectador quiere mi stream de `medio`. */
             const stream = streamsLocales.current.get(medio);
             if (!stream || !datos.sdp) continue;
-            if (pcsComoEmisor.current.size >= TOPE_ESPECTADORES) {
+            if (pcsComoEmisor.current.size >= perfil.tope) {
               void senal(s.deClienteId, "lleno", { medio });
               continue;
             }
@@ -359,7 +391,12 @@ export function useVideoSala(
               params.degradationPreference =
                 medio === "pantalla" ? "maintain-resolution" : "maintain-framerate";
               params.encodings = [
-                { maxBitrate: medio === "pantalla" ? 2_500_000 : 600_000 },
+                {
+                  maxBitrate:
+                    medio === "pantalla"
+                      ? perfil.pantalla.bitrate
+                      : perfil.camara.bitrate,
+                },
               ];
               void sender.setParameters(params).catch(() => {});
             }
@@ -416,7 +453,7 @@ export function useVideoSala(
         void consumirSenales({ asambleaId, clienteId, ids: consumidas, codigoPoder }).catch(() => {});
       }
     })();
-  }, [activo, buzon, senal, consumirSenales, refrescarEspectadores, asambleaId, clienteId, codigoPoder]);
+  }, [activo, buzon, senal, consumirSenales, refrescarEspectadores, asambleaId, clienteId, codigoPoder, perfil]);
 
   /* ── Desmontaje: apagar todo ─────────────────────────────────────────── */
   useEffect(() => {
@@ -441,7 +478,8 @@ export function useVideoSala(
     /** Emisiones remotas con su estado de conexión. */
     remotos,
     espectadores,
-    tope: TOPE_ESPECTADORES,
+    tope: perfil.tope,
+    calidad,
     encender,
     apagar,
     micOn,

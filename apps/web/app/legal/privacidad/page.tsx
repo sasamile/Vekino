@@ -6,7 +6,7 @@ export const metadata: Metadata = {
   title: "Política de privacidad | Vekino",
   description:
     "Cómo Vekino recolecta, usa y protege los datos personales de administradores, residentes y personal de vigilancia.",
-  alternates: { canonical: "https://vekino.co/legal/privacidad" },
+  alternates: { canonical: "https://vekino.com/legal/privacidad" },
 };
 
 /**
