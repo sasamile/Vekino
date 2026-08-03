@@ -566,6 +566,97 @@ export const reaccionesRecientes = query({
 });
 
 // ─────────────────────────────────────────────────────────────
+// Chat de la sala
+// ─────────────────────────────────────────────────────────────
+
+const CHAT_MAX_CHARS = 400;
+const CHAT_LIMITE = 80;
+
+async function nombreEnSala(
+  ctx: QueryCtx | MutationCtx,
+  asambleaId: Id<"asambleas">,
+  user: { _id: Id<"users">; name: string } | null,
+  codigoPoder?: string,
+) {
+  if (user) return user.name;
+  const codigo = codigoPoder?.trim().toUpperCase() ?? "";
+  if (codigo.length >= 4) {
+    const poder = await ctx.db
+      .query("poderesAsamblea")
+      .withIndex("by_codigo", (q) => q.eq("codigoAcceso", codigo))
+      .first();
+    if (poder && poder.asambleaId === asambleaId) {
+      return poder.representanteNombre;
+    }
+  }
+  return "Participante";
+}
+
+export const enviarMensaje = mutation({
+  args: {
+    asambleaId: v.id("asambleas"),
+    texto: v.string(),
+    codigoPoder: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const texto = args.texto.trim().slice(0, CHAT_MAX_CHARS);
+    if (!texto) throw new Error("Escribe un mensaje.");
+    const { asamblea, user } = await requireAccesoSala(
+      ctx,
+      args.asambleaId,
+      args.codigoPoder,
+    );
+    if (asamblea.estado !== "en_curso") {
+      throw new Error("La sala no está abierta.");
+    }
+    const codigo = args.codigoPoder?.trim().toUpperCase() || undefined;
+    const nombre = await nombreEnSala(ctx, args.asambleaId, user, codigo);
+    await ctx.db.insert("salaMensajes", {
+      condominioId: asamblea.condominioId,
+      asambleaId: args.asambleaId,
+      texto,
+      nombre,
+      userId: user?._id,
+      codigoPoder: codigo,
+      createdAt: Date.now(),
+    });
+    return { ok: true as const };
+  },
+});
+
+/** Últimos mensajes de la sala (reactivo). */
+export const mensajesSala = query({
+  args: {
+    asambleaId: v.id("asambleas"),
+    codigoPoder: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    try {
+      await requireAccesoSala(ctx, args.asambleaId, args.codigoPoder);
+    } catch {
+      return [];
+    }
+    const filas = await ctx.db
+      .query("salaMensajes")
+      .withIndex("by_asamblea_created", (q) =>
+        q.eq("asambleaId", args.asambleaId),
+      )
+      .order("desc")
+      .take(CHAT_LIMITE);
+    return filas
+      .slice()
+      .reverse()
+      .map((m) => ({
+        _id: m._id,
+        texto: m.texto,
+        nombre: m.nombre,
+        createdAt: m.createdAt,
+        userId: m.userId ?? null,
+      }));
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
 // Limpieza
 // ─────────────────────────────────────────────────────────────
 
@@ -599,9 +690,17 @@ export const limpiar = internalMutation({
         reaccionesViejas++;
       }
     }
-    if (borrados + huerfanas + reaccionesViejas > 0) {
+    const mensajes = await ctx.db.query("salaMensajes").take(500);
+    let mensajesViejos = 0;
+    for (const m of mensajes) {
+      if (m.createdAt < now - 12 * 60 * 60_000) {
+        await ctx.db.delete(m._id);
+        mensajesViejos++;
+      }
+    }
+    if (borrados + huerfanas + reaccionesViejas + mensajesViejos > 0) {
       console.info(
-        `[salaVideo] limpieza: ${borrados} emisores, ${huerfanas} señales, ${reaccionesViejas} reacciones`,
+        `[salaVideo] limpieza: ${borrados} emisores, ${huerfanas} señales, ${reaccionesViejas} reacciones, ${mensajesViejos} msgs`,
       );
     }
   },

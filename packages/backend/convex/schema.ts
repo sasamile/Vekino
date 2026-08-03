@@ -764,6 +764,17 @@ export default defineSchema({
     createdAt: v.number(),
   }).index("by_asamblea_created", ["asambleaId", "createdAt"]),
 
+  /** Chat de la sala: mensajes cortos entre quienes están en la llamada. */
+  salaMensajes: defineTable({
+    condominioId: v.id("condominios"),
+    asambleaId: v.id("asambleas"),
+    texto: v.string(),
+    nombre: v.string(),
+    userId: v.optional(v.id("users")),
+    codigoPoder: v.optional(v.string()),
+    createdAt: v.number(),
+  }).index("by_asamblea_created", ["asambleaId", "createdAt"]),
+
   salaSenales: defineTable({
     asambleaId: v.id("asambleas"),
     deClienteId: v.string(),

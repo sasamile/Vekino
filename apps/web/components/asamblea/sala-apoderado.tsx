@@ -17,6 +17,7 @@ import {
   Vote,
 } from "lucide-react";
 import { EscenarioVideo } from "@/components/asamblea/escenario-video";
+import { BotonChatSala, SalaChatSheet } from "@/components/asamblea/sala-chat";
 import { useSalaLatidoApoderado } from "@/hooks/use-sala-latido-apoderado";
 import { cn } from "@/lib/utils";
 
@@ -28,6 +29,7 @@ export function SalaApoderado({ codigo }: { codigo: string }) {
   const data = useQuery(api.asambleas.accederConCodigo, { codigo });
   const latido = useSalaLatidoApoderado(codigo);
   const [panelAbierto, setPanelAbierto] = useState(false);
+  const [chatAbierto, setChatAbierto] = useState(false);
 
   const abiertasLen =
     data?.votaciones.filter((vt) => vt.estado === "abierta").length ?? 0;
@@ -110,6 +112,12 @@ export function SalaApoderado({ codigo }: { codigo: string }) {
             controlesFin={
               enCurso ? (
                 <>
+                  <BotonChatSala
+                    asambleaId={a._id}
+                    abierto={chatAbierto}
+                    onToggle={() => setChatAbierto((v) => !v)}
+                    codigoPoder={codigo}
+                  />
                   <button
                     type="button"
                     onClick={() => setPanelAbierto((v) => !v)}
@@ -243,6 +251,14 @@ export function SalaApoderado({ codigo }: { codigo: string }) {
           </aside>
         ) : null}
       </div>
+
+      <SalaChatSheet
+        asambleaId={a._id}
+        abierto={chatAbierto && enCurso}
+        onClose={() => setChatAbierto(false)}
+        codigoPoder={codigo}
+        miNombre={data.apoderadoNombre}
+      />
     </div>
   );
 }

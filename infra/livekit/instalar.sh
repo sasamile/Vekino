@@ -73,8 +73,11 @@ keys:
 logging:
   level: info
 room:
-  empty_timeout: 300
-  max_participants: 300
+  # Una asamblea de 5 h no se puede caer porque la sala quede vacía un rato.
+  empty_timeout: 3600
+  # Techo duro: al asistente que pasa de aquí el servidor lo RECHAZA, no lo
+  # deja lento. Debe ir por encima del aforo real con margen.
+  max_participants: 600
 YAML
 
 cat > Caddyfile <<CADDY

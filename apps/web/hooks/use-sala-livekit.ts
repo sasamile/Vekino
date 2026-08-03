@@ -27,7 +27,7 @@ import type { AudioRemoto, Calidad, EmisorRemoto, Medio } from "./sala-tipos";
  */
 
 /** Techo del servidor (`max_participants` en livekit.yaml). */
-const TOPE_SALA = 300;
+const TOPE_SALA = 600;
 
 /**
  * Perfiles de calidad.
@@ -45,7 +45,11 @@ const PERFILES = {
   },
   ahorro: {
     camara: { width: 320, height: 180, fps: 15, bitrate: 150_000 },
-    pantalla: { width: 1600, height: 900, fps: 15, bitrate: 1_500_000 },
+    /* 1 Mbps es lo que decide si una asamblea de 300 cabe o no: la pantalla
+     * del administrador se multiplica por CADA asistente, así que es el 80%
+     * del gasto del servidor. A 15 fps y con prioridad a la resolución, un
+     * documento se sigue leyendo. */
+    pantalla: { width: 1600, height: 900, fps: 15, bitrate: 1_000_000 },
   },
 } as const;
 
@@ -98,7 +102,23 @@ export function useSalaLiveKit(
   const calidad: Calidad = opts.calidad ?? "normal";
   const perfil = PERFILES[calidad];
 
-  const room = useMemo(() => (activo && conexion ? new Room() : null), [activo, conexion]);
+  /**
+   * `adaptiveStream` y `dynacast` no son afinaciones: son lo que hace que una
+   * asamblea de cientos quepa.
+   *
+   *   adaptiveStream — cada asistente se suscribe SOLO a lo que tiene visible
+   *     en pantalla. Sin esto, un mosaico con diez cámaras se lo descarga
+   *     entero cada una de las 300 personas, aunque no lo estén mirando.
+   *   dynacast — el servidor deja de enviar capas que nadie consume, en vez
+   *     de empujarlas por si acaso.
+   */
+  const room = useMemo(
+    () =>
+      activo && conexion
+        ? new Room({ adaptiveStream: true, dynacast: true })
+        : null,
+    [activo, conexion],
+  );
 
   const [remotos, setRemotos] = useState<EmisorRemoto[]>([]);
   const [audios, setAudios] = useState<AudioRemoto[]>([]);

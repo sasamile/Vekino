@@ -30,6 +30,7 @@ import {
   X,
 } from "lucide-react";
 import { EscenarioVideo } from "@/components/asamblea/escenario-video";
+import { BotonChatSala, SalaChatSheet } from "@/components/asamblea/sala-chat";
 import type { Calidad } from "@/hooks/use-video-sala";
 import { useSalaLatido } from "@/hooks/use-sala-latido";
 import { cn } from "@/lib/utils";
@@ -106,6 +107,8 @@ export function SalaReunion({
   const [modalVotoId, setModalVotoId] = useState<Id<"votaciones"> | null>(null);
   const [modalResultadosId, setModalResultadosId] =
     useState<Id<"votaciones"> | null>(null);
+  const [modalOrden, setModalOrden] = useState(false);
+  const [chatAbierto, setChatAbierto] = useState(false);
   const [avisoVoto, setAvisoVoto] = useState(false);
   const autoVotoVisto = useRef(new Set<string>());
 
@@ -173,7 +176,6 @@ export function SalaReunion({
     !(!!mi?.delegoTodo && (mi?.representa?.length ?? 0) === 0);
   const puntos =
     a.ordenDia ?? a.agenda.map((t) => ({ titulo: t, hecho: false as boolean }));
-  const puntoActual = puntos.find((p) => !p.hecho) ?? null;
   const miPalabra = (palabras ?? []).find((f) => f.mia) ?? null;
   const manosLevantadas = (palabras ?? []).filter((f) => !f.mia || esMesa);
 
@@ -207,7 +209,9 @@ export function SalaReunion({
           </p>
         </div>
         <div className="pointer-events-auto flex shrink-0 items-center gap-2">
-          <EstadoConexion latido={latido} enCurso={enCurso} />
+          {!panelAbierto ? (
+            <EstadoConexion latido={latido} enCurso={enCurso} />
+          ) : null}
           {enCurso ? (
             <button
               type="button"
@@ -248,6 +252,32 @@ export function SalaReunion({
             controlesFin={
               enCurso ? (
                 <>
+                  <BotonChatSala
+                    asambleaId={asambleaId}
+                    abierto={chatAbierto}
+                    onToggle={() => setChatAbierto((v) => !v)}
+                  />
+                  {esMesa ? (
+                    <button
+                      type="button"
+                      onClick={() => setModalOrden(true)}
+                      aria-label="Orden del día"
+                      title="Orden del día"
+                      className={cn(
+                        "relative flex h-12 w-12 items-center justify-center rounded-full transition-colors",
+                        modalOrden
+                          ? "bg-white/25 text-white"
+                          : "bg-white/15 text-white hover:bg-white/25",
+                      )}
+                    >
+                      <ListOrdered className="h-5 w-5" aria-hidden />
+                      {puntos.filter((p) => !p.hecho).length > 0 ? (
+                        <span className="absolute -right-0.5 -top-0.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-white/90 px-1 text-[10px] font-bold text-black">
+                          {puntos.filter((p) => !p.hecho).length}
+                        </span>
+                      ) : null}
+                    </button>
+                  ) : null}
                   {abiertas.length > 0 ? (
                     <button
                       type="button"
@@ -339,67 +369,81 @@ export function SalaReunion({
           ) : null}
         </main>
 
-        {/* ── Panel lateral (oculto por defecto) ─────────────────────────── */}
+        {/* ── Sheet de sala (quórum / personas), no tapa el lienzo lateral ─ */}
         {panelAbierto && enCurso ? (
-          <aside className="z-20 w-full max-w-[360px] shrink-0 overflow-y-auto border-l border-white/10 bg-[#14161b]">
-            <div className="px-4 py-4 sm:px-5">
-              {/* Quórum + personas + orden: un solo flujo, sin cajas sueltas */}
-              <ResumenSala sala={sala} />
-
-              {!esMesa ? (
-                <div className="border-t border-white/10 pt-4">
-                  {delegoSinRepresentar ? (
-                    <VotoDelegado apoderado={mi?.apoderadoNombre ?? null} />
-                  ) : (
-                    <EstadoRegistro
-                      presente={mi?.presente ?? false}
-                      conectado={latido.conectado}
-                      error={registro.error}
-                      onReintentar={() =>
-                        setRegistro({ intentado: false, error: null })
-                      }
-                    />
-                  )}
+          <div className="fixed inset-0 z-40 flex items-end justify-center sm:items-center">
+            <button
+              type="button"
+              aria-label="Cerrar panel"
+              className="absolute inset-0 bg-black/55 backdrop-blur-sm"
+              onClick={() => setPanelAbierto(false)}
+            />
+            <div
+              role="dialog"
+              aria-modal
+              aria-label="En la sala"
+              className="relative z-10 flex max-h-[80vh] w-full max-w-md flex-col overflow-hidden rounded-t-2xl border border-white/10 bg-[#14161b] shadow-2xl sm:max-h-[85vh] sm:rounded-2xl"
+            >
+              <div className="flex shrink-0 flex-col border-b border-white/10">
+                <div className="flex justify-center pt-2.5 sm:hidden">
+                  <div className="h-1 w-10 rounded-full bg-white/20" />
                 </div>
-              ) : null}
-
-              {esMesa && manosLevantadas.length > 0 ? (
-                <div className="border-t border-white/10 pt-4">
-                  <ManosLevantadas
-                    filas={manosLevantadas}
-                    onResolver={(userId, conceder) =>
-                      void resolverPalabra({
-                        asambleaId,
-                        userId,
-                        conceder,
-                      }).catch(() => {})
-                    }
-                  />
+                <div className="flex items-center gap-2 px-4 py-3">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-white">En la sala</p>
+                    <p className="text-[11px] text-white/45">
+                      Quórum y personas conectadas
+                    </p>
+                  </div>
+                  <EstadoConexion latido={latido} enCurso={enCurso} />
+                  <button
+                    type="button"
+                    onClick={() => setPanelAbierto(false)}
+                    aria-label="Cerrar"
+                    className="rounded-lg p-1.5 text-white/50 hover:bg-white/10 hover:text-white"
+                  >
+                    <X className="h-5 w-5" aria-hidden />
+                  </button>
                 </div>
-              ) : null}
-
-              <div className="border-t border-white/10 pt-4">
-                {esMesa ? (
-                  <MesaOrdenYPreguntas
-                    asambleaId={asambleaId}
-                    puntos={puntos}
-                    votaciones={votaciones ?? []}
-                  />
-                ) : (
-                  <PuntoEnCurso punto={puntoActual} total={puntos.length} />
-                )}
               </div>
 
-              {esMesa && abiertas.length > 0 ? (
-                <div className="border-t border-white/10 pt-4">
-                  <MesaSeguimientoVotos
-                    abiertas={abiertas}
-                    onVerResultados={(id) => setModalResultadosId(id)}
-                  />
-                </div>
-              ) : null}
+              <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-5">
+                <ResumenSala sala={sala} />
+
+                {!esMesa ? (
+                  <div className="border-t border-white/10 pt-4">
+                    {delegoSinRepresentar ? (
+                      <VotoDelegado apoderado={mi?.apoderadoNombre ?? null} />
+                    ) : (
+                      <EstadoRegistro
+                        presente={mi?.presente ?? false}
+                        conectado={latido.conectado}
+                        error={registro.error}
+                        onReintentar={() =>
+                          setRegistro({ intentado: false, error: null })
+                        }
+                      />
+                    )}
+                  </div>
+                ) : null}
+
+                {esMesa && manosLevantadas.length > 0 ? (
+                  <div className="border-t border-white/10 pt-4">
+                    <ManosLevantadas
+                      filas={manosLevantadas}
+                      onResolver={(userId, conceder) =>
+                        void resolverPalabra({
+                          asambleaId,
+                          userId,
+                          conceder,
+                        }).catch(() => {})
+                      }
+                    />
+                  </div>
+                ) : null}
+              </div>
             </div>
-          </aside>
+          </div>
         ) : null}
       </div>
 
@@ -439,6 +483,22 @@ export function SalaReunion({
           </div>
         </div>
       ) : null}
+
+      {modalOrden && esMesa ? (
+        <ModalOrdenDiaSala
+          asambleaId={asambleaId}
+          puntos={puntos}
+          votaciones={votaciones ?? []}
+          onClose={() => setModalOrden(false)}
+        />
+      ) : null}
+
+      <SalaChatSheet
+        asambleaId={asambleaId}
+        abierto={chatAbierto && enCurso}
+        onClose={() => setChatAbierto(false)}
+        miNombre={mi?.nombre ?? undefined}
+      />
 
       {modalVotoId ? (
         <ModalVotarSala
@@ -869,39 +929,6 @@ function VotoDelegado({ apoderado }: { apoderado: string | null }) {
   );
 }
 
-/* ── Punto en discusión ───────────────────────────────────────────────── */
-function PuntoEnCurso({
-  punto,
-  total,
-}: {
-  punto: { titulo: string; descripcion?: string } | null;
-  total: number;
-}) {
-  return (
-    <section>
-      <h2 className="mb-2 flex items-center gap-2 text-sm font-semibold text-white/80">
-        <ListOrdered className="h-4 w-4" /> Punto en discusión
-      </h2>
-      {punto ? (
-        <>
-          <p className="text-sm font-medium text-white">{punto.titulo}</p>
-          {punto.descripcion ? (
-            <p className="mt-1.5 text-xs leading-relaxed text-white/50">
-              {punto.descripcion}
-            </p>
-          ) : null}
-        </>
-      ) : (
-        <p className="text-sm text-white/50">
-          {total > 0
-            ? "Todos los puntos del orden del día están marcados como hechos."
-            : "El orden del día está vacío."}
-        </p>
-      )}
-    </section>
-  );
-}
-
 type PuntoSala = {
   titulo: string;
   descripcion?: string;
@@ -916,125 +943,167 @@ type VotacionSala = {
   opciones: { texto: string }[];
 };
 
-/** Mesa: crear puntos, marcar hechos y abrir/cerrar la votación del punto. */
-function MesaOrdenYPreguntas({
+/** Sheet de orden del día (botón ListOrdered en la barra). */
+function ModalOrdenDiaSala({
   asambleaId,
   puntos,
   votaciones,
+  onClose,
 }: {
   asambleaId: Id<"asambleas">;
   puntos: PuntoSala[];
   votaciones: VotacionSala[];
+  onClose: () => void;
 }) {
   const toggleHecho = useMutation(api.asambleas.togglePuntoHecho);
   const toggleVotacion = useMutation(api.asambleas.toggleVotacion);
   const [modal, setModal] = useState<"punto" | "pregunta" | null>(null);
-
   const porId = new Map(votaciones.map((v) => [v._id as string, v]));
 
   return (
-    <section>
-      <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-white/80">
-        <ListOrdered className="h-4 w-4" aria-hidden /> Orden del día
-      </h2>
+    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
+      <button
+        type="button"
+        aria-label="Cerrar"
+        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+        onClick={onClose}
+      />
+      <div
+        role="dialog"
+        aria-modal
+        aria-labelledby="modal-orden-dia-titulo"
+        className="relative z-10 flex max-h-[90dvh] w-full max-w-lg flex-col overflow-hidden rounded-t-2xl border border-white/10 bg-[#14161b] text-white shadow-2xl sm:max-h-[85vh] sm:rounded-2xl"
+      >
+        <div className="flex shrink-0 flex-col border-b border-white/10">
+          <div className="flex justify-center pt-2.5 sm:hidden">
+            <div className="h-1 w-10 rounded-full bg-white/20" />
+          </div>
+          <div className="flex items-center justify-between gap-3 px-5 py-3">
+            <h2
+              id="modal-orden-dia-titulo"
+              className="flex items-center gap-2 text-base font-semibold"
+            >
+              <ListOrdered className="h-5 w-5 text-white/50" aria-hidden />
+              Orden del día
+            </h2>
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-lg p-1.5 text-white/50 hover:bg-white/10 hover:text-white"
+            >
+              <X className="h-5 w-5" aria-hidden />
+            </button>
+          </div>
+        </div>
 
-      <div className="mb-3 flex flex-wrap gap-2">
-        <button
-          type="button"
-          onClick={() => setModal("punto")}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-white px-3 py-1.5 text-xs font-semibold text-black hover:bg-white/90"
-        >
-          <Plus className="h-3.5 w-3.5" aria-hidden />
-          Agregar punto
-        </button>
-        <button
-          type="button"
-          onClick={() => setModal("pregunta")}
-          title="Configura la pregunta y ábrela de inmediato"
-          className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-600"
-        >
-          <Unlock className="h-3.5 w-3.5" aria-hidden />
-          Abrir pregunta
-        </button>
-      </div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+          <div className="mb-4 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setModal("punto")}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-white px-3 py-1.5 text-xs font-semibold text-black hover:bg-white/90"
+            >
+              <Plus className="h-3.5 w-3.5" aria-hidden />
+              Agregar punto
+            </button>
+            <button
+              type="button"
+              onClick={() => setModal("pregunta")}
+              title="Configura la pregunta y ábrela de inmediato"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-600"
+            >
+              <Unlock className="h-3.5 w-3.5" aria-hidden />
+              Abrir pregunta
+            </button>
+          </div>
 
-      {puntos.length === 0 ? (
-        <p className="text-sm text-white/45">Aún no hay puntos.</p>
-      ) : (
-        <ul className="max-h-56 space-y-2 overflow-y-auto pr-1">
-          {puntos.map((p, i) => {
-            const vt = p.votacionId
-              ? porId.get(p.votacionId as string)
-              : undefined;
-            const abierta = vt?.estado === "abierta";
-            return (
-              <li
-                key={`${p.titulo}-${i}`}
-                className="rounded-xl bg-white/[0.04] px-3 py-2"
-              >
-                <div className="flex items-start gap-2">
-                  <button
-                    type="button"
-                    title={p.hecho ? "Marcar pendiente" : "Marcar hecho"}
-                    onClick={() =>
-                      void toggleHecho({ asambleaId, index: i }).catch(() => {})
-                    }
-                    className={cn(
-                      "mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border",
-                      p.hecho
-                        ? "border-emerald-400/50 bg-emerald-500/30 text-emerald-200"
-                        : "border-white/20 text-transparent hover:border-white/40",
-                    )}
+          {puntos.length === 0 ? (
+            <p className="text-sm text-white/45">Aún no hay puntos.</p>
+          ) : (
+            <ul className="space-y-2">
+              {puntos.map((p, i) => {
+                const vt = p.votacionId
+                  ? porId.get(p.votacionId as string)
+                  : undefined;
+                const abierta = vt?.estado === "abierta";
+                return (
+                  <li
+                    key={`${p.titulo}-${i}`}
+                    className="rounded-xl bg-white/[0.04] px-3 py-2.5"
                   >
-                    <CheckCircle2 className="h-3.5 w-3.5" aria-hidden />
-                  </button>
-                  <div className="min-w-0 flex-1">
-                    <p
-                      className={cn(
-                        "text-sm font-medium",
-                        p.hecho ? "text-white/40 line-through" : "text-white/90",
-                      )}
-                    >
-                      {p.titulo}
-                    </p>
-                    {vt ? (
-                      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                        <span
+                    <div className="flex items-start gap-2">
+                      <button
+                        type="button"
+                        title={p.hecho ? "Marcar pendiente" : "Marcar hecho"}
+                        onClick={() =>
+                          void toggleHecho({ asambleaId, index: i }).catch(
+                            () => {},
+                          )
+                        }
+                        className={cn(
+                          "mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border",
+                          p.hecho
+                            ? "border-emerald-400/50 bg-emerald-500/30 text-emerald-200"
+                            : "border-white/20 text-transparent hover:border-white/40",
+                        )}
+                      >
+                        <CheckCircle2 className="h-3.5 w-3.5" aria-hidden />
+                      </button>
+                      <div className="min-w-0 flex-1">
+                        <p
                           className={cn(
-                            "rounded-full px-2 py-0.5 text-[10px] font-semibold",
-                            abierta
-                              ? "bg-emerald-500/20 text-emerald-300"
-                              : "bg-white/10 text-white/50",
+                            "text-sm font-medium",
+                            p.hecho
+                              ? "text-white/40 line-through"
+                              : "text-white/90",
                           )}
                         >
-                          {abierta ? "Votación abierta" : "Votación lista"}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            void toggleVotacion({ id: vt._id }).catch(() => {})
-                          }
-                          className="inline-flex items-center gap-1 rounded-lg bg-white/10 px-2 py-0.5 text-[11px] font-semibold text-white hover:bg-white/20"
-                        >
-                          {abierta ? (
-                            <>
-                              <Lock className="h-3 w-3" aria-hidden /> Cerrar
-                            </>
-                          ) : (
-                            <>
-                              <Unlock className="h-3 w-3" aria-hidden /> Abrir
-                            </>
-                          )}
-                        </button>
+                          {p.titulo}
+                        </p>
+                        {vt ? (
+                          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                            <span
+                              className={cn(
+                                "rounded-full px-2 py-0.5 text-[10px] font-semibold",
+                                abierta
+                                  ? "bg-emerald-500/20 text-emerald-300"
+                                  : "bg-white/10 text-white/50",
+                              )}
+                            >
+                              {abierta ? "Votación abierta" : "Votación lista"}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                void toggleVotacion({ id: vt._id }).catch(
+                                  () => {},
+                                )
+                              }
+                              className="inline-flex items-center gap-1 rounded-lg bg-white/10 px-2 py-0.5 text-[11px] font-semibold text-white hover:bg-white/20"
+                            >
+                              {abierta ? (
+                                <>
+                                  <Lock className="h-3 w-3" aria-hidden />{" "}
+                                  Cerrar
+                                </>
+                              ) : (
+                                <>
+                                  <Unlock className="h-3 w-3" aria-hidden />{" "}
+                                  Abrir
+                                </>
+                              )}
+                            </button>
+                          </div>
+                        ) : null}
                       </div>
-                    ) : null}
-                  </div>
-                </div>
-              </li>
-            );
-          })}
-        </ul>
-      )}
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      </div>
 
       {modal ? (
         <ModalPuntoSala
@@ -1043,7 +1112,7 @@ function MesaOrdenYPreguntas({
           onClose={() => setModal(null)}
         />
       ) : null}
-    </section>
+    </div>
   );
 }
 
@@ -1105,11 +1174,11 @@ function ModalPuntoSala({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
+    <div className="fixed inset-0 z-[60] flex items-end justify-center sm:items-center">
       <button
         type="button"
         aria-label="Cerrar"
-        className="absolute inset-0 bg-black/55 backdrop-blur-sm"
+        className="absolute inset-0 bg-black/40 backdrop-blur-sm"
         onClick={onClose}
       />
       <div
