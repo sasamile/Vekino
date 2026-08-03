@@ -522,8 +522,14 @@ export function EscenarioVideo({
 
       {/* ── Barra de controles flotante, centrada ───────────────────────── */}
       {hayBarra ? (
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-center pb-5">
-          <div className="pointer-events-auto flex items-center gap-2.5 rounded-full bg-[#1c1f26]/95 px-3 py-2.5 shadow-[0_8px_32px_rgb(0_0_0/0.5)] backdrop-blur">
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-center px-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-4 sm:pb-5">
+          <div
+            className={cn(
+              "pointer-events-auto flex max-w-full items-center gap-1.5 overflow-x-auto overscroll-x-contain rounded-full bg-[#1c1f26]/95 px-2 py-2 shadow-[0_8px_32px_rgb(0_0_0/0.5)] backdrop-blur sm:gap-2.5 sm:px-3 sm:py-2.5",
+              /* Sin scrollbar visible: se desliza si no caben en el ancho. */
+              "[-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+            )}
+          >
             {puedoHablar ? (
               <>
                 <BotonRedondo
@@ -533,9 +539,9 @@ export function EscenarioVideo({
                   label={video.micOn ? "Silenciar micrófono" : "Activar micrófono"}
                 >
                   {video.micOn ? (
-                    <Mic className="h-5 w-5" aria-hidden />
+                    <Mic className="h-4 w-4 sm:h-5 sm:w-5" aria-hidden />
                   ) : (
-                    <MicOff className="h-5 w-5" aria-hidden />
+                    <MicOff className="h-4 w-4 sm:h-5 sm:w-5" aria-hidden />
                   )}
                 </BotonRedondo>
                 <BotonRedondo
@@ -545,9 +551,9 @@ export function EscenarioVideo({
                   label={video.camOn ? "Apagar cámara" : "Encender cámara"}
                 >
                   {video.camOn ? (
-                    <Video className="h-5 w-5" aria-hidden />
+                    <Video className="h-4 w-4 sm:h-5 sm:w-5" aria-hidden />
                   ) : (
-                    <VideoOff className="h-5 w-5" aria-hidden />
+                    <VideoOff className="h-4 w-4 sm:h-5 sm:w-5" aria-hidden />
                   )}
                 </BotonRedondo>
                 {onCambiarCalidad ? (
@@ -563,7 +569,7 @@ export function EscenarioVideo({
                         : `Alta calidad: tope ${video.tope} personas. Tocar para modo ahorro`
                     }
                   >
-                    <Gauge className="h-5 w-5" aria-hidden />
+                    <Gauge className="h-4 w-4 sm:h-5 sm:w-5" aria-hidden />
                   </BotonRedondo>
                 ) : null}
                 <BotonRedondo
@@ -578,7 +584,7 @@ export function EscenarioVideo({
                   }
                   label={compartiendo ? "Dejar de compartir" : "Compartir pantalla"}
                 >
-                  <MonitorUp className="h-5 w-5" aria-hidden />
+                  <MonitorUp className="h-4 w-4 sm:h-5 sm:w-5" aria-hidden />
                 </BotonRedondo>
               </>
             ) : null}
@@ -603,9 +609,9 @@ export function EscenarioVideo({
               label={sonidoOn ? "Silenciar la sala" : "Activar el sonido de la sala"}
             >
               {sonidoOn ? (
-                <Volume2 className="h-5 w-5" aria-hidden />
+                <Volume2 className="h-4 w-4 sm:h-5 sm:w-5" aria-hidden />
               ) : (
-                <VolumeX className="h-5 w-5" aria-hidden />
+                <VolumeX className="h-4 w-4 sm:h-5 sm:w-5" aria-hidden />
               )}
             </BotonRedondo>
             {enCurso ? (
@@ -691,13 +697,13 @@ function BotonReaccionar({
         aria-label="Reaccionar"
         title="Reaccionar"
         className={cn(
-          "flex h-12 w-12 items-center justify-center rounded-full transition-colors",
+          "flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition-colors sm:h-12 sm:w-12",
           abierto
             ? "bg-white/25 text-white"
             : "bg-white/10 text-white/85 hover:bg-white/20",
         )}
       >
-        <SmilePlus className="h-5 w-5" aria-hidden />
+        <SmilePlus className="h-4 w-4 sm:h-5 sm:w-5" aria-hidden />
       </button>
     </div>
   );
@@ -795,7 +801,7 @@ function BotonRedondo({
       aria-pressed={encendido}
       title={label}
       className={cn(
-        "flex h-12 w-12 items-center justify-center rounded-full transition-colors disabled:opacity-60",
+        "flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition-colors disabled:opacity-60 sm:h-12 sm:w-12",
         encendido
           ? "bg-white/15 text-white hover:bg-white/25"
           : "bg-red-500 text-white hover:bg-red-600",

@@ -853,6 +853,11 @@ export default defineSchema({
      */
     abiertaEn: v.optional(v.number()),
     cerradaEn: v.optional(v.number()),
+    /**
+     * Si está abierta con temporizador: instante en que debe cerrarse sola.
+     * La mesa puede extenderlo o cerrar antes. Sin este campo = sin límite.
+     */
+    cierraEn: v.optional(v.number()),
     createdAt: v.number(),
     updatedAt: v.number(),
   })

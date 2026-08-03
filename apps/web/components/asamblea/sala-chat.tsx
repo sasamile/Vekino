@@ -164,7 +164,7 @@ export function SalaChatSheet({
               onChange={(e) => setTexto(e.target.value)}
               placeholder="Escribe un mensaje…"
               maxLength={400}
-              className="min-w-0 flex-1 rounded-xl border border-white/10 bg-black/30 px-3 py-2.5 text-sm text-white placeholder:text-white/35 outline-none focus:border-white/25"
+              className="min-w-0 flex-1 rounded-xl border border-white/10 bg-black/30 px-3 py-2.5 text-base text-white placeholder:text-white/35 outline-none focus:border-white/25"
             />
             <button
               type="submit"
@@ -222,13 +222,13 @@ export function BotonChatSala({
       }
       title="Chat de la sala"
       className={cn(
-        "relative flex h-12 w-12 items-center justify-center rounded-full transition-colors",
+        "relative flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition-colors sm:h-12 sm:w-12",
         abierto
           ? "bg-white/25 text-white"
           : "bg-white/15 text-white hover:bg-white/25",
       )}
     >
-      <MessageCircle className="h-5 w-5" aria-hidden />
+      <MessageCircle className="h-4 w-4 sm:h-5 sm:w-5" aria-hidden />
       {!abierto && noLeidos > 0 ? (
         <span className="absolute -right-0.5 -top-0.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-emerald-400 px-1 text-[10px] font-bold text-black">
           {noLeidos > 9 ? "9+" : noLeidos}

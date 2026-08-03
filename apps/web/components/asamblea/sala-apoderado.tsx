@@ -125,21 +125,21 @@ export function SalaApoderado({ codigo }: { codigo: string }) {
                     aria-label="Panel de la asamblea"
                     title="Panel de la asamblea"
                     className={cn(
-                      "relative flex h-12 w-12 items-center justify-center rounded-full transition-colors",
+                      "relative flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition-colors sm:h-12 sm:w-12",
                       panelAbierto
                         ? "bg-white/25 text-white"
                         : "bg-white/15 text-white hover:bg-white/25",
                     )}
                   >
-                    <Users className="h-5 w-5" aria-hidden />
+                    <Users className="h-4 w-4 sm:h-5 sm:w-5" aria-hidden />
                   </button>
                   <Link
                     href="/apoderado"
                     aria-label="Salir de la sala"
                     title="Salir de la sala"
-                    className="ml-1 flex h-12 items-center justify-center rounded-full bg-red-500 px-5 text-white transition-colors hover:bg-red-600"
+                    className="ml-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-red-500 text-white transition-colors hover:bg-red-600 sm:ml-1 sm:h-12 sm:w-auto sm:px-5"
                   >
-                    <PhoneOff className="h-5 w-5" aria-hidden />
+                    <PhoneOff className="h-4 w-4 sm:h-5 sm:w-5" aria-hidden />
                   </Link>
                 </>
               ) : null

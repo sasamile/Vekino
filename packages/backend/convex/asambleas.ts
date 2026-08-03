@@ -1,7 +1,8 @@
 import { v } from "convex/values";
-import { query, mutation } from "./_generated/server";
+import { query, mutation, internalMutation } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
+import { internal } from "./_generated/api";
 import {
   requireCondominioRole,
   requireAppUser,
@@ -273,25 +274,60 @@ export const createVotacion = mutation({
     asambleaId: v.id("asambleas"),
     pregunta: v.string(),
     opciones: v.array(v.string()),
+    /** Segundos abiertos. 0 / omitido = sin límite. Solo aplica si la asamblea está en curso. */
+    duracionSegundos: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const asamblea = await ctx.db.get(args.asambleaId);
     if (!asamblea) throw new Error("Asamblea no encontrada.");
     await requireCondominioRole(ctx, asamblea.condominioId, [...WRITE_ROLES]);
     const now = Date.now();
+    const pregunta = args.pregunta.trim();
+    if (!pregunta) throw new Error("La pregunta es obligatoria.");
+    const opciones = args.opciones
+      .map((o) => o.trim())
+      .filter(Boolean)
+      .map((texto) => ({ texto, votos: 0 }));
+    if (opciones.length < 2) {
+      throw new Error("La votación necesita al menos 2 opciones.");
+    }
     // Solo se abre al público si la asamblea ya está en curso.
     const enCurso = asamblea.estado === "en_curso";
-    return await ctx.db.insert("votaciones", {
+    const dur = Math.max(0, Math.floor(args.duracionSegundos ?? 0));
+    const cierraEn = enCurso && dur > 0 ? now + dur * 1000 : undefined;
+    const id = await ctx.db.insert("votaciones", {
       condominioId: asamblea.condominioId,
       asambleaId: args.asambleaId,
       asambleaTitulo: asamblea.titulo,
-      pregunta: args.pregunta.trim(),
-      opciones: args.opciones.map((o) => o.trim()).filter(Boolean).map((texto) => ({ texto, votos: 0 })),
+      pregunta,
+      opciones,
       estado: enCurso ? "abierta" : "cerrada",
-      ...(enCurso ? { abiertaAlgunaVez: true } : {}),
+      ...(enCurso
+        ? {
+            abiertaAlgunaVez: true,
+            abiertaEn: now,
+            ...(cierraEn != null ? { cierraEn } : {}),
+          }
+        : {}),
       createdAt: now,
       updatedAt: now,
     });
+    // Enlazar al orden del día para poder cerrar / gestionar desde la sala.
+    const orden = ordenDiaActual(asamblea);
+    orden.push({ titulo: pregunta, votacionId: id });
+    await ctx.db.patch(args.asambleaId, {
+      ordenDia: orden,
+      agenda: orden.map((p) => p.titulo),
+      updatedAt: now,
+    });
+    if (cierraEn != null) {
+      await ctx.scheduler.runAfter(
+        cierraEn - now,
+        internal.asambleas.cerrarVotacionSiExpiro,
+        { id, cierraEn },
+      );
+    }
+    return id;
   },
 });
 
@@ -309,7 +345,11 @@ export const setVotos = mutation({
 });
 
 export const toggleVotacion = mutation({
-  args: { id: v.id("votaciones") },
+  args: {
+    id: v.id("votaciones"),
+    /** Al abrir: segundos de duración. 0 / omitido = sin límite. */
+    duracionSegundos: v.optional(v.number()),
+  },
   handler: async (ctx, args) => {
     const existing = await ctx.db.get(args.id);
     if (!existing) throw new Error("Votación no encontrada.");
@@ -322,13 +362,95 @@ export const toggleVotacion = mutation({
       }
     }
     const ahora = Date.now();
+    if (abrir) {
+      const dur = Math.max(0, Math.floor(args.duracionSegundos ?? 0));
+      const cierraEn = dur > 0 ? ahora + dur * 1000 : undefined;
+      await ctx.db.patch(args.id, {
+        estado: "abierta",
+        // `abiertaEn` se refresca en cada apertura: si un punto se reabre, la
+        // ventana que vale para el quórum es la última, no la primera.
+        abiertaAlgunaVez: true,
+        abiertaEn: ahora,
+        cierraEn,
+        updatedAt: ahora,
+      });
+      if (cierraEn != null) {
+        await ctx.scheduler.runAfter(
+          cierraEn - ahora,
+          internal.asambleas.cerrarVotacionSiExpiro,
+          { id: args.id, cierraEn },
+        );
+      }
+    } else {
+      await ctx.db.patch(args.id, {
+        estado: "cerrada",
+        cerradaEn: ahora,
+        cierraEn: undefined,
+        updatedAt: ahora,
+      });
+    }
+  },
+});
+
+/**
+ * Extiende el temporizador (o reabre una cerrada) sumando segundos.
+ * Si estaba abierta sin límite, pasa a cerrar en `ahora + extra`.
+ */
+export const extenderVotacion = mutation({
+  args: {
+    id: v.id("votaciones"),
+    segundosExtra: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db.get(args.id);
+    if (!existing) throw new Error("Votación no encontrada.");
+    await requireCondominioRole(ctx, existing.condominioId, [...WRITE_ROLES]);
+    const asamblea = await ctx.db.get(existing.asambleaId);
+    if (!asamblea || asamblea.estado !== "en_curso") {
+      throw new Error("La asamblea no está en curso.");
+    }
+    const extra = Math.max(30, Math.min(Math.floor(args.segundosExtra), 3600));
+    const ahora = Date.now();
+    const base =
+      existing.estado === "abierta" && existing.cierraEn != null
+        ? Math.max(ahora, existing.cierraEn)
+        : ahora;
+    const cierraEn = base + extra * 1000;
     await ctx.db.patch(args.id, {
-      estado: abrir ? "abierta" : "cerrada",
-      // `abiertaEn` se refresca en cada apertura: si un punto se reabre, la
-      // ventana que vale para el quórum es la última, no la primera.
-      ...(abrir
-        ? { abiertaAlgunaVez: true, abiertaEn: ahora }
-        : { cerradaEn: ahora }),
+      estado: "abierta",
+      abiertaAlgunaVez: true,
+      abiertaEn:
+        existing.estado === "abierta"
+          ? (existing.abiertaEn ?? ahora)
+          : ahora,
+      cierraEn,
+      updatedAt: ahora,
+    });
+    await ctx.scheduler.runAfter(
+      cierraEn - ahora,
+      internal.asambleas.cerrarVotacionSiExpiro,
+      { id: args.id, cierraEn },
+    );
+    return { cierraEn };
+  },
+});
+
+/** Cierra la votación solo si el `cierraEn` programado sigue vigente. */
+export const cerrarVotacionSiExpiro = internalMutation({
+  args: {
+    id: v.id("votaciones"),
+    cierraEn: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const vt = await ctx.db.get(args.id);
+    if (!vt || vt.estado !== "abierta") return;
+    if (vt.cierraEn !== args.cierraEn) return;
+    const ahora = Date.now();
+    if ((vt.cierraEn ?? 0) > ahora + 750) return;
+    await ctx.db.patch(vt._id, {
+      estado: "cerrada",
+      cerradaEn: ahora,
+      cierraEn: undefined,
       updatedAt: ahora,
     });
   },
@@ -843,12 +965,35 @@ export const miParticipacion = query({
  * unidades votan la misma opción). Puede cambiar el voto mientras esté abierta.
  * Recalcula los contadores de la votación para el tablero en vivo.
  */
+async function assertVotacionAbierta(
+  ctx: MutationCtx,
+  votacion: {
+    _id: Id<"votaciones">;
+    estado: "abierta" | "cerrada";
+    cierraEn?: number;
+  },
+) {
+  if (votacion.estado !== "abierta") {
+    throw new Error("La votación está cerrada.");
+  }
+  if (votacion.cierraEn != null && votacion.cierraEn <= Date.now()) {
+    const ahora = Date.now();
+    await ctx.db.patch(votacion._id, {
+      estado: "cerrada",
+      cerradaEn: ahora,
+      cierraEn: undefined,
+      updatedAt: ahora,
+    });
+    throw new Error("El tiempo de la votación terminó.");
+  }
+}
+
 export const votar = mutation({
   args: { votacionId: v.id("votaciones"), opcionIndex: v.number() },
   handler: async (ctx, args) => {
     const votacion = await ctx.db.get(args.votacionId);
     if (!votacion) throw new Error("Votación no encontrada.");
-    if (votacion.estado !== "abierta") throw new Error("La votación está cerrada.");
+    await assertVotacionAbierta(ctx, votacion);
     if (args.opcionIndex < 0 || args.opcionIndex >= votacion.opciones.length) {
       throw new Error("Opción inválida.");
     }
@@ -2393,7 +2538,7 @@ export const votarConCodigo = mutation({
     const codigo = args.codigo.trim().toUpperCase();
     const votacion = await ctx.db.get(args.votacionId);
     if (!votacion) throw new Error("Votación no encontrada.");
-    if (votacion.estado !== "abierta") throw new Error("La votación está cerrada.");
+    await assertVotacionAbierta(ctx, votacion);
     if (args.opcionIndex < 0 || args.opcionIndex >= votacion.opciones.length) {
       throw new Error("Opción inválida.");
     }

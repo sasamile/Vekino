@@ -10,6 +10,7 @@ import {
   ArrowLeft,
   CheckCircle2,
   Hand,
+  Clock,
   ListOrdered,
   Loader2,
   Lock,
@@ -21,6 +22,7 @@ import {
   Plus,
   Radio,
   ShieldCheck,
+  Timer,
   Trash2,
   Unlock,
   UserCheck,
@@ -116,25 +118,29 @@ export function SalaReunion({
     if (registro.error) setPanelAbierto(true);
   }, [registro.error]);
 
-  /* Al abrir una votación: popup para votar + aviso del icono en la barra. */
+  /* Al abrir (o reabrir) una votación: popup para votar/cambiar + aviso. */
   useEffect(() => {
     if (!votaciones) return;
-    const puedeVotar =
+    const puedeVotarAhora =
       enCursoQ &&
       (mi?.presente ?? false) &&
       !(!!mi?.delegoTodo && (mi?.representa?.length ?? 0) === 0);
-    if (!puedeVotar) return;
+    if (!puedeVotarAhora) return;
     for (const vt of votaciones) {
       if (vt.estado !== "abierta") continue;
       const id = vt._id as string;
-      if ((mi?.votos ?? {})[id] != null) continue;
-      if (autoVotoVisto.current.has(id)) continue;
-      autoVotoVisto.current.add(id);
+      /* Cada reapertura refresca `abiertaEn` → nueva clave → modal otra vez. */
+      const clave = `${id}:${vt.abiertaEn ?? "sin"}`;
+      if (autoVotoVisto.current.has(clave)) continue;
+      autoVotoVisto.current.add(clave);
       setModalVotoId(vt._id);
       setAvisoVoto(true);
+      setChatAbierto(false);
+      setModalOrden(false);
+      setPanelAbierto(false);
       break;
     }
-  }, [votaciones, enCursoQ, mi?.presente, mi?.votos, mi?.delegoTodo, mi?.representa]);
+  }, [votaciones, enCursoQ, mi?.presente, mi?.delegoTodo, mi?.representa]);
 
   useEffect(() => {
     if (!listoParaRegistro || registro.intentado) return;
@@ -264,13 +270,13 @@ export function SalaReunion({
                       aria-label="Orden del día"
                       title="Orden del día"
                       className={cn(
-                        "relative flex h-12 w-12 items-center justify-center rounded-full transition-colors",
+                        "relative flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition-colors sm:h-12 sm:w-12",
                         modalOrden
                           ? "bg-white/25 text-white"
                           : "bg-white/15 text-white hover:bg-white/25",
                       )}
                     >
-                      <ListOrdered className="h-5 w-5" aria-hidden />
+                      <ListOrdered className="h-4 w-4 sm:h-5 sm:w-5" aria-hidden />
                       {puntos.filter((p) => !p.hecho).length > 0 ? (
                         <span className="absolute -right-0.5 -top-0.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-white/90 px-1 text-[10px] font-bold text-black">
                           {puntos.filter((p) => !p.hecho).length}
@@ -287,8 +293,13 @@ export function SalaReunion({
                           setModalResultadosId(abiertas[0]._id);
                           return;
                         }
+                        /* Residente: abrir para votar o cambiar el voto. */
                         if (puedeVotar && pendientesVoto[0]) {
                           setModalVotoId(pendientesVoto[0]._id);
+                          return;
+                        }
+                        if (puedeVotar && abiertas[0]) {
+                          setModalVotoId(abiertas[0]._id);
                           return;
                         }
                         if (abiertas[0]) setModalResultadosId(abiertas[0]._id);
@@ -298,23 +309,27 @@ export function SalaReunion({
                           ? "Ver quién ya votó y quién falta"
                           : pendientesVoto.length > 0
                             ? "Hay una votación abierta — tocar para votar"
-                            : "Ver resultados de la votación"
+                            : abiertas.length > 0
+                              ? "Cambiar tu voto o ver la votación"
+                              : "Ver resultados de la votación"
                       }
                       title={
                         esMesa
                           ? "Quién votó / pendientes"
                           : pendientesVoto.length > 0
                             ? "Votación abierta — toca para votar"
-                            : "Resultados de la votación"
+                            : abiertas.length > 0
+                              ? "Cambiar voto"
+                              : "Resultados de la votación"
                       }
                       className={cn(
-                        "relative flex h-12 w-12 items-center justify-center rounded-full transition-colors",
+                        "relative flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition-colors sm:h-12 sm:w-12",
                         pendientesVoto.length > 0
                           ? "bg-emerald-500 text-white hover:bg-emerald-600"
                           : "bg-white/15 text-white hover:bg-white/25",
                       )}
                     >
-                      <Vote className="h-5 w-5" aria-hidden />
+                      <Vote className="h-4 w-4 sm:h-5 sm:w-5" aria-hidden />
                       {pendientesVoto.length > 0 ? (
                         <span className="absolute -right-0.5 -top-0.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-amber-400 px-1 text-[10px] font-bold text-black">
                           {pendientesVoto.length}
@@ -329,13 +344,13 @@ export function SalaReunion({
                     aria-label="Panel de la asamblea"
                     title="Panel de la asamblea"
                     className={cn(
-                      "relative flex h-12 w-12 items-center justify-center rounded-full transition-colors",
+                      "relative flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition-colors sm:h-12 sm:w-12",
                       panelAbierto
                         ? "bg-white/25 text-white"
                         : "bg-white/15 text-white hover:bg-white/25",
                     )}
                   >
-                    <Users className="h-5 w-5" aria-hidden />
+                    <Users className="h-4 w-4 sm:h-5 sm:w-5" aria-hidden />
                     {esMesa && manosPedidas > 0 ? (
                       <span className="absolute -right-0.5 -top-0.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] font-bold text-black">
                         {manosPedidas}
@@ -346,9 +361,9 @@ export function SalaReunion({
                     href={volverHref}
                     aria-label="Salir de la sala"
                     title="Salir de la sala"
-                    className="ml-1 flex h-12 items-center gap-2 rounded-full bg-red-500 px-5 text-sm font-semibold text-white transition-colors hover:bg-red-600"
+                    className="ml-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-red-500 text-white transition-colors hover:bg-red-600 sm:ml-1 sm:h-12 sm:w-auto sm:gap-2 sm:px-5 sm:text-sm sm:font-semibold"
                   >
-                    <PhoneOff className="h-5 w-5" aria-hidden />
+                    <PhoneOff className="h-4 w-4 sm:h-5 sm:w-5" aria-hidden />
                   </Link>
                 </>
               ) : null
@@ -382,7 +397,7 @@ export function SalaReunion({
               role="dialog"
               aria-modal
               aria-label="En la sala"
-              className="relative z-10 flex max-h-[80vh] w-full max-w-md flex-col overflow-hidden rounded-t-2xl border border-white/10 bg-[#14161b] shadow-2xl sm:max-h-[85vh] sm:rounded-2xl"
+              className="relative z-10 flex h-[min(80dvh,640px)] w-full max-w-md flex-col overflow-hidden rounded-t-2xl border border-white/10 bg-[#14161b] shadow-2xl sm:rounded-2xl"
             >
               <div className="flex shrink-0 flex-col border-b border-white/10">
                 <div className="flex justify-center pt-2.5 sm:hidden">
@@ -407,40 +422,41 @@ export function SalaReunion({
                 </div>
               </div>
 
-              <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-5">
+              <div className="flex min-h-0 flex-1 flex-col px-4 pt-4 sm:px-5">
                 <ResumenSala sala={sala} />
 
-                {!esMesa ? (
-                  <div className="border-t border-white/10 pt-4">
-                    {delegoSinRepresentar ? (
-                      <VotoDelegado apoderado={mi?.apoderadoNombre ?? null} />
-                    ) : (
-                      <EstadoRegistro
-                        presente={mi?.presente ?? false}
-                        conectado={latido.conectado}
-                        error={registro.error}
-                        onReintentar={() =>
-                          setRegistro({ intentado: false, error: null })
+                {!esMesa || manosLevantadas.length > 0 ? (
+                  <div className="shrink-0 space-y-4 border-t border-white/10 py-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+                    {!esMesa ? (
+                      delegoSinRepresentar ? (
+                        <VotoDelegado apoderado={mi?.apoderadoNombre ?? null} />
+                      ) : (
+                        <EstadoRegistro
+                          presente={mi?.presente ?? false}
+                          conectado={latido.conectado}
+                          error={registro.error}
+                          onReintentar={() =>
+                            setRegistro({ intentado: false, error: null })
+                          }
+                        />
+                      )
+                    ) : null}
+                    {esMesa && manosLevantadas.length > 0 ? (
+                      <ManosLevantadas
+                        filas={manosLevantadas}
+                        onResolver={(userId, conceder) =>
+                          void resolverPalabra({
+                            asambleaId,
+                            userId,
+                            conceder,
+                          }).catch(() => {})
                         }
                       />
-                    )}
+                    ) : null}
                   </div>
-                ) : null}
-
-                {esMesa && manosLevantadas.length > 0 ? (
-                  <div className="border-t border-white/10 pt-4">
-                    <ManosLevantadas
-                      filas={manosLevantadas}
-                      onResolver={(userId, conceder) =>
-                        void resolverPalabra({
-                          asambleaId,
-                          userId,
-                          conceder,
-                        }).catch(() => {})
-                      }
-                    />
-                  </div>
-                ) : null}
+                ) : (
+                  <div className="shrink-0 pb-[max(0.75rem,env(safe-area-inset-bottom))]" />
+                )}
               </div>
             </div>
           </div>
@@ -524,8 +540,7 @@ export function SalaReunion({
           onClose={() => setModalResultadosId(null)}
           onVolverAVotar={
             puedeVotar &&
-            abiertas.some((v) => v._id === modalResultadosId) &&
-            misVotos[modalResultadosId as string] == null
+            abiertas.some((v) => v._id === modalResultadosId)
               ? () => {
                   setModalResultadosId(null);
                   setModalVotoId(modalResultadosId);
@@ -753,41 +768,43 @@ function ResumenSala({ sala }: { sala: SalaEnVivo | null | undefined }) {
   const personas = personasDeSala(sala);
 
   return (
-    <section className="pb-4">
-      <div className="flex items-baseline gap-2">
-        <span
-          className={cn(
-            "text-3xl font-bold tabular-nums",
-            sala.hayQuorum ? "text-emerald-400" : "text-amber-400",
-          )}
-        >
-          {sala.pctCoeficiente.toFixed(2)}%
-        </span>
-        <span className="text-xs text-white/50">
-          coeficiente · {sala.unidadesConectadas}/{sala.totalUnidades} unidades
-          {personas.length > 0 ? ` · ${personas.length} en sala` : ""}
-        </span>
+    <section className="flex min-h-0 flex-1 flex-col">
+      <div className="shrink-0">
+        <div className="flex items-baseline gap-2">
+          <span
+            className={cn(
+              "text-3xl font-bold tabular-nums",
+              sala.hayQuorum ? "text-emerald-400" : "text-amber-400",
+            )}
+          >
+            {sala.pctCoeficiente.toFixed(2)}%
+          </span>
+          <span className="text-xs text-white/50">
+            coeficiente · {sala.unidadesConectadas}/{sala.totalUnidades} unidades
+            {personas.length > 0 ? ` · ${personas.length} en sala` : ""}
+          </span>
+        </div>
+        <div className="relative mt-3 h-1.5 overflow-hidden rounded-full bg-white/10">
+          <div
+            className={cn(
+              "h-full rounded-full transition-all",
+              sala.hayQuorum ? "bg-emerald-500" : "bg-amber-500",
+            )}
+            style={{ width: `${Math.min(100, sala.pctCoeficiente)}%` }}
+          />
+          <div
+            className="absolute inset-y-0 w-0.5 bg-red-400"
+            style={{ left: `${sala.quorumRequerido}%` }}
+          />
+        </div>
+        <p className="mt-1.5 text-[11px] text-white/40">
+          Quórum {sala.quorumRequerido}% ·{" "}
+          {sala.hayQuorum ? "alcanzado" : "aún sin quórum"}
+        </p>
       </div>
-      <div className="relative mt-3 h-1.5 overflow-hidden rounded-full bg-white/10">
-        <div
-          className={cn(
-            "h-full rounded-full transition-all",
-            sala.hayQuorum ? "bg-emerald-500" : "bg-amber-500",
-          )}
-          style={{ width: `${Math.min(100, sala.pctCoeficiente)}%` }}
-        />
-        <div
-          className="absolute inset-y-0 w-0.5 bg-red-400"
-          style={{ left: `${sala.quorumRequerido}%` }}
-        />
-      </div>
-      <p className="mt-1.5 text-[11px] text-white/40">
-        Quórum {sala.quorumRequerido}% ·{" "}
-        {sala.hayQuorum ? "alcanzado" : "aún sin quórum"}
-      </p>
 
       {personas.length > 0 ? (
-        <ul className="mt-4 max-h-48 space-y-1.5 overflow-y-auto">
+        <ul className="mt-4 min-h-0 flex-1 space-y-1.5 overflow-y-auto overscroll-contain pb-2">
           {personas.map((per) => (
             <li
               key={per.nombre}
@@ -844,7 +861,9 @@ function ResumenSala({ sala }: { sala: SalaEnVivo | null | undefined }) {
             </li>
           ))}
         </ul>
-      ) : null}
+      ) : (
+        <p className="mt-4 text-sm text-white/40">Nadie conectado aún.</p>
+      )}
     </section>
   );
 }
@@ -941,7 +960,55 @@ type VotacionSala = {
   pregunta: string;
   estado: string;
   opciones: { texto: string }[];
+  cierraEn?: number | null;
+  abiertaEn?: number | null;
 };
+
+const DURACIONES_PREGUNTA: { label: string; segundos: number }[] = [
+  { label: "1 min", segundos: 60 },
+  { label: "2 min", segundos: 120 },
+  { label: "5 min", segundos: 300 },
+  { label: "10 min", segundos: 600 },
+  { label: "15 min", segundos: 900 },
+  { label: "Sin límite", segundos: 0 },
+];
+
+function formatearRestante(ms: number): string {
+  const s = Math.max(0, Math.ceil(ms / 1000));
+  const mm = Math.floor(s / 60);
+  const ss = s % 60;
+  return `${mm}:${ss.toString().padStart(2, "0")}`;
+}
+
+function CuentaRegresivaVoto({ cierraEn }: { cierraEn: number }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const ms = cierraEn - now;
+  if (ms <= 0) {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-semibold text-amber-200">
+        <Timer className="h-3 w-3" aria-hidden />
+        Cerrando…
+      </span>
+    );
+  }
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold tabular-nums",
+        ms < 30_000
+          ? "bg-red-500/20 text-red-200"
+          : "bg-emerald-500/20 text-emerald-200",
+      )}
+    >
+      <Clock className="h-3 w-3" aria-hidden />
+      {formatearRestante(ms)}
+    </span>
+  );
+}
 
 /** Sheet de orden del día (botón ListOrdered en la barra). */
 function ModalOrdenDiaSala({
@@ -957,8 +1024,23 @@ function ModalOrdenDiaSala({
 }) {
   const toggleHecho = useMutation(api.asambleas.togglePuntoHecho);
   const toggleVotacion = useMutation(api.asambleas.toggleVotacion);
+  const extender = useMutation(api.asambleas.extenderVotacion);
   const [modal, setModal] = useState<"punto" | "pregunta" | null>(null);
+  const [eligiendoId, setEligiendoId] = useState<string | null>(null);
+  const [duracionAbrir, setDuracionAbrir] = useState(300);
   const porId = new Map(votaciones.map((v) => [v._id as string, v]));
+  const idsEnOrden = new Set(
+    puntos.map((p) => p.votacionId as string | undefined).filter(Boolean),
+  );
+  /** Preguntas abiertas que no están en el orden (creadas antes del enlace). */
+  const huerfanasAbiertas = votaciones.filter(
+    (v) => v.estado === "abierta" && !idsEnOrden.has(v._id as string),
+  );
+
+  async function abrirConTiempo(id: Id<"votaciones">, segundos: number) {
+    setEligiendoId(null);
+    await toggleVotacion({ id, duracionSegundos: segundos }).catch(() => {});
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
@@ -972,7 +1054,7 @@ function ModalOrdenDiaSala({
         role="dialog"
         aria-modal
         aria-labelledby="modal-orden-dia-titulo"
-        className="relative z-10 flex max-h-[90dvh] w-full max-w-lg flex-col overflow-hidden rounded-t-2xl border border-white/10 bg-[#14161b] text-white shadow-2xl sm:max-h-[85vh] sm:rounded-2xl"
+        className="relative z-10 flex h-[min(90dvh,720px)] w-full max-w-lg flex-col overflow-hidden rounded-t-2xl border border-white/10 bg-[#14161b] text-white shadow-2xl sm:rounded-2xl"
       >
         <div className="flex shrink-0 flex-col border-b border-white/10">
           <div className="flex justify-center pt-2.5 sm:hidden">
@@ -994,10 +1076,7 @@ function ModalOrdenDiaSala({
               <X className="h-5 w-5" aria-hidden />
             </button>
           </div>
-        </div>
-
-        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
-          <div className="mb-4 flex flex-wrap gap-2">
+          <div className="flex flex-wrap gap-2 px-5 pb-3">
             <button
               type="button"
               onClick={() => setModal("punto")}
@@ -1009,23 +1088,75 @@ function ModalOrdenDiaSala({
             <button
               type="button"
               onClick={() => setModal("pregunta")}
-              title="Configura la pregunta y ábrela de inmediato"
+              title="Configura la pregunta, el tiempo y ábrela de inmediato"
               className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-600"
             >
               <Unlock className="h-3.5 w-3.5" aria-hidden />
               Abrir pregunta
             </button>
           </div>
+        </div>
 
-          {puntos.length === 0 ? (
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+          {huerfanasAbiertas.length > 0 ? (
+            <div className="mb-4 space-y-2">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-300/80">
+                Votaciones abiertas
+              </p>
+              <ul className="space-y-2">
+                {huerfanasAbiertas.map((vt) => (
+                  <li
+                    key={vt._id as string}
+                    className="rounded-xl border border-emerald-500/25 bg-emerald-500/10 px-3 py-2.5"
+                  >
+                    <p className="text-sm font-medium text-white/90">
+                      {vt.pregunta}
+                    </p>
+                    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                      <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] font-semibold text-emerald-300">
+                        Votación abierta
+                      </span>
+                      {vt.cierraEn ? (
+                        <CuentaRegresivaVoto cierraEn={vt.cierraEn} />
+                      ) : null}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void extender({
+                            id: vt._id,
+                            segundosExtra: 60,
+                          }).catch(() => {})
+                        }
+                        className="inline-flex items-center gap-1 rounded-lg bg-white/10 px-2 py-0.5 text-[11px] font-semibold text-white hover:bg-white/20"
+                      >
+                        <Timer className="h-3 w-3" aria-hidden /> +1 min
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void toggleVotacion({ id: vt._id }).catch(() => {})
+                        }
+                        className="inline-flex items-center gap-1 rounded-lg bg-white/10 px-2 py-0.5 text-[11px] font-semibold text-white hover:bg-white/20"
+                      >
+                        <Lock className="h-3 w-3" aria-hidden /> Cerrar
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
+          {puntos.length === 0 && huerfanasAbiertas.length === 0 ? (
             <p className="text-sm text-white/45">Aún no hay puntos.</p>
-          ) : (
+          ) : puntos.length === 0 ? null : (
             <ul className="space-y-2">
               {puntos.map((p, i) => {
                 const vt = p.votacionId
                   ? porId.get(p.votacionId as string)
                   : undefined;
                 const abierta = vt?.estado === "abierta";
+                const eligiendo = eligiendoId === (vt?._id as string);
                 return (
                   <li
                     key={`${p.titulo}-${i}`}
@@ -1061,38 +1192,126 @@ function ModalOrdenDiaSala({
                           {p.titulo}
                         </p>
                         {vt ? (
-                          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                            <span
-                              className={cn(
-                                "rounded-full px-2 py-0.5 text-[10px] font-semibold",
-                                abierta
-                                  ? "bg-emerald-500/20 text-emerald-300"
-                                  : "bg-white/10 text-white/50",
-                              )}
-                            >
-                              {abierta ? "Votación abierta" : "Votación lista"}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                void toggleVotacion({ id: vt._id }).catch(
-                                  () => {},
-                                )
-                              }
-                              className="inline-flex items-center gap-1 rounded-lg bg-white/10 px-2 py-0.5 text-[11px] font-semibold text-white hover:bg-white/20"
-                            >
+                          <div className="mt-1.5 space-y-2">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span
+                                className={cn(
+                                  "rounded-full px-2 py-0.5 text-[10px] font-semibold",
+                                  abierta
+                                    ? "bg-emerald-500/20 text-emerald-300"
+                                    : "bg-white/10 text-white/50",
+                                )}
+                              >
+                                {abierta
+                                  ? "Votación abierta"
+                                  : "Votación lista"}
+                              </span>
+                              {abierta && vt.cierraEn ? (
+                                <CuentaRegresivaVoto cierraEn={vt.cierraEn} />
+                              ) : null}
                               {abierta ? (
                                 <>
-                                  <Lock className="h-3 w-3" aria-hidden />{" "}
-                                  Cerrar
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      void extender({
+                                        id: vt._id,
+                                        segundosExtra: 60,
+                                      }).catch(() => {})
+                                    }
+                                    className="inline-flex items-center gap-1 rounded-lg bg-white/10 px-2 py-0.5 text-[11px] font-semibold text-white hover:bg-white/20"
+                                  >
+                                    <Timer className="h-3 w-3" aria-hidden />{" "}
+                                    +1 min
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      void extender({
+                                        id: vt._id,
+                                        segundosExtra: 300,
+                                      }).catch(() => {})
+                                    }
+                                    className="inline-flex items-center gap-1 rounded-lg bg-white/10 px-2 py-0.5 text-[11px] font-semibold text-white hover:bg-white/20"
+                                  >
+                                    +5 min
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      void toggleVotacion({
+                                        id: vt._id,
+                                      }).catch(() => {})
+                                    }
+                                    className="inline-flex items-center gap-1 rounded-lg bg-red-500/20 px-2 py-0.5 text-[11px] font-semibold text-red-200 hover:bg-red-500/30"
+                                  >
+                                    <Lock className="h-3 w-3" aria-hidden />{" "}
+                                    Cerrar
+                                  </button>
                                 </>
                               ) : (
-                                <>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setDuracionAbrir(300);
+                                    setEligiendoId(
+                                      eligiendo ? null : (vt._id as string),
+                                    );
+                                  }}
+                                  className="inline-flex items-center gap-1 rounded-lg bg-white/10 px-2 py-0.5 text-[11px] font-semibold text-white hover:bg-white/20"
+                                >
                                   <Unlock className="h-3 w-3" aria-hidden />{" "}
                                   Abrir
-                                </>
+                                </button>
                               )}
-                            </button>
+                            </div>
+                            {eligiendo && !abierta ? (
+                              <div className="rounded-lg border border-white/10 bg-black/20 p-2">
+                                <p className="mb-1.5 text-[11px] text-white/50">
+                                  Tiempo de la votación
+                                </p>
+                                <div className="flex flex-wrap gap-1.5">
+                                  {DURACIONES_PREGUNTA.map((d) => (
+                                    <button
+                                      key={d.segundos}
+                                      type="button"
+                                      onClick={() =>
+                                        setDuracionAbrir(d.segundos)
+                                      }
+                                      className={cn(
+                                        "rounded-full px-2.5 py-1 text-[11px] font-semibold transition-colors",
+                                        duracionAbrir === d.segundos
+                                          ? "bg-emerald-500 text-white"
+                                          : "bg-white/10 text-white/70 hover:bg-white/15",
+                                      )}
+                                    >
+                                      {d.label}
+                                    </button>
+                                  ))}
+                                </div>
+                                <div className="mt-2 flex justify-end gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => setEligiendoId(null)}
+                                    className="rounded-lg px-2 py-1 text-[11px] text-white/50 hover:text-white"
+                                  >
+                                    Cancelar
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      void abrirConTiempo(
+                                        vt._id,
+                                        duracionAbrir,
+                                      )
+                                    }
+                                    className="rounded-lg bg-emerald-500 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-emerald-600"
+                                  >
+                                    Abrir ahora
+                                  </button>
+                                </div>
+                              </div>
+                            ) : null}
                           </div>
                         ) : null}
                       </div>
@@ -1135,6 +1354,7 @@ function ModalPuntoSala({
   const [descripcion, setDescripcion] = useState("");
   const [habilitar, setHabilitar] = useState(true);
   const [opciones, setOpciones] = useState(["A favor", "En contra", "Abstención"]);
+  const [duracion, setDuracion] = useState(300);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -1156,7 +1376,12 @@ function ModalPuntoSala({
     setError(null);
     try {
       if (abrirYa) {
-        await crearPregunta({ asambleaId, pregunta: t, opciones: ops });
+        await crearPregunta({
+          asambleaId,
+          pregunta: t,
+          opciones: ops,
+          duracionSegundos: duracion,
+        });
       } else {
         await agregar({
           asambleaId,
@@ -1185,7 +1410,7 @@ function ModalPuntoSala({
         role="dialog"
         aria-modal
         aria-labelledby="modal-punto-sala-titulo"
-        className="relative z-10 w-full max-w-lg rounded-t-2xl border border-zinc-200 bg-white p-6 text-zinc-900 shadow-xl sm:rounded-2xl"
+        className="relative z-10 max-h-[90dvh] w-full max-w-lg overflow-y-auto rounded-t-2xl border border-zinc-200 bg-white p-6 text-zinc-900 shadow-xl sm:rounded-2xl"
       >
         <div className="mb-4 flex items-center justify-between gap-3">
           <h2
@@ -1295,6 +1520,35 @@ function ModalPuntoSala({
             </div>
           ) : null}
 
+          {abrirYa ? (
+            <div className="space-y-1.5">
+              <span className="flex items-center gap-1.5 text-sm font-medium text-zinc-800">
+                <Timer className="h-4 w-4 text-zinc-500" aria-hidden />
+                Tiempo abierta
+              </span>
+              <div className="flex flex-wrap gap-1.5">
+                {DURACIONES_PREGUNTA.map((d) => (
+                  <button
+                    key={d.segundos}
+                    type="button"
+                    onClick={() => setDuracion(d.segundos)}
+                    className={cn(
+                      "rounded-full px-3 py-1.5 text-xs font-semibold transition-colors",
+                      duracion === d.segundos
+                        ? "bg-brand text-white"
+                        : "bg-zinc-100 text-zinc-700 hover:bg-zinc-200",
+                    )}
+                  >
+                    {d.label}
+                  </button>
+                ))}
+              </div>
+              <p className="text-xs text-zinc-500">
+                Luego puedes cerrarla a mano o sumar más tiempo.
+              </p>
+            </div>
+          ) : null}
+
           {error ? <p className="text-sm text-red-600">{error}</p> : null}
 
           <div className="flex justify-end gap-2 pt-1">
@@ -1332,6 +1586,7 @@ function MesaSeguimientoVotos({
   onVerResultados?: (id: Id<"votaciones">) => void;
 }) {
   const toggle = useMutation(api.asambleas.toggleVotacion);
+  const extender = useMutation(api.asambleas.extenderVotacion);
 
   return (
     <section>
@@ -1342,27 +1597,45 @@ function MesaSeguimientoVotos({
         {abiertas.map((vt) => (
           <li
             key={vt._id as string}
-            className="flex items-center gap-2 rounded-xl bg-white/[0.04] px-3 py-2"
+            className="rounded-xl bg-white/[0.04] px-3 py-2"
           >
-            <p className="min-w-0 flex-1 truncate text-sm text-white/90">
-              {vt.pregunta}
-            </p>
-            {onVerResultados ? (
+            <div className="flex items-center gap-2">
+              <p className="min-w-0 flex-1 truncate text-sm text-white/90">
+                {vt.pregunta}
+              </p>
+              {vt.cierraEn ? (
+                <CuentaRegresivaVoto cierraEn={vt.cierraEn} />
+              ) : null}
+            </div>
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              {onVerResultados ? (
+                <button
+                  type="button"
+                  onClick={() => onVerResultados(vt._id)}
+                  className="shrink-0 rounded-lg bg-white px-2.5 py-1 text-[11px] font-semibold text-black hover:bg-white/90"
+                >
+                  Quién votó
+                </button>
+              ) : null}
               <button
                 type="button"
-                onClick={() => onVerResultados(vt._id)}
-                className="shrink-0 rounded-lg bg-white px-2.5 py-1 text-[11px] font-semibold text-black hover:bg-white/90"
+                onClick={() =>
+                  void extender({ id: vt._id, segundosExtra: 60 }).catch(
+                    () => {},
+                  )
+                }
+                className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-white/10 px-2 py-1 text-[11px] font-semibold text-white hover:bg-white/20"
               >
-                Quién votó
+                <Timer className="h-3 w-3" aria-hidden /> +1 min
               </button>
-            ) : null}
-            <button
-              type="button"
-              onClick={() => void toggle({ id: vt._id }).catch(() => {})}
-              className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-white/10 px-2 py-1 text-[11px] font-semibold text-white hover:bg-white/20"
-            >
-              <Lock className="h-3 w-3" aria-hidden /> Cerrar
-            </button>
+              <button
+                type="button"
+                onClick={() => void toggle({ id: vt._id }).catch(() => {})}
+                className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-red-500/20 px-2 py-1 text-[11px] font-semibold text-red-200 hover:bg-red-500/30"
+              >
+                <Lock className="h-3 w-3" aria-hidden /> Cerrar
+              </button>
+            </div>
           </li>
         ))}
       </ul>
@@ -1394,7 +1667,7 @@ function ModalVotarSala({
   if (!votacion) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
+    <div className="fixed inset-0 z-[70] flex items-end justify-center sm:items-center">
       <button
         type="button"
         aria-label="Cerrar"
@@ -1409,7 +1682,7 @@ function ModalVotarSala({
         <div className="mb-4 flex items-start justify-between gap-3">
           <div>
             <p className="text-xs font-semibold uppercase tracking-wide text-emerald-600">
-              Votación abierta
+              {miVoto !== undefined ? "Puedes cambiar tu voto" : "Votación abierta"}
             </p>
             <h2 className="mt-1 text-lg font-semibold text-zinc-900">
               {votacion.pregunta}
@@ -1655,7 +1928,7 @@ function ModalResultadosSala({
               onClick={onVolverAVotar}
               className="rounded-lg px-3 py-1.5 text-sm font-medium text-zinc-500 hover:bg-zinc-100"
             >
-              Ir a votar
+              Votar / cambiar voto
             </button>
           ) : null}
           <button
@@ -1727,7 +2000,7 @@ function BotonMano({
             : "Pedir la palabra"
       }
       className={cn(
-        "flex h-12 w-12 items-center justify-center rounded-full transition-colors",
+        "flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition-colors sm:h-12 sm:w-12",
         estado === "concedida"
           ? "bg-emerald-500 text-white hover:bg-emerald-600"
           : levantada
@@ -1735,7 +2008,7 @@ function BotonMano({
             : "bg-white/10 text-white/85 hover:bg-white/20",
       )}
     >
-      <Hand className="h-5 w-5" aria-hidden />
+      <Hand className="h-4 w-4 sm:h-5 sm:w-5" aria-hidden />
     </button>
   );
 }
