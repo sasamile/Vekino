@@ -6,7 +6,7 @@ import { api } from "@vekino/backend/api";
 
 /**
  * Latido de sala para el apoderado (acceso por código, sin cuenta).
- * Misma lógica que `useSalaLatido`, pero autenticado con el código del poder.
+ * Presencia (Meet) + sesiones de unidad si ya registró asistencia.
  */
 export function useSalaLatidoApoderado(codigo: string | null) {
   const sala = useQuery(
@@ -15,24 +15,38 @@ export function useSalaLatidoApoderado(codigo: string | null) {
   );
   const latido = useMutation(api.asambleaSala.latidoConCodigo);
   const salir = useMutation(api.asambleaSala.salirDeSalaConCodigo);
+  const latidoPresencia = useMutation(api.asambleaSala.latidoPresenciaConCodigo);
+  const salirPresencia = useMutation(api.asambleaSala.salirPresenciaConCodigo);
 
   const debeLatir = !!sala?.debeLatir;
+  const debeLatirPresencia = !!sala?.debeLatirPresencia;
   const intervaloMs = sala?.latidoMs ?? 30_000;
 
   const latidoRef = useRef(latido);
   const salirRef = useRef(salir);
+  const latidoPresenciaRef = useRef(latidoPresencia);
+  const salirPresenciaRef = useRef(salirPresencia);
   const codigoRef = useRef(codigo);
   latidoRef.current = latido;
   salirRef.current = salir;
+  latidoPresenciaRef.current = latidoPresencia;
+  salirPresenciaRef.current = salirPresencia;
   codigoRef.current = codigo;
 
   useEffect(() => {
-    if (!codigo || !debeLatir) return;
+    if (!codigo || (!debeLatir && !debeLatirPresencia)) return;
 
     let vivo = true;
     const enviar = () => {
       if (!vivo || !codigoRef.current) return;
-      void latidoRef.current({ codigo: codigoRef.current }).catch(() => {});
+      if (debeLatirPresencia) {
+        void latidoPresenciaRef
+          .current({ codigo: codigoRef.current })
+          .catch(() => {});
+      }
+      if (debeLatir) {
+        void latidoRef.current({ codigo: codigoRef.current }).catch(() => {});
+      }
     };
 
     enviar();
@@ -43,7 +57,14 @@ export function useSalaLatidoApoderado(codigo: string | null) {
     };
     const onSalida = () => {
       if (!codigoRef.current) return;
-      void salirRef.current({ codigo: codigoRef.current }).catch(() => {});
+      if (debeLatir) {
+        void salirRef.current({ codigo: codigoRef.current }).catch(() => {});
+      }
+      if (debeLatirPresencia) {
+        void salirPresenciaRef
+          .current({ codigo: codigoRef.current })
+          .catch(() => {});
+      }
     };
 
     document.addEventListener("visibilitychange", onVisibilidad);
@@ -56,13 +77,13 @@ export function useSalaLatidoApoderado(codigo: string | null) {
       window.removeEventListener("pagehide", onSalida);
       onSalida();
     };
-  }, [codigo, debeLatir, intervaloMs]);
+  }, [codigo, debeLatir, debeLatirPresencia, intervaloMs]);
 
   return {
     cargando: sala === undefined,
     registrado: !!sala?.registrado,
     enCurso: !!sala?.enCurso,
-    conectado: (sala?.unidadesConectadas ?? 0) > 0,
+    conectado: (sala?.unidadesConectadas ?? 0) > 0 || !!sala?.debeLatirPresencia,
     unidades: sala?.unidades ?? 0,
     unidadesConectadas: sala?.unidadesConectadas ?? 0,
     exigeConexionParaVotar: !!sala?.exigeConexionParaVotar,

@@ -121,13 +121,29 @@ export const registrarEmisor = mutation({
     }
 
     const now = Date.now();
-    const previos = await ctx.db
+
+    /* Una misma persona NO emite el mismo medio desde dos pestañas. La
+     * pestaña vieja (recargada o abandonada) deja un emisor fantasma hasta
+     * el corte de 90 s: cada espectador se conectaba a AMBOS y el emisor
+     * subía el stream por duplicado — se veía un mosaico repetido y todo
+     * más lento. La pestaña nueva desplaza a la vieja. */
+    const enAsamblea = await ctx.db
       .query("salaEmisores")
-      .withIndex("by_asamblea_cliente", (q) =>
-        q.eq("asambleaId", args.asambleaId).eq("clienteId", args.clienteId),
-      )
+      .withIndex("by_asamblea", (q) => q.eq("asambleaId", args.asambleaId))
       .collect();
-    const mio = previos.find((e) => e.medio === args.medio);
+    for (const e of enAsamblea) {
+      if (
+        e.userId === user._id &&
+        e.medio === args.medio &&
+        e.clienteId !== args.clienteId
+      ) {
+        await ctx.db.delete(e._id);
+      }
+    }
+
+    const mio = enAsamblea.find(
+      (e) => e.clienteId === args.clienteId && e.medio === args.medio,
+    );
     if (mio) {
       await ctx.db.patch(mio._id, { ultimoLatido: now });
       return { emisorId: mio._id };
@@ -441,6 +457,83 @@ export const consumirSenales = mutation({
 });
 
 // ─────────────────────────────────────────────────────────────
+// Reacciones (👍👏❤️… como Meet)
+// ─────────────────────────────────────────────────────────────
+
+export const REACCION_EMOJIS = ["👍", "👏", "❤️", "😂", "😮", "🎉"] as const;
+const REACCION_VIVE_MS = 6_000;
+
+export const enviarReaccion = mutation({
+  args: {
+    asambleaId: v.id("asambleas"),
+    emoji: v.string(),
+    codigoPoder: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    if (!(REACCION_EMOJIS as readonly string[]).includes(args.emoji)) {
+      throw new Error("Reacción no válida.");
+    }
+    const { asamblea, user } = await requireAccesoSala(
+      ctx,
+      args.asambleaId,
+      args.codigoPoder,
+    );
+    if (asamblea.estado !== "en_curso") {
+      throw new Error("La sala no está abierta.");
+    }
+
+    let nombre = user?.name ?? "Participante";
+    const codigo = args.codigoPoder?.trim().toUpperCase();
+    if (!user && codigo) {
+      const poder = await ctx.db
+        .query("poderesAsamblea")
+        .withIndex("by_codigo", (q) => q.eq("codigoAcceso", codigo))
+        .first();
+      if (poder) nombre = poder.representanteNombre;
+    }
+
+    await ctx.db.insert("salaReacciones", {
+      condominioId: asamblea.condominioId,
+      asambleaId: args.asambleaId,
+      emoji: args.emoji,
+      nombre,
+      userId: user?._id,
+      codigoPoder: codigo || undefined,
+      createdAt: Date.now(),
+    });
+    return { ok: true as const };
+  },
+});
+
+/** Reacciones de los últimos segundos para animar en pantalla. */
+export const reaccionesRecientes = query({
+  args: {
+    asambleaId: v.id("asambleas"),
+    codigoPoder: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    try {
+      await requireAccesoSala(ctx, args.asambleaId, args.codigoPoder);
+    } catch {
+      return [];
+    }
+    const desde = Date.now() - REACCION_VIVE_MS;
+    const filas = await ctx.db
+      .query("salaReacciones")
+      .withIndex("by_asamblea_created", (q) =>
+        q.eq("asambleaId", args.asambleaId).gte("createdAt", desde),
+      )
+      .collect();
+    return filas.map((r) => ({
+      _id: r._id,
+      emoji: r.emoji,
+      nombre: r.nombre,
+      createdAt: r.createdAt,
+    }));
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
 // Limpieza
 // ─────────────────────────────────────────────────────────────
 
@@ -466,9 +559,17 @@ export const limpiar = internalMutation({
         huerfanas++;
       }
     }
-    if (borrados + huerfanas > 0) {
+    const reacciones = await ctx.db.query("salaReacciones").take(500);
+    let reaccionesViejas = 0;
+    for (const r of reacciones) {
+      if (r.createdAt < now - REACCION_VIVE_MS * 2) {
+        await ctx.db.delete(r._id);
+        reaccionesViejas++;
+      }
+    }
+    if (borrados + huerfanas + reaccionesViejas > 0) {
       console.info(
-        `[salaVideo] limpieza: ${borrados} emisores, ${huerfanas} señales`,
+        `[salaVideo] limpieza: ${borrados} emisores, ${huerfanas} señales, ${reaccionesViejas} reacciones`,
       );
     }
   },

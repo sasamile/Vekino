@@ -289,6 +289,25 @@ body {
 .animate-scale-in { animation: scale-in 0.15s ease-out; }
 .animate-slide-up { animation: slide-up 0.2s ease-out; }
 
+/* Reacciones de sala (Meet): emoji sube y se desvanece */
+@keyframes reaccion-float {
+  0% {
+    opacity: 0;
+    transform: translateY(0) scale(0.55);
+  }
+  12% {
+    opacity: 1;
+    transform: translateY(-12px) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-200px) scale(1.15);
+  }
+}
+.animate-reaccion-float {
+  animation: reaccion-float 3.8s ease-out forwards;
+}
+
 /* ═══════════════════════════════════════════════════════════════════════
  * LANDING · estructura visual
  *

@@ -12,8 +12,10 @@ sin navegación.
 `asambleas.entrarYRegistrar` (residente) o `entrarYRegistrarConPoder`
 (apoderado, con el código de su poder). Requisitos del lado del servidor:
 asamblea **en curso**, membresía del condominio, modalidad no presencial.
-Después el latido (`use-sala-latido*.ts`, cada 30 s) mantiene el tramo de
-conexión en `asambleaSesiones`; el cron cierra a los 90 s sin señal.
+Después el latido (`use-sala-latido*.ts`, cada 30 s) **solo dentro de `/sala`**
+mantiene el tramo de conexión en `asambleaSesiones`; el cron cierra a los 90 s
+sin señal. El chip de la ficha de asamblea (`IndicadorSala`) solo lee el
+estado: no late (si lateara, al salir de la sala se reabriría la sesión).
 
 **El código rotativo sigue existiendo** con un solo propósito: quien sigue la
 reunión POR FUERA (Meet/Zoom, app móvil) y no está en la sala. Posee el

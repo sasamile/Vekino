@@ -6,24 +6,15 @@ import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
 
 /**
- * Mantiene viva la conexión del residente a la sala de la asamblea.
+ * Mantiene viva la conexión del residente SOLO mientras está dentro de `/sala`.
  *
- * El backend cierra por inactividad a los 90 s (3 latidos perdidos), así que
- * aquí late cada 30 s. Tres detalles que no son evidentes:
+ * - **Presencia** (personas en la pestaña, estilo Meet): late siempre si la
+ *   asamblea está en curso — también la mesa sin unidades.
+ * - **Sesiones por unidad** (permanencia / quórum): solo si ya registró
+ *   asistencia (`debeLatir`).
  *
- * 1. **Pestaña oculta**: `setInterval` se estrangula a ~1 vez por minuto en
- *    segundo plano. Por eso, además del intervalo, late al volver a la
- *    pestaña (`visibilitychange`) — si no, quien mira otra ventana un rato
- *    aparecería como desconectado justo cuando se abre una votación.
- *
- * 2. **Cerrar la pestaña**: `sendBeacon` no sirve aquí porque la mutación va
- *    firmada por el cliente de Convex. Se intenta `salirDeSala` en
- *    `pagehidden` y, si no alcanza a salir, el cron lo cierra solo. La
- *    permanencia se corta en el ÚLTIMO LATIDO real, no cuando el cron se
- *    entera, así que no se regalan minutos.
- *
- * 3. **Solo late si hay algo que latir**: sin asamblea en curso o sin
- *    asistencia registrada, no monta ningún intervalo.
+ * No usar en la ficha de la asamblea (`IndicadorSala`): ahí solo se consulta
+ * el estado.
  */
 export function useSalaLatido(asambleaId: Id<"asambleas"> | null) {
   const sala = useQuery(
@@ -32,25 +23,34 @@ export function useSalaLatido(asambleaId: Id<"asambleas"> | null) {
   );
   const latido = useMutation(api.asambleaSala.latido);
   const salir = useMutation(api.asambleaSala.salirDeSala);
+  const latidoPresencia = useMutation(api.asambleaSala.latidoPresencia);
+  const salirPresencia = useMutation(api.asambleaSala.salirPresencia);
 
   const debeLatir = !!sala?.debeLatir;
+  const debeLatirPresencia = !!sala?.debeLatirPresencia;
   const intervaloMs = sala?.latidoMs ?? 30_000;
 
-  // Refs para no re-montar el efecto en cada render de Convex.
   const latidoRef = useRef(latido);
   const salirRef = useRef(salir);
+  const latidoPresenciaRef = useRef(latidoPresencia);
+  const salirPresenciaRef = useRef(salirPresencia);
   latidoRef.current = latido;
   salirRef.current = salir;
+  latidoPresenciaRef.current = latidoPresencia;
+  salirPresenciaRef.current = salirPresencia;
 
   useEffect(() => {
-    if (!asambleaId || !debeLatir) return;
+    if (!asambleaId || (!debeLatir && !debeLatirPresencia)) return;
 
     let vivo = true;
     const enviar = () => {
       if (!vivo) return;
-      // Un latido perdido no es un error que mostrarle a nadie: el siguiente
-      // llega en 30 s y el corte tolera dos fallos seguidos.
-      void latidoRef.current({ asambleaId }).catch(() => {});
+      if (debeLatirPresencia) {
+        void latidoPresenciaRef.current({ asambleaId }).catch(() => {});
+      }
+      if (debeLatir) {
+        void latidoRef.current({ asambleaId }).catch(() => {});
+      }
     };
 
     enviar();
@@ -60,7 +60,10 @@ export function useSalaLatido(asambleaId: Id<"asambleas"> | null) {
       if (document.visibilityState === "visible") enviar();
     };
     const onSalida = () => {
-      void salirRef.current({ asambleaId }).catch(() => {});
+      if (debeLatir) void salirRef.current({ asambleaId }).catch(() => {});
+      if (debeLatirPresencia) {
+        void salirPresenciaRef.current({ asambleaId }).catch(() => {});
+      }
     };
 
     document.addEventListener("visibilitychange", onVisibilidad);
@@ -71,17 +74,16 @@ export function useSalaLatido(asambleaId: Id<"asambleas"> | null) {
       clearInterval(id);
       document.removeEventListener("visibilitychange", onVisibilidad);
       window.removeEventListener("pagehide", onSalida);
-      /* Al desmontar (navegar a otra pantalla de la app) también se sale.
-       * Si el residente vuelve, el propio `latido` reabre un tramo nuevo. */
       onSalida();
     };
-  }, [asambleaId, debeLatir, intervaloMs]);
+  }, [asambleaId, debeLatir, debeLatirPresencia, intervaloMs]);
 
   return {
     cargando: sala === undefined,
     registrado: !!sala?.registrado,
+    esMesa: !!sala?.esMesa,
     enCurso: !!sala?.enCurso,
-    conectado: (sala?.unidadesConectadas ?? 0) > 0,
+    conectado: (sala?.unidadesConectadas ?? 0) > 0 || !!sala?.esMesa,
     unidades: sala?.unidades ?? 0,
     unidadesConectadas: sala?.unidadesConectadas ?? 0,
     exigeConexionParaVotar: !!sala?.exigeConexionParaVotar,

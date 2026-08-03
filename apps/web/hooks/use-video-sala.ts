@@ -116,9 +116,9 @@ export function useVideoSala(
         medio === "camara"
           ? await navigator.mediaDevices.getUserMedia({
               video: {
-                width: { ideal: 1280 },
-                height: { ideal: 720 },
-                frameRate: { ideal: 30 },
+                width: { ideal: 640 },
+                height: { ideal: 360 },
+                frameRate: { ideal: 24 },
               },
               audio: { echoCancellation: true, noiseSuppression: true },
             })
@@ -315,13 +315,17 @@ export function useVideoSala(
 
   /* ── Buzón de señales: el cartero reparte ────────────────────────────── */
   const procesando = useRef(false);
+  const vistas = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (!activo || !buzon || buzon.length === 0 || procesando.current) return;
+    const pendientes = buzon.filter((s) => !vistas.current.has(s._id as string));
+    if (pendientes.length === 0) return;
     procesando.current = true;
 
     void (async () => {
       const consumidas: Id<"salaSenales">[] = [];
-      for (const s of buzon) {
+      for (const s of pendientes) {
+        vistas.current.add(s._id as string);
         consumidas.push(s._id);
         let datos: { medio?: Medio; sdp?: RTCSessionDescriptionInit; candidato?: RTCIceCandidateInit };
         try {
@@ -355,7 +359,7 @@ export function useVideoSala(
               params.degradationPreference =
                 medio === "pantalla" ? "maintain-resolution" : "maintain-framerate";
               params.encodings = [
-                { maxBitrate: medio === "pantalla" ? 2_500_000 : 1_200_000 },
+                { maxBitrate: medio === "pantalla" ? 2_500_000 : 600_000 },
               ];
               void sender.setParameters(params).catch(() => {});
             }
@@ -405,6 +409,9 @@ export function useVideoSala(
         }
       }
       procesando.current = false;
+      if (vistas.current.size > 1000) {
+        vistas.current = new Set([...vistas.current].slice(-500));
+      }
       if (consumidas.length > 0) {
         void consumirSenales({ asambleaId, clienteId, ids: consumidas, codigoPoder }).catch(() => {});
       }

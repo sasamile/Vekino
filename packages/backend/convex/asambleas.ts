@@ -9,6 +9,7 @@ import {
   getMembership,
 } from "./model/authz";
 import { resolveMediaUrl } from "./model/files";
+import { resolveUserImage } from "./model/userImage";
 import {
   codigoActual,
   codigoEsValido,
@@ -567,10 +568,11 @@ export const entrarYRegistrar = mutation({
       userId: user._id,
       userNombre: user.name,
     });
+    /* Sin unidades (mesa, o delegó todo y no representa a nadie) no es un
+     * fallo: puede quedarse en la sala escuchando. Antes se lanzaba error y
+     * ensuciaba la consola aunque el cliente lo silenciara. */
     if (filas.length === 0) {
-      throw new Error(
-        "No tienes unidades para registrar. Si delegaste tu poder, tu apoderado representa tu unidad.",
-      );
+      return { registradas: 0, unidades: [] as string[], sinUnidades: true as const };
     }
     const registradas = await insertarAsistencias(ctx, {
       origen: "sala",
@@ -578,7 +580,7 @@ export const entrarYRegistrar = mutation({
       asambleaId: args.asambleaId,
       filas,
     });
-    return { registradas, unidades: filas.map((f) => f.unidadNumero) };
+    return { registradas, unidades: filas.map((f) => f.unidadNumero), sinUnidades: false as const };
   },
 });
 
@@ -824,9 +826,12 @@ export const miParticipacion = query({
     return {
       presente: misAsistencias.length > 0,
       nombre: user.name,
+      imageUrl: await resolveUserImage(ctx, user),
       unidades: misAsistencias.map((a) => a.unidadNumero),
       representa,
       delegoTodo,
+      /** Hay algo que marcar al entrar (propias sin delegar o poderes recibidos). */
+      puedeRegistrar: propiasSinDelegar.length > 0 || poderesRecibidos.length > 0,
       apoderadoNombre: poderesOtorgados[0]?.representanteNombre ?? null,
       votos: Object.fromEntries(misVotos.map((vt) => [vt.votacionId as string, vt.opcionIndex])),
     };

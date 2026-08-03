@@ -5,9 +5,11 @@ import type { Doc, Id } from "./_generated/dataModel";
 import {
   requireCondominioRole,
   requireAppUser,
+  getCurrentAppUser,
   getMembership,
   hasPlatformRole,
 } from "./model/authz";
+import { resolveUserImage } from "./model/userImage";
 import {
   duracionVentana,
   formatearDuracion,
@@ -363,6 +365,189 @@ export const salirDeSala = mutation({
   },
 });
 
+// ─────────────────────────────────────────────────────────────
+// Presencia de PERSONAS en la pestaña (estilo Meet)
+// ─────────────────────────────────────────────────────────────
+
+async function upsertPresencia(
+  ctx: MutationCtx,
+  args: {
+    condominioId: Id<"condominios">;
+    asambleaId: Id<"asambleas">;
+    userId?: Id<"users">;
+    codigoPoder?: string;
+    nombre: string;
+    imageUrl?: string | null;
+    esMesa: boolean;
+  },
+) {
+  const now = Date.now();
+  const imageUrl = args.imageUrl?.trim() || undefined;
+  if (args.userId) {
+    const ex = await ctx.db
+      .query("salaPresencias")
+      .withIndex("by_asamblea_user", (q) =>
+        q.eq("asambleaId", args.asambleaId).eq("userId", args.userId!),
+      )
+      .first();
+    if (ex) {
+      await ctx.db.patch(ex._id, {
+        nombre: args.nombre,
+        imageUrl,
+        esMesa: args.esMesa,
+        ultimoLatido: now,
+      });
+      return;
+    }
+  } else if (args.codigoPoder) {
+    const ex = await ctx.db
+      .query("salaPresencias")
+      .withIndex("by_asamblea_codigo", (q) =>
+        q
+          .eq("asambleaId", args.asambleaId)
+          .eq("codigoPoder", args.codigoPoder!),
+      )
+      .first();
+    if (ex) {
+      await ctx.db.patch(ex._id, {
+        nombre: args.nombre,
+        imageUrl,
+        esMesa: false,
+        ultimoLatido: now,
+      });
+      return;
+    }
+  } else {
+    return;
+  }
+
+  await ctx.db.insert("salaPresencias", {
+    condominioId: args.condominioId,
+    asambleaId: args.asambleaId,
+    userId: args.userId,
+    codigoPoder: args.codigoPoder,
+    nombre: args.nombre,
+    imageUrl,
+    esMesa: args.esMesa,
+    ultimoLatido: now,
+  });
+}
+
+async function borrarPresencia(
+  ctx: MutationCtx,
+  args: {
+    asambleaId: Id<"asambleas">;
+    userId?: Id<"users">;
+    codigoPoder?: string;
+  },
+) {
+  if (args.userId) {
+    const ex = await ctx.db
+      .query("salaPresencias")
+      .withIndex("by_asamblea_user", (q) =>
+        q.eq("asambleaId", args.asambleaId).eq("userId", args.userId!),
+      )
+      .first();
+    if (ex) await ctx.db.delete(ex._id);
+  }
+  if (args.codigoPoder) {
+    const ex = await ctx.db
+      .query("salaPresencias")
+      .withIndex("by_asamblea_codigo", (q) =>
+        q
+          .eq("asambleaId", args.asambleaId)
+          .eq("codigoPoder", args.codigoPoder!),
+      )
+      .first();
+    if (ex) await ctx.db.delete(ex._id);
+  }
+}
+
+/** Latido de presencia: cualquiera con la sala abierta (mesa sin unidades también). */
+export const latidoPresencia = mutation({
+  args: { asambleaId: v.id("asambleas") },
+  handler: async (ctx, args) => {
+    const asamblea = await ctx.db.get(args.asambleaId);
+    if (!asamblea) throw new Error("Asamblea no encontrada.");
+    if (asamblea.estado !== "en_curso") {
+      return { activo: false as const };
+    }
+    const user = await requireAppUser(ctx);
+    const membership = await getMembership(ctx, user._id, asamblea.condominioId);
+    const esMesa =
+      hasPlatformRole(user, "superadmin", "admin") ||
+      (!!membership?.isActive &&
+        membership.roles.some((r) =>
+          (WRITE_ROLES as readonly string[]).includes(r),
+        ));
+    if (!membership?.isActive && !esMesa) {
+      throw new Error("Sin acceso a este condominio.");
+    }
+    await upsertPresencia(ctx, {
+      condominioId: asamblea.condominioId,
+      asambleaId: args.asambleaId,
+      userId: user._id,
+      nombre: user.name,
+      imageUrl: await resolveUserImage(ctx, user),
+      esMesa,
+    });
+    return { activo: true as const, proximoLatidoMs: LATIDO_MS };
+  },
+});
+
+export const salirPresencia = mutation({
+  args: { asambleaId: v.id("asambleas") },
+  handler: async (ctx, args) => {
+    const user = await getCurrentAppUser(ctx);
+    if (!user) return { ok: true as const };
+    await borrarPresencia(ctx, {
+      asambleaId: args.asambleaId,
+      userId: user._id,
+    });
+    return { ok: true as const };
+  },
+});
+
+/** Presencia del apoderado (código de poder, sin cuenta). */
+export const latidoPresenciaConCodigo = mutation({
+  args: { codigo: v.string() },
+  handler: async (ctx, args) => {
+    const pack = await poderesPorCodigo(ctx, args.codigo);
+    if (!pack) return { activo: false as const };
+    const { poderes, asamblea, codigo } = pack;
+    if (asamblea.estado !== "en_curso") return { activo: false as const };
+    const repId = poderes[0]!.representanteUserId;
+    let imageUrl: string | null = null;
+    if (repId) {
+      const u = await ctx.db.get(repId);
+      imageUrl = await resolveUserImage(ctx, u);
+    }
+    await upsertPresencia(ctx, {
+      condominioId: asamblea.condominioId,
+      asambleaId: asamblea._id,
+      userId: repId,
+      codigoPoder: repId ? undefined : codigo,
+      nombre: poderes[0]!.representanteNombre,
+      imageUrl,
+      esMesa: false,
+    });
+    return { activo: true as const, proximoLatidoMs: LATIDO_MS };
+  },
+});
+
+export const salirPresenciaConCodigo = mutation({
+  args: { codigo: v.string() },
+  handler: async (ctx, args) => {
+    const pack = await poderesPorCodigo(ctx, args.codigo);
+    if (!pack) return { ok: true as const };
+    await borrarPresencia(ctx, {
+      asambleaId: pack.asamblea._id,
+      codigoPoder: pack.codigo,
+    });
+    return { ok: true as const };
+  },
+});
+
 /**
  * Cierra las conexiones que llevan rato sin latir. Lo llama el cron cada
  * minuto sobre TODAS las asambleas — por eso el índice arranca por
@@ -387,12 +572,25 @@ export const cerrarSesionesInactivas = internalMutation({
         motivoSalida: "inactividad",
       });
     }
-    if (vencidas.length > 0) {
+
+    // Presencias (personas en pestaña) sin latido → se borran.
+    const presenciasVencidas = await ctx.db
+      .query("salaPresencias")
+      .withIndex("by_latido", (q) => q.lt("ultimoLatido", limite))
+      .take(500);
+    for (const p of presenciasVencidas) {
+      await ctx.db.delete(p._id);
+    }
+
+    if (vencidas.length > 0 || presenciasVencidas.length > 0) {
       console.info(
-        `[asambleaSala] ${vencidas.length} conexiones cerradas por inactividad (corte ${new Date(limite).toISOString()}, ahora ${new Date(now).toISOString()})`,
+        `[asambleaSala] ${vencidas.length} sesiones + ${presenciasVencidas.length} presencias por inactividad`,
       );
     }
-    return { cerradas: vencidas.length };
+    return {
+      cerradas: vencidas.length,
+      presencias: presenciasVencidas.length,
+    };
   },
 });
 
@@ -440,8 +638,27 @@ export const salaEnVivo = query({
           ? (porUnidad.size / unidades.length) * 100
           : 0;
 
+    const presencias = await ctx.db
+      .query("salaPresencias")
+      .withIndex("by_asamblea", (q) => q.eq("asambleaId", args.asambleaId))
+      .collect();
+    const ahora = Date.now();
+    const vivas = presencias.filter(
+      (p) => ahora - p.ultimoLatido < CORTE_INACTIVIDAD_MS,
+    );
+
     return {
       unidadesConectadas: porUnidad.size,
+      /** Personas con la pestaña de la sala abierta (estilo Meet). */
+      personasEnSala: vivas.length,
+      personas: vivas
+        .sort((a, b) => b.ultimoLatido - a.ultimoLatido)
+        .slice(0, 100)
+        .map((p) => ({
+          nombre: p.nombre,
+          esMesa: p.esMesa,
+          imageUrl: p.imageUrl ?? null,
+        })),
       totalUnidades: unidades.length,
       pctCoeficiente: Math.round(pct * 100) / 100,
       quorumRequerido: asamblea.quorumRequerido ?? 51,
@@ -685,9 +902,22 @@ export const exigirConexionParaVotar = mutation({
 export const miSala = query({
   args: { asambleaId: v.id("asambleas") },
   handler: async (ctx, args) => {
+    /* Devuelve null en vez de lanzar cuando no hay usuario o membresía.
+     *
+     * Esta query es la PRIMERA que dispara la página de la sala, y el
+     * cliente de Convex la ejecuta antes de terminar de adjuntar el token
+     * de sesión: con `requireAppUser` ese instante sin token reventaba con
+     * un overlay de error aunque la persona SÍ estuviera logueada. La
+     * página trata null como "sin acceso" y el gate de autenticación vive
+     * en el cliente (useConvexAuth). */
+    const user = await getCurrentAppUser(ctx);
+    if (!user) return null;
     const asamblea = await ctx.db.get(args.asambleaId);
     if (!asamblea) return null;
-    const user = await requireAppUser(ctx);
+
+    const membresia = await getMembership(ctx, user._id, asamblea.condominioId);
+    const esPlataforma = hasPlatformRole(user, "superadmin", "admin");
+    if (!membresia?.isActive && !esPlataforma) return null;
 
     const asistencias = await ctx.db
       .query("asambleaAsistentes")
@@ -706,11 +936,10 @@ export const miSala = query({
     /* El rol se resuelve aquí y no en la URL: la sala es UNA ruta para todos
      * (`/sala/...`, fuera de los dos shells de la app), así que el cliente no
      * puede deducir de la ruta si eres mesa o residente. */
-    const membership = await getMembership(ctx, user._id, asamblea.condominioId);
     const esMesa =
-      hasPlatformRole(user, "superadmin", "admin") ||
-      (!!membership?.isActive &&
-        membership.roles.some((r) =>
+      esPlataforma ||
+      (!!membresia?.isActive &&
+        membresia.roles.some((r) =>
           (WRITE_ROLES as readonly string[]).includes(r),
         ));
 
@@ -721,6 +950,8 @@ export const miSala = query({
       unidades: asistencias.length,
       unidadesConectadas: conectadas,
       debeLatir: asamblea.estado === "en_curso" && asistencias.length > 0,
+      /** La mesa (sin unidades) también late presencia para contar en el Meet. */
+      debeLatirPresencia: asamblea.estado === "en_curso",
       latidoMs: LATIDO_MS,
       exigeConexionParaVotar: !!asamblea.exigirConexionParaVotar,
     };
@@ -781,6 +1012,7 @@ export const miSalaConCodigo = query({
       unidades: poderes.length,
       unidadesConectadas: conectadas,
       debeLatir: asamblea.estado === "en_curso" && registradas > 0,
+      debeLatirPresencia: asamblea.estado === "en_curso",
       latidoMs: LATIDO_MS,
       exigeConexionParaVotar: !!asamblea.exigirConexionParaVotar,
     };

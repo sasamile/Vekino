@@ -83,8 +83,14 @@ export function SalaReunion({
   const presenteQ = mi?.presente ?? false;
   const delegoSinRepresentarQ =
     !!mi?.delegoTodo && (mi?.representa?.length ?? 0) === 0;
+  /* Solo intenta registrar si el servidor dice que hay unidades (propias o
+   * por poder). Evita el round-trip inútil de mesa / sin casas. */
   const listoParaRegistro =
-    enCursoQ && mi !== undefined && !presenteQ && !delegoSinRepresentarQ;
+    enCursoQ &&
+    mi != null &&
+    !presenteQ &&
+    !delegoSinRepresentarQ &&
+    mi.puedeRegistrar !== false;
 
   /* Panel lateral tipo reunión: OCULTO por defecto (el lienzo manda) y se
    * abre solo cuando pasa algo que exige atención: una votación abierta o
@@ -177,7 +183,7 @@ export function SalaReunion({
               className="flex h-10 items-center gap-1.5 rounded-full bg-white/10 px-3 text-sm font-semibold text-white/85 transition-colors hover:bg-white/20"
             >
               <Users className="h-4 w-4" aria-hidden />
-              {sala?.unidadesConectadas ?? 0}
+              {sala?.personasEnSala ?? 0}
             </button>
           ) : null}
           <BotonPantallaCompleta />
@@ -192,6 +198,8 @@ export function SalaReunion({
             enCurso={enCurso}
             puedoHablar={esMesa || miPalabra?.estado === "concedida"}
             nombreEspera={mi?.nombre ?? undefined}
+            imageUrlLocal={mi?.imageUrl ?? undefined}
+            personas={sala?.personas}
             extraControles={
               !esMesa && enCurso && (mi?.presente ?? false) ? (
                 <BotonMano
@@ -379,6 +387,18 @@ function EstadoConexion({
     return (
       <span className="rounded-full bg-white/10 px-3 py-1.5 text-xs text-white/60">
         Sala cerrada
+      </span>
+    );
+  }
+  /* Mesa sin unidades propias: igual está "en la sala" (presencia Meet). */
+  if (latido.esMesa && !latido.registrado) {
+    return (
+      <span className="inline-flex items-center gap-2 rounded-full bg-emerald-500/15 px-3 py-1.5 text-xs font-medium text-emerald-300">
+        <span className="relative flex h-2 w-2">
+          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75 motion-reduce:hidden" />
+          <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" />
+        </span>
+        Mesa · en la sala
       </span>
     );
   }
@@ -847,30 +867,50 @@ function ManosLevantadas({
 
 
 /* ── Quién está en la sala ───────────────────────────────────────────────
- * `salaEnVivo.conectados` trae una fila por UNIDAD conectada; aquí se agrupa
- * por persona (un apoderado con tres poderes es UNA persona con tres
- * unidades, no tres filas). */
+ * Preferimos `personas` (presencia Meet: una fila por pestaña). Si aún no
+ * hay, caemos a `conectados` agrupado por nombre (unidades). */
 function EnLaSala({ sala }: { sala: SalaEnVivo | undefined }) {
-  if (!sala || sala.conectados.length === 0) return null;
+  if (!sala) return null;
 
-  const porPersona = new Map<
-    string,
-    { nombre: string; unidades: string[]; esPoder: boolean }
-  >();
-  for (const c of sala.conectados) {
-    const previa = porPersona.get(c.userNombre);
-    if (previa) {
-      previa.unidades.push(c.unidadNumero);
-      previa.esPoder = previa.esPoder || c.esPoder;
-    } else {
-      porPersona.set(c.userNombre, {
-        nombre: c.userNombre,
-        unidades: [c.unidadNumero],
-        esPoder: c.esPoder,
-      });
+  const desdePresencia = (sala.personas ?? []).map((p) => ({
+    nombre: p.nombre,
+    imageUrl: p.imageUrl ?? null,
+    unidades: [] as string[],
+    esPoder: false,
+    esMesa: p.esMesa,
+  }));
+
+  let personas = desdePresencia;
+  if (personas.length === 0 && sala.conectados.length > 0) {
+    const porPersona = new Map<
+      string,
+      {
+        nombre: string;
+        imageUrl: string | null;
+        unidades: string[];
+        esPoder: boolean;
+        esMesa: boolean;
+      }
+    >();
+    for (const c of sala.conectados) {
+      const previa = porPersona.get(c.userNombre);
+      if (previa) {
+        previa.unidades.push(c.unidadNumero);
+        previa.esPoder = previa.esPoder || c.esPoder;
+      } else {
+        porPersona.set(c.userNombre, {
+          nombre: c.userNombre,
+          imageUrl: null,
+          unidades: [c.unidadNumero],
+          esPoder: c.esPoder,
+          esMesa: false,
+        });
+      }
     }
+    personas = [...porPersona.values()];
   }
-  const personas = [...porPersona.values()];
+
+  if (personas.length === 0) return null;
 
   return (
     <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
@@ -879,23 +919,58 @@ function EnLaSala({ sala }: { sala: SalaEnVivo | undefined }) {
       </h2>
       <ul className="max-h-64 space-y-2 overflow-y-auto pr-1">
         {personas.map((per) => (
-          <li key={per.nombre} className="flex items-center gap-2.5">
-            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white/10 text-[11px] font-bold text-white/85">
-              {per.nombre.trim().charAt(0).toUpperCase()}
-            </span>
-            <span className="min-w-0 flex-1">
-              <span className="block truncate text-[13px] font-medium leading-tight text-white/90">
+          <li
+            key={per.nombre}
+            className="flex items-center gap-2.5 rounded-xl bg-white/[0.04] px-3 py-2"
+          >
+            {per.imageUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={per.imageUrl}
+                alt=""
+                referrerPolicy="no-referrer"
+                className="h-8 w-8 shrink-0 rounded-full object-cover"
+              />
+            ) : (
+              <span
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-semibold text-white"
+                style={{
+                  backgroundColor: [
+                    "#1a73e8",
+                    "#188038",
+                    "#c5221f",
+                    "#e37400",
+                    "#9334e6",
+                    "#0b8043",
+                  ][
+                    Math.abs(
+                      [...per.nombre].reduce(
+                        (h, ch) => (h * 31 + ch.charCodeAt(0)) | 0,
+                        0,
+                      ),
+                    ) % 6
+                  ],
+                }}
+              >
+                {per.nombre.trim().charAt(0).toUpperCase() || "?"}
+              </span>
+            )}
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-medium text-white/90">
                 {per.nombre}
-              </span>
-              <span className="block truncate text-[11px] leading-tight text-white/45">
-                {per.unidades.join(", ")}
-              </span>
-            </span>
-            {per.esPoder ? (
-              <span className="shrink-0 rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-semibold text-white/60">
-                Poder
-              </span>
-            ) : null}
+                {per.esMesa ? (
+                  <span className="ml-1.5 text-[11px] font-normal text-white/45">
+                    mesa
+                  </span>
+                ) : null}
+              </p>
+              {per.unidades.length > 0 ? (
+                <p className="truncate text-[11px] text-white/45">
+                  {per.unidades.join(", ")}
+                  {per.esPoder ? " · Poder" : ""}
+                </p>
+              ) : null}
+            </div>
           </li>
         ))}
       </ul>

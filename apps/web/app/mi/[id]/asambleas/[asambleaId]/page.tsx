@@ -79,9 +79,7 @@ export default function AsambleaSala() {
           {a.estado === "en_curso" && <span className="ml-2 inline-flex items-center gap-1 font-medium text-emerald-600"><Radio className="h-3.5 w-3.5 animate-pulse" /> En vivo</span>}
         </p>
 
-        {/* Además de informar, este componente es el que MANTIENE la conexión:
-            monta el latido mientras la pantalla esté abierta. Si se quita,
-            se deja de medir la permanencia. */}
+        {/* Estado de conexión (solo lectura). El latido corre dentro de /sala. */}
         <div className="mt-3 flex flex-wrap items-center justify-center gap-3">
           <IndicadorSala asambleaId={asambleaId} />
           {a.estado === "en_curso" &&

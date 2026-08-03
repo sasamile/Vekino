@@ -689,6 +689,28 @@ export default defineSchema({
   // tiene máximo un poder por asamblea.
   // ─────────────────────────────────────────────────────────────
   // ─────────────────────────────────────────────────────────────
+  // Quién tiene la pestaña de la sala abierta AHORA (como Meet).
+  // Distinto de asambleaSesiones: eso es permanencia por unidad / quórum.
+  // Aquí cuenta PERSONAS en la reunión, aunque la mesa no tenga unidades.
+  // ─────────────────────────────────────────────────────────────
+  salaPresencias: defineTable({
+    condominioId: v.id("condominios"),
+    asambleaId: v.id("asambleas"),
+    userId: v.optional(v.id("users")),
+    /** Apoderado externo sin cuenta: se identifica por el código del poder. */
+    codigoPoder: v.optional(v.string()),
+    nombre: v.string(),
+    /** Foto de perfil (URL) para las cards tipo Meet. */
+    imageUrl: v.optional(v.string()),
+    esMesa: v.boolean(),
+    ultimoLatido: v.number(),
+  })
+    .index("by_asamblea", ["asambleaId"])
+    .index("by_asamblea_user", ["asambleaId", "userId"])
+    .index("by_asamblea_codigo", ["asambleaId", "codigoPoder"])
+    .index("by_latido", ["ultimoLatido"]),
+
+  // ─────────────────────────────────────────────────────────────
   // Video propio de la sala (WebRTC, señalización por Convex)
   //
   // Sin Meet, sin Zoom, sin proveedor: la mesa publica cámara/pantalla desde
@@ -730,6 +752,17 @@ export default defineSchema({
   })
     .index("by_asamblea", ["asambleaId"])
     .index("by_asamblea_user", ["asambleaId", "userId"]),
+
+  /** Reacciones efímeras tipo Meet (👍👏❤️…): viven unos segundos en pantalla. */
+  salaReacciones: defineTable({
+    condominioId: v.id("condominios"),
+    asambleaId: v.id("asambleas"),
+    emoji: v.string(),
+    nombre: v.string(),
+    userId: v.optional(v.id("users")),
+    codigoPoder: v.optional(v.string()),
+    createdAt: v.number(),
+  }).index("by_asamblea_created", ["asambleaId", "createdAt"]),
 
   salaSenales: defineTable({
     asambleaId: v.id("asambleas"),

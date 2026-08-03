@@ -1,17 +1,18 @@
 "use client";
 
+import { useQuery } from "convex/react";
 import { Radio, WifiOff } from "lucide-react";
+import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
-import { useSalaLatido } from "@/hooks/use-sala-latido";
 import { cn } from "@/lib/utils";
 
 /**
- * Chip de estado de conexión para el residente, y el que enciende el latido.
+ * Chip de estado de conexión en la ficha de la asamblea.
  *
- * Va montado en la pantalla de la asamblea: mientras esté en pantalla, la
- * persona cuenta como presente. El indicador no es decoración — cuando la
- * asamblea exige conexión para votar, es lo único que le dice a alguien por
- * qué el botón de votar dejó de funcionar.
+ * Solo LEE `miSala`: no late. El latido vive únicamente dentro de `/sala`
+ * (`useSalaLatido`). Si este chip también latiera, al salir de la sala y
+ * volver a esta pantalla se reabrirían las sesiones y seguirías "en la sala"
+ * sin estar adentro.
  */
 export function IndicadorSala({
   asambleaId,
@@ -20,12 +21,11 @@ export function IndicadorSala({
   asambleaId: Id<"asambleas">;
   className?: string;
 }) {
-  const sala = useSalaLatido(asambleaId);
+  const sala = useQuery(api.asambleaSala.miSala, { asambleaId });
 
-  // Fuera de asamblea en curso, o sin asistencia marcada, no hay nada que decir.
-  if (sala.cargando || !sala.enCurso || !sala.registrado) return null;
+  if (sala === undefined || !sala?.enCurso || !sala.registrado) return null;
 
-  const conectado = sala.conectado;
+  const conectado = sala.unidadesConectadas > 0;
 
   return (
     <div
@@ -56,7 +56,7 @@ export function IndicadorSala({
       ) : (
         <>
           <WifiOff className="h-3.5 w-3.5" aria-hidden />
-          Reconectando…
+          Fuera de la sala
         </>
       )}
     </div>
