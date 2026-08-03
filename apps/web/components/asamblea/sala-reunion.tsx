@@ -22,10 +22,12 @@ import {
   Plus,
   Radio,
   ShieldCheck,
+  Trash2,
   Unlock,
   UserCheck,
   Users,
   Video,
+  X,
 } from "lucide-react";
 import { EscenarioVideo } from "@/components/asamblea/escenario-video";
 import type { Calidad } from "@/hooks/use-video-sala";
@@ -722,55 +724,11 @@ function MesaOrdenYPreguntas({
   puntos: PuntoSala[];
   votaciones: VotacionSala[];
 }) {
-  const agregar = useMutation(api.asambleas.agregarPunto);
   const toggleHecho = useMutation(api.asambleas.togglePuntoHecho);
   const toggleVotacion = useMutation(api.asambleas.toggleVotacion);
-  const crearPregunta = useMutation(api.asambleas.createVotacion);
-
-  const [titulo, setTitulo] = useState("");
-  const [conVotacion, setConVotacion] = useState(true);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [modal, setModal] = useState<"punto" | "pregunta" | null>(null);
 
   const porId = new Map(votaciones.map((v) => [v._id as string, v]));
-
-  async function agregarPunto() {
-    const t = titulo.trim();
-    if (!t || busy) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await agregar({
-        asambleaId,
-        titulo: t,
-        habilitarVotacion: conVotacion,
-      });
-      setTitulo("");
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "No se pudo agregar.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function preguntaRapida() {
-    const t = titulo.trim();
-    if (!t || busy) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await crearPregunta({
-        asambleaId,
-        pregunta: t,
-        opciones: ["A favor", "En contra", "Abstención"],
-      });
-      setTitulo("");
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "No se pudo abrir la pregunta.");
-    } finally {
-      setBusy(false);
-    }
-  }
 
   return (
     <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
@@ -778,55 +736,24 @@ function MesaOrdenYPreguntas({
         <ListOrdered className="h-4 w-4" aria-hidden /> Orden del día
       </h2>
 
-      <div className="mb-3 space-y-2">
-        <input
-          value={titulo}
-          onChange={(e) => setTitulo(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") void agregarPunto();
-          }}
-          placeholder="Nuevo punto o pregunta…"
-          className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-sm text-white placeholder:text-white/35 focus:border-white/25 focus:outline-none"
-        />
-        <label className="flex items-center gap-2 text-xs text-white/55">
-          <input
-            type="checkbox"
-            checked={conVotacion}
-            onChange={(e) => setConVotacion(e.target.checked)}
-            className="rounded border-white/30"
-          />
-          Incluir votación (A favor / En contra / Abstención)
-        </label>
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            disabled={busy || !titulo.trim()}
-            onClick={() => void agregarPunto()}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-white px-3 py-1.5 text-xs font-semibold text-black hover:bg-white/90 disabled:opacity-40"
-          >
-            {busy ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
-            ) : (
-              <Plus className="h-3.5 w-3.5" aria-hidden />
-            )}
-            Agregar punto
-          </button>
-          <button
-            type="button"
-            disabled={busy || !titulo.trim()}
-            onClick={() => void preguntaRapida()}
-            title="Abre la votación de inmediato (sin sumarla al orden)"
-            className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-600 disabled:opacity-40"
-          >
-            <Unlock className="h-3.5 w-3.5" aria-hidden />
-            Abrir pregunta ya
-          </button>
-        </div>
-        {error ? (
-          <p className="text-xs text-red-300" role="alert">
-            {error}
-          </p>
-        ) : null}
+      <div className="mb-3 flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={() => setModal("punto")}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-white px-3 py-1.5 text-xs font-semibold text-black hover:bg-white/90"
+        >
+          <Plus className="h-3.5 w-3.5" aria-hidden />
+          Agregar punto
+        </button>
+        <button
+          type="button"
+          onClick={() => setModal("pregunta")}
+          title="Configura la pregunta y ábrela de inmediato"
+          className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-600"
+        >
+          <Unlock className="h-3.5 w-3.5" aria-hidden />
+          Abrir pregunta
+        </button>
       </div>
 
       {puntos.length === 0 ? (
@@ -906,7 +833,222 @@ function MesaOrdenYPreguntas({
           })}
         </ul>
       )}
+
+      {modal ? (
+        <ModalPuntoSala
+          asambleaId={asambleaId}
+          modo={modal}
+          onClose={() => setModal(null)}
+        />
+      ) : null}
     </section>
+  );
+}
+
+/**
+ * Modal para configurar pregunta/título y opciones de respuesta
+ * (misma idea que en la ficha admin).
+ */
+function ModalPuntoSala({
+  asambleaId,
+  modo,
+  onClose,
+}: {
+  asambleaId: Id<"asambleas">;
+  modo: "punto" | "pregunta";
+  onClose: () => void;
+}) {
+  const agregar = useMutation(api.asambleas.agregarPunto);
+  const crearPregunta = useMutation(api.asambleas.createVotacion);
+  const [titulo, setTitulo] = useState("");
+  const [descripcion, setDescripcion] = useState("");
+  const [habilitar, setHabilitar] = useState(true);
+  const [opciones, setOpciones] = useState(["A favor", "En contra", "Abstención"]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const abrirYa = modo === "pregunta";
+  const muestraOpciones = abrirYa || habilitar;
+
+  async function guardar() {
+    const t = titulo.trim();
+    if (!t) {
+      setError("La pregunta / título es obligatorio.");
+      return;
+    }
+    const ops = opciones.map((o) => o.trim()).filter(Boolean);
+    if (muestraOpciones && ops.length < 2) {
+      setError("La votación necesita al menos 2 opciones.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      if (abrirYa) {
+        await crearPregunta({ asambleaId, pregunta: t, opciones: ops });
+      } else {
+        await agregar({
+          asambleaId,
+          titulo: t,
+          descripcion: descripcion.trim() || undefined,
+          habilitarVotacion: habilitar,
+          opciones: ops,
+        });
+      }
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudo guardar.");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
+      <button
+        type="button"
+        aria-label="Cerrar"
+        className="absolute inset-0 bg-black/55 backdrop-blur-sm"
+        onClick={onClose}
+      />
+      <div
+        role="dialog"
+        aria-modal
+        aria-labelledby="modal-punto-sala-titulo"
+        className="relative z-10 w-full max-w-lg rounded-t-2xl border border-zinc-200 bg-white p-6 text-zinc-900 shadow-xl sm:rounded-2xl"
+      >
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <h2
+            id="modal-punto-sala-titulo"
+            className="text-lg font-semibold text-zinc-900"
+          >
+            {abrirYa ? "Abrir pregunta" : "Crear punto del orden del día"}
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700"
+          >
+            <X className="h-5 w-5" aria-hidden />
+          </button>
+        </div>
+
+        <div className="space-y-4">
+          <label className="block space-y-1.5">
+            <span className="text-sm font-medium text-zinc-800">
+              Pregunta / Título
+            </span>
+            <input
+              value={titulo}
+              onChange={(e) => setTitulo(e.target.value)}
+              placeholder="Ej: Aprobación del presupuesto 2026"
+              autoFocus
+              className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 placeholder:text-zinc-400 outline-none focus:border-brand"
+            />
+          </label>
+
+          {!abrirYa ? (
+            <label className="block space-y-1.5">
+              <span className="text-sm font-medium text-zinc-800">
+                Descripción{" "}
+                <span className="font-normal text-zinc-500">(opcional)</span>
+              </span>
+              <input
+                value={descripcion}
+                onChange={(e) => setDescripcion(e.target.value)}
+                placeholder="Detalle del punto"
+                className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 placeholder:text-zinc-400 outline-none focus:border-brand"
+              />
+            </label>
+          ) : null}
+
+          {!abrirYa ? (
+            <label className="flex items-center gap-2.5">
+              <input
+                type="checkbox"
+                checked={habilitar}
+                onChange={(e) => setHabilitar(e.target.checked)}
+                className="h-4 w-4 rounded border-zinc-300 accent-brand"
+              />
+              <span className="text-sm font-medium text-zinc-800">
+                Habilitar votación en este punto
+              </span>
+            </label>
+          ) : (
+            <p className="text-xs text-zinc-500">
+              Se abre de inmediato para que los presentes puedan votar.
+            </p>
+          )}
+
+          {muestraOpciones ? (
+            <div className="space-y-2 rounded-xl border border-zinc-200 bg-zinc-50 p-3">
+              <span className="text-xs font-medium text-zinc-500">
+                Opciones de la votación
+              </span>
+              {opciones.map((op, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <input
+                    value={op}
+                    onChange={(e) =>
+                      setOpciones((prev) =>
+                        prev.map((x, idx) =>
+                          idx === i ? e.target.value : x,
+                        ),
+                      )
+                    }
+                    placeholder={`Opción ${i + 1}`}
+                    className="w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 placeholder:text-zinc-400 outline-none focus:border-brand"
+                  />
+                  {opciones.length > 2 ? (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setOpciones((prev) =>
+                          prev.filter((_, idx) => idx !== i),
+                        )
+                      }
+                      className="rounded p-1.5 text-zinc-400 hover:text-red-600"
+                      aria-label="Quitar opción"
+                    >
+                      <Trash2 className="h-4 w-4" aria-hidden />
+                    </button>
+                  ) : null}
+                </div>
+              ))}
+              <button
+                type="button"
+                onClick={() => setOpciones((prev) => [...prev, ""])}
+                className="text-sm font-medium text-brand hover:underline"
+              >
+                + Agregar opción
+              </button>
+            </div>
+          ) : null}
+
+          {error ? <p className="text-sm text-red-600">{error}</p> : null}
+
+          <div className="flex justify-end gap-2 pt-1">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-lg px-3 py-1.5 text-sm font-medium text-zinc-500 hover:bg-zinc-100"
+            >
+              Cancelar
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void guardar()}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-brand px-3 py-1.5 text-sm font-semibold text-white hover:bg-brand/90 disabled:opacity-50"
+            >
+              {busy ? (
+                <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+              ) : null}
+              {abrirYa ? "Abrir votación" : "Crear punto"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
