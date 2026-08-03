@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import { query, mutation, internalMutation } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
+import { internal } from "./_generated/api";
 import {
   getCurrentAppUser,
   requireAppUser,
@@ -312,6 +313,7 @@ export const bajarMano = mutation({
     if (fila) await ctx.db.delete(fila._id);
     // Si estaba al aire, sus emisiones se apagan con la mano.
     await apagarEmisionesDeUsuario(ctx, args.asambleaId, user._id);
+    await revocarEnServidorDeMedios(ctx, args.asambleaId, user._id);
   },
 });
 
@@ -337,12 +339,42 @@ export const resolverPalabra = mutation({
     if (args.conceder) {
       if (!fila) throw new Error("Esa persona no tiene la mano levantada.");
       await ctx.db.patch(fila._id, { estado: "concedida" });
+      await sincronizarPalabra(ctx, args.asambleaId, args.userId, true);
       return;
     }
     if (fila) await ctx.db.delete(fila._id);
     await apagarEmisionesDeUsuario(ctx, args.asambleaId, args.userId);
+    await revocarEnServidorDeMedios(ctx, args.asambleaId, args.userId);
   },
 });
+
+/**
+ * Le avisa al servidor de medios que esta persona cambió de permiso.
+ *
+ * Va por el scheduler y no en línea porque una mutación no puede hacer
+ * `fetch`: la palabra se concede en la base de datos de inmediato y el
+ * permiso en el SFU llega un instante después. Si el servidor de medios no
+ * respondiera, la mutación ya está confirmada — la mesa ve el cambio y el
+ * peor caso es que la persona deba volver a entrar a la sala.
+ */
+async function sincronizarPalabra(
+  ctx: MutationCtx,
+  asambleaId: Id<"asambleas">,
+  userId: Id<"users">,
+  puedePublicar: boolean,
+) {
+  await ctx.scheduler.runAfter(0, internal.salaPermisos.sincronizarPalabra, {
+    asambleaId,
+    userId,
+    puedePublicar,
+  });
+}
+
+const revocarEnServidorDeMedios = (
+  ctx: MutationCtx,
+  asambleaId: Id<"asambleas">,
+  userId: Id<"users">,
+) => sincronizarPalabra(ctx, asambleaId, userId, false);
 
 async function apagarEmisionesDeUsuario(
   ctx: MutationCtx,
