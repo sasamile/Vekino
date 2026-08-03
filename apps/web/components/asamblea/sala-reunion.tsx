@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@vekino/backend/api";
@@ -17,7 +17,6 @@ import {
   MicOff,
   Minimize2,
   LogOut,
-  MonitorPlay,
   PhoneOff,
   Plus,
   Radio,
@@ -27,11 +26,11 @@ import {
   UserCheck,
   Users,
   Video,
+  Vote,
   X,
 } from "lucide-react";
 import { EscenarioVideo } from "@/components/asamblea/escenario-video";
 import type { Calidad } from "@/hooks/use-video-sala";
-import { MostrarCodigoAsistencia } from "@/components/asamblea/mostrar-codigo-asistencia";
 import { useSalaLatido } from "@/hooks/use-sala-latido";
 import { cn } from "@/lib/utils";
 
@@ -80,7 +79,6 @@ export function SalaReunion({
   const pedirPalabra = useMutation(api.salaVideo.pedirPalabra);
   const bajarMano = useMutation(api.salaVideo.bajarMano);
   const resolverPalabra = useMutation(api.salaVideo.resolverPalabra);
-  const [codigoAbierto, setCodigoAbierto] = useState(false);
   /* Arranca en "ahorro": el tope pasa de ~16 a ~45 espectadores y en una
    * asamblea nadie echa de menos los 24 fps de una cara. La mesa sube a
    * alta calidad si el conjunto es pequeño. */
@@ -103,19 +101,37 @@ export function SalaReunion({
     !delegoSinRepresentarQ &&
     mi.puedeRegistrar !== false;
 
-  /* Panel lateral tipo reunión: OCULTO por defecto (el lienzo manda) y se
-   * abre solo cuando pasa algo que exige atención: una votación abierta o
-   * un fallo de registro. */
+  /* Panel lateral: oculto por defecto. La votación sale en modal, no aquí. */
   const [panelAbierto, setPanelAbierto] = useState(false);
-  const abiertasLen = (votaciones ?? []).filter(
-    (vt) => vt.estado === "abierta",
-  ).length;
-  useEffect(() => {
-    if (abiertasLen > 0) setPanelAbierto(true);
-  }, [abiertasLen]);
+  const [modalVotoId, setModalVotoId] = useState<Id<"votaciones"> | null>(null);
+  const [modalResultadosId, setModalResultadosId] =
+    useState<Id<"votaciones"> | null>(null);
+  const [avisoVoto, setAvisoVoto] = useState(false);
+  const autoVotoVisto = useRef(new Set<string>());
+
   useEffect(() => {
     if (registro.error) setPanelAbierto(true);
   }, [registro.error]);
+
+  /* Al abrir una votación: popup para votar + aviso del icono en la barra. */
+  useEffect(() => {
+    if (!votaciones) return;
+    const puedeVotar =
+      enCursoQ &&
+      (mi?.presente ?? false) &&
+      !(!!mi?.delegoTodo && (mi?.representa?.length ?? 0) === 0);
+    if (!puedeVotar) return;
+    for (const vt of votaciones) {
+      if (vt.estado !== "abierta") continue;
+      const id = vt._id as string;
+      if ((mi?.votos ?? {})[id] != null) continue;
+      if (autoVotoVisto.current.has(id)) continue;
+      autoVotoVisto.current.add(id);
+      setModalVotoId(vt._id);
+      setAvisoVoto(true);
+      break;
+    }
+  }, [votaciones, enCursoQ, mi?.presente, mi?.votos, mi?.delegoTodo, mi?.representa]);
 
   useEffect(() => {
     if (!listoParaRegistro || registro.intentado) return;
@@ -148,6 +164,13 @@ export function SalaReunion({
 
   const enCurso = a.estado === "en_curso";
   const abiertas = (votaciones ?? []).filter((vt) => vt.estado === "abierta");
+  const misVotos = mi?.votos ?? {};
+  const pendientesVoto = abiertas.filter(
+    (vt) => misVotos[vt._id as string] == null,
+  );
+  const puedeVotar =
+    (mi?.presente ?? false) &&
+    !(!!mi?.delegoTodo && (mi?.representa?.length ?? 0) === 0);
   const puntos =
     a.ordenDia ?? a.agenda.map((t) => ({ titulo: t, hecho: false as boolean }));
   const puntoActual = puntos.find((p) => !p.hecho) ?? null;
@@ -225,6 +248,50 @@ export function SalaReunion({
             controlesFin={
               enCurso ? (
                 <>
+                  {abiertas.length > 0 ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        /* Mesa: prioriza el modal de seguimiento (quién votó). */
+                        if (esMesa && abiertas[0]) {
+                          setModalResultadosId(abiertas[0]._id);
+                          return;
+                        }
+                        if (puedeVotar && pendientesVoto[0]) {
+                          setModalVotoId(pendientesVoto[0]._id);
+                          return;
+                        }
+                        if (abiertas[0]) setModalResultadosId(abiertas[0]._id);
+                      }}
+                      aria-label={
+                        esMesa
+                          ? "Ver quién ya votó y quién falta"
+                          : pendientesVoto.length > 0
+                            ? "Hay una votación abierta — tocar para votar"
+                            : "Ver resultados de la votación"
+                      }
+                      title={
+                        esMesa
+                          ? "Quién votó / pendientes"
+                          : pendientesVoto.length > 0
+                            ? "Votación abierta — toca para votar"
+                            : "Resultados de la votación"
+                      }
+                      className={cn(
+                        "relative flex h-12 w-12 items-center justify-center rounded-full transition-colors",
+                        pendientesVoto.length > 0
+                          ? "bg-emerald-500 text-white hover:bg-emerald-600"
+                          : "bg-white/15 text-white hover:bg-white/25",
+                      )}
+                    >
+                      <Vote className="h-5 w-5" aria-hidden />
+                      {pendientesVoto.length > 0 ? (
+                        <span className="absolute -right-0.5 -top-0.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-amber-400 px-1 text-[10px] font-bold text-black">
+                          {pendientesVoto.length}
+                        </span>
+                      ) : null}
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     onClick={() => setPanelAbierto((v) => !v)}
@@ -274,102 +341,139 @@ export function SalaReunion({
 
         {/* ── Panel lateral (oculto por defecto) ─────────────────────────── */}
         {panelAbierto && enCurso ? (
-          <aside className="z-20 w-full max-w-[380px] shrink-0 overflow-y-auto border-l border-white/10 bg-[#14161b] p-4 sm:p-5">
-            <div className="space-y-4">
-              <QuorumVivo sala={sala} />
-              <EnLaSala sala={sala} />
+          <aside className="z-20 w-full max-w-[360px] shrink-0 overflow-y-auto border-l border-white/10 bg-[#14161b]">
+            <div className="px-4 py-4 sm:px-5">
+              {/* Quórum + personas + orden: un solo flujo, sin cajas sueltas */}
+              <ResumenSala sala={sala} />
 
               {!esMesa ? (
-                delegoSinRepresentar ? (
-                  <VotoDelegado apoderado={mi?.apoderadoNombre ?? null} />
-                ) : (
-                  <EstadoRegistro
-                    presente={mi?.presente ?? false}
-                    conectado={latido.conectado}
-                    error={registro.error}
-                    onReintentar={() =>
-                      setRegistro({ intentado: false, error: null })
-                    }
-                  />
-                )
+                <div className="border-t border-white/10 pt-4">
+                  {delegoSinRepresentar ? (
+                    <VotoDelegado apoderado={mi?.apoderadoNombre ?? null} />
+                  ) : (
+                    <EstadoRegistro
+                      presente={mi?.presente ?? false}
+                      conectado={latido.conectado}
+                      error={registro.error}
+                      onReintentar={() =>
+                        setRegistro({ intentado: false, error: null })
+                      }
+                    />
+                  )}
+                </div>
               ) : null}
 
               {esMesa && manosLevantadas.length > 0 ? (
-                <ManosLevantadas
-                  filas={manosLevantadas}
-                  onResolver={(userId, conceder) =>
-                    void resolverPalabra({ asambleaId, userId, conceder }).catch(
-                      () => {},
-                    )
-                  }
-                />
+                <div className="border-t border-white/10 pt-4">
+                  <ManosLevantadas
+                    filas={manosLevantadas}
+                    onResolver={(userId, conceder) =>
+                      void resolverPalabra({
+                        asambleaId,
+                        userId,
+                        conceder,
+                      }).catch(() => {})
+                    }
+                  />
+                </div>
               ) : null}
 
-              {esMesa ? (
-                <MesaOrdenYPreguntas
-                  asambleaId={asambleaId}
-                  puntos={puntos}
-                  votaciones={votaciones ?? []}
-                />
-              ) : (
-                <PuntoEnCurso punto={puntoActual} total={puntos.length} />
-              )}
+              <div className="border-t border-white/10 pt-4">
+                {esMesa ? (
+                  <MesaOrdenYPreguntas
+                    asambleaId={asambleaId}
+                    puntos={puntos}
+                    votaciones={votaciones ?? []}
+                  />
+                ) : (
+                  <PuntoEnCurso punto={puntoActual} total={puntos.length} />
+                )}
+              </div>
 
               {esMesa && abiertas.length > 0 ? (
-                <MesaSeguimientoVotos
-                  asambleaId={asambleaId}
-                  abiertas={abiertas}
-                />
-              ) : null}
-
-              {abiertas.length > 0 &&
-              (mi?.presente ?? false) &&
-              !delegoSinRepresentar ? (
-                <VotacionesAbiertas
-                  abiertas={abiertas}
-                  misVotos={mi?.votos ?? {}}
-                />
-              ) : null}
-
-              {/* Código SOLO para quien sigue por Zoom/Meet/YouTube u otra
-                  plataforma: quien ya está en esta sala quedó registrado al entrar. */}
-              {esMesa ? (
-                <section className="rounded-2xl border border-white/10 bg-white/[0.03]">
-                  <button
-                    type="button"
-                    onClick={() => setCodigoAbierto((v) => !v)}
-                    aria-expanded={codigoAbierto}
-                    className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm font-semibold text-white/70 hover:text-white"
-                  >
-                    <MonitorPlay className="h-4 w-4 shrink-0" aria-hidden />
-                    <span className="min-w-0 flex-1">
-                      Código para stream externo
-                      <span className="mt-0.5 block text-[11px] font-normal text-white/40">
-                        Zoom, Meet u otra plataforma — no hace falta si ya están aquí
-                      </span>
-                    </span>
-                    <span className="shrink-0 text-xs font-normal text-white/40">
-                      {codigoAbierto ? "Ocultar" : "Mostrar"}
-                    </span>
-                  </button>
-                  {codigoAbierto ? (
-                    <div className="space-y-3 border-t border-white/10 p-4">
-                      <p className="text-xs leading-relaxed text-white/50">
-                        Quien entra a esta sala ya queda en asistencia. Este
-                        código es para proyectarlo en un stream externo y que
-                        registren desde fuera.
-                      </p>
-                      <div className="rounded-xl bg-white p-4 text-foreground">
-                        <MostrarCodigoAsistencia asambleaId={asambleaId} />
-                      </div>
-                    </div>
-                  ) : null}
-                </section>
+                <div className="border-t border-white/10 pt-4">
+                  <MesaSeguimientoVotos
+                    abiertas={abiertas}
+                    onVerResultados={(id) => setModalResultadosId(id)}
+                  />
+                </div>
               ) : null}
             </div>
           </aside>
         ) : null}
       </div>
+
+      {/* Aviso flotante: indica el icono de votación en la barra */}
+      {enCurso &&
+      avisoVoto &&
+      pendientesVoto.length > 0 &&
+      !modalVotoId ? (
+        <div className="pointer-events-none absolute inset-x-0 bottom-24 z-40 flex justify-center px-4">
+          <div className="pointer-events-auto flex max-w-md items-center gap-3 rounded-2xl border border-emerald-400/30 bg-[#1c1f26]/95 px-4 py-3 shadow-xl backdrop-blur">
+            <Vote className="h-5 w-5 shrink-0 text-emerald-400" aria-hidden />
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold text-white">
+                Hay una votación abierta
+              </p>
+              <p className="text-[11px] text-white/55">
+                Toca el icono verde de votar en la barra de abajo, o aquí.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                if (pendientesVoto[0]) setModalVotoId(pendientesVoto[0]._id);
+              }}
+              className="shrink-0 rounded-xl bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-600"
+            >
+              Votar
+            </button>
+            <button
+              type="button"
+              aria-label="Cerrar aviso"
+              onClick={() => setAvisoVoto(false)}
+              className="shrink-0 rounded-lg p-1 text-white/40 hover:text-white"
+            >
+              <X className="h-4 w-4" aria-hidden />
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {modalVotoId ? (
+        <ModalVotarSala
+          votacion={
+            abiertas.find((v) => v._id === modalVotoId) ??
+            (votaciones ?? []).find((v) => v._id === modalVotoId) ??
+            null
+          }
+          miVoto={misVotos[modalVotoId as string]}
+          onClose={() => setModalVotoId(null)}
+          onVerResultados={() => {
+            setModalVotoId(null);
+            setModalResultadosId(modalVotoId);
+          }}
+        />
+      ) : null}
+
+      {modalResultadosId ? (
+        <ModalResultadosSala
+          asambleaId={asambleaId}
+          votacionId={modalResultadosId}
+          esMesa={esMesa}
+          onClose={() => setModalResultadosId(null)}
+          onVolverAVotar={
+            puedeVotar &&
+            abiertas.some((v) => v._id === modalResultadosId) &&
+            misVotos[modalResultadosId as string] == null
+              ? () => {
+                  setModalResultadosId(null);
+                  setModalVotoId(modalResultadosId);
+                }
+              : undefined
+          }
+        />
+      ) : null}
     </div>
   );
 }
@@ -542,16 +646,52 @@ function SalaCerrada({
   );
 }
 
-/* ── Quórum en vivo ───────────────────────────────────────────────────── */
+/* ── Quórum + personas (un bloque, sin cajas sueltas) ─────────────────── */
 type SalaEnVivo = FunctionReturnType<typeof api.asambleaSala.salaEnVivo>;
 
-function QuorumVivo({ sala }: { sala: SalaEnVivo | undefined }) {
+type PersonaSala = {
+  nombre: string;
+  imageUrl: string | null;
+  unidades: string[];
+  esPoder: boolean;
+  esMesa: boolean;
+};
+
+function personasDeSala(sala: SalaEnVivo): PersonaSala[] {
+  const desdePresencia = (sala.personas ?? []).map((p) => ({
+    nombre: p.nombre,
+    imageUrl: p.imageUrl ?? null,
+    unidades: [] as string[],
+    esPoder: false,
+    esMesa: !!p.esMesa,
+  }));
+  if (desdePresencia.length > 0) return desdePresencia;
+
+  const porPersona = new Map<string, PersonaSala>();
+  for (const c of sala.conectados) {
+    const previa = porPersona.get(c.userNombre);
+    if (previa) {
+      previa.unidades.push(c.unidadNumero);
+      previa.esPoder = previa.esPoder || c.esPoder;
+    } else {
+      porPersona.set(c.userNombre, {
+        nombre: c.userNombre,
+        imageUrl: null,
+        unidades: [c.unidadNumero],
+        esPoder: c.esPoder,
+        esMesa: false,
+      });
+    }
+  }
+  return [...porPersona.values()];
+}
+
+function ResumenSala({ sala }: { sala: SalaEnVivo | undefined }) {
   if (!sala) return null;
+  const personas = personasDeSala(sala);
+
   return (
-    <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
-      <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-white/80">
-        <Users className="h-4 w-4" /> En la sala ahora
-      </h2>
+    <section className="pb-4">
       <div className="flex items-baseline gap-2">
         <span
           className={cn(
@@ -562,11 +702,11 @@ function QuorumVivo({ sala }: { sala: SalaEnVivo | undefined }) {
           {sala.pctCoeficiente.toFixed(2)}%
         </span>
         <span className="text-xs text-white/50">
-          de coeficiente · {sala.unidadesConectadas} de {sala.totalUnidades}{" "}
-          unidades
+          coeficiente · {sala.unidadesConectadas}/{sala.totalUnidades} unidades
+          {personas.length > 0 ? ` · ${personas.length} en sala` : ""}
         </span>
       </div>
-      <div className="relative mt-3 h-2 overflow-hidden rounded-full bg-white/10">
+      <div className="relative mt-3 h-1.5 overflow-hidden rounded-full bg-white/10">
         <div
           className={cn(
             "h-full rounded-full transition-all",
@@ -579,10 +719,70 @@ function QuorumVivo({ sala }: { sala: SalaEnVivo | undefined }) {
           style={{ left: `${sala.quorumRequerido}%` }}
         />
       </div>
-      <p className="mt-2 text-xs text-white/40">
-        Mínimo {sala.quorumRequerido}% ·{" "}
-        {sala.hayQuorum ? "hay quórum" : "aún sin quórum"}
+      <p className="mt-1.5 text-[11px] text-white/40">
+        Quórum {sala.quorumRequerido}% ·{" "}
+        {sala.hayQuorum ? "alcanzado" : "aún sin quórum"}
       </p>
+
+      {personas.length > 0 ? (
+        <ul className="mt-4 max-h-48 space-y-1.5 overflow-y-auto">
+          {personas.map((per) => (
+            <li
+              key={per.nombre}
+              className="flex items-center gap-2.5 py-1"
+            >
+              {per.imageUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={per.imageUrl}
+                  alt=""
+                  referrerPolicy="no-referrer"
+                  className="h-7 w-7 shrink-0 rounded-full object-cover"
+                />
+              ) : (
+                <span
+                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold text-white"
+                  style={{
+                    backgroundColor: [
+                      "#1a73e8",
+                      "#188038",
+                      "#c5221f",
+                      "#e37400",
+                      "#9334e6",
+                      "#00786a",
+                    ][
+                      Math.abs(
+                        [...per.nombre].reduce(
+                          (h, ch) => (h * 31 + ch.charCodeAt(0)) | 0,
+                          0,
+                        ),
+                      ) % 6
+                    ],
+                  }}
+                >
+                  {per.nombre.trim().charAt(0).toUpperCase() || "?"}
+                </span>
+              )}
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm text-white/85">
+                  {per.nombre}
+                  {per.esMesa ? (
+                    <span className="ml-1.5 text-[10px] text-white/40">
+                      mesa
+                    </span>
+                  ) : null}
+                </p>
+                {per.unidades.length > 0 ? (
+                  <p className="truncate text-[11px] text-white/40">
+                    {per.unidades.join(", ")}
+                    {per.esPoder ? " · Poder" : ""}
+                  </p>
+                ) : null}
+              </div>
+            </li>
+          ))}
+        </ul>
+      ) : null}
     </section>
   );
 }
@@ -676,7 +876,7 @@ function PuntoEnCurso({
   total: number;
 }) {
   return (
-    <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
+    <section>
       <h2 className="mb-2 flex items-center gap-2 text-sm font-semibold text-white/80">
         <ListOrdered className="h-4 w-4" /> Punto en discusión
       </h2>
@@ -731,7 +931,7 @@ function MesaOrdenYPreguntas({
   const porId = new Map(votaciones.map((v) => [v._id as string, v]));
 
   return (
-    <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
+    <section>
       <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-white/80">
         <ListOrdered className="h-4 w-4" aria-hidden /> Orden del día
       </h2>
@@ -1052,188 +1252,382 @@ function ModalPuntoSala({
   );
 }
 
-/** Mesa: quién ya votó / pendientes en cada votación abierta. */
+/** Mesa: acceso rápido al modal de seguimiento (quién votó / quién falta). */
 function MesaSeguimientoVotos({
-  asambleaId,
   abiertas,
+  onVerResultados,
 }: {
-  asambleaId: Id<"asambleas">;
   abiertas: VotacionSala[];
+  onVerResultados?: (id: Id<"votaciones">) => void;
 }) {
-  const det = useQuery(api.asambleas.asistentesDetallado, { asambleaId });
   const toggle = useMutation(api.asambleas.toggleVotacion);
-  const filas = det?.filas ?? [];
-  const presentes = filas.filter((f) => f.presente);
 
   return (
-    <section className="rounded-2xl border border-brand/30 bg-brand/10 p-5">
+    <section>
       <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-white">
-        <ShieldCheck className="h-4 w-4" aria-hidden /> Seguimiento de votos
+        <ShieldCheck className="h-4 w-4" aria-hidden /> Votaciones abiertas
       </h2>
-      <div className="space-y-4">
-        {abiertas.map((vt) => {
-          const id = vt._id as string;
-          const votaron = filas
-            .filter((f) => f.votos[id] != null)
-            .map((f) => f.unidadNumero)
-            .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-          const pendientes = presentes
-            .filter((f) => f.votos[id] == null)
-            .map((f) => f.unidadNumero)
-            .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-          return (
-            <div key={id} className="rounded-xl bg-black/25 p-3">
-              <div className="mb-2 flex items-start justify-between gap-2">
-                <p className="min-w-0 text-sm font-medium text-white/90">
-                  {vt.pregunta}
-                </p>
-                <button
-                  type="button"
-                  onClick={() => void toggle({ id: vt._id }).catch(() => {})}
-                  className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-white/10 px-2 py-1 text-[11px] font-semibold text-white hover:bg-white/20"
-                >
-                  <Lock className="h-3 w-3" aria-hidden /> Cerrar
-                </button>
-              </div>
-              <p className="mb-2 text-[11px] text-white/50">
-                {votaron.length} votaron
-                {pendientes.length > 0
-                  ? ` · ${pendientes.length} pendientes`
-                  : presentes.length > 0
-                    ? " · sin pendientes"
-                    : ""}
-              </p>
-              <div className="grid grid-cols-2 gap-2 text-[11px]">
-                <div>
-                  <p className="mb-1 font-semibold text-emerald-300/90">
-                    Ya votaron
-                  </p>
-                  <p className="leading-relaxed text-white/70">
-                    {votaron.length > 0 ? votaron.join(", ") : "—"}
-                  </p>
-                </div>
-                <div>
-                  <p className="mb-1 font-semibold text-amber-200/90">
-                    Pendientes
-                  </p>
-                  <p className="leading-relaxed text-white/70">
-                    {pendientes.length > 0 ? pendientes.join(", ") : "—"}
-                  </p>
-                </div>
-              </div>
-            </div>
-          );
-        })}
-      </div>
+      <ul className="space-y-2">
+        {abiertas.map((vt) => (
+          <li
+            key={vt._id as string}
+            className="flex items-center gap-2 rounded-xl bg-white/[0.04] px-3 py-2"
+          >
+            <p className="min-w-0 flex-1 truncate text-sm text-white/90">
+              {vt.pregunta}
+            </p>
+            {onVerResultados ? (
+              <button
+                type="button"
+                onClick={() => onVerResultados(vt._id)}
+                className="shrink-0 rounded-lg bg-white px-2.5 py-1 text-[11px] font-semibold text-black hover:bg-white/90"
+              >
+                Quién votó
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => void toggle({ id: vt._id }).catch(() => {})}
+              className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-white/10 px-2 py-1 text-[11px] font-semibold text-white hover:bg-white/20"
+            >
+              <Lock className="h-3 w-3" aria-hidden /> Cerrar
+            </button>
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }
 
-/* ── Votaciones abiertas ──────────────────────────────────────────────
- *
- * Se vota AQUÍ. Mandar al residente a otra pantalla cortaría su latido y,
- * con `exigirConexionParaVotar` activo, lo dejaría sin poder votar
- * justamente por haber ido a votar. */
-function VotacionesAbiertas({
-  abiertas,
-  misVotos,
+/** Popup para emitir el voto (no vive en el panel lateral). */
+function ModalVotarSala({
+  votacion,
+  miVoto,
+  onClose,
+  onVerResultados,
 }: {
-  abiertas: {
+  votacion: {
     _id: Id<"votaciones">;
     pregunta: string;
     opciones: { texto: string }[];
-  }[];
-  misVotos: Record<string, number>;
-}) {
-  return (
-    <>
-      {abiertas.map((vt) => (
-        <VotacionCard
-          key={vt._id}
-          votacionId={vt._id}
-          pregunta={vt.pregunta}
-          opciones={vt.opciones}
-          miVoto={misVotos[vt._id as string]}
-        />
-      ))}
-    </>
-  );
-}
-
-function VotacionCard({
-  votacionId,
-  pregunta,
-  opciones,
-  miVoto,
-}: {
-  votacionId: Id<"votaciones">;
-  pregunta: string;
-  opciones: { texto: string }[];
+    estado?: string;
+  } | null;
   miVoto: number | undefined;
+  onClose: () => void;
+  onVerResultados: () => void;
 }) {
   const votar = useMutation(api.asambleas.votar);
   const [busy, setBusy] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  if (!votacion) return null;
+
   return (
-    <section className="rounded-2xl border border-brand/40 bg-brand/10 p-5">
-      <h2 className="mb-1 flex items-center gap-2 text-sm font-semibold text-white">
-        <ShieldCheck className="h-4 w-4" /> Votación abierta
-      </h2>
-      <p className="mb-3 text-sm leading-relaxed text-white/85">{pregunta}</p>
+    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
+      <button
+        type="button"
+        aria-label="Cerrar"
+        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+        onClick={onClose}
+      />
+      <div
+        role="dialog"
+        aria-modal
+        className="relative z-10 w-full max-w-md rounded-t-2xl border border-zinc-200 bg-white p-6 text-zinc-900 shadow-xl sm:rounded-2xl"
+      >
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-emerald-600">
+              Votación abierta
+            </p>
+            <h2 className="mt-1 text-lg font-semibold text-zinc-900">
+              {votacion.pregunta}
+            </h2>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700"
+          >
+            <X className="h-5 w-5" aria-hidden />
+          </button>
+        </div>
 
-      <div className="space-y-2">
-        {opciones.map((o, i) => {
-          const elegida = miVoto === i;
-          return (
-            <button
-              key={i}
-              type="button"
-              disabled={busy !== null}
-              aria-pressed={elegida}
-              onClick={async () => {
-                setBusy(i);
-                setError(null);
-                try {
-                  await votar({ votacionId, opcionIndex: i });
-                } catch (e) {
-                  setError(
-                    e instanceof Error ? e.message : "No se pudo registrar tu voto.",
-                  );
-                } finally {
-                  setBusy(null);
-                }
-              }}
-              className={cn(
-                "flex h-11 w-full items-center justify-between gap-3 rounded-xl px-4 text-sm font-medium transition-colors",
-                elegida
-                  ? "bg-white text-[#0f1115]"
-                  : "border border-white/15 bg-white/5 text-white hover:bg-white/10",
-                busy !== null && "opacity-70",
-              )}
-            >
-              <span>{o.texto}</span>
-              {busy === i ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : elegida ? (
-                <CheckCircle2 className="h-4 w-4" />
-              ) : null}
-            </button>
-          );
-        })}
+        <div className="space-y-2">
+          {votacion.opciones.map((o, i) => {
+            const elegida = miVoto === i;
+            return (
+              <button
+                key={i}
+                type="button"
+                disabled={busy !== null}
+                aria-pressed={elegida}
+                onClick={async () => {
+                  setBusy(i);
+                  setError(null);
+                  try {
+                    await votar({ votacionId: votacion._id, opcionIndex: i });
+                  } catch (e) {
+                    setError(
+                      e instanceof Error
+                        ? e.message
+                        : "No se pudo registrar tu voto.",
+                    );
+                  } finally {
+                    setBusy(null);
+                  }
+                }}
+                className={cn(
+                  "flex h-12 w-full items-center justify-between gap-3 rounded-xl px-4 text-sm font-medium transition-colors",
+                  elegida
+                    ? "bg-zinc-900 text-white"
+                    : "border border-zinc-200 bg-zinc-50 text-zinc-800 hover:bg-zinc-100",
+                  busy !== null && "opacity-70",
+                )}
+              >
+                <span>{o.texto}</span>
+                {busy === i ? (
+                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                ) : elegida ? (
+                  <CheckCircle2 className="h-4 w-4" aria-hidden />
+                ) : null}
+              </button>
+            );
+          })}
+        </div>
+
+        {miVoto !== undefined ? (
+          <p className="mt-3 text-xs text-zinc-500">
+            Tu voto quedó registrado. Puedes cambiarlo mientras siga abierta.
+          </p>
+        ) : null}
+        {error ? (
+          <p className="mt-2 text-sm text-red-600" role="alert">
+            {error}
+          </p>
+        ) : null}
+
+        <div className="mt-5 flex flex-wrap justify-end gap-2">
+          <button
+            type="button"
+            onClick={onVerResultados}
+            className="rounded-lg px-3 py-1.5 text-sm font-medium text-zinc-500 hover:bg-zinc-100"
+          >
+            Ver resultados
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg bg-zinc-900 px-3 py-1.5 text-sm font-semibold text-white hover:bg-zinc-800"
+          >
+            {miVoto !== undefined ? "Listo" : "Más tarde"}
+          </button>
+        </div>
       </div>
+    </div>
+  );
+}
 
-      {miVoto !== undefined ? (
-        <p className="mt-2 text-xs text-white/60">
-          Tu voto quedó registrado. Puedes cambiarlo mientras siga abierta.
-        </p>
-      ) : null}
-      {error ? (
-        <p role="alert" className="mt-2 text-xs text-red-300">
-          {error}
-        </p>
-      ) : null}
-    </section>
+/** Popup de resultados + (mesa) pestañas Ya votaron / Pendientes. */
+function ModalResultadosSala({
+  asambleaId,
+  votacionId,
+  esMesa,
+  onClose,
+  onVolverAVotar,
+}: {
+  asambleaId: Id<"asambleas">;
+  votacionId: Id<"votaciones">;
+  esMesa: boolean;
+  onClose: () => void;
+  onVolverAVotar?: () => void;
+}) {
+  const res = useQuery(api.asambleas.resultadosVotacion, { votacionId });
+  const det = useQuery(
+    api.asambleas.asistentesDetallado,
+    esMesa ? { asambleaId } : "skip",
+  );
+  const [tab, setTab] = useState<"resultados" | "votaron" | "pendientes">(
+    esMesa ? "pendientes" : "resultados",
+  );
+
+  const totalCoef = res
+    ? res.opciones.reduce((s, o) => s + o.coeficiente, 0)
+    : 0;
+
+  const filas = det?.filas ?? [];
+  const presentes = filas.filter((f) => f.presente);
+  const votaron = filas
+    .filter((f) => f.votos[votacionId as string] != null)
+    .map((f) => f.unidadNumero)
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  const pendientes = presentes
+    .filter((f) => f.votos[votacionId as string] == null)
+    .map((f) => f.unidadNumero)
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
+      <button
+        type="button"
+        aria-label="Cerrar"
+        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+        onClick={onClose}
+      />
+      <div
+        role="dialog"
+        aria-modal
+        className="relative z-10 flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-t-2xl border border-zinc-200 bg-white text-zinc-900 shadow-xl sm:rounded-2xl"
+      >
+        <div className="flex items-start justify-between gap-3 border-b border-zinc-100 px-6 pb-3 pt-5">
+          <div className="min-w-0">
+            <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+              {esMesa ? "Seguimiento de votos" : "Resultados"}
+              {res?.estado === "abierta" ? " · en vivo" : ""}
+            </p>
+            <h2 className="mt-1 truncate text-lg font-semibold">
+              {res?.pregunta ?? "…"}
+            </h2>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700"
+          >
+            <X className="h-5 w-5" aria-hidden />
+          </button>
+        </div>
+
+        {esMesa ? (
+          <div className="flex gap-1 border-b border-zinc-100 px-4 pt-2">
+            {(
+              [
+                { id: "resultados" as const, label: "Resultados" },
+                {
+                  id: "votaron" as const,
+                  label: `Ya votaron (${votaron.length})`,
+                },
+                {
+                  id: "pendientes" as const,
+                  label: `Pendientes (${pendientes.length})`,
+                },
+              ] as const
+            ).map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => setTab(t.id)}
+                className={cn(
+                  "rounded-t-lg px-3 py-2 text-xs font-semibold transition-colors",
+                  tab === t.id
+                    ? "bg-zinc-100 text-zinc-900"
+                    : "text-zinc-500 hover:text-zinc-800",
+                )}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+        ) : null}
+
+        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+          {!res ? (
+            <div className="flex justify-center py-8">
+              <Loader2 className="h-6 w-6 animate-spin text-zinc-400" />
+            </div>
+          ) : !esMesa || tab === "resultados" ? (
+            <div className="space-y-3">
+              <p className="text-xs text-zinc-500">
+                {res.totalVotos} unidad{res.totalVotos === 1 ? "" : "es"} ·{" "}
+                {totalCoef.toFixed(2)}% de coeficiente
+              </p>
+              {res.opciones.map((o) => {
+                const pct =
+                  totalCoef > 0 ? (o.coeficiente / totalCoef) * 100 : 0;
+                return (
+                  <div key={o.texto}>
+                    <div className="mb-1 flex items-baseline justify-between gap-2 text-sm">
+                      <span className="font-medium">{o.texto}</span>
+                      <span className="tabular-nums text-zinc-500">
+                        {o.votos} · {o.coeficiente.toFixed(2)}%
+                      </span>
+                    </div>
+                    <div className="h-2 overflow-hidden rounded-full bg-zinc-100">
+                      <div
+                        className="h-full rounded-full bg-brand transition-all"
+                        style={{ width: `${Math.min(100, pct)}%` }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : tab === "votaron" ? (
+            <ListaUnidadesModal
+              numeros={votaron}
+              vacio="Nadie ha votado aún."
+              tono="ok"
+            />
+          ) : (
+            <ListaUnidadesModal
+              numeros={pendientes}
+              vacio="Todas las unidades presentes ya votaron."
+              tono="pendiente"
+            />
+          )}
+        </div>
+
+        <div className="flex flex-wrap justify-end gap-2 border-t border-zinc-100 px-6 py-4">
+          {onVolverAVotar ? (
+            <button
+              type="button"
+              onClick={onVolverAVotar}
+              className="rounded-lg px-3 py-1.5 text-sm font-medium text-zinc-500 hover:bg-zinc-100"
+            >
+              Ir a votar
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg bg-zinc-900 px-3 py-1.5 text-sm font-semibold text-white hover:bg-zinc-800"
+          >
+            Cerrar
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ListaUnidadesModal({
+  numeros,
+  vacio,
+  tono,
+}: {
+  numeros: string[];
+  vacio: string;
+  tono: "ok" | "pendiente";
+}) {
+  if (numeros.length === 0) {
+    return <p className="text-sm text-zinc-500">{vacio}</p>;
+  }
+  return (
+    <div className="flex flex-wrap gap-2">
+      {numeros.map((n) => (
+        <span
+          key={n}
+          className={cn(
+            "inline-flex rounded-full px-2.5 py-1 text-xs font-semibold tabular-nums",
+            tono === "ok"
+              ? "bg-emerald-100 text-emerald-800"
+              : "bg-amber-100 text-amber-900",
+          )}
+        >
+          {n}
+        </span>
+      ))}
+    </div>
   );
 }
 
@@ -1284,7 +1678,7 @@ function ManosLevantadas({
   onResolver: (userId: Id<"users">, conceder: boolean) => void;
 }) {
   return (
-    <section className="rounded-2xl border border-amber-500/25 bg-amber-500/10 p-5">
+    <section>
       <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-amber-200">
         <Hand className="h-4 w-4" aria-hidden /> Manos levantadas
       </h2>
@@ -1335,114 +1729,5 @@ function ManosLevantadas({
 }
 
 
-/* ── Quién está en la sala ───────────────────────────────────────────────
- * Preferimos `personas` (presencia Meet: una fila por pestaña). Si aún no
- * hay, caemos a `conectados` agrupado por nombre (unidades). */
-function EnLaSala({ sala }: { sala: SalaEnVivo | undefined }) {
-  if (!sala) return null;
 
-  const desdePresencia = (sala.personas ?? []).map((p) => ({
-    nombre: p.nombre,
-    imageUrl: p.imageUrl ?? null,
-    unidades: [] as string[],
-    esPoder: false,
-    esMesa: p.esMesa,
-  }));
-
-  let personas = desdePresencia;
-  if (personas.length === 0 && sala.conectados.length > 0) {
-    const porPersona = new Map<
-      string,
-      {
-        nombre: string;
-        imageUrl: string | null;
-        unidades: string[];
-        esPoder: boolean;
-        esMesa: boolean;
-      }
-    >();
-    for (const c of sala.conectados) {
-      const previa = porPersona.get(c.userNombre);
-      if (previa) {
-        previa.unidades.push(c.unidadNumero);
-        previa.esPoder = previa.esPoder || c.esPoder;
-      } else {
-        porPersona.set(c.userNombre, {
-          nombre: c.userNombre,
-          imageUrl: null,
-          unidades: [c.unidadNumero],
-          esPoder: c.esPoder,
-          esMesa: false,
-        });
-      }
-    }
-    personas = [...porPersona.values()];
-  }
-
-  if (personas.length === 0) return null;
-
-  return (
-    <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
-      <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-white/80">
-        <Users className="h-4 w-4" aria-hidden /> En la sala ({personas.length})
-      </h2>
-      <ul className="max-h-64 space-y-2 overflow-y-auto pr-1">
-        {personas.map((per) => (
-          <li
-            key={per.nombre}
-            className="flex items-center gap-2.5 rounded-xl bg-white/[0.04] px-3 py-2"
-          >
-            {per.imageUrl ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={per.imageUrl}
-                alt=""
-                referrerPolicy="no-referrer"
-                className="h-8 w-8 shrink-0 rounded-full object-cover"
-              />
-            ) : (
-              <span
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-semibold text-white"
-                style={{
-                  backgroundColor: [
-                    "#1a73e8",
-                    "#188038",
-                    "#c5221f",
-                    "#e37400",
-                    "#9334e6",
-                    "#0b8043",
-                  ][
-                    Math.abs(
-                      [...per.nombre].reduce(
-                        (h, ch) => (h * 31 + ch.charCodeAt(0)) | 0,
-                        0,
-                      ),
-                    ) % 6
-                  ],
-                }}
-              >
-                {per.nombre.trim().charAt(0).toUpperCase() || "?"}
-              </span>
-            )}
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium text-white/90">
-                {per.nombre}
-                {per.esMesa ? (
-                  <span className="ml-1.5 text-[11px] font-normal text-white/45">
-                    mesa
-                  </span>
-                ) : null}
-              </p>
-              {per.unidades.length > 0 ? (
-                <p className="truncate text-[11px] text-white/45">
-                  {per.unidades.join(", ")}
-                  {per.esPoder ? " · Poder" : ""}
-                </p>
-              ) : null}
-            </div>
-          </li>
-        ))}
-      </ul>
-    </section>
-  );
-}
+/* (lista de personas vive en ResumenSala) */
