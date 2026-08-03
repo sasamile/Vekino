@@ -17,6 +17,7 @@ const WRITE_ROLES = [
 const tipoBitacora = v.union(
   v.literal("entrada"),
   v.literal("salida"),
+  v.literal("palabra_pedida"),
   v.literal("palabra_concedida"),
   v.literal("palabra_retirada"),
   v.literal("votacion_abierta"),
@@ -32,6 +33,7 @@ const tipoBitacora = v.union(
 export type TipoBitacora =
   | "entrada"
   | "salida"
+  | "palabra_pedida"
   | "palabra_concedida"
   | "palabra_retirada"
   | "votacion_abierta"
@@ -42,6 +44,40 @@ export type TipoBitacora =
   | "grabacion_inicio"
   | "grabacion_fin"
   | "presidente_asignado";
+
+/** Etiqueta legible para exportar / mostrar la bitácora. */
+export function etiquetaBitacora(tipo: TipoBitacora): string {
+  switch (tipo) {
+    case "entrada":
+      return "Entró";
+    case "salida":
+      return "Salió";
+    case "palabra_pedida":
+      return "Pidió la palabra";
+    case "palabra_concedida":
+      return "Palabra concedida";
+    case "palabra_retirada":
+      return "Palabra retirada";
+    case "votacion_abierta":
+      return "Votación abierta";
+    case "votacion_cerrada":
+      return "Votación cerrada";
+    case "voto":
+      return "Votó";
+    case "chat":
+      return "Chat";
+    case "reaccion":
+      return "Reacción";
+    case "grabacion_inicio":
+      return "Grabación iniciada";
+    case "grabacion_fin":
+      return "Grabación finalizada";
+    case "presidente_asignado":
+      return "Presidente";
+    default:
+      return tipo;
+  }
+}
 
 /** Inserta un evento de bitácora (uso interno desde otras mutaciones). */
 export async function registrarBitacora(

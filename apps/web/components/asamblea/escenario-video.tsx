@@ -254,6 +254,7 @@ export function EscenarioVideo({
   enCurso,
   puedoHablar,
   codigoPoder,
+  codigoInvitado,
   nombreEspera,
   personas,
   imageUrlLocal,
@@ -265,10 +266,12 @@ export function EscenarioVideo({
 }: {
   asambleaId: Id<"asambleas">;
   enCurso: boolean;
-  /** Mesa, o residente con la palabra concedida. */
+  /** Mesa, o residente/invitado con la palabra concedida. */
   puedoHablar: boolean;
   /** Apoderado externo: firma las señales con el código de su poder. */
   codigoPoder?: string;
+  /** Invitado externo (sesión del enlace): habla con palabra, sin voto. */
+  codigoInvitado?: string;
   /** Nombre local para el mosaico si aún no llegó la presencia. */
   nombreEspera?: string;
   /** Personas con la pestaña abierta (presencia Meet). */
@@ -285,7 +288,11 @@ export function EscenarioVideo({
   /** Cierre de la barra (abrir panel, colgar). */
   controlesFin?: React.ReactNode;
 }) {
-  const video = useVideoSala(asambleaId, enCurso, { codigoPoder, calidad });
+  const video = useVideoSala(asambleaId, enCurso, {
+    codigoPoder,
+    codigoInvitado,
+    calidad,
+  });
   const streamsGrabacion = [
     ...video.audios.map((a) => a.stream),
     ...video.locales.map((l) => l.stream),

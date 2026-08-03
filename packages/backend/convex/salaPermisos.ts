@@ -14,11 +14,14 @@ import { configMedios, nombreSala, tokenAdmin } from "./lib/livekitJwt";
  * Se llama desde el scheduler al conceder y al retirar la palabra. Es
  * `internalAction` a propósito: nadie desde el navegador debe poder pedir
  * que le suban los permisos.
+ *
+ * `identidad` es el `sub` del JWT: userId del residente/mesa, o `inv:CODIGO`
+ * para invitados.
  */
 export const sincronizarPalabra = internalAction({
   args: {
     asambleaId: v.id("asambleas"),
-    userId: v.id("users"),
+    identidad: v.string(),
     puedePublicar: v.boolean(),
   },
   handler: async (_ctx, args) => {
@@ -40,7 +43,7 @@ export const sincronizarPalabra = internalAction({
         },
         body: JSON.stringify({
           room: sala,
-          identity: args.userId,
+          identity: args.identidad,
           permission: {
             can_subscribe: true,
             can_publish: args.puedePublicar,

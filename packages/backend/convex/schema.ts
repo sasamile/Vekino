@@ -606,10 +606,17 @@ export default defineSchema({
      */
     presidenteUserId: v.optional(v.id("users")),
     presidenteNombre: v.optional(v.string()),
+    /**
+     * Código del enlace de invitados (sin voto ni quórum).
+     * Quien entra por `/invitado?codigo=…` puede hablar/compartir pantalla
+     * si la mesa le da la palabra; no registra asistencia.
+     */
+    codigoInvitado: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
-    .index("by_condominio", ["condominioId"]),
+    .index("by_condominio", ["condominioId"])
+    .index("by_codigo_invitado", ["codigoInvitado"]),
 
   // ─────────────────────────────────────────────────────────────
   // Asistencia a asambleas (quórum en tiempo real)
@@ -705,6 +712,11 @@ export default defineSchema({
     userId: v.optional(v.id("users")),
     /** Apoderado externo sin cuenta: se identifica por el código del poder. */
     codigoPoder: v.optional(v.string()),
+    /**
+     * Invitado externo (enlace de invitados): sesión única por persona.
+     * No suma quórum ni puede votar.
+     */
+    codigoInvitado: v.optional(v.string()),
     nombre: v.string(),
     /** Foto de perfil (URL) para las cards tipo Meet. */
     imageUrl: v.optional(v.string()),
@@ -714,7 +726,28 @@ export default defineSchema({
     .index("by_asamblea", ["asambleaId"])
     .index("by_asamblea_user", ["asambleaId", "userId"])
     .index("by_asamblea_codigo", ["asambleaId", "codigoPoder"])
+    .index("by_asamblea_invitado", ["asambleaId", "codigoInvitado"])
     .index("by_latido", ["ultimoLatido"]),
+
+  /**
+   * Sesiones de invitados a la sala (enlace compartido).
+   * Cada persona que entra con nombre obtiene un `sesionCodigo` propio.
+   * Nunca crea filas en asambleaAsistentes / asambleaSesiones.
+   */
+  asambleaInvitadoSesiones: defineTable({
+    condominioId: v.id("condominios"),
+    asambleaId: v.id("asambleas"),
+    /** Código del enlace de la asamblea al momento de unirse. */
+    codigoEnlace: v.string(),
+    /** Identidad de esta persona en la sala (única). */
+    sesionCodigo: v.string(),
+    nombre: v.string(),
+    ultimoLatido: v.number(),
+    createdAt: v.number(),
+  })
+    .index("by_sesion", ["sesionCodigo"])
+    .index("by_asamblea", ["asambleaId"])
+    .index("by_asamblea_enlace", ["asambleaId", "codigoEnlace"]),
 
   // ─────────────────────────────────────────────────────────────
   // Video propio de la sala (WebRTC, señalización por Convex)
@@ -729,7 +762,9 @@ export default defineSchema({
     asambleaId: v.id("asambleas"),
     /** Identidad de la PESTAÑA emisora (uuid por sesión de navegador). */
     clienteId: v.string(),
-    userId: v.id("users"),
+    userId: v.optional(v.id("users")),
+    /** Invitado externo emitiendo con palabra concedida. */
+    codigoInvitado: v.optional(v.string()),
     nombre: v.string(),
     medio: v.union(v.literal("camara"), v.literal("pantalla")),
     /** Cámara deshabilitada (frames negros): el espectador pinta avatar. */
@@ -751,7 +786,9 @@ export default defineSchema({
   salaPalabra: defineTable({
     condominioId: v.id("condominios"),
     asambleaId: v.id("asambleas"),
-    userId: v.id("users"),
+    userId: v.optional(v.id("users")),
+    /** Invitado externo (sesión del enlace de invitados). */
+    codigoInvitado: v.optional(v.string()),
     nombre: v.string(),
     estado: v.union(v.literal("pedida"), v.literal("concedida")),
     /** Instantes de la concesión (auditoría / cronómetro). */
@@ -761,7 +798,8 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_asamblea", ["asambleaId"])
-    .index("by_asamblea_user", ["asambleaId", "userId"]),
+    .index("by_asamblea_user", ["asambleaId", "userId"])
+    .index("by_asamblea_invitado", ["asambleaId", "codigoInvitado"]),
 
   /** Reacciones efímeras tipo Meet (👍👏❤️…): viven unos segundos en pantalla. */
   salaReacciones: defineTable({
@@ -771,6 +809,7 @@ export default defineSchema({
     nombre: v.string(),
     userId: v.optional(v.id("users")),
     codigoPoder: v.optional(v.string()),
+    codigoInvitado: v.optional(v.string()),
     createdAt: v.number(),
   }).index("by_asamblea_created", ["asambleaId", "createdAt"]),
 
@@ -782,8 +821,28 @@ export default defineSchema({
     nombre: v.string(),
     userId: v.optional(v.id("users")),
     codigoPoder: v.optional(v.string()),
+    codigoInvitado: v.optional(v.string()),
     createdAt: v.number(),
   }).index("by_asamblea_created", ["asambleaId", "createdAt"]),
+
+  /**
+   * Silenciados del chat: la mesa bloquea a quien se pasa de la raya.
+   * Pueden seguir viendo el chat; no pueden enviar.
+   */
+  salaChatSilenciados: defineTable({
+    condominioId: v.id("condominios"),
+    asambleaId: v.id("asambleas"),
+    userId: v.optional(v.id("users")),
+    codigoPoder: v.optional(v.string()),
+    codigoInvitado: v.optional(v.string()),
+    nombre: v.string(),
+    silenciadoPorUserId: v.optional(v.id("users")),
+    createdAt: v.number(),
+  })
+    .index("by_asamblea", ["asambleaId"])
+    .index("by_asamblea_user", ["asambleaId", "userId"])
+    .index("by_asamblea_poder", ["asambleaId", "codigoPoder"])
+    .index("by_asamblea_invitado", ["asambleaId", "codigoInvitado"]),
 
   /**
    * Bitácora de la sala: entradas, palabra, votos, chat, grabación…
@@ -795,6 +854,7 @@ export default defineSchema({
     tipo: v.union(
       v.literal("entrada"),
       v.literal("salida"),
+      v.literal("palabra_pedida"),
       v.literal("palabra_concedida"),
       v.literal("palabra_retirada"),
       v.literal("votacion_abierta"),
@@ -802,10 +862,10 @@ export default defineSchema({
       v.literal("voto"),
       v.literal("chat"),
       v.literal("reaccion"),
-  v.literal("grabacion_inicio"),
-  v.literal("grabacion_fin"),
-  v.literal("presidente_asignado"),
-),
+      v.literal("grabacion_inicio"),
+      v.literal("grabacion_fin"),
+      v.literal("presidente_asignado"),
+    ),
     nombre: v.string(),
     detalle: v.optional(v.string()),
     userId: v.optional(v.id("users")),

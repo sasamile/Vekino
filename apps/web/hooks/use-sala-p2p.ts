@@ -74,20 +74,25 @@ function useClienteId() {
 export function useSalaP2P(
   asambleaId: Id<"asambleas">,
   activo: boolean,
-  opts: { codigoPoder?: string; calidad?: Calidad } = {},
+  opts: {
+    codigoPoder?: string;
+    codigoInvitado?: string;
+    calidad?: Calidad;
+  } = {},
 ) {
   const clienteId = useClienteId();
   const codigoPoder = opts.codigoPoder;
+  const codigoInvitado = opts.codigoInvitado;
   const calidad: Calidad = opts.calidad ?? "normal";
   const perfil = PERFILES[calidad];
 
   const emisoresRemotos = useQuery(
     api.salaVideo.emisores,
-    activo ? { asambleaId, codigoPoder } : "skip",
+    activo ? { asambleaId, codigoPoder, codigoInvitado } : "skip",
   );
   const buzon = useQuery(
     api.salaVideo.senalesParaMi,
-    activo ? { asambleaId, clienteId, codigoPoder } : "skip",
+    activo ? { asambleaId, clienteId, codigoPoder, codigoInvitado } : "skip",
   );
 
   const registrarEmisor = useMutation(api.salaVideo.registrarEmisor);
@@ -120,8 +125,9 @@ export function useSalaP2P(
         tipo,
         datos: JSON.stringify(datos ?? {}),
         codigoPoder,
+        codigoInvitado,
       }).catch(() => {}),
-    [enviarSenal, asambleaId, clienteId, codigoPoder],
+    [enviarSenal, asambleaId, clienteId, codigoPoder, codigoInvitado],
   );
 
   /* ── Encender / apagar medios (mesa) ─────────────────────────────────── */
@@ -156,14 +162,14 @@ export function useSalaP2P(
       setLocales(
         [...streamsLocales.current.entries()].map(([m, s]) => ({ medio: m, stream: s })),
       );
-      await registrarEmisor({ asambleaId, clienteId, medio });
+      await registrarEmisor({ asambleaId, clienteId, medio, codigoInvitado });
 
       // "Detener compartir" del propio navegador debe apagar el emisor.
       stream.getVideoTracks()[0]?.addEventListener("ended", () => {
         void apagarRef.current(medio);
       });
     },
-    [registrarEmisor, asambleaId, clienteId, perfil],
+    [registrarEmisor, asambleaId, clienteId, perfil, codigoInvitado],
   );
 
   const [micOn, setMicOn] = useState(false);
@@ -196,9 +202,10 @@ export function useSalaP2P(
         clienteId,
         micOn: conMic,
         camOn: conCam,
+        codigoInvitado,
       }).catch(() => {});
     },
-    [encender, actualizarEstadoMedios, asambleaId, clienteId],
+    [encender, actualizarEstadoMedios, asambleaId, clienteId, codigoInvitado],
   );
 
   const toggleMic = useCallback(
@@ -237,7 +244,7 @@ export function useSalaP2P(
         }
       }
       refrescarEspectadores();
-      await detenerEmisor({ asambleaId, clienteId, medio }).catch(() => {});
+      await detenerEmisor({ asambleaId, clienteId, medio, codigoInvitado }).catch(() => {});
     },
     [detenerEmisor, asambleaId, clienteId, refrescarEspectadores],
   );
@@ -248,7 +255,7 @@ export function useSalaP2P(
   useEffect(() => {
     if (!activo || locales.length === 0) return;
     const id = setInterval(() => {
-      void latidoEmisor({ asambleaId, clienteId }).catch(() => {});
+      void latidoEmisor({ asambleaId, clienteId, codigoInvitado }).catch(() => {});
     }, 30_000);
     return () => clearInterval(id);
   }, [activo, locales.length, latidoEmisor, asambleaId, clienteId]);
@@ -436,10 +443,10 @@ export function useSalaP2P(
         vistas.current = new Set([...vistas.current].slice(-500));
       }
       if (consumidas.length > 0) {
-        void consumirSenales({ asambleaId, clienteId, ids: consumidas, codigoPoder }).catch(() => {});
+        void consumirSenales({ asambleaId, clienteId, ids: consumidas, codigoPoder, codigoInvitado }).catch(() => {});
       }
     })();
-  }, [activo, buzon, senal, consumirSenales, refrescarEspectadores, asambleaId, clienteId, codigoPoder, perfil]);
+  }, [activo, buzon, senal, consumirSenales, refrescarEspectadores, asambleaId, clienteId, codigoPoder, codigoInvitado, perfil]);
 
   /* ── Desmontaje: apagar todo ─────────────────────────────────────────── */
   useEffect(() => {
@@ -454,7 +461,7 @@ export function useSalaP2P(
       comoEmisor.clear();
       for (const c of comoEspectador.values()) c.pc.close();
       comoEspectador.clear();
-      void detenerEmisor({ asambleaId, clienteId }).catch(() => {});
+      void detenerEmisor({ asambleaId, clienteId, codigoInvitado }).catch(() => {});
     };
   }, [activo, detenerEmisor, asambleaId, clienteId]);
 

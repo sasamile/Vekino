@@ -1048,6 +1048,7 @@ export const miParticipacion = query({
 
     return {
       presente: misAsistencias.length > 0,
+      userId: user._id,
       nombre: user.name,
       imageUrl: await resolveUserImage(ctx, user),
       unidades: misAsistencias.map((a) => a.unidadNumero),
@@ -2792,6 +2793,13 @@ export const votarConCodigo = mutation({
     await ctx.db.patch(args.votacionId, {
       opciones: votacion.opciones.map((o, i) => ({ texto: o.texto, votos: votos.filter((vt) => vt.opcionIndex === i).length })),
       updatedAt: now,
+    });
+    await registrarBitacora(ctx, {
+      condominioId: votacion.condominioId,
+      asambleaId: votacion.asambleaId,
+      tipo: "voto",
+      nombre: presentes[0]!.representanteNombre,
+      detalle: `${presentes.map((p) => p.unidadNumero).join(", ")} → ${votacion.opciones[args.opcionIndex]?.texto ?? `opción ${args.opcionIndex + 1}`} (apoderado)`,
     });
     return { ok: true as const };
   },

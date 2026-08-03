@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { MostrarCodigoAsistencia } from "@/components/asamblea/mostrar-codigo-asistencia";
 import { SalaTab } from "@/components/asamblea/sala-tab";
+import { PanelEnlaceInvitados } from "@/components/asamblea/panel-enlace-invitados";
 import { PageContainer } from "@/components/layout/page-container";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -154,6 +155,9 @@ export default function AsambleaAdmin() {
                 <Radio className="h-4 w-4" /> Entrar a la sala
               </Link>
             </Card>
+          ) : null}
+          {a.modalidad !== "presencial" ? (
+            <PanelEnlaceInvitados asambleaId={asambleaId} variante="claro" />
           ) : null}
           <SalaTab asambleaId={asambleaId} estado={a.estado} modalidad={a.modalidad} />
         </div>

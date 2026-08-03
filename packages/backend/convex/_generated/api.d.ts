@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as asambleaInvitados from "../asambleaInvitados.js";
 import type * as asambleaSala from "../asambleaSala.js";
 import type * as asambleas from "../asambleas.js";
 import type * as auth from "../auth.js";
@@ -63,6 +64,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  asambleaInvitados: typeof asambleaInvitados;
   asambleaSala: typeof asambleaSala;
   asambleas: typeof asambleas;
   auth: typeof auth;

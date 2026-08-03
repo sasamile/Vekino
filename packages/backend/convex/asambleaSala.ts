@@ -139,11 +139,25 @@ export async function cerrarSesionesUnidad(
     .collect();
 
   const now = Date.now();
+  const motivoDetalle: Record<typeof args.motivo, string> = {
+    salida: "Salió de la sala",
+    inactividad: "Desconectado por inactividad",
+    retirada_admin: "Retirado por la mesa",
+    cierre_asamblea: "Cierre de la asamblea",
+  };
   for (const s of abiertas) {
     await ctx.db.patch(s._id, {
       abierta: false,
       salioEn: now,
       motivoSalida: args.motivo,
+    });
+    await registrarBitacora(ctx, {
+      condominioId: s.condominioId,
+      asambleaId: args.asambleaId,
+      tipo: "salida",
+      nombre: s.userNombre,
+      detalle: `Unidad ${s.unidadNumero} · ${motivoDetalle[args.motivo]}`,
+      userId: s.userId,
     });
   }
   return abiertas.length;
@@ -163,11 +177,23 @@ export async function cerrarSesionesAsamblea(
     .collect();
 
   const now = Date.now();
+  const detalle =
+    motivo === "cierre_asamblea"
+      ? "Cierre de la asamblea"
+      : "Retirado por la mesa";
   for (const s of abiertas) {
     await ctx.db.patch(s._id, {
       abierta: false,
       salioEn: now,
       motivoSalida: motivo,
+    });
+    await registrarBitacora(ctx, {
+      condominioId: s.condominioId,
+      asambleaId,
+      tipo: "salida",
+      nombre: s.userNombre,
+      detalle: `Unidad ${s.unidadNumero} · ${detalle}`,
+      userId: s.userId,
     });
   }
   return abiertas.length;
@@ -448,8 +474,28 @@ async function borrarPresencia(
     asambleaId: Id<"asambleas">;
     userId?: Id<"users">;
     codigoPoder?: string;
+    /** Si true, deja rastro en bitácora (salida explícita / inactividad). */
+    registrarSalida?: boolean;
+    motivo?: string;
   },
 ) {
+  const registrar = async (ex: {
+    condominioId: Id<"condominios">;
+    asambleaId: Id<"asambleas">;
+    nombre: string;
+    userId?: Id<"users">;
+  }) => {
+    if (!args.registrarSalida) return;
+    await registrarBitacora(ctx, {
+      condominioId: ex.condominioId,
+      asambleaId: ex.asambleaId,
+      tipo: "salida",
+      nombre: ex.nombre,
+      detalle: args.motivo ?? "Salió de la sala",
+      userId: ex.userId,
+    });
+  };
+
   if (args.userId) {
     const ex = await ctx.db
       .query("salaPresencias")
@@ -457,7 +503,10 @@ async function borrarPresencia(
         q.eq("asambleaId", args.asambleaId).eq("userId", args.userId!),
       )
       .first();
-    if (ex) await ctx.db.delete(ex._id);
+    if (ex) {
+      await registrar(ex);
+      await ctx.db.delete(ex._id);
+    }
   }
   if (args.codigoPoder) {
     const ex = await ctx.db
@@ -468,7 +517,10 @@ async function borrarPresencia(
           .eq("codigoPoder", args.codigoPoder!),
       )
       .first();
-    if (ex) await ctx.db.delete(ex._id);
+    if (ex) {
+      await registrar(ex);
+      await ctx.db.delete(ex._id);
+    }
   }
 }
 
@@ -512,6 +564,8 @@ export const salirPresencia = mutation({
     await borrarPresencia(ctx, {
       asambleaId: args.asambleaId,
       userId: user._id,
+      registrarSalida: true,
+      motivo: "Salió de la sala",
     });
     return { ok: true as const };
   },
@@ -549,9 +603,13 @@ export const salirPresenciaConCodigo = mutation({
   handler: async (ctx, args) => {
     const pack = await poderesPorCodigo(ctx, args.codigo);
     if (!pack) return { ok: true as const };
+    const repId = pack.poderes[0]!.representanteUserId;
     await borrarPresencia(ctx, {
       asambleaId: pack.asamblea._id,
-      codigoPoder: pack.codigo,
+      userId: repId ?? undefined,
+      codigoPoder: repId ? undefined : pack.codigo,
+      registrarSalida: true,
+      motivo: "Salió de la sala (apoderado)",
     });
     return { ok: true as const };
   },
@@ -580,6 +638,14 @@ export const cerrarSesionesInactivas = internalMutation({
         salioEn: s.ultimoLatido,
         motivoSalida: "inactividad",
       });
+      await registrarBitacora(ctx, {
+        condominioId: s.condominioId,
+        asambleaId: s.asambleaId,
+        tipo: "salida",
+        nombre: s.userNombre,
+        detalle: `Unidad ${s.unidadNumero} · Desconectado por inactividad`,
+        userId: s.userId,
+      });
     }
 
     // Presencias (personas en pestaña) sin latido → se borran.
@@ -588,6 +654,14 @@ export const cerrarSesionesInactivas = internalMutation({
       .withIndex("by_latido", (q) => q.lt("ultimoLatido", limite))
       .take(500);
     for (const p of presenciasVencidas) {
+      await registrarBitacora(ctx, {
+        condominioId: p.condominioId,
+        asambleaId: p.asambleaId,
+        tipo: "salida",
+        nombre: p.nombre,
+        detalle: "Desconectado por inactividad",
+        userId: p.userId,
+      });
       await ctx.db.delete(p._id);
     }
 
@@ -667,6 +741,7 @@ export const salaEnVivo = query({
           userId: p.userId ?? null,
           nombre: p.nombre,
           esMesa: p.esMesa,
+          esInvitado: !!p.codigoInvitado,
           imageUrl: p.imageUrl ?? null,
         })),
       totalUnidades: unidades.length,

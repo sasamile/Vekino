@@ -35,6 +35,7 @@ import {
 } from "lucide-react";
 import { EscenarioVideo } from "@/components/asamblea/escenario-video";
 import { BotonChatSala, SalaChatSheet } from "@/components/asamblea/sala-chat";
+import { PanelEnlaceInvitados } from "@/components/asamblea/panel-enlace-invitados";
 import type { Calidad } from "@/hooks/use-video-sala";
 import { useSalaLatido } from "@/hooks/use-sala-latido";
 import { cn } from "@/lib/utils";
@@ -269,6 +270,21 @@ export function SalaReunion({
               type="button"
               onClick={() => {
                 const filas = bitacora ?? [];
+                const etiquetas: Record<string, string> = {
+                  entrada: "Entró",
+                  salida: "Salió",
+                  palabra_pedida: "Pidió la palabra",
+                  palabra_concedida: "Palabra concedida",
+                  palabra_retirada: "Palabra retirada",
+                  votacion_abierta: "Votación abierta",
+                  votacion_cerrada: "Votación cerrada",
+                  voto: "Votó",
+                  chat: "Chat",
+                  reaccion: "Reacción",
+                  grabacion_inicio: "Grabación iniciada",
+                  grabacion_fin: "Grabación finalizada",
+                  presidente_asignado: "Presidente",
+                };
                 const lineas = [
                   `Bitácora · ${a.titulo}`,
                   `Presidente: ${a.presidenteNombre ?? "(sin asignar)"}`,
@@ -276,7 +292,8 @@ export function SalaReunion({
                   "",
                   ...filas.map((f) => {
                     const t = new Date(f.createdAt).toLocaleTimeString();
-                    return `[${t}] ${f.tipo} · ${f.nombre}${f.detalle ? ` — ${f.detalle}` : ""}`;
+                    const etiqueta = etiquetas[f.tipo] ?? f.tipo;
+                    return `[${t}] ${etiqueta} · ${f.nombre}${f.detalle ? ` — ${f.detalle}` : ""}`;
                   }),
                 ];
                 const blob = new Blob([lineas.join("\n")], {
@@ -497,8 +514,13 @@ export function SalaReunion({
                 </div>
               </div>
 
-              <div className="flex min-h-0 flex-1 flex-col px-4 pt-4 sm:px-5">
+              <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 pt-4 sm:px-5">
                 <ResumenSala sala={sala} />
+                {esMesa ? (
+                  <div className="mt-4">
+                    <PanelEnlaceInvitados asambleaId={asambleaId} />
+                  </div>
+                ) : null}
 
                 {!esMesa || manosLevantadas.length > 0 ? (
                   <div className="shrink-0 space-y-4 border-t border-white/10 py-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
@@ -647,6 +669,8 @@ export function SalaReunion({
         abierto={chatAbierto && enCurso}
         onClose={() => setChatAbierto(false)}
         miNombre={mi?.nombre ?? undefined}
+        miUserId={mi?.userId ?? undefined}
+        esMesa={esMesa}
       />
 
       {modalVotoId ? (
@@ -865,6 +889,7 @@ type PersonaSala = {
   unidades: string[];
   esPoder: boolean;
   esMesa: boolean;
+  esInvitado: boolean;
 };
 
 function personasDeSala(sala: SalaEnVivo): PersonaSala[] {
@@ -874,6 +899,7 @@ function personasDeSala(sala: SalaEnVivo): PersonaSala[] {
     unidades: [] as string[],
     esPoder: false,
     esMesa: !!p.esMesa,
+    esInvitado: !!p.esInvitado,
   }));
   if (desdePresencia.length > 0) return desdePresencia;
 
@@ -890,6 +916,7 @@ function personasDeSala(sala: SalaEnVivo): PersonaSala[] {
         unidades: [c.unidadNumero],
         esPoder: c.esPoder,
         esMesa: false,
+        esInvitado: false,
       });
     }
   }
@@ -981,6 +1008,10 @@ function ResumenSala({ sala }: { sala: SalaEnVivo | null | undefined }) {
                   {per.esMesa ? (
                     <span className="ml-1.5 text-[10px] text-white/40">
                       mesa
+                    </span>
+                  ) : per.esInvitado ? (
+                    <span className="ml-1.5 text-[10px] text-amber-200/70">
+                      invitado
                     </span>
                   ) : null}
                 </p>
@@ -2345,7 +2376,8 @@ function ManosLevantadas({
 }: {
   asambleaId: Id<"asambleas">;
   filas: {
-    userId: Id<"users">;
+    userId: Id<"users"> | null;
+    codigoInvitado?: string | null;
     nombre: string;
     estado: "pedida" | "concedida";
     cierraEn?: number | null;
@@ -2363,8 +2395,14 @@ function ManosLevantadas({
       </h2>
       <ul className="space-y-2">
         {filas.map((f) => {
-          const id = f.userId as string;
+          const id = (f.codigoInvitado ?? f.userId ?? f.nombre) as string;
           const eligiendo = eligiendoId === id;
+          const destino = f.codigoInvitado
+            ? { codigoInvitado: f.codigoInvitado }
+            : f.userId
+              ? { userId: f.userId }
+              : null;
+          if (!destino) return null;
           return (
             <li
               key={id}
@@ -2393,7 +2431,7 @@ function ManosLevantadas({
                       onClick={() =>
                         void extender({
                           asambleaId,
-                          userId: f.userId,
+                          ...destino,
                           segundosExtra: 60,
                         }).catch(() => {})
                       }
@@ -2406,7 +2444,7 @@ function ManosLevantadas({
                       onClick={() =>
                         void resolver({
                           asambleaId,
-                          userId: f.userId,
+                          ...destino,
                           conceder: false,
                         }).catch(() => {})
                       }
@@ -2453,7 +2491,7 @@ function ManosLevantadas({
                           setEligiendoId(null);
                           void resolver({
                             asambleaId,
-                            userId: f.userId,
+                            ...destino,
                             conceder: true,
                             duracionSegundos: duracion,
                           }).catch(() => {});
@@ -2481,7 +2519,7 @@ function ManosLevantadas({
                       onClick={() =>
                         void resolver({
                           asambleaId,
-                          userId: f.userId,
+                          ...destino,
                           conceder: false,
                         }).catch(() => {})
                       }
