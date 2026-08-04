@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Id } from "@vekino/backend/dataModel";
 import {
+  ChevronLeft,
+  ChevronRight,
   Gauge,
   Loader2,
   Mic,
@@ -204,8 +206,7 @@ function layoutMosaico(n: number, movil: boolean) {
   if (n <= 6) return { cols: 3, rows: Math.ceil(n / 3) };
   if (n <= 9) return { cols: 3, rows: Math.ceil(n / 3) };
   if (n <= 16) return { cols: 4, rows: Math.ceil(n / 4) };
-  if (n <= 25) return { cols: 5, rows: Math.ceil(n / 5) };
-  return { cols: 6, rows: Math.ceil(n / 6) };
+  return { cols: 4, rows: Math.ceil(n / 4) };
 }
 
 function tamanoAvatarPorCantidad(n: number): "lg" | "md" | "sm" | "xs" {
@@ -215,9 +216,28 @@ function tamanoAvatarPorCantidad(n: number): "lg" | "md" | "sm" | "xs" {
   return "xs";
 }
 
+/** Como Meet: no se pintan 250 tiles; se pagina. */
+const TOPE_MOSAICO_DESKTOP = 16;
+const TOPE_MOSAICO_MOVIL = 9;
+
+type PersonaTile = {
+  nombre: string;
+  imageUrl?: string | null;
+  esMesa?: boolean;
+  esYo?: boolean;
+};
+
+function ordenarParaMosaico(personas: PersonaTile[]) {
+  return [...personas].sort((a, b) => {
+    if (a.esYo !== b.esYo) return a.esYo ? -1 : 1;
+    if (!!a.esMesa !== !!b.esMesa) return a.esMesa ? -1 : 1;
+    return a.nombre.localeCompare(b.nombre, undefined, { sensitivity: "base" });
+  });
+}
+
 /**
- * Mosaico de personas en la sala (como Meet sin pantalla compartida):
- * rellena el lienzo; con mucha gente achica las tiles para que quepan todas.
+ * Mosaico tipo Meet: máximo N visibles por página; el resto se pasa con flechas.
+ * Una asamblea de 250 no se dibuja entera — se ve feo y no aporta.
  */
 function MosaicoPersonas({
   personas,
@@ -227,12 +247,7 @@ function MosaicoPersonas({
   camOn,
   micOn,
 }: {
-  personas: {
-    nombre: string;
-    imageUrl?: string | null;
-    esMesa?: boolean;
-    esYo?: boolean;
-  }[];
+  personas: PersonaTile[];
   enCurso: boolean;
   puedoHablar: boolean;
   camaraLocal: { stream: MediaStream } | null;
@@ -241,6 +256,8 @@ function MosaicoPersonas({
 }) {
   const hablandoYo = useAudioHablando(camaraLocal?.stream, micOn);
   const [movil, setMovil] = useState(false);
+  const [pagina, setPagina] = useState(0);
+
   useEffect(() => {
     const mq = window.matchMedia("(max-width: 640px)");
     const sync = () => setMovil(mq.matches);
@@ -249,58 +266,112 @@ function MosaicoPersonas({
     return () => mq.removeEventListener("change", sync);
   }, []);
 
+  const ordenadas = ordenarParaMosaico(personas);
+  const tope = movil ? TOPE_MOSAICO_MOVIL : TOPE_MOSAICO_DESKTOP;
+  const totalPaginas = Math.max(1, Math.ceil(ordenadas.length / tope));
+  const paginaSegura = Math.min(pagina, totalPaginas - 1);
+
+  useEffect(() => {
+    if (pagina !== paginaSegura) setPagina(paginaSegura);
+  }, [pagina, paginaSegura]);
+
+  useEffect(() => {
+    setPagina(0);
+  }, [tope, ordenadas.length]);
+
   if (personas.length === 0) {
     return (
       <EsperaMeet enCurso={enCurso} puedoHablar={puedoHablar} nombre={undefined} />
     );
   }
 
-  const n = personas.length;
+  const visibles = ordenadas.slice(
+    paginaSegura * tope,
+    paginaSegura * tope + tope,
+  );
+  const n = visibles.length;
   const { cols, rows } = layoutMosaico(n, movil);
   const tamano = tamanoAvatarPorCantidad(n);
   const denso = n > 6;
+  const hayPaginacion = ordenadas.length > tope;
 
   return (
-    <div
-      className={cn(
-        "grid h-full w-full min-h-0 overflow-hidden",
-        denso ? "gap-1 sm:gap-1.5" : "gap-2 sm:gap-3",
-      )}
-      style={{
-        gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
-        gridTemplateRows: `repeat(${rows}, minmax(0, 1fr))`,
-      }}
-    >
-      {personas.map((p, i) => {
-        const key = `${p.nombre}-${p.esYo ? "yo" : i}`;
-        if (p.esYo && camaraLocal) {
+    <div className="relative flex h-full min-h-0 w-full flex-col">
+      <div
+        className={cn(
+          "grid min-h-0 flex-1 overflow-hidden",
+          denso ? "gap-1 sm:gap-1.5" : "gap-2 sm:gap-3",
+        )}
+        style={{
+          gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
+          gridTemplateRows: `repeat(${rows}, minmax(0, 1fr))`,
+        }}
+      >
+        {visibles.map((p, i) => {
+          const key = `${p.nombre}-${p.esYo ? "yo" : i}`;
+          if (p.esYo && camaraLocal) {
+            return (
+              <div
+                key={key}
+                className="min-h-0 overflow-hidden rounded-xl sm:rounded-2xl"
+              >
+                <PreviewStream
+                  stream={camaraLocal.stream}
+                  etiqueta={p.nombre ? `${p.nombre} (Tú)` : "Tú"}
+                  principal
+                  apagada={!camOn}
+                  silenciado={!micOn}
+                  imageUrl={p.imageUrl}
+                  tamanoAvatar={tamano}
+                />
+              </div>
+            );
+          }
           return (
-            <div key={key} className="min-h-0 overflow-hidden rounded-xl sm:rounded-2xl">
-              <PreviewStream
-                stream={camaraLocal.stream}
-                etiqueta={p.nombre ? `${p.nombre} (Tú)` : "Tú"}
-                principal
-                apagada={!camOn}
-                silenciado={!micOn}
-                imageUrl={p.imageUrl}
-                tamanoAvatar={tamano}
-              />
-            </div>
+            <CardPersona
+              key={key}
+              nombre={p.nombre}
+              imageUrl={p.imageUrl}
+              esYo={p.esYo}
+              esMesa={p.esMesa}
+              silenciado={p.esYo ? !micOn : true}
+              hablando={!!p.esYo && hablandoYo}
+              tamano={tamano}
+            />
           );
-        }
-        return (
-          <CardPersona
-            key={key}
-            nombre={p.nombre}
-            imageUrl={p.imageUrl}
-            esYo={p.esYo}
-            esMesa={p.esMesa}
-            silenciado={p.esYo ? !micOn : true}
-            hablando={!!p.esYo && hablandoYo}
-            tamano={tamano}
-          />
-        );
-      })}
+        })}
+      </div>
+
+      {hayPaginacion ? (
+        <div className="pointer-events-none absolute inset-y-0 left-0 right-0 z-20 flex items-center justify-between px-1 sm:px-2">
+          <button
+            type="button"
+            disabled={paginaSegura <= 0}
+            onClick={() => setPagina((p) => Math.max(0, p - 1))}
+            aria-label="Página anterior"
+            className="pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full bg-black/55 text-white shadow-lg backdrop-blur-sm transition-colors hover:bg-black/70 disabled:opacity-30 sm:h-11 sm:w-11"
+          >
+            <ChevronLeft className="h-5 w-5" aria-hidden />
+          </button>
+          <button
+            type="button"
+            disabled={paginaSegura >= totalPaginas - 1}
+            onClick={() =>
+              setPagina((p) => Math.min(totalPaginas - 1, p + 1))
+            }
+            aria-label="Página siguiente"
+            className="pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full bg-black/55 text-white shadow-lg backdrop-blur-sm transition-colors hover:bg-black/70 disabled:opacity-30 sm:h-11 sm:w-11"
+          >
+            <ChevronRight className="h-5 w-5" aria-hidden />
+          </button>
+        </div>
+      ) : null}
+
+      {hayPaginacion ? (
+        <p className="pointer-events-none absolute bottom-1 left-1/2 z-20 -translate-x-1/2 rounded-full bg-black/55 px-3 py-1 text-[11px] font-medium text-white/85 backdrop-blur-sm sm:bottom-2 sm:text-xs">
+          {paginaSegura + 1} / {totalPaginas} · {ordenadas.length} en sala
+        </p>
+      ) : null}
     </div>
   );
 }
