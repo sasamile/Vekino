@@ -108,6 +108,7 @@ export function SalaInvitado({ sesionCodigo }: { sesionCodigo: string }) {
               className="flex h-10 items-center gap-1.5 rounded-full bg-white/10 px-3 text-sm font-semibold text-white/85 transition-colors hover:bg-white/20"
             >
               <Users className="h-4 w-4" aria-hidden />
+              {latido.personasEnSala > 0 ? latido.personasEnSala : null}
             </button>
           ) : null}
         </div>
@@ -121,6 +122,7 @@ export function SalaInvitado({ sesionCodigo }: { sesionCodigo: string }) {
             puedoHablar={puedoHablar}
             codigoInvitado={sesionCodigo}
             nombreEspera={data.nombre}
+            personas={latido.personas}
             extraControles={
               enCurso ? (
                 <button
@@ -226,6 +228,36 @@ export function SalaInvitado({ sesionCodigo }: { sesionCodigo: string }) {
                   Puedes pedir la palabra, hablar y compartir pantalla. No
                   participas en votaciones ni cuentas para el quórum.
                 </p>
+              </section>
+
+              <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
+                <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-white/80">
+                  <Users className="h-4 w-4" /> En la sala
+                  <span className="text-white/40">
+                    ({latido.personasEnSala})
+                  </span>
+                </h2>
+                {latido.personas.length === 0 ? (
+                  <p className="text-sm text-white/40">Nadie más conectado.</p>
+                ) : (
+                  <ul className="space-y-2">
+                    {latido.personas.map((p, i) => (
+                      <li
+                        key={`${p.nombre}-${i}`}
+                        className="flex items-center gap-2 text-sm text-white/85"
+                      >
+                        <span className="min-w-0 flex-1 truncate">{p.nombre}</span>
+                        {p.esMesa ? (
+                          <span className="text-[10px] text-white/40">mesa</span>
+                        ) : p.esInvitado ? (
+                          <span className="text-[10px] text-amber-200/70">
+                            invitado
+                          </span>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </section>
 
               {puntoActual ? (

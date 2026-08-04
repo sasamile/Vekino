@@ -49,14 +49,23 @@ function colorDe(nombre: string) {
 function AvatarCover({
   nombre,
   imageUrl,
-  principal = false,
+  tamano = "md",
 }: {
   nombre: string;
   imageUrl?: string | null;
-  principal?: boolean;
+  /** lg = pocos en sala; xs = mucha gente (como Meet). */
+  tamano?: "lg" | "md" | "sm" | "xs";
 }) {
   const color = colorDe(nombre);
   const inicial = nombre.trim().charAt(0).toUpperCase() || "?";
+  const caja =
+    tamano === "lg"
+      ? "h-28 w-28 text-5xl sm:h-36 sm:w-36"
+      : tamano === "md"
+        ? "h-16 w-16 text-2xl sm:h-20 sm:w-20 sm:text-3xl"
+        : tamano === "sm"
+          ? "h-11 w-11 text-lg sm:h-14 sm:w-14 sm:text-xl"
+          : "h-8 w-8 text-sm sm:h-10 sm:w-10 sm:text-base";
   return (
     <div className="absolute inset-0 flex items-center justify-center bg-[#202124]">
       {imageUrl ? (
@@ -65,16 +74,13 @@ function AvatarCover({
           src={imageUrl}
           alt=""
           referrerPolicy="no-referrer"
-          className={cn(
-            "rounded-full object-cover shadow-lg",
-            principal ? "h-28 w-28 sm:h-36 sm:w-36" : "h-14 w-14",
-          )}
+          className={cn("rounded-full object-cover shadow-lg", caja)}
         />
       ) : (
         <span
           className={cn(
             "flex items-center justify-center rounded-full font-semibold text-white",
-            principal ? "h-28 w-28 text-5xl sm:h-36 sm:w-36" : "h-14 w-14 text-2xl",
+            caja,
           )}
           style={{ backgroundColor: color }}
         >
@@ -103,7 +109,7 @@ function EsperaMeet({
   const label = nombre?.trim() || (puedoHablar ? "Tú" : "Sala");
   return (
     <div className="relative h-full w-full overflow-hidden rounded-2xl">
-      <AvatarCover nombre={label} imageUrl={imageUrl} principal />
+      <AvatarCover nombre={label} imageUrl={imageUrl} tamano="lg" />
       <span className="absolute bottom-3 left-3 z-10 rounded-md bg-black/55 px-2.5 py-1 text-xs font-medium text-white/90">
         {label}
       </span>
@@ -128,6 +134,7 @@ function CardPersona({
   esMesa,
   silenciado,
   hablando = false,
+  tamano = "md",
 }: {
   nombre: string;
   imageUrl?: string | null;
@@ -136,24 +143,42 @@ function CardPersona({
   silenciado?: boolean;
   /** Borde azul tipo Meet mientras hay voz. */
   hablando?: boolean;
+  tamano?: "lg" | "md" | "sm" | "xs";
 }) {
   const label = esYo ? (nombre ? `${nombre} (Tú)` : "Tú") : nombre;
+  const denso = tamano === "sm" || tamano === "xs";
   return (
     <div
       className={cn(
-        "relative h-full min-h-0 w-full overflow-hidden rounded-2xl transition-shadow duration-150",
+        "relative h-full min-h-0 w-full overflow-hidden transition-shadow duration-150",
+        denso ? "rounded-xl" : "rounded-2xl",
         hablando
           ? "shadow-[inset_0_0_0_3px_#8ab4f8]"
           : "shadow-[inset_0_0_0_0_transparent]",
       )}
     >
-      <AvatarCover nombre={nombre || "?"} imageUrl={imageUrl} principal />
+      <AvatarCover nombre={nombre || "?"} imageUrl={imageUrl} tamano={tamano} />
       {silenciado ? (
-        <span className="absolute right-2.5 top-2.5 flex h-7 w-7 items-center justify-center rounded-full bg-black/50">
-          <MicOff className="h-3.5 w-3.5 text-white" aria-hidden />
+        <span
+          className={cn(
+            "absolute flex items-center justify-center rounded-full bg-black/50",
+            denso ? "right-1.5 top-1.5 h-5 w-5" : "right-2.5 top-2.5 h-7 w-7",
+          )}
+        >
+          <MicOff
+            className={cn(denso ? "h-2.5 w-2.5" : "h-3.5 w-3.5", "text-white")}
+            aria-hidden
+          />
         </span>
       ) : null}
-      <span className="absolute bottom-2.5 left-2.5 max-w-[calc(100%-1.25rem)] truncate rounded-md bg-black/55 px-2 py-0.5 text-xs font-medium text-white/90">
+      <span
+        className={cn(
+          "absolute max-w-[calc(100%-0.75rem)] truncate rounded-md bg-black/55 font-medium text-white/90",
+          denso
+            ? "bottom-1.5 left-1.5 px-1.5 py-0.5 text-[10px]"
+            : "bottom-2.5 left-2.5 px-2 py-0.5 text-xs",
+        )}
+      >
         {label}
         {esMesa && !esYo ? " · mesa" : ""}
       </span>
@@ -161,17 +186,38 @@ function CardPersona({
   );
 }
 
-function claseGrilla(n: number) {
-  if (n <= 1) return "grid-cols-1";
-  if (n === 2) return "grid-cols-1 sm:grid-cols-2";
-  if (n === 3) return "grid-cols-1 sm:grid-cols-3";
-  if (n <= 4) return "grid-cols-2";
-  return "grid-cols-2 lg:grid-cols-3";
+/**
+ * Columnas/filas tipo Meet: todo cabe en el viewport, sin scroll.
+ * Con mucha gente las tiles se hacen más pequeñas.
+ */
+function layoutMosaico(n: number, movil: boolean) {
+  if (n <= 1) return { cols: 1, rows: 1 };
+  if (movil) {
+    if (n === 2) return { cols: 1, rows: 2 };
+    if (n <= 4) return { cols: 2, rows: Math.ceil(n / 2) };
+    if (n <= 9) return { cols: 3, rows: Math.ceil(n / 3) };
+    return { cols: 3, rows: Math.ceil(n / 3) };
+  }
+  if (n === 2) return { cols: 2, rows: 1 };
+  if (n === 3) return { cols: 3, rows: 1 };
+  if (n === 4) return { cols: 2, rows: 2 };
+  if (n <= 6) return { cols: 3, rows: Math.ceil(n / 3) };
+  if (n <= 9) return { cols: 3, rows: Math.ceil(n / 3) };
+  if (n <= 16) return { cols: 4, rows: Math.ceil(n / 4) };
+  if (n <= 25) return { cols: 5, rows: Math.ceil(n / 5) };
+  return { cols: 6, rows: Math.ceil(n / 6) };
+}
+
+function tamanoAvatarPorCantidad(n: number): "lg" | "md" | "sm" | "xs" {
+  if (n <= 2) return "lg";
+  if (n <= 6) return "md";
+  if (n <= 12) return "sm";
+  return "xs";
 }
 
 /**
  * Mosaico de personas en la sala (como Meet sin pantalla compartida):
- * cada uno es una card; con 2 se ven lado a lado.
+ * rellena el lienzo; con mucha gente achica las tiles para que quepan todas.
  */
 function MosaicoPersonas({
   personas,
@@ -194,6 +240,14 @@ function MosaicoPersonas({
   micOn: boolean;
 }) {
   const hablandoYo = useAudioHablando(camaraLocal?.stream, micOn);
+  const [movil, setMovil] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 640px)");
+    const sync = () => setMovil(mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, []);
 
   if (personas.length === 0) {
     return (
@@ -201,18 +255,27 @@ function MosaicoPersonas({
     );
   }
 
+  const n = personas.length;
+  const { cols, rows } = layoutMosaico(n, movil);
+  const tamano = tamanoAvatarPorCantidad(n);
+  const denso = n > 6;
+
   return (
     <div
       className={cn(
-        "grid h-full w-full gap-2 sm:gap-3",
-        claseGrilla(personas.length),
+        "grid h-full w-full min-h-0 overflow-hidden",
+        denso ? "gap-1 sm:gap-1.5" : "gap-2 sm:gap-3",
       )}
+      style={{
+        gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
+        gridTemplateRows: `repeat(${rows}, minmax(0, 1fr))`,
+      }}
     >
       {personas.map((p, i) => {
         const key = `${p.nombre}-${p.esYo ? "yo" : i}`;
         if (p.esYo && camaraLocal) {
           return (
-            <div key={key} className="min-h-0 overflow-hidden rounded-2xl">
+            <div key={key} className="min-h-0 overflow-hidden rounded-xl sm:rounded-2xl">
               <PreviewStream
                 stream={camaraLocal.stream}
                 etiqueta={p.nombre ? `${p.nombre} (Tú)` : "Tú"}
@@ -220,6 +283,7 @@ function MosaicoPersonas({
                 apagada={!camOn}
                 silenciado={!micOn}
                 imageUrl={p.imageUrl}
+                tamanoAvatar={tamano}
               />
             </div>
           );
@@ -233,6 +297,7 @@ function MosaicoPersonas({
             esMesa={p.esMesa}
             silenciado={p.esYo ? !micOn : true}
             hablando={!!p.esYo && hablandoYo}
+            tamano={tamano}
           />
         );
       })}
@@ -842,7 +907,10 @@ function VideoRemoto({
       {/* Cámara deshabilitada: avatar encima; el video sigue en el DOM para
           que el audio del micrófono no se corte. */}
       {camaraApagada ? (
-        <AvatarCover nombre={emisor.nombre} principal={principal} />
+        <AvatarCover
+          nombre={emisor.nombre}
+          tamano={principal ? "lg" : "sm"}
+        />
       ) : null}
       {emisor.micApagado ? (
         <span className="absolute right-2 top-2 flex h-6 w-6 items-center justify-center rounded-full bg-red-500/90">
@@ -865,6 +933,7 @@ function PreviewStream({
   apagada = false,
   silenciado = false,
   imageUrl,
+  tamanoAvatar,
 }: {
   stream: MediaStream;
   etiqueta: string;
@@ -872,6 +941,7 @@ function PreviewStream({
   apagada?: boolean;
   silenciado?: boolean;
   imageUrl?: string | null;
+  tamanoAvatar?: "lg" | "md" | "sm" | "xs";
 }) {
   const ref = useRef<HTMLVideoElement>(null);
   const hablando = useAudioHablando(stream, !silenciado);
@@ -907,7 +977,7 @@ function PreviewStream({
         <AvatarCover
           nombre={etiqueta.replace(/\s*\(Tú\)\s*$/, "")}
           imageUrl={imageUrl}
-          principal={principal}
+          tamano={tamanoAvatar ?? (principal ? "lg" : "sm")}
         />
       ) : null}
       <span className="absolute bottom-2 left-2 flex items-center gap-1 rounded-md bg-black/60 px-2 py-0.5 text-[11px] font-medium text-white/90">

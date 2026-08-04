@@ -6,7 +6,7 @@ import {
   requireCondominioRole,
   getCurrentAppUser,
 } from "./model/authz";
-import { LATIDO_MS } from "./asambleaSala";
+import { LATIDO_MS, CORTE_INACTIVIDAD_MS } from "./asambleaSala";
 import { registrarBitacora } from "./salaBitacora";
 
 /**
@@ -249,7 +249,7 @@ export const unirseComoInvitado = mutation({
   },
 });
 
-/** Estado de sala del invitado (para latidos). */
+/** Estado de sala del invitado (para latidos y mosaico Meet). */
 export const miSalaInvitado = query({
   args: { sesionCodigo: v.string() },
   handler: async (ctx, args) => {
@@ -263,6 +263,25 @@ export const miSalaInvitado = query({
         q.eq("asambleaId", asamblea._id).eq("codigoInvitado", sesionCodigo),
       )
       .first();
+
+    /* Misma fuente que la sala autenticada: quién tiene la pestaña abierta.
+     * Sin esto el invitado solo se veía a sí mismo en el mosaico. */
+    const presencias = await ctx.db
+      .query("salaPresencias")
+      .withIndex("by_asamblea", (q) => q.eq("asambleaId", asamblea._id))
+      .collect();
+    const ahora = Date.now();
+    const personas = presencias
+      .filter((p) => ahora - p.ultimoLatido < CORTE_INACTIVIDAD_MS)
+      .sort((a, b) => b.ultimoLatido - a.ultimoLatido)
+      .slice(0, 100)
+      .map((p) => ({
+        userId: p.userId ?? null,
+        nombre: p.nombre,
+        esMesa: !!p.esMesa,
+        esInvitado: !!p.codigoInvitado,
+        imageUrl: p.imageUrl ?? null,
+      }));
 
     return {
       asambleaId: asamblea._id,
@@ -278,6 +297,8 @@ export const miSalaInvitado = query({
       /** Nunca: los invitados no tienen unidades ni quórum. */
       registrado: false,
       debeLatir: false,
+      personasEnSala: personas.length,
+      personas,
     };
   },
 });

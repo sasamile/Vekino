@@ -68,5 +68,7 @@ export function useSalaLatidoInvitado(sesionCodigo: string | null) {
     cierraEn: sala?.cierraEn ?? null,
     nombre: sala?.nombre ?? null,
     asambleaId: sala?.asambleaId ?? null,
+    personas: sala?.personas ?? [],
+    personasEnSala: sala?.personasEnSala ?? 0,
   };
 }
