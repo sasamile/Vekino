@@ -87,14 +87,14 @@ export function SalaReunion({
   const grabacionActiva = useQuery(api.salaBitacora.grabacionActiva, {
     asambleaId,
   });
+  const detenerGrabacion = useMutation(api.salaBitacora.detenerGrabacion);
   const bitacora = useQuery(
     api.salaBitacora.listar,
     esMesa ? { asambleaId } : "skip",
   );
-  /* Arranca en "ahorro": el tope pasa de ~16 a ~45 espectadores y en una
-   * asamblea nadie echa de menos los 24 fps de una cara. La mesa sube a
-   * alta calidad si el conjunto es pequeño. */
-  const [calidad, setCalidad] = useState<Calidad>("ahorro");
+  /* Arranca en "normal": mejor audio/video; la mesa puede bajar a ahorro
+   * si la asamblea es muy grande y la red se satura. */
+  const [calidad, setCalidad] = useState<Calidad>("normal");
   const [registro, setRegistro] = useState<{
     intentado: boolean;
     error: string | null;
@@ -237,10 +237,22 @@ export function SalaReunion({
         </div>
         <div className="pointer-events-auto flex shrink-0 items-center gap-2">
           {grabacionActiva ? (
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-red-500/90 px-2.5 py-1 text-[11px] font-semibold text-white">
-              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-white" />
-              Grabando
-            </span>
+            esMesa ? (
+              <button
+                type="button"
+                onClick={() => void detenerGrabacion({ asambleaId }).catch(() => {})}
+                title="Tocar para detener / limpiar el aviso de grabación"
+                className="inline-flex items-center gap-1.5 rounded-full bg-red-500/90 px-2.5 py-1 text-[11px] font-semibold text-white transition-colors hover:bg-red-600"
+              >
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-white" />
+                Grabando · parar
+              </button>
+            ) : (
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-red-500/90 px-2.5 py-1 text-[11px] font-semibold text-white">
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-white" />
+                Grabando
+              </span>
+            )
           ) : null}
           {!panelAbierto ? (
             <EstadoConexion latido={latido} enCurso={enCurso} />
@@ -339,6 +351,7 @@ export function SalaReunion({
             calidad={calidad}
             onCambiarCalidad={esMesa ? setCalidad : undefined}
             puedoGrabar={esMesa}
+            grabacionActivaServidor={!!grabacionActiva}
             nombreEspera={mi?.nombre ?? undefined}
             imageUrlLocal={mi?.imageUrl ?? undefined}
             personas={sala?.personas}

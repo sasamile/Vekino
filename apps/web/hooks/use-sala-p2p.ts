@@ -5,6 +5,7 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
 import type { AudioRemoto, Calidad, EmisorRemoto, Medio } from "./sala-tipos";
+import { AUDIO_BITRATE, MIC_CAPTURE } from "./sala-audio";
 
 /**
  * Video propio de la sala: WebRTC punto a punto con Convex de señalización.
@@ -141,7 +142,7 @@ export function useSalaP2P(
                 height: { ideal: perfil.camara.height },
                 frameRate: { ideal: perfil.camara.fps },
               },
-              audio: { echoCancellation: true, noiseSuppression: true },
+              audio: { ...MIC_CAPTURE },
             })
           : await navigator.mediaDevices.getDisplayMedia({
               video: {
@@ -156,6 +157,9 @@ export function useSalaP2P(
        * mal justo en pantallas compartidas con letra pequeña. */
       for (const t of stream.getVideoTracks()) {
         t.contentHint = medio === "pantalla" ? "detail" : "motion";
+      }
+      for (const t of stream.getAudioTracks()) {
+        t.contentHint = "speech";
       }
 
       streamsLocales.current.set(medio, stream);
@@ -379,8 +383,18 @@ export function useSalaP2P(
              * intenta megas que la subida no da y TODO se vuelve lento.
              * 2.5 Mbps de pantalla se lee nítido; 1.2 Mbps de cámara sobra. */
             for (const sender of pc.getSenders()) {
-              if (sender.track?.kind !== "video") continue;
+              if (!sender.track) continue;
               const params = sender.getParameters();
+              if (sender.track.kind === "audio") {
+                /* Opus ~64 kbps + prioridad alta: voz fluida aunque el video
+                 * compita por la subida. */
+                params.encodings = [
+                  { maxBitrate: AUDIO_BITRATE, priority: "high" },
+                ];
+                void sender.setParameters(params).catch(() => {});
+                continue;
+              }
+              if (sender.track.kind !== "video") continue;
               params.degradationPreference =
                 medio === "pantalla" ? "maintain-resolution" : "maintain-framerate";
               params.encodings = [

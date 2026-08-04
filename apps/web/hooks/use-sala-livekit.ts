@@ -12,6 +12,7 @@ import {
   type RemoteTrackPublication,
 } from "livekit-client";
 import type { AudioRemoto, Calidad, EmisorRemoto, Medio } from "./sala-tipos";
+import { AUDIO_BITRATE, MIC_CAPTURE } from "./sala-audio";
 
 /**
  * La misma sala, repartida por el servidor de medios en vez de par a par.
@@ -51,6 +52,14 @@ const PERFILES = {
      * documento se sigue leyendo. */
     pantalla: { width: 1600, height: 900, fps: 15, bitrate: 1_000_000 },
   },
+} as const;
+
+/** Publicación de audio: bitrate alto + RED (pérdida) + sin DTX (sin cortes). */
+const AUDIO_PUBLISH = {
+  audioPreset: { maxBitrate: AUDIO_BITRATE, priority: "high" as const },
+  dtx: false,
+  red: true,
+  forceStereo: false,
 } as const;
 
 export type ConexionSala = {
@@ -115,7 +124,12 @@ export function useSalaLiveKit(
   const room = useMemo(
     () =>
       activo && conexion
-        ? new Room({ adaptiveStream: true, dynacast: true })
+        ? new Room({
+            adaptiveStream: true,
+            dynacast: true,
+            audioCaptureDefaults: { ...MIC_CAPTURE },
+            publishDefaults: { ...AUDIO_PUBLISH },
+          })
         : null,
     [activo, conexion],
   );
@@ -256,6 +270,7 @@ export function useSalaLiveKit(
     (medio: Medio) =>
       medio === "camara"
         ? {
+            ...AUDIO_PUBLISH,
             videoEncoding: {
               maxBitrate: perfil.camara.bitrate,
               maxFramerate: perfil.camara.fps,
@@ -265,6 +280,7 @@ export function useSalaLiveKit(
             simulcast: true,
           }
         : {
+            ...AUDIO_PUBLISH,
             videoEncoding: {
               maxBitrate: perfil.pantalla.bitrate,
               maxFramerate: perfil.pantalla.fps,
@@ -315,7 +331,11 @@ export function useSalaLiveKit(
   const toggleMic = useCallback(async () => {
     if (!room) return;
     const siguiente = !room.localParticipant.isMicrophoneEnabled;
-    await room.localParticipant.setMicrophoneEnabled(siguiente);
+    await room.localParticipant.setMicrophoneEnabled(
+      siguiente,
+      siguiente ? { ...MIC_CAPTURE } : undefined,
+      siguiente ? { ...AUDIO_PUBLISH } : undefined,
+    );
     sincronizar(room);
   }, [room, sincronizar]);
 

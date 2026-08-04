@@ -397,6 +397,7 @@ export function EscenarioVideo({
   calidad = "ahorro",
   onCambiarCalidad,
   puedoGrabar = false,
+  grabacionActivaServidor = false,
   extraControles,
   controlesFin,
 }: {
@@ -419,6 +420,8 @@ export function EscenarioVideo({
   onCambiarCalidad?: (c: Calidad) => void;
   /** Solo la mesa: grabar audio de respaldo + bitácora. */
   puedoGrabar?: boolean;
+  /** Badge del servidor: activa aunque se haya perdido el MediaRecorder local. */
+  grabacionActivaServidor?: boolean;
   /** Botones extra en la barra (levantar la mano). */
   extraControles?: React.ReactNode;
   /** Cierre de la barra (abrir panel, colgar). */
@@ -431,12 +434,24 @@ export function EscenarioVideo({
   });
   const streamsGrabacion = [
     ...video.audios.map((a) => a.stream),
-    ...video.locales.map((l) => l.stream),
-    ...video.remotos.map((r) => r.stream).filter((s): s is MediaStream => !!s),
+    /* Solo video remoto: el mic local se añade aparte y NUNCA se reproduce
+     * por altavoz. Meter locales aquí duplicaba el mic y agravaba el eco. */
+    ...video.remotos
+      .map((r) => r.stream)
+      .filter((s): s is MediaStream => !!s),
   ];
+  const micLocalGrabacion =
+    video.locales
+      .find((l) => l.medio === "camara")
+      ?.stream.getAudioTracks()
+      .find((t) => t.readyState === "live") ?? null;
   const grabacion = useGrabacionSala(
     asambleaId,
     puedoGrabar ? streamsGrabacion : [],
+    {
+      activaEnServidor: grabacionActivaServidor,
+      micTrack: puedoGrabar ? micLocalGrabacion : null,
+    },
   );
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -769,23 +784,31 @@ export function EscenarioVideo({
               <button
                 type="button"
                 onClick={() =>
-                  void (grabacion.grabando ? grabacion.stop() : grabacion.start())
+                  void (
+                    grabacion.grabando || grabacion.huerfana
+                      ? grabacion.stop()
+                      : grabacion.start()
+                  )
                 }
-                aria-pressed={grabacion.grabando}
+                aria-pressed={grabacion.grabando || grabacion.huerfana}
                 aria-label={
-                  grabacion.grabando
-                    ? `Detener grabación · ${formatearElapsed(grabacion.elapsed)}`
-                    : "Grabar la reunión (video y audio)"
+                  grabacion.huerfana
+                    ? "Quitar aviso de grabación (se perdió al recargar)"
+                    : grabacion.grabando
+                      ? `Detener grabación · ${formatearElapsed(grabacion.elapsed)}`
+                      : "Grabar la reunión (video y audio)"
                 }
                 title={
                   grabacion.error ??
-                  (grabacion.grabando
-                    ? `Grabando reunión ${formatearElapsed(grabacion.elapsed)} — tocar para detener y descargar`
-                    : "Grabar reunión completa (elige esta pestaña + audio)")
+                  (grabacion.huerfana
+                    ? "La grabación se cortó al recargar. Toca para quitar el aviso (el archivo ya no se puede recuperar)."
+                    : grabacion.grabando
+                      ? `Grabando reunión ${formatearElapsed(grabacion.elapsed)} — tocar para detener y descargar`
+                      : "Grabar reunión completa (elige esta pestaña + audio)")
                 }
                 className={cn(
                   "relative flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition-colors sm:h-12 sm:w-12",
-                  grabacion.grabando
+                  grabacion.grabando || grabacion.huerfana
                     ? "bg-red-500 text-white hover:bg-red-600"
                     : "bg-white/10 text-white/85 hover:bg-white/20",
                 )}
@@ -793,13 +816,17 @@ export function EscenarioVideo({
                 <Circle
                   className={cn(
                     "h-4 w-4 sm:h-5 sm:w-5",
-                    grabacion.grabando && "fill-current",
+                    (grabacion.grabando || grabacion.huerfana) && "fill-current",
                   )}
                   aria-hidden
                 />
                 {grabacion.grabando ? (
                   <span className="absolute -bottom-5 left-1/2 -translate-x-1/2 whitespace-nowrap text-[9px] font-semibold tabular-nums text-red-300">
                     {formatearElapsed(grabacion.elapsed)}
+                  </span>
+                ) : grabacion.huerfana ? (
+                  <span className="absolute -bottom-5 left-1/2 -translate-x-1/2 whitespace-nowrap text-[9px] font-semibold text-amber-300">
+                    Parar
                   </span>
                 ) : null}
               </button>
@@ -870,6 +897,10 @@ function BotonRedondo({
  * depender de que alguien tenga la cámara encendida. Si el navegador rechaza
  * reproducir —Safari en iPhone lo hace siempre hasta que el usuario toca la
  * pantalla— avisa hacia arriba para que aparezca un único botón.
+ *
+ * Importante: no reiniciar `srcObject` si es la misma pista. El espejo de la
+ * sala recrea MediaStreams en cada evento y, si aquí se volvía a asignar,
+ * la voz se cortaba a pedazos (efecto “robot”).
  */
 function PistaAudio({
   stream,
@@ -885,19 +916,40 @@ function PistaAudio({
   onBloqueado: () => void;
 }) {
   const ref = useRef<HTMLAudioElement>(null);
+  const pistaIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
+    const pista = stream.getAudioTracks()[0];
+    const id = pista?.id ?? null;
+
+    if (id && pistaIdRef.current === id) {
+      /* Misma pista: solo reanudar si quedó en pausa (gesto / autoplay). */
+      if (el.paused) {
+        void el.play().catch(() => onBloqueado());
+      }
+      return;
+    }
+
+    pistaIdRef.current = id;
     el.srcObject = stream;
-    el.play().catch(() => onBloqueado());
-  }, [stream, intento, onBloqueado]);
+    void el.play().catch(() => onBloqueado());
+  }, [stream, onBloqueado]);
 
   /* Efecto aparte: silenciar no debe reiniciar la reproducción. */
   useEffect(() => {
     const el = ref.current;
     if (el) el.muted = !activo;
   }, [activo]);
+
+  /* Forzar reintento al pulsar "Activar sonido" aunque sea la misma pista. */
+  useEffect(() => {
+    if (intento === 0) return;
+    const el = ref.current;
+    if (!el) return;
+    void el.play().catch(() => onBloqueado());
+  }, [intento, onBloqueado]);
 
   return <audio ref={ref} autoPlay playsInline className="hidden" />;
 }
@@ -918,7 +970,11 @@ function VideoRemoto({
   useEffect(() => {
     const el = ref.current;
     if (!el || !emisor.stream) return;
-    el.srcObject = emisor.stream;
+    /* Audio SOLO por PistaAudio: aquí solo video, si no se oye doble. */
+    const soloVideo = new MediaStream(emisor.stream.getVideoTracks());
+    el.srcObject = soloVideo;
+    el.muted = true;
+    el.volume = 0;
     void el.play().catch(() => {});
   }, [emisor.stream]);
 
@@ -996,7 +1052,9 @@ function VideoRemoto({
   );
 }
 
-/** Stream propio (cámara flotante o pantalla presentándose). Siempre muda. */
+/** Stream propio (cámara flotante o pantalla presentándose). Siempre muda.
+ *  Solo pistas de VIDEO en el `<video>`: si el mic va en el mismo MediaStream,
+ *  algunos navegadores lo reproducen igual (eco de tu propia voz). */
 function PreviewStream({
   stream,
   etiqueta,
@@ -1019,7 +1077,11 @@ function PreviewStream({
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    el.srcObject = stream;
+    /* Nunca adjuntar pistas de audio al elemento de preview. */
+    const soloVideo = new MediaStream(stream.getVideoTracks());
+    el.srcObject = soloVideo;
+    el.muted = true;
+    el.volume = 0;
     void el.play().catch(() => {});
   }, [stream]);
   return (
