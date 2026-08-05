@@ -139,6 +139,7 @@ export default function CondominiosPage() {
               | undefined,
             unitLimit: editFor.unitLimit,
             avalPortalUrl: editFor.avalPortalUrl,
+            activeModules: editFor.activeModules,
           }}
           onClose={() => setEditFor(null)}
         />

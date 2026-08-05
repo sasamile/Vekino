@@ -28,6 +28,8 @@ export const datosPagoAprobado = internalQuery({
     const factura = await ctx.db.get(pago.facturaId);
     const condominio = await ctx.db.get(pago.condominioId);
     if (!factura || !condominio) return null;
+    // Gate por tenant: sin el módulo "whatsapp" no se notifica nada.
+    if (!condominio.activeModules.includes("whatsapp")) return null;
 
     let userId = pago.userId ?? null;
     if (!userId && factura.membershipId) {

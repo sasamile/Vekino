@@ -243,7 +243,9 @@ http.route({
         texto ??
         (media?.caption ? `[${tipoMsg}] ${media.caption}` : `[${tipoMsg}]`);
 
-      const registro = await ctx.runMutation(internal.whatsapp.registrarEntrante, {
+      // Registro + scheduling del router son UNA transacción dentro de la
+      // mutation: o queda todo, o YCloud reintenta.
+      await ctx.runMutation(internal.whatsapp.registrarEntrante, {
         telefono,
         ycloudMessageId: String(msg.id),
         tipo: tipoMsg,
@@ -252,17 +254,10 @@ http.route({
           typeof msg.customerProfile?.name === "string"
             ? msg.customerProfile.name
             : undefined,
+        texto: texto?.slice(0, 4000),
+        interactiveId,
+        media,
       });
-
-      if (!registro.duplicado) {
-        await ctx.scheduler.runAfter(0, internal.whatsapp.procesarEntrante, {
-          conversacionId: registro.conversacionId,
-          tipo: tipoMsg,
-          texto: texto?.slice(0, 4000),
-          interactiveId,
-          media,
-        });
-      }
       return Response.json({ ok: true });
     }
 

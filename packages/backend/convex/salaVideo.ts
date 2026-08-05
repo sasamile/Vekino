@@ -3,6 +3,7 @@ import { query, mutation, internalMutation } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
+import { hayAsambleaEnCurso } from "./model/latidos";
 import {
   getCurrentAppUser,
   requireAppUser,
@@ -1485,9 +1486,22 @@ export const mensajesSala = query({
 // ─────────────────────────────────────────────────────────────
 
 /** Barre emisores sin latido y señales huérfanas. Corre cada minuto. */
+/**
+ * Barrido de lo efímero de la sala. Cron cada minuto.
+ *
+ * Se sale de inmediato si no hay ninguna asamblea en curso, que es lo que
+ * pasa casi todos los días: emisores, señales y reacciones solo existen
+ * mientras hay reunión, y recorrer cuatro tablas cada minuto durante todo el
+ * año para no encontrar nada costaba del orden de 86.000 llamadas al mes.
+ *
+ * El chat NO se limpia aquí — se le pasa el trapo una vez al día en
+ * `limpiarMensajes`. Si viviera en este cron, los mensajes de una asamblea
+ * ya terminada no se borrarían nunca hasta que hubiera otra.
+ */
 export const limpiar = internalMutation({
   args: {},
   handler: async (ctx) => {
+    if (!(await hayAsambleaEnCurso(ctx))) return;
     const now = Date.now();
     const emisoresViejos = await ctx.db.query("salaEmisores").take(500);
     let borrados = 0;
@@ -1514,18 +1528,34 @@ export const limpiar = internalMutation({
         reaccionesViejas++;
       }
     }
-    const mensajes = await ctx.db.query("salaMensajes").take(500);
-    let mensajesViejos = 0;
-    for (const m of mensajes) {
-      if (m.createdAt < now - 12 * 60 * 60_000) {
-        await ctx.db.delete(m._id);
-        mensajesViejos++;
-      }
-    }
-    if (borrados + huerfanas + reaccionesViejas + mensajesViejos > 0) {
+    if (borrados + huerfanas + reaccionesViejas > 0) {
       console.info(
-        `[salaVideo] limpieza: ${borrados} emisores, ${huerfanas} señales, ${reaccionesViejas} reacciones, ${mensajesViejos} msgs`,
+        `[salaVideo] limpieza: ${borrados} emisores, ${huerfanas} señales, ${reaccionesViejas} reacciones`,
       );
     }
+  },
+});
+
+/**
+ * Chat de la sala: se borra lo de hace más de 12 horas. Cron diario.
+ *
+ * Va aparte del barrido por minuto porque los mensajes sobreviven a la
+ * asamblea: si dependieran de que haya una en curso, los de la última se
+ * quedarían ahí hasta la siguiente. Y como el corte es de 12 horas, mirarlo
+ * una vez al día basta.
+ */
+export const limpiarMensajes = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const corte = Date.now() - 12 * 60 * 60_000;
+    const mensajes = await ctx.db.query("salaMensajes").take(2000);
+    let viejos = 0;
+    for (const m of mensajes) {
+      if (m.createdAt < corte) {
+        await ctx.db.delete(m._id);
+        viejos++;
+      }
+    }
+    if (viejos > 0) console.info(`[salaVideo] ${viejos} mensajes borrados`);
   },
 });

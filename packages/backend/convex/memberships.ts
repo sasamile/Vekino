@@ -304,13 +304,21 @@ export const upsertCondoMemberProfile = mutation({
     if (existing) {
       userId = existing._id;
       existed = true;
-      await ctx.db.patch(existing._id, {
-        name,
-        telefono,
-        telefonoE164,
-        active: true,
-        updatedAt: now,
-      });
+      // Patch condicional: en Convex, patch con undefined BORRA el campo.
+      // Re-agregar a un miembro existente sin mandar teléfono no debe
+      // borrarle el que ya tenía.
+      const patch: {
+        name: string;
+        active: boolean;
+        updatedAt: number;
+        telefono?: string;
+        telefonoE164?: string;
+      } = { name, active: true, updatedAt: now };
+      if (args.telefono !== undefined) {
+        patch.telefono = telefono;
+        patch.telefonoE164 = telefonoE164;
+      }
+      await ctx.db.patch(existing._id, patch);
     } else {
       userId = await ctx.db.insert("users", {
         name,

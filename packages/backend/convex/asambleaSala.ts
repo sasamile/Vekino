@@ -21,6 +21,13 @@ import {
   type Ventana,
 } from "./lib/permanencia";
 import { registrarBitacora } from "./salaBitacora";
+import {
+  hayAsambleaEnCurso,
+  latirPresencia,
+  latirSesion,
+  olvidarLatidoPresencia,
+  olvidarLatidoSesion,
+} from "./model/latidos";
 
 /**
  * Sala de la asamblea: quién está conectado, cuánto tiempo estuvo y quién
@@ -89,11 +96,14 @@ export async function abrirSesiones(
       .first();
 
     if (previa) {
-      await ctx.db.patch(previa._id, { ultimoLatido: now });
+      // Ya estaba dentro: basta con refrescarle el pulso. Tocar la sesión
+      // reejecutaría `salaEnVivo` en todos los conectados sin que haya
+      // cambiado nada que ellos vean.
+      await latirSesion(ctx, args.asambleaId, previa._id);
       continue;
     }
 
-    await ctx.db.insert("asambleaSesiones", {
+    const sesionId = await ctx.db.insert("asambleaSesiones", {
       condominioId: args.condominioId,
       asambleaId: args.asambleaId,
       unidadId: f.unidadId,
@@ -105,8 +115,11 @@ export async function abrirSesiones(
       entroEn: now,
       abierta: true,
       origen: args.origen,
+      // Queda como "desde cuándo"; el pulso vivo va en `salaLatidos`.
       ultimoLatido: now,
     });
+    // Sin pulso inicial, el cron la cerraría en la siguiente vuelta.
+    await latirSesion(ctx, args.asambleaId, sesionId);
     abiertas++;
     await registrarBitacora(ctx, {
       condominioId: args.condominioId,
@@ -151,6 +164,7 @@ export async function cerrarSesionesUnidad(
       salioEn: now,
       motivoSalida: args.motivo,
     });
+    await olvidarLatidoSesion(ctx, s._id);
     await registrarBitacora(ctx, {
       condominioId: s.condominioId,
       asambleaId: args.asambleaId,
@@ -187,6 +201,7 @@ export async function cerrarSesionesAsamblea(
       salioEn: now,
       motivoSalida: motivo,
     });
+    await olvidarLatidoSesion(ctx, s._id);
     await registrarBitacora(ctx, {
       condominioId: s.condominioId,
       asambleaId,
@@ -648,57 +663,77 @@ export const salirPresenciaConCodigo = mutation({
 export const cerrarSesionesInactivas = internalMutation({
   args: {},
   handler: async (ctx) => {
-    const limite = Date.now() - CORTE_INACTIVIDAD_MS;
-    const vencidas = await ctx.db
-      .query("asambleaSesiones")
-      .withIndex("by_abierta_latido", (q) =>
-        q.eq("abierta", true).lt("ultimoLatido", limite),
-      )
-      .take(500);
-
-    const now = Date.now();
-    for (const s of vencidas) {
-      await ctx.db.patch(s._id, {
-        abierta: false,
-        salioEn: s.ultimoLatido,
-        motivoSalida: "inactividad",
-      });
-      await registrarBitacora(ctx, {
-        condominioId: s.condominioId,
-        asambleaId: s.asambleaId,
-        tipo: "salida",
-        nombre: s.userNombre,
-        detalle: `Unidad ${s.unidadNumero} · Desconectado por inactividad`,
-        userId: s.userId,
-      });
+    /* Sin asamblea en curso no hay nada que barrer, y la mayoría de los días
+     * no hay ninguna. Una lectura por índice contra dos barridos completos
+     * cada minuto durante todo el año. */
+    if (!(await hayAsambleaEnCurso(ctx))) {
+      return { cerradas: 0, presencias: 0 };
     }
 
-    // Presencias (personas en pestaña) sin latido → se borran.
-    const presenciasVencidas = await ctx.db
-      .query("salaPresencias")
+    /* Barrido desde `salaLatidos`: ahí vive el pulso. Las sesiones y las
+     * presencias ya no lo llevan encima, justamente para que latir no
+     * despierte a `salaEnVivo` (ver el comentario de la tabla en el schema).
+     *
+     * El tope de 500 no es capricho: una vuelta del cron tiene que caber en
+     * una transacción. Lo que sobre se cierra en la vuelta siguiente, un
+     * minuto después. */
+    const limite = Date.now() - CORTE_INACTIVIDAD_MS;
+    const muertos = await ctx.db
+      .query("salaLatidos")
       .withIndex("by_latido", (q) => q.lt("ultimoLatido", limite))
       .take(500);
-    for (const p of presenciasVencidas) {
-      await registrarBitacora(ctx, {
-        condominioId: p.condominioId,
-        asambleaId: p.asambleaId,
-        tipo: "salida",
-        nombre: p.nombre,
-        detalle: "Desconectado por inactividad",
-        userId: p.userId,
-      });
-      await ctx.db.delete(p._id);
+
+    let cerradas = 0;
+    let presencias = 0;
+
+    for (const l of muertos) {
+      if (l.sesionId) {
+        const s = await ctx.db.get(l.sesionId);
+        if (s?.abierta) {
+          await ctx.db.patch(s._id, {
+            abierta: false,
+            // La hora del último pulso, no la de ahora: se fue cuando dejó
+            // de latir, no cuando el cron se dio cuenta. La permanencia se
+            // mide con esto.
+            salioEn: l.ultimoLatido,
+            motivoSalida: "inactividad",
+          });
+          await registrarBitacora(ctx, {
+            condominioId: s.condominioId,
+            asambleaId: s.asambleaId,
+            tipo: "salida",
+            nombre: s.userNombre,
+            detalle: `Unidad ${s.unidadNumero} · Desconectado por inactividad`,
+            userId: s.userId,
+          });
+          cerradas++;
+        }
+      } else if (l.presenciaId) {
+        const p = await ctx.db.get(l.presenciaId);
+        if (p) {
+          await registrarBitacora(ctx, {
+            condominioId: p.condominioId,
+            asambleaId: p.asambleaId,
+            tipo: "salida",
+            nombre: p.nombre,
+            detalle: "Desconectado por inactividad",
+            userId: p.userId,
+          });
+          await ctx.db.delete(p._id);
+          presencias++;
+        }
+      }
+      // El pulso se borra pase lo que pase: si el documento ya no existe,
+      // dejarlo haría al cron volver sobre él en cada vuelta, para siempre.
+      await ctx.db.delete(l._id);
     }
 
-    if (vencidas.length > 0 || presenciasVencidas.length > 0) {
+    if (cerradas > 0 || presencias > 0) {
       console.info(
-        `[asambleaSala] ${vencidas.length} sesiones + ${presenciasVencidas.length} presencias por inactividad`,
+        `[asambleaSala] ${cerradas} sesiones + ${presencias} presencias por inactividad`,
       );
     }
-    return {
-      cerradas: vencidas.length,
-      presencias: presenciasVencidas.length,
-    };
+    return { cerradas, presencias };
   },
 });
 
@@ -746,21 +781,30 @@ export const salaEnVivo = query({
           ? (porUnidad.size / unidades.length) * 100
           : 0;
 
-    const presencias = await ctx.db
+    /* Sin filtro por frescura: las presencias muertas las borra el cron.
+     *
+     * Antes se filtraba aquí, lo que obligaba a que esta consulta leyera
+     * `ultimoLatido` — y por tanto a reejecutarse con cada pulso de cada
+     * persona. Ese filtro era la mitad del problema de consumo.
+     *
+     * A cambio, a quien se le cae la conexión sin cerrar la pestaña se le
+     * deja de ver cuando pasa el cron, hasta un minuto más tarde que antes.
+     * Las salidas limpias siguen siendo instantáneas: borran la fila. */
+    const vivas = await ctx.db
       .query("salaPresencias")
       .withIndex("by_asamblea", (q) => q.eq("asambleaId", args.asambleaId))
       .collect();
-    const ahora = Date.now();
-    const vivas = presencias.filter(
-      (p) => ahora - p.ultimoLatido < CORTE_INACTIVIDAD_MS,
-    );
 
     return {
       unidadesConectadas: porUnidad.size,
       /** Personas con la pestaña de la sala abierta (estilo Meet). */
       personasEnSala: vivas.length,
+      /* Por orden de llegada. Antes se ordenaba por el último latido, que
+       * cambiaba cada 30 s y hacía saltar a la gente de sitio en la lista
+       * sin motivo; ahora ese campo solo marca cuándo entró, así que además
+       * habría dejado de significar lo que decía. */
       personas: vivas
-        .sort((a, b) => b.ultimoLatido - a.ultimoLatido)
+        .sort((a, b) => a._creationTime - b._creationTime)
         .slice(0, 100)
         .map((p) => ({
           userId: p.userId ?? null,

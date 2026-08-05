@@ -8,6 +8,7 @@ import {
 } from "./model/authz";
 import { LATIDO_MS, CORTE_INACTIVIDAD_MS } from "./asambleaSala";
 import { registrarBitacora } from "./salaBitacora";
+import { latirPresencia, olvidarLatidoPresencia } from "./model/latidos";
 
 /**
  * Invitados a la sala: entran con enlace, pueden pedir la palabra y
@@ -275,10 +276,12 @@ export const miSalaInvitado = query({
       .query("salaPresencias")
       .withIndex("by_asamblea", (q) => q.eq("asambleaId", asamblea._id))
       .collect();
-    const ahora = Date.now();
+    /* Sin filtrar por frescura: de eso se encarga el cron. Leer aquí el
+     * `ultimoLatido` obligaría a reejecutar esta consulta con cada pulso de
+     * cada persona (ver `salaLatidos` en el schema). Se ordena por entrada,
+     * que además es un orden estable —el del latido bailaba en cada vuelta. */
     const personas = presencias
-      .filter((p) => ahora - p.ultimoLatido < CORTE_INACTIVIDAD_MS)
-      .sort((a, b) => b.ultimoLatido - a.ultimoLatido)
+      .sort((a, b) => a._creationTime - b._creationTime)
       .slice(0, 100)
       .map((p) => ({
         userId: p.userId ?? null,
@@ -348,6 +351,8 @@ export const latidoPresenciaInvitado = mutation({
     }
 
     const now = Date.now();
+    // La sesión del invitado no la lee ninguna consulta reactiva de la sala,
+    // así que refrescarla aquí no despierta a nadie.
     await ctx.db.patch(sesion._id, { ultimoLatido: now });
 
     const ex = await ctx.db
@@ -357,13 +362,15 @@ export const latidoPresenciaInvitado = mutation({
       )
       .first();
     if (ex) {
-      await ctx.db.patch(ex._id, {
-        nombre: sesion.nombre,
-        esMesa: false,
-        ultimoLatido: now,
-      });
+      /* `salaPresencias` SÍ la leen todos los conectados. Solo se toca si el
+       * nombre cambió de verdad; el pulso va a `salaLatidos`. Ver el
+       * comentario de esa tabla en el schema. */
+      if (ex.nombre !== sesion.nombre) {
+        await ctx.db.patch(ex._id, { nombre: sesion.nombre });
+      }
+      await latirPresencia(ctx, asamblea._id, ex._id);
     } else {
-      await ctx.db.insert("salaPresencias", {
+      const presenciaId = await ctx.db.insert("salaPresencias", {
         condominioId: asamblea.condominioId,
         asambleaId: asamblea._id,
         codigoInvitado: sesionCodigo,
@@ -371,6 +378,7 @@ export const latidoPresenciaInvitado = mutation({
         esMesa: false,
         ultimoLatido: now,
       });
+      await latirPresencia(ctx, asamblea._id, presenciaId);
     }
     return { activo: true as const, proximoLatidoMs: LATIDO_MS };
   },
@@ -396,6 +404,8 @@ export const salirPresenciaInvitado = mutation({
         nombre: sesion.nombre,
         detalle: "Salió de la sala (invitado)",
       });
+      // El pulso primero: uno huérfano haría al cron perseguir un fantasma.
+      await olvidarLatidoPresencia(ctx, ex._id);
       await ctx.db.delete(ex._id);
     }
     return { ok: true as const };

@@ -76,31 +76,22 @@ docker logs -f vekino-transcriptor
 
 ## Producción
 
-El `.env` que se genera en local apunta al deployment **dev** de Convex. Si
-se copia tal cual al servidor, el transcriptor escribiría las asambleas de
-producción en la base de pruebas — y nadie lo notaría hasta que el acta
-saliera vacía.
+> **Ojo con el estado actual del proyecto.** Hoy existe un solo deployment de
+> Convex (`agreeable-bee-782`), etiquetado `dev:` pero es el que sirve a
+> `www.vekino.com`. Es decir: **dev y producción son la misma base.** Mientras
+> eso siga así, el `.env` que se genera en local ya apunta al sitio correcto y
+> no hay nada que cambiar al llevarlo al servidor.
+>
+> Cuando se separen los entornos —que habría que hacerlo— este archivo tendrá
+> que apuntar al `.convex.site` de producción y llevar el
+> `TRANSCRIPTOR_SECRET` de ese deployment, que es distinto por entorno.
 
-En el servidor hay que cambiar **dos** valores:
-
-| Variable | En producción |
+| Variable | De dónde sale |
 |---|---|
-| `CONVEX_SITE_URL` | El `.convex.site` del deployment **prod** |
-| `TRANSCRIPTOR_SECRET` | El que esté puesto en el Convex **prod** |
-| `LIVEKIT_*` | Iguales — es el mismo servidor de medios |
-| `DEEPGRAM_API_KEY` | La misma llave, o una aparte para separar el gasto |
-
-El secreto de prod hay que crearlo, porque cada deployment tiene sus propias
-variables:
-
-```bash
-cd packages/backend
-npx convex env set --prod TRANSCRIPTOR_SECRET "$(openssl rand -hex 32)"
-npx convex env get --prod TRANSCRIPTOR_SECRET   # copiar al .env del servidor
-```
-
-Conviene que **no sea el mismo secreto que en dev**: si se filtra el de una
-máquina de pruebas, no debería servir para escribir en las actas de verdad.
+| `CONVEX_SITE_URL` | El `.convex.site` del deployment que usa la web |
+| `TRANSCRIPTOR_SECRET` | `npx convex env get TRANSCRIPTOR_SECRET` |
+| `LIVEKIT_*` | Las mismas del `livekit.yaml` de al lado |
+| `DEEPGRAM_API_KEY` | De console.deepgram.com |
 
 Comprobación rápida desde el servidor, antes de levantar el contenedor:
 

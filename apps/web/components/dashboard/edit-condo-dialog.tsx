@@ -28,6 +28,8 @@ export type CondoEditValues = {
   subscriptionPlan?: Plan | null;
   unitLimit?: number | null;
   avalPortalUrl?: string | null;
+  /** Módulos habilitados del condominio (p.ej. "whatsapp"). */
+  activeModules?: string[] | null;
 };
 
 type UploadUi = {
@@ -68,6 +70,9 @@ export function EditCondoDialog({
   );
   const [avalPortalUrl, setAvalPortalUrl] = useState(
     initial.avalPortalUrl ?? "",
+  );
+  const [whatsappActivo, setWhatsappActivo] = useState(
+    (initial.activeModules ?? []).includes("whatsapp"),
   );
   const [logoProgress, setLogoProgress] = useState<UploadUi | null>(null);
   const [coverProgress, setCoverProgress] = useState<UploadUi | null>(null);
@@ -211,6 +216,12 @@ export function EditCondoDialog({
           subscriptionPlan: plan,
           unitLimit: limit,
           avalPortalUrl: avalPortalUrl.trim(),
+          activeModules: whatsappActivo
+            ? [
+                ...(initial.activeModules ?? []).filter((m) => m !== "whatsapp"),
+                "whatsapp",
+              ]
+            : (initial.activeModules ?? []).filter((m) => m !== "whatsapp"),
         },
       });
       onClose();
@@ -485,6 +496,28 @@ export function EditCondoDialog({
             onChange={setAvalPortalUrl}
             placeholder="https://… (opcional)"
           />
+
+          <div>
+            <p className="mb-2 text-sm font-medium text-foreground">Módulos</p>
+            <label className="flex cursor-pointer items-start justify-between gap-3 rounded-xl border border-border bg-background px-3 py-3">
+              <span className="min-w-0">
+                <span className="block text-sm font-medium text-foreground">
+                  WhatsApp (YCloud)
+                </span>
+                <span className="mt-0.5 block text-xs text-muted-foreground">
+                  Bot para residentes (facturas, reservas, comprobantes, PQRS) y
+                  avisos por plantilla al publicar comunicados.
+                </span>
+              </span>
+              <input
+                type="checkbox"
+                checked={whatsappActivo}
+                onChange={(e) => setWhatsappActivo(e.target.checked)}
+                disabled={busy || uploading}
+                className="mt-0.5 h-5 w-9 shrink-0 cursor-pointer appearance-none rounded-full bg-muted transition-colors before:mt-0.5 before:ml-0.5 before:block before:h-4 before:w-4 before:rounded-full before:bg-white before:shadow before:transition-transform checked:bg-brand checked:before:translate-x-4"
+              />
+            </label>
+          </div>
 
           {error && <p className="text-sm text-red-600">{error}</p>}
 

@@ -294,6 +294,32 @@ export const update = mutation({
 });
 
 /**
+ * Activa o desactiva un módulo del condominio (p.ej. "whatsapp").
+ * `activeModules` es la lista blanca que gatea features por tenant:
+ * el bot y los broadcasts de WhatsApp solo operan si "whatsapp" está aquí.
+ */
+export const toggleModulo = mutation({
+  args: {
+    condominioId: v.id("condominios"),
+    modulo: v.string(),
+    activo: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    await requirePlatformStaff(ctx);
+    const condo = await ctx.db.get(args.condominioId);
+    if (!condo) throw new Error("Condominio no encontrado.");
+
+    const sin = condo.activeModules.filter((m) => m !== args.modulo);
+    const activeModules = args.activo ? [...sin, args.modulo] : sin;
+    await ctx.db.patch(args.condominioId, {
+      activeModules,
+      updatedAt: Date.now(),
+    });
+    return activeModules;
+  },
+});
+
+/**
  * Helper interno para fijar la URL del portal de pagos AvalPayCenter de un
  * condominio (deep-link por convenio). Uso puntual desde CLI/soporte.
  */

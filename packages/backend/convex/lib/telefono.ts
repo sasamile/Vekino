@@ -18,6 +18,10 @@ export function normalizarTelefonoE164(raw: string | null | undefined): string |
   const teniaMas = raw.trim().startsWith("+");
   const digitos = raw.replace(/\D/g, "");
   if (digitos.length < 8 || digitos.length > 15) return null;
+  // Ningún E.164 empieza por 0 tras el "+": un "0414..." venezolano o un
+  // trunk-0 europeo normalizado a "+0..." jamás matchearía a YCloud y todo
+  // envío fallaría. Mejor null que un canónico inválido.
+  if (digitos.startsWith("0")) return null;
 
   if (teniaMas) return `+${digitos}`;
 

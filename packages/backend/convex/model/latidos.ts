@@ -1,5 +1,23 @@
-import type { MutationCtx } from "../_generated/server";
+import type { MutationCtx, QueryCtx } from "../_generated/server";
 import type { Id } from "../_generated/dataModel";
+
+/**
+ * ¿Hay alguna asamblea en curso ahora mismo?
+ *
+ * La usan los crons de la sala para salirse temprano. Corren cada minuto,
+ * las veinticuatro horas, y casi todos los días no hay ninguna asamblea:
+ * eran ~2.880 llamadas diarias —unas 86.000 al mes— barriendo tablas vacías.
+ *
+ * Una sola lectura por índice cuesta prácticamente nada frente a los dos
+ * barridos que evita.
+ */
+export async function hayAsambleaEnCurso(ctx: QueryCtx | MutationCtx) {
+  const alguna = await ctx.db
+    .query("asambleas")
+    .withIndex("by_estado", (q) => q.eq("estado", "en_curso"))
+    .first();
+  return alguna != null;
+}
 
 /**
  * El pulso de las conexiones a la sala.

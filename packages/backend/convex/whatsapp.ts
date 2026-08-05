@@ -45,6 +45,19 @@ export const registrarEntrante = internalMutation({
     tipo: v.string(),
     contenido: v.string(),
     nombrePerfil: v.optional(v.string()),
+    // Datos que necesita el router. Se agenda desde AQUÍ (no desde el
+    // webhook) para que registro + scheduling sean una sola transacción:
+    // si algo falla, YCloud reintenta y no hay mensaje fantasma ya "visto".
+    texto: v.optional(v.string()),
+    interactiveId: v.optional(v.string()),
+    media: v.optional(
+      v.object({
+        link: v.string(),
+        mimeType: v.optional(v.string()),
+        filename: v.optional(v.string()),
+        caption: v.optional(v.string()),
+      }),
+    ),
   },
   handler: async (ctx, args) => {
     const existente = await ctx.db
@@ -85,17 +98,37 @@ export const registrarEntrante = internalMutation({
       conversacion = await ctx.db.get(conversacionId);
     }
 
-    // Identificación por teléfono. No es único (parejas comparten número):
-    // tomamos el primer usuario ACTIVO; la desambiguación fina no vale el
-    // costo aquí porque ambos ven las mismas unidades en la práctica.
-    if (conversacion && !conversacion.userId) {
-      const candidatos = await ctx.db
-        .query("users")
-        .withIndex("by_telefono", (q) => q.eq("telefonoE164", args.telefono))
-        .collect();
-      const usuario = candidatos.find((u) => u.active);
-      if (usuario) {
-        await ctx.db.patch(conversacionId, { userId: usuario._id, updatedAt: now });
+    // Identificación por teléfono, REVALIDADA en cada entrante: si el número
+    // fue reasignado a otra persona (el admin corrigió teléfonos), el vínculo
+    // viejo expondría facturas y unidades del dueño anterior. No es único
+    // (parejas comparten número): tomamos el primer usuario ACTIVO.
+    if (conversacion) {
+      const vigente = conversacion.userId
+        ? await ctx.db.get(conversacion.userId)
+        : null;
+      const vinculoValido =
+        vigente != null &&
+        vigente.active &&
+        vigente.telefonoE164 === args.telefono;
+
+      if (!vinculoValido) {
+        const candidatos = await ctx.db
+          .query("users")
+          .withIndex("by_telefono", (q) => q.eq("telefonoE164", args.telefono))
+          .collect();
+        const usuario = candidatos.find((u) => u.active);
+        if (usuario?._id !== conversacion.userId) {
+          // Cambió el dueño del número: nada del contexto anterior
+          // (condominio, unidad, borradores) puede heredarse.
+          await ctx.db.patch(conversacionId, {
+            userId: usuario?._id,
+            membershipId: undefined,
+            condominioId: undefined,
+            paso: "nueva",
+            contexto: null,
+            updatedAt: now,
+          });
+        }
       }
     }
 
@@ -107,6 +140,14 @@ export const registrarEntrante = internalMutation({
       contenido: args.contenido.slice(0, 4000),
       ycloudMessageId: args.ycloudMessageId,
       createdAt: now,
+    });
+
+    await ctx.scheduler.runAfter(0, internal.whatsapp.procesarEntrante, {
+      conversacionId,
+      tipo: args.tipo,
+      texto: args.texto,
+      interactiveId: args.interactiveId,
+      media: args.media,
     });
 
     return { conversacionId, duplicado: false as const };
@@ -176,6 +217,35 @@ export const setConversacion = internalMutation({
   },
 });
 
+/**
+ * Reclama atómicamente el borrador de reserva pendiente de confirmar.
+ * Las mutations de Convex serializan: si llegan dos taps de "Confirmar",
+ * solo el primero recibe el draft; el segundo recibe null y no duplica.
+ */
+export const reclamarDraftReserva = internalMutation({
+  args: { conversacionId: v.id("waConversations") },
+  handler: async (ctx, args) => {
+    const conversacion = await ctx.db.get(args.conversacionId);
+    if (!conversacion || conversacion.paso !== "reserva:confirmar") return null;
+    const contexto = (conversacion.contexto ?? {}) as Record<string, any>;
+    const draft = contexto.reserva;
+    if (!draft?.zonaId || !draft?.fecha || !draft?.horaInicio || !draft?.horaFin) {
+      return null;
+    }
+    await ctx.db.patch(args.conversacionId, {
+      paso: "menu",
+      contexto: { ...contexto, reserva: undefined },
+      updatedAt: Date.now(),
+    });
+    return draft as {
+      zonaId: string;
+      fecha: string;
+      horaInicio: string;
+      horaFin: string;
+    };
+  },
+});
+
 /** Todo lo que el router necesita para decidir: usuario, membresías, unidades. */
 export const contextoConversacion = internalQuery({
   args: { conversacionId: v.id("waConversations") },
@@ -204,12 +274,28 @@ export const contextoConversacion = internalQuery({
       }
     }
 
+    // Membresía "efectiva": la persistida si sigue activa, o la única activa
+    // si aún no se persistió (primer mensaje). Sin este fallback, el primer
+    // mensaje de un usuario nuevo (típicamente la foto del comprobante) vería
+    // 0 unidades: el router fija membershipId DESPUÉS de esta query. También
+    // cubre membershipId obsoleto (membresía desactivada): jamás se cargan
+    // unidades de un vínculo que ya no está activo.
+    const conModulo = membresias.filter((m) =>
+      m.condominio.activeModules.includes("whatsapp"),
+    );
+    const efectiva =
+      membresias.find(
+        (m) => m.membership._id === conversacion.membershipId,
+      ) ??
+      (conModulo.length === 1 ? conModulo[0] : undefined) ??
+      (membresias.length === 1 ? membresias[0] : undefined);
+
     const unidades: Array<{ unidad: Doc<"unidades">; vinculo: string }> = [];
-    if (conversacion.membershipId) {
+    if (efectiva) {
       const vinculos = await ctx.db
         .query("usuarioUnidad")
         .withIndex("by_membership", (q) =>
-          q.eq("membershipId", conversacion.membershipId!),
+          q.eq("membershipId", efectiva.membership._id),
         )
         .collect();
       for (const vu of vinculos) {
@@ -344,9 +430,12 @@ export const procesarEntrante = internalAction({
 
     const enviar = async (payload: Record<string, unknown> & { to: string }) => {
       const tipo = (payload as { type?: string }).type ?? "text";
-      const contenido = JSON.stringify(
-        (payload as Record<string, unknown>)[tipo] ?? payload,
-      );
+      // Texto plano se guarda como texto (el historial alimenta a la IA como
+      // turnos del asistente); los interactivos/documentos, como JSON.
+      const contenido =
+        tipo === "text"
+          ? ((payload as { text?: { body?: string } }).text?.body ?? "")
+          : JSON.stringify((payload as Record<string, unknown>)[tipo] ?? payload);
       try {
         const res = await enviarMensaje(payload);
         await ctx.runMutation(internal.whatsapp.registrarSaliente, {
@@ -399,12 +488,28 @@ export const procesarEntrante = internalAction({
       return null;
     }
 
+    // 2b) Gate por tenant: el módulo "whatsapp" se activa por condominio
+    // (condominios.activeModules, toggle del superadmin). Solo se atienden
+    // los conjuntos que lo tengan encendido.
+    const habilitadas = datos.membresias.filter((m) =>
+      m.condominio.activeModules.includes("whatsapp"),
+    );
+    if (habilitadas.length === 0) {
+      await enviar(
+        msgTexto(
+          to,
+          "Este canal de WhatsApp aún no está habilitado para tu conjunto. 🙏\n\nPor ahora usa la app de Vekino o escríbele directamente a tu administración.",
+        ),
+      );
+      return null;
+    }
+
     // 3) Resolver condominio activo de la conversación.
-    let activa = datos.membresias.find(
+    let activa = habilitadas.find(
       (m) => m.membership._id === datos.conversacion.membershipId,
     );
-    if (!activa && datos.membresias.length === 1) {
-      activa = datos.membresias[0]!;
+    if (!activa && habilitadas.length === 1) {
+      activa = habilitadas[0]!;
       await setConv({
         condominioId: activa.condominio._id,
         membershipId: activa.membership._id,
@@ -420,7 +525,7 @@ export const procesarEntrante = internalAction({
     let mostrarMenuTrasElegirCondominio = false;
     if (accion?.startsWith("condo:")) {
       const membershipId = accion.slice("condo:".length) as Id<"memberships">;
-      const elegida = datos.membresias.find((m) => m.membership._id === membershipId);
+      const elegida = habilitadas.find((m) => m.membership._id === membershipId);
       if (elegida) {
         await setConv({
           condominioId: elegida.condominio._id,
@@ -440,7 +545,7 @@ export const procesarEntrante = internalAction({
           to,
           `Hola ${nombre} 👋 ¿Sobre cuál conjunto quieres hablar?`,
           "Elegir conjunto",
-          datos.membresias.map((m) => ({
+          habilitadas.map((m) => ({
             id: `condo:${m.membership._id}`,
             title: m.condominio.name.slice(0, 24),
           })),

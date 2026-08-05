@@ -32,11 +32,31 @@ crons.interval(
   {},
 );
 
-/** Barre emisores de video caídos y señales WebRTC que nadie consumió. */
+/**
+ * Barre emisores de video caídos y señales WebRTC que nadie consumió.
+ *
+ * Se sale sola en cuanto ve que no hay ninguna asamblea en curso, que es
+ * casi siempre. Sin esa guarda recorría cuatro tablas cada minuto durante
+ * todo el año para no encontrar nada.
+ */
 crons.interval(
   "clean sala video signaling",
   { minutes: 1 },
   internal.salaVideo.limpiar,
+  {},
+);
+
+/**
+ * Chat de la sala: se borra lo de hace más de 12 horas.
+ *
+ * Diario y no por minuto: los mensajes sobreviven a la asamblea, así que no
+ * puede depender de que haya una en curso, y con un corte de 12 horas mirar
+ * una vez al día sobra.
+ */
+crons.daily(
+  "clean sala chat",
+  { hourUTC: 6, minuteUTC: 0 },
+  internal.salaVideo.limpiarMensajes,
   {},
 );
 
