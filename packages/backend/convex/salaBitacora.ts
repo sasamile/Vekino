@@ -27,6 +27,8 @@ const tipoBitacora = v.union(
   v.literal("reaccion"),
   v.literal("grabacion_inicio"),
   v.literal("grabacion_fin"),
+  v.literal("transcripcion_inicio"),
+  v.literal("transcripcion_fin"),
   v.literal("presidente_asignado"),
 );
 
@@ -43,6 +45,8 @@ export type TipoBitacora =
   | "reaccion"
   | "grabacion_inicio"
   | "grabacion_fin"
+  | "transcripcion_inicio"
+  | "transcripcion_fin"
   | "presidente_asignado";
 
 /** Etiqueta legible para exportar / mostrar la bitácora. */
@@ -72,6 +76,10 @@ export function etiquetaBitacora(tipo: TipoBitacora): string {
       return "Grabación iniciada";
     case "grabacion_fin":
       return "Grabación finalizada";
+    case "transcripcion_inicio":
+      return "Transcripción iniciada";
+    case "transcripcion_fin":
+      return "Transcripción finalizada";
     case "presidente_asignado":
       return "Presidente";
     default:

@@ -13,17 +13,11 @@ import { registrarBitacora } from "./salaBitacora";
  * Invitados a la sala: entran con enlace, pueden pedir la palabra y
  * compartir pantalla, pero NO votan ni suman al quórum.
  *
- * Flujo:
- *  1. La mesa activa un `codigoInvitado` en la asamblea → link `/invitado?codigo=…`
- *  2. Cada persona escribe su nombre → obtiene un `sesionCodigo` único
- *  3. Con ese código late presencia / chat / palabra (nunca asistencia)
+ * Solo el administrador del condominio (o staff de plataforma) gestiona
+ * el enlace. Propietarios, apoderados y otros roles de mesa no.
  */
 
-const WRITE_ROLES = [
-  "administrador",
-  "junta_directiva",
-  "representante_asamblea",
-] as const;
+const ADMIN_INVITADOS = ["administrador"] as const;
 
 function generarCodigoCorto(semilla: string): string {
   const raw = (Date.now().toString(36) + semilla)
@@ -66,13 +60,20 @@ async function sesionInvitadoValida(
   return { sesion, asamblea, sesionCodigo };
 }
 
-/** Mesa: estado del enlace de invitados. */
+/** Administrador: estado del enlace de invitados. */
 export const enlaceInvitado = query({
   args: { asambleaId: v.id("asambleas") },
   handler: async (ctx, args) => {
     const asamblea = await ctx.db.get(args.asambleaId);
     if (!asamblea) return null;
-    await requireCondominioRole(ctx, asamblea.condominioId, [...WRITE_ROLES]);
+    try {
+      await requireCondominioRole(ctx, asamblea.condominioId, [
+        ...ADMIN_INVITADOS,
+      ]);
+    } catch {
+      /* Propietario / apoderado / otros: no ven el panel. */
+      return null;
+    }
     const sesiones = await ctx.db
       .query("asambleaInvitadoSesiones")
       .withIndex("by_asamblea", (q) => q.eq("asambleaId", args.asambleaId))
@@ -89,7 +90,7 @@ export const enlaceInvitado = query({
   },
 });
 
-/** Mesa: crea o regenera el código del enlace. */
+/** Administrador: crea o regenera el código del enlace. */
 export const activarEnlaceInvitado = mutation({
   args: {
     asambleaId: v.id("asambleas"),
@@ -98,7 +99,9 @@ export const activarEnlaceInvitado = mutation({
   handler: async (ctx, args) => {
     const asamblea = await ctx.db.get(args.asambleaId);
     if (!asamblea) throw new Error("Asamblea no encontrada.");
-    await requireCondominioRole(ctx, asamblea.condominioId, [...WRITE_ROLES]);
+    await requireCondominioRole(ctx, asamblea.condominioId, [
+      ...ADMIN_INVITADOS,
+    ]);
     if (asamblea.estado === "finalizada" || asamblea.estado === "cancelada") {
       throw new Error("La asamblea ya no está activa.");
     }
@@ -129,7 +132,7 @@ export const activarEnlaceInvitado = mutation({
       condominioId: asamblea.condominioId,
       asambleaId: args.asambleaId,
       tipo: "entrada",
-      nombre: user?.name ?? "Mesa",
+      nombre: user?.name ?? "Administrador",
       detalle: args.regenerar
         ? `Enlace de invitados regenerado (${codigo})`
         : `Enlace de invitados activo (${codigo})`,
@@ -140,13 +143,15 @@ export const activarEnlaceInvitado = mutation({
   },
 });
 
-/** Mesa: desactiva el enlace (las sesiones dejan de valer). */
+/** Administrador: desactiva el enlace (las sesiones dejan de valer). */
 export const desactivarEnlaceInvitado = mutation({
   args: { asambleaId: v.id("asambleas") },
   handler: async (ctx, args) => {
     const asamblea = await ctx.db.get(args.asambleaId);
     if (!asamblea) throw new Error("Asamblea no encontrada.");
-    await requireCondominioRole(ctx, asamblea.condominioId, [...WRITE_ROLES]);
+    await requireCondominioRole(ctx, asamblea.condominioId, [
+      ...ADMIN_INVITADOS,
+    ]);
     await ctx.db.patch(args.asambleaId, {
       codigoInvitado: undefined,
       updatedAt: Date.now(),

@@ -1,0 +1,21 @@
+{
+  "name": "vekino-transcriptor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Transcribe en vivo las asambleas virtuales de Vekino.",
+  "scripts": {
+    "dev": "node --env-file-if-exists=.env --watch src/index.ts",
+    "start": "node --env-file-if-exists=.env src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@livekit/rtc-node": "^0.13.22",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "@types/ws": "^8.5.13",
+    "typescript": "^5.7.3"
+  }
+}

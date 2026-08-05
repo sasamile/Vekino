@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "types": ["node"],
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+
+    // Node ejecuta el TypeScript directamente: no hay paso de compilación,
+    // así que los import llevan la extensión .ts tal cual.
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    // Node borra los tipos, no los compila: enums, namespaces y propiedades
+    // de parámetro revientan en tiempo de ejecución. Esto los rechaza aquí,
+    // que es donde se ven, y no en el servidor a mitad de una asamblea.
+    "erasableSyntaxOnly": true
+  },
+  "include": ["src/**/*.ts"]
+}

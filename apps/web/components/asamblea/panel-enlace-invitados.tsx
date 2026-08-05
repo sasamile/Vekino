@@ -7,7 +7,7 @@ import type { Id } from "@vekino/backend/dataModel";
 import { Check, Copy, Link2, Loader2, RefreshCw, UserRound } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-/** Mesa: genera y copia el enlace de invitados (sin voto ni quórum). */
+/** Administrador: genera y copia el enlace de invitados (sin voto ni quórum). */
 export function PanelEnlaceInvitados({
   asambleaId,
   variante = "oscuro",
@@ -23,6 +23,28 @@ export function PanelEnlaceInvitados({
   const [error, setError] = useState<string | null>(null);
 
   const oscuro = variante === "oscuro";
+
+  /* Sin permiso (propietario, apoderado, etc.) el backend devuelve null. */
+  if (enlace === null) return null;
+  if (enlace === undefined) {
+    return (
+      <div
+        className={cn(
+          "rounded-2xl border p-5",
+          oscuro
+            ? "border-white/10 bg-white/[0.03]"
+            : "border-border bg-card",
+        )}
+      >
+        <Loader2
+          className={cn(
+            "h-4 w-4 animate-spin",
+            oscuro ? "text-white/40" : "text-muted-foreground",
+          )}
+        />
+      </div>
+    );
+  }
 
   async function asegurar(regenerar = false) {
     setBusy(true);

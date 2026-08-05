@@ -76,12 +76,14 @@ export default function SalaPage() {
   }
 
   const esMesa = !!sala.esMesa;
+  const puedeGestionarInvitados = !!sala.puedeGestionarInvitados;
 
   return (
     <SalaReunion
       asambleaId={asambleaId}
       condominioId={condominioId}
       esMesa={esMesa}
+      puedeGestionarInvitados={puedeGestionarInvitados}
       volverHref={
         esMesa
           ? `/condominio/${condominioId}/asamblea/${asambleaId}`

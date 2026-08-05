@@ -8,6 +8,7 @@ import type { Id } from "@vekino/backend/dataModel";
 import type { FunctionReturnType } from "convex/server";
 import {
   ArrowLeft,
+  Captions,
   CheckCircle2,
   Crown,
   Hand,
@@ -28,6 +29,7 @@ import {
   Trash2,
   Unlock,
   UserCheck,
+  UserRound,
   Users,
   Video,
   Vote,
@@ -36,9 +38,10 @@ import {
 import { EscenarioVideo } from "@/components/asamblea/escenario-video";
 import { BotonChatSala, SalaChatSheet } from "@/components/asamblea/sala-chat";
 import { PanelEnlaceInvitados } from "@/components/asamblea/panel-enlace-invitados";
+import { PanelTranscripcionSala } from "@/components/asamblea/panel-transcripcion-sala";
 import type { Calidad } from "@/hooks/use-video-sala";
 import { useSalaLatido } from "@/hooks/use-sala-latido";
-import { cn } from "@/lib/utils";
+import { cn, mensajeErrorUsuario } from "@/lib/utils";
 
 /**
  * La sala de la asamblea: el sitio al que se ENTRA y en el que uno se queda.
@@ -60,12 +63,15 @@ export function SalaReunion({
   condominioId,
   volverHref,
   esMesa,
+  puedeGestionarInvitados = false,
 }: {
   asambleaId: Id<"asambleas">;
   condominioId: Id<"condominios">;
   volverHref: string;
   /** La mesa ve controles de apertura; el residente, el registro. */
   esMesa: boolean;
+  /** Solo administrador: enlace de invitados. */
+  puedeGestionarInvitados?: boolean;
 }) {
   const a = useQuery(api.asambleas.get, { id: asambleaId });
   const sala = useQuery(api.asambleaSala.salaEnVivo, { asambleaId });
@@ -88,6 +94,9 @@ export function SalaReunion({
     asambleaId,
   });
   const detenerGrabacion = useMutation(api.salaBitacora.detenerGrabacion);
+  /* Visible para TODOS, no solo para la mesa: transcribir es tratamiento de
+   * datos personales y quien está en la sala tiene derecho a saberlo. */
+  const transcripcion = useQuery(api.intervenciones.estado, { asambleaId });
   const bitacora = useQuery(
     api.salaBitacora.listar,
     esMesa ? { asambleaId } : "skip",
@@ -115,11 +124,14 @@ export function SalaReunion({
 
   /* Panel lateral: oculto por defecto. La votación sale en modal, no aquí. */
   const [panelAbierto, setPanelAbierto] = useState(false);
+  const [modalInvitados, setModalInvitados] = useState(false);
+  const [perfilAbierto, setPerfilAbierto] = useState(false);
   const [modalVotoId, setModalVotoId] = useState<Id<"votaciones"> | null>(null);
   const [modalResultadosId, setModalResultadosId] =
     useState<Id<"votaciones"> | null>(null);
   const [modalOrden, setModalOrden] = useState(false);
   const [chatAbierto, setChatAbierto] = useState(false);
+  const [transcripcionAbierta, setTranscripcionAbierta] = useState(false);
   const [modalPresidente, setModalPresidente] = useState(false);
   const [avisoVoto, setAvisoVoto] = useState(false);
   const autoVotoVisto = useRef(new Set<string>());
@@ -193,7 +205,12 @@ export function SalaReunion({
   const puntos =
     a.ordenDia ?? a.agenda.map((t) => ({ titulo: t, hecho: false as boolean }));
   const miPalabra = (palabras ?? []).find((f) => f.mia) ?? null;
-  const manosLevantadas = (palabras ?? []).filter((f) => !f.mia || esMesa);
+  const esPresidente =
+    !!mi?.userId && a.presidenteUserId === mi.userId;
+  const puedeModerarPalabra = esMesa || esPresidente;
+  const manosLevantadas = (palabras ?? []).filter(
+    (f) => !f.mia || puedeModerarPalabra,
+  );
   const palabraAlAire =
     (palabras ?? []).find((f) => f.estado === "concedida") ?? null;
   const votacionConTiempo =
@@ -205,7 +222,9 @@ export function SalaReunion({
   const delegoSinRepresentar =
     !!mi?.delegoTodo && (mi?.representa?.length ?? 0) === 0;
 
-  const manosPedidas = manosLevantadas.filter((f) => f.estado === "pedida").length;
+  const manosPedidas = (palabras ?? []).filter(
+    (f) => f.estado === "pedida",
+  ).length;
 
   return (
     /* La gramática de una videollamada: el lienzo ocupa TODO, la información
@@ -253,6 +272,15 @@ export function SalaReunion({
                 Grabando
               </span>
             )
+          ) : null}
+          {transcripcion?.activa ? (
+            <span
+              title="Lo que se hable se está transcribiendo para el acta"
+              className="inline-flex items-center gap-1.5 rounded-full bg-amber-500/90 px-2.5 py-1 text-[11px] font-semibold text-white"
+            >
+              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-white" />
+              Transcribiendo
+            </span>
           ) : null}
           {!panelAbierto ? (
             <EstadoConexion latido={latido} enCurso={enCurso} />
@@ -325,16 +353,36 @@ export function SalaReunion({
               <ScrollText className="h-4 w-4" aria-hidden />
             </button>
           ) : null}
+          {puedeGestionarInvitados && enCurso ? (
+            <button
+              type="button"
+              onClick={() => setModalInvitados(true)}
+              aria-label="Enlace de invitados"
+              title="Invitados (enlace externo, sin voto)"
+              className="flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-white/80 transition-colors hover:bg-white/20 hover:text-white"
+            >
+              <UserRound className="h-4 w-4" aria-hidden />
+            </button>
+          ) : null}
           {enCurso ? (
             <button
               type="button"
               onClick={() => setPanelAbierto((v) => !v)}
               aria-label="Ver quién está en la sala"
-              title="Ver quién está en la sala"
-              className="flex h-10 items-center gap-1.5 rounded-full bg-white/10 px-3 text-sm font-semibold text-white/85 transition-colors hover:bg-white/20"
+              title={
+                puedeModerarPalabra
+                  ? "Sala, quórum y dar la palabra"
+                  : "Ver quién está en la sala"
+              }
+              className="relative flex h-10 items-center gap-1.5 rounded-full bg-white/10 px-3 text-sm font-semibold text-white/85 transition-colors hover:bg-white/20"
             >
               <Users className="h-4 w-4" aria-hidden />
               {sala?.personasEnSala ?? 0}
+              {puedeModerarPalabra && manosPedidas > 0 ? (
+                <span className="absolute -right-0.5 -top-0.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] font-bold text-black">
+                  {manosPedidas}
+                </span>
+              ) : null}
             </button>
           ) : null}
           <BotonPantallaCompleta />
@@ -347,7 +395,9 @@ export function SalaReunion({
           <EscenarioVideo
             asambleaId={asambleaId}
             enCurso={enCurso}
-            puedoHablar={esMesa || miPalabra?.estado === "concedida"}
+            puedoHablar={
+              esMesa || esPresidente || miPalabra?.estado === "concedida"
+            }
             calidad={calidad}
             onCambiarCalidad={esMesa ? setCalidad : undefined}
             puedoGrabar={esMesa}
@@ -356,7 +406,10 @@ export function SalaReunion({
             imageUrlLocal={mi?.imageUrl ?? undefined}
             personas={sala?.personas}
             extraControles={
-              !esMesa && enCurso && (mi?.presente ?? false) ? (
+              !esMesa &&
+              !esPresidente &&
+              enCurso &&
+              (mi?.presente ?? false) ? (
                 <BotonMano
                   estado={miPalabra?.estado ?? null}
                   onPedir={() => void pedirPalabra({ asambleaId }).catch(() => {})}
@@ -372,6 +425,37 @@ export function SalaReunion({
                     abierto={chatAbierto}
                     onToggle={() => setChatAbierto((v) => !v)}
                   />
+                  {/* Transcripción: solo la mesa. Es material de trabajo del
+                      acta —sale en bruto y sin revisar—, así que no se le
+                      muestra a los residentes hasta que la secretaría la
+                      corrige. Que se esté transcribiendo sí lo ven todos, en
+                      el aviso de arriba.
+
+                      En presencial no aplica: hay un solo micrófono y no se
+                      sabe quién habla. */}
+                  {esMesa && a.modalidad !== "presencial" ? (
+                    <button
+                      type="button"
+                      onClick={() => setTranscripcionAbierta((v) => !v)}
+                      aria-label="Transcripción"
+                      title={
+                        transcripcion?.activa
+                          ? "Transcripción en vivo — tocar para ver"
+                          : "Transcripción"
+                      }
+                      className={cn(
+                        "relative flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition-colors sm:h-12 sm:w-12",
+                        transcripcionAbierta
+                          ? "bg-white/25 text-white"
+                          : "bg-white/15 text-white hover:bg-white/25",
+                      )}
+                    >
+                      <Captions className="h-4 w-4 sm:h-5 sm:w-5" aria-hidden />
+                      {transcripcion?.activa ? (
+                        <span className="absolute -right-0.5 -top-0.5 h-3 w-3 animate-pulse rounded-full border-2 border-[#14161b] bg-amber-400" />
+                      ) : null}
+                    </button>
+                  ) : null}
                   {esMesa ? (
                     <button
                       type="button"
@@ -456,11 +540,44 @@ export function SalaReunion({
                     )}
                   >
                     <Users className="h-4 w-4 sm:h-5 sm:w-5" aria-hidden />
-                    {esMesa && manosPedidas > 0 ? (
+                    {puedeModerarPalabra && manosPedidas > 0 ? (
                       <span className="absolute -right-0.5 -top-0.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] font-bold text-black">
                         {manosPedidas}
                       </span>
                     ) : null}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPerfilAbierto(true)}
+                    aria-label="Tu perfil"
+                    title={mi?.nombre ? `Perfil · ${mi.nombre}` : "Tu perfil"}
+                    className={cn(
+                      "relative flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full transition-colors sm:h-12 sm:w-12",
+                      perfilAbierto
+                        ? "ring-2 ring-white/40"
+                        : "bg-white/15 hover:bg-white/25",
+                    )}
+                  >
+                    {mi?.imageUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={mi.imageUrl}
+                        alt=""
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      <span className="text-[11px] font-semibold text-white/85 sm:text-xs">
+                        {mi?.nombre
+                          ? mi.nombre
+                              .trim()
+                              .split(/\s+/)
+                              .filter(Boolean)
+                              .slice(0, 2)
+                              .map((p) => p[0]?.toUpperCase() ?? "")
+                              .join("") || "?"
+                          : "?"}
+                      </span>
+                    )}
                   </button>
                   <Link
                     href={volverHref}
@@ -512,7 +629,9 @@ export function SalaReunion({
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-semibold text-white">En la sala</p>
                     <p className="text-[11px] text-white/45">
-                      Quórum y personas conectadas
+                      {puedeModerarPalabra
+                        ? "Quórum, personas y dar la palabra"
+                        : "Quórum y personas conectadas"}
                     </p>
                   </div>
                   <EstadoConexion latido={latido} enCurso={enCurso} />
@@ -529,38 +648,204 @@ export function SalaReunion({
 
               <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 pt-4 sm:px-5">
                 <ResumenSala sala={sala} />
-                {esMesa ? (
-                  <div className="mt-4">
-                    <PanelEnlaceInvitados asambleaId={asambleaId} />
+
+                {puedeModerarPalabra ? (
+                  <div className="mt-4 shrink-0 border-t border-white/10 pt-4">
+                    <ManosLevantadas
+                      asambleaId={asambleaId}
+                      filas={manosLevantadas}
+                    />
                   </div>
                 ) : null}
 
-                {!esMesa || manosLevantadas.length > 0 ? (
+                {!esMesa ? (
                   <div className="shrink-0 space-y-4 border-t border-white/10 py-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
-                    {!esMesa ? (
-                      delegoSinRepresentar ? (
-                        <VotoDelegado apoderado={mi?.apoderadoNombre ?? null} />
-                      ) : (
-                        <EstadoRegistro
-                          presente={mi?.presente ?? false}
-                          conectado={latido.conectado}
-                          error={registro.error}
-                          onReintentar={() =>
-                            setRegistro({ intentado: false, error: null })
-                          }
-                        />
-                      )
-                    ) : null}
-                    {esMesa && manosLevantadas.length > 0 ? (
-                      <ManosLevantadas
-                        asambleaId={asambleaId}
-                        filas={manosLevantadas}
+                    {delegoSinRepresentar ? (
+                      <VotoDelegado apoderado={mi?.apoderadoNombre ?? null} />
+                    ) : (
+                      <EstadoRegistro
+                        presente={mi?.presente ?? false}
+                        conectado={latido.conectado}
+                        error={registro.error}
+                        onReintentar={() =>
+                          setRegistro({ intentado: false, error: null })
+                        }
                       />
-                    ) : null}
+                    )}
                   </div>
                 ) : (
                   <div className="shrink-0 pb-[max(0.75rem,env(safe-area-inset-bottom))]" />
                 )}
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {transcripcionAbierta && esMesa && a.modalidad !== "presencial" ? (
+          <PanelTranscripcionSala
+            asambleaId={asambleaId}
+            esMesa={esMesa}
+            onCerrar={() => setTranscripcionAbierta(false)}
+          />
+        ) : null}
+
+        {/* Modal aparte: enlace de invitados (solo administrador) */}
+        {modalInvitados && puedeGestionarInvitados && enCurso ? (
+          <div className="fixed inset-0 z-40 flex items-end justify-center sm:items-center">
+            <button
+              type="button"
+              aria-label="Cerrar"
+              className="absolute inset-0 bg-black/55 backdrop-blur-sm"
+              onClick={() => setModalInvitados(false)}
+            />
+            <div
+              role="dialog"
+              aria-modal
+              aria-label="Invitados"
+              className="relative z-10 flex w-full max-w-md flex-col overflow-hidden rounded-t-2xl border border-white/10 bg-[#14161b] shadow-2xl sm:rounded-2xl"
+            >
+              <div className="flex items-center gap-2 border-b border-white/10 px-4 py-3">
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-white">Invitados</p>
+                  <p className="text-[11px] text-white/45">
+                    Enlace externo · sin voto ni quórum
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setModalInvitados(false)}
+                  aria-label="Cerrar"
+                  className="rounded-lg p-1.5 text-white/50 hover:bg-white/10 hover:text-white"
+                >
+                  <X className="h-5 w-5" aria-hidden />
+                </button>
+              </div>
+              <div className="px-4 py-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:px-5">
+                <PanelEnlaceInvitados asambleaId={asambleaId} />
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {/* Perfil de la cuenta con la que estás en la sala */}
+        {perfilAbierto ? (
+          <div className="fixed inset-0 z-[45] flex items-end justify-center sm:items-center">
+            <button
+              type="button"
+              aria-label="Cerrar"
+              className="absolute inset-0 bg-black/55 backdrop-blur-sm"
+              onClick={() => setPerfilAbierto(false)}
+            />
+            <div
+              role="dialog"
+              aria-modal
+              aria-label="Tu perfil"
+              className="relative z-10 w-full max-w-sm overflow-hidden rounded-t-2xl border border-white/10 bg-[#14161b] shadow-2xl sm:rounded-2xl"
+            >
+              <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
+                <p className="text-sm font-semibold text-white">Tu cuenta</p>
+                <button
+                  type="button"
+                  onClick={() => setPerfilAbierto(false)}
+                  aria-label="Cerrar"
+                  className="rounded-lg p-1.5 text-white/50 hover:bg-white/10 hover:text-white"
+                >
+                  <X className="h-5 w-5" aria-hidden />
+                </button>
+              </div>
+              <div className="px-5 py-5 pb-[max(1.25rem,env(safe-area-inset-bottom))]">
+                <div className="flex items-center gap-4">
+                  <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-full bg-white/10 ring-2 ring-white/10">
+                    {mi?.imageUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={mi.imageUrl}
+                        alt=""
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      <span className="text-lg font-semibold text-white/80">
+                        {mi?.nombre
+                          ? mi.nombre
+                              .trim()
+                              .split(/\s+/)
+                              .filter(Boolean)
+                              .slice(0, 2)
+                              .map((p) => p[0]?.toUpperCase() ?? "")
+                              .join("") || "?"
+                          : "?"}
+                      </span>
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-base font-semibold text-white">
+                      {mi?.nombre ?? "Sin nombre"}
+                    </p>
+                    {mi?.email ? (
+                      <p className="mt-0.5 truncate text-sm text-white/45">
+                        {mi.email}
+                      </p>
+                    ) : null}
+                    <p className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-white/10 px-2.5 py-0.5 text-[11px] font-semibold text-white/75">
+                      {mi?.platformRole === "superadmin" ? (
+                        <>
+                          <ShieldCheck className="h-3 w-3 text-violet-300" aria-hidden />
+                          Superadmin
+                        </>
+                      ) : mi?.platformRole === "admin" ? (
+                        <>
+                          <ShieldCheck className="h-3 w-3 text-sky-300" aria-hidden />
+                          Desarrollador
+                        </>
+                      ) : esMesa ? (
+                        <>
+                          <ShieldCheck className="h-3 w-3" aria-hidden />
+                          Administrador
+                        </>
+                      ) : esPresidente ? (
+                        <>
+                          <Crown className="h-3 w-3 text-amber-300" aria-hidden />
+                          Presidente
+                        </>
+                      ) : (
+                        <>
+                          <UserCheck className="h-3 w-3" aria-hidden />
+                          Participante
+                        </>
+                      )}
+                    </p>
+                  </div>
+                </div>
+
+                {(mi?.unidades?.length ?? 0) > 0 ||
+                (mi?.representa?.length ?? 0) > 0 ? (
+                  <div className="mt-5 space-y-3 border-t border-white/10 pt-4">
+                    {(mi?.unidades?.length ?? 0) > 0 ? (
+                      <div>
+                        <p className="text-[11px] font-medium uppercase tracking-wider text-white/35">
+                          Unidades presentes
+                        </p>
+                        <p className="mt-1 text-sm text-white/80">
+                          {mi!.unidades.join(", ")}
+                        </p>
+                      </div>
+                    ) : null}
+                    {(mi?.representa?.length ?? 0) > 0 ? (
+                      <div>
+                        <p className="text-[11px] font-medium uppercase tracking-wider text-white/35">
+                          Representas
+                        </p>
+                        <p className="mt-1 text-sm text-white/80">
+                          {mi!.representa.join(", ")}
+                        </p>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                <p className="mt-5 text-center text-[11px] leading-relaxed text-white/30">
+                  Esta es la cuenta con la que entraste a la asamblea.
+                </p>
               </div>
             </div>
           </div>
@@ -1193,7 +1478,7 @@ function CuentaRegresivaVoto({
         )}
       >
         <Timer className={grande ? "h-4 w-4" : "h-3 w-3"} aria-hidden />
-        Cerrando…
+        Tiempo agotado
       </span>
     );
   }
@@ -2067,8 +2352,21 @@ function ModalVotarSala({
   const votar = useMutation(api.asambleas.votar);
   const [busy, setBusy] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!votacion?.cierraEn) return;
+    const t = setInterval(() => setNow(Date.now()), 500);
+    return () => clearInterval(t);
+  }, [votacion?.cierraEn]);
 
   if (!votacion) return null;
+
+  const tiempoAgotado =
+    votacion.cierraEn != null && votacion.cierraEn <= now;
+  const cerrada =
+    votacion.estado === "cerrada" || tiempoAgotado;
+  const puedeVotarAqui = !cerrada;
 
   return (
     <div className="fixed inset-0 z-[70] flex items-end justify-center sm:items-center">
@@ -2086,10 +2384,19 @@ function ModalVotarSala({
         <div className="mb-4 flex items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
-              <p className="text-xs font-semibold uppercase tracking-wide text-emerald-600">
-                {miVoto !== undefined
-                  ? "Puedes cambiar tu voto"
-                  : "Votación abierta"}
+              <p
+                className={cn(
+                  "text-xs font-semibold uppercase tracking-wide",
+                  cerrada ? "text-amber-700" : "text-emerald-600",
+                )}
+              >
+                {cerrada
+                  ? tiempoAgotado
+                    ? "Se acabó el tiempo"
+                    : "Votación cerrada"
+                  : miVoto !== undefined
+                    ? "Puedes cambiar tu voto"
+                    : "Votación abierta"}
               </p>
               {votacion.cierraEn ? (
                 <CuentaRegresivaVoto cierraEn={votacion.cierraEn} claro />
@@ -2108,50 +2415,82 @@ function ModalVotarSala({
           </button>
         </div>
 
-        <div className="space-y-2">
-          {votacion.opciones.map((o, i) => {
-            const elegida = miVoto === i;
-            return (
-              <button
-                key={i}
-                type="button"
-                disabled={busy !== null}
-                aria-pressed={elegida}
-                onClick={async () => {
-                  setBusy(i);
-                  setError(null);
-                  try {
-                    await votar({ votacionId: votacion._id, opcionIndex: i });
-                  } catch (e) {
-                    setError(
-                      e instanceof Error
-                        ? e.message
-                        : "No se pudo registrar tu voto.",
-                    );
-                  } finally {
-                    setBusy(null);
-                  }
-                }}
-                className={cn(
-                  "flex h-12 w-full items-center justify-between gap-3 rounded-xl px-4 text-sm font-medium transition-colors",
-                  elegida
-                    ? "bg-zinc-900 text-white"
-                    : "border border-zinc-200 bg-zinc-50 text-zinc-800 hover:bg-zinc-100",
-                  busy !== null && "opacity-70",
-                )}
-              >
-                <span>{o.texto}</span>
-                {busy === i ? (
-                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
-                ) : elegida ? (
-                  <CheckCircle2 className="h-4 w-4" aria-hidden />
-                ) : null}
-              </button>
-            );
-          })}
-        </div>
+        {cerrada ? (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            {tiempoAgotado
+              ? "El tiempo para votar terminó. Ya no se aceptan más votos."
+              : "Esta votación ya está cerrada."}
+            {miVoto !== undefined ? (
+              <p className="mt-1 text-amber-800/80">
+                Tu voto quedó registrado:{" "}
+                <span className="font-semibold">
+                  {votacion.opciones[miVoto]?.texto ?? `opción ${miVoto + 1}`}
+                </span>
+                .
+              </p>
+            ) : (
+              <p className="mt-1 text-amber-800/80">
+                No alcanzaste a votar en esta pregunta.
+              </p>
+            )}
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {votacion.opciones.map((o, i) => {
+              const elegida = miVoto === i;
+              return (
+                <button
+                  key={i}
+                  type="button"
+                  disabled={busy !== null}
+                  aria-pressed={elegida}
+                  onClick={async () => {
+                    setBusy(i);
+                    setError(null);
+                    try {
+                      await votar({
+                        votacionId: votacion._id,
+                        opcionIndex: i,
+                      });
+                    } catch (e) {
+                      const msg = mensajeErrorUsuario(
+                        e,
+                        "No se pudo registrar tu voto.",
+                      );
+                      if (
+                        /cerrada|tiempo|terminó|termino/i.test(msg)
+                      ) {
+                        setError(
+                          "Se acabó el tiempo. Ya no se pueden emitir votos.",
+                        );
+                      } else {
+                        setError(msg);
+                      }
+                    } finally {
+                      setBusy(null);
+                    }
+                  }}
+                  className={cn(
+                    "flex h-12 w-full items-center justify-between gap-3 rounded-xl px-4 text-sm font-medium transition-colors",
+                    elegida
+                      ? "bg-zinc-900 text-white"
+                      : "border border-zinc-200 bg-zinc-50 text-zinc-800 hover:bg-zinc-100",
+                    busy !== null && "opacity-70",
+                  )}
+                >
+                  <span>{o.texto}</span>
+                  {busy === i ? (
+                    <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                  ) : elegida ? (
+                    <CheckCircle2 className="h-4 w-4" aria-hidden />
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
+        )}
 
-        {miVoto !== undefined ? (
+        {!cerrada && miVoto !== undefined ? (
           <p className="mt-3 text-xs text-zinc-500">
             Tu voto quedó registrado. Puedes cambiarlo mientras siga abierta.
           </p>
@@ -2166,17 +2505,32 @@ function ModalVotarSala({
           <button
             type="button"
             onClick={onVerResultados}
-            className="rounded-lg px-3 py-1.5 text-sm font-medium text-zinc-500 hover:bg-zinc-100"
+            className={cn(
+              "rounded-lg px-3 py-1.5 text-sm font-medium",
+              cerrada
+                ? "bg-zinc-900 font-semibold text-white hover:bg-zinc-800"
+                : "text-zinc-500 hover:bg-zinc-100",
+            )}
           >
             Ver resultados
           </button>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-lg bg-zinc-900 px-3 py-1.5 text-sm font-semibold text-white hover:bg-zinc-800"
-          >
-            {miVoto !== undefined ? "Listo" : "Más tarde"}
-          </button>
+          {puedeVotarAqui ? (
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-lg bg-zinc-900 px-3 py-1.5 text-sm font-semibold text-white hover:bg-zinc-800"
+            >
+              {miVoto !== undefined ? "Listo" : "Más tarde"}
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-lg px-3 py-1.5 text-sm font-medium text-zinc-500 hover:bg-zinc-100"
+            >
+              Cerrar
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -2382,7 +2736,7 @@ function BotonMano({
   );
 }
 
-/* ── Manos levantadas (panel de la mesa) ─────────────────────────────── */
+/* ── Manos levantadas (mesa / presidente) ────────────────────────────── */
 function ManosLevantadas({
   asambleaId,
   filas,
@@ -2403,9 +2757,18 @@ function ManosLevantadas({
 
   return (
     <section>
-      <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-amber-200">
-        <Hand className="h-4 w-4" aria-hidden /> Manos levantadas
+      <h2 className="mb-1 flex items-center gap-2 text-sm font-semibold text-amber-200">
+        <Hand className="h-4 w-4" aria-hidden /> Dar la palabra
       </h2>
+      <p className="mb-3 text-xs leading-relaxed text-white/45">
+        Quien levanta la mano aparece aquí. Al conceder, se le activa el
+        micrófono y puede hablar o compartir pantalla.
+      </p>
+      {filas.length === 0 ? (
+        <p className="rounded-xl border border-dashed border-white/10 bg-white/[0.02] px-3 py-4 text-center text-sm text-white/40">
+          Nadie ha levantado la mano todavía.
+        </p>
+      ) : (
       <ul className="space-y-2">
         {filas.map((f) => {
           const id = (f.codigoInvitado ?? f.userId ?? f.nombre) as string;
@@ -2434,7 +2797,11 @@ function ManosLevantadas({
                       <CuentaRegresivaVoto cierraEn={f.cierraEn} />
                     ) : null}
                   </>
-                ) : null}
+                ) : (
+                  <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-[11px] font-semibold text-amber-200">
+                    Mano alzada
+                  </span>
+                )}
               </div>
               <div className="mt-2 flex flex-wrap items-center gap-1.5">
                 {f.estado === "concedida" ? (
@@ -2511,7 +2878,7 @@ function ManosLevantadas({
                         }}
                         className="rounded-lg bg-emerald-500 px-2.5 py-1 text-xs font-semibold text-white hover:bg-emerald-600"
                       >
-                        Conceder
+                        Activar audio
                       </button>
                     </div>
                   </div>
@@ -2547,6 +2914,7 @@ function ManosLevantadas({
           );
         })}
       </ul>
+      )}
     </section>
   );
 }

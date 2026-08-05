@@ -31,6 +31,27 @@ services:
       - caddy_data:/data
       - caddy_config:/config
 
+  # Transcripción en vivo de las asambleas virtuales.
+  #
+  # Vive en la misma máquina que el servidor de medios porque entra a las
+  # salas como un participante más: hacerlo desde otro lado sería sacar el
+  # audio a internet para volverlo a meter.
+  #
+  # `network_mode: host` para hablarle a LiveKit por localhost sin dar
+  # vueltas por el puente de Docker.
+  #
+  # Si este contenedor no está, no pasa nada: las asambleas siguen igual y
+  # simplemente no hay transcripción.
+  transcriptor:
+    build: ../transcriptor
+    container_name: vekino-transcriptor
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - ../transcriptor/.env
+    depends_on:
+      - livekit
+
 volumes:
   caddy_data:
   caddy_config:

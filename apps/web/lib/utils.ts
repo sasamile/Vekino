@@ -86,3 +86,33 @@ export function hexToBrandForeground(hex: string): string {
   const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
   return lum > 0.62 ? "120 6% 10%" : "0 0% 100%";
 }
+
+/**
+ * Extrae el mensaje humano de un error de Convex/JS.
+ * Evita mostrar `[CONVEX M(...)] Server Error Uncaught Error: …`.
+ */
+export function mensajeErrorUsuario(
+  e: unknown,
+  fallback = "Algo salió mal. Intenta de nuevo.",
+): string {
+  const raw =
+    e instanceof Error
+      ? e.message
+      : typeof e === "string"
+        ? e
+        : fallback;
+  const sinPrefijo = raw
+    .replace(/^\[CONVEX[^\]]*\]\s*/i, "")
+    .replace(/^Server Error\s*/i, "")
+    .replace(/^Uncaught Error:\s*/i, "")
+    .trim();
+  const primera = sinPrefijo.split("\n")[0]?.trim() ?? "";
+  if (
+    !primera ||
+    primera.startsWith("at ") ||
+    primera.includes("Called by client")
+  ) {
+    return fallback;
+  }
+  return primera;
+}

@@ -41,7 +41,7 @@ export const tokenSala = action({
     if (!sala) return null;
     if (!sala.enCurso) return null;
 
-    const puedePublicar = sala.esMesa || sala.tienePalabra === true;
+    const puedePublicar = sala.puedePublicar === true;
     const nombre = nombreSala(args.asambleaId);
 
     const ahora = Math.floor(Date.now() / 1000);

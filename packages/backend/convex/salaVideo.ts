@@ -54,6 +54,19 @@ async function esMesa(
   return m.roles.some((r) => (WRITE_ROLES as readonly string[]).includes(r));
 }
 
+/** Mesa (admin) o presidente de la asamblea: dan / quitan la palabra. */
+async function puedeModerarPalabra(
+  ctx: QueryCtx | MutationCtx,
+  asamblea: {
+    condominioId: Id<"condominios">;
+    presidenteUserId?: Id<"users">;
+  },
+  user: { _id: Id<"users">; platformRole?: string | null },
+) {
+  if (await esMesa(ctx, asamblea.condominioId, user)) return true;
+  return asamblea.presidenteUserId === user._id;
+}
+
 /**
  * Miembro con sesión, apoderado con código de poder, o invitado con sesión.
  * Devuelve el usuario cuando lo hay (null para externos).
@@ -474,7 +487,7 @@ export const bajarMano = mutation({
   },
 });
 
-/** La mesa concede o quita la palabra. Quitar también corta su emisión. */
+/** La mesa o el presidente concede o quita la palabra. Quitar también corta su emisión. */
 export const resolverPalabra = mutation({
   args: {
     asambleaId: v.id("asambleas"),
@@ -487,7 +500,10 @@ export const resolverPalabra = mutation({
   handler: async (ctx, args) => {
     const asamblea = await ctx.db.get(args.asambleaId);
     if (!asamblea) throw new Error("Asamblea no encontrada.");
-    await requireCondominioRole(ctx, asamblea.condominioId, [...WRITE_ROLES]);
+    const user = await requireAppUser(ctx);
+    if (!(await puedeModerarPalabra(ctx, asamblea, user))) {
+      throw new Error("Solo la mesa o el presidente pueden dar la palabra.");
+    }
 
     const inv = args.codigoInvitado?.trim().toUpperCase() || undefined;
     if (inv) {
@@ -613,7 +629,10 @@ export const extenderPalabra = mutation({
   handler: async (ctx, args) => {
     const asamblea = await ctx.db.get(args.asambleaId);
     if (!asamblea) throw new Error("Asamblea no encontrada.");
-    await requireCondominioRole(ctx, asamblea.condominioId, [...WRITE_ROLES]);
+    const user = await requireAppUser(ctx);
+    if (!(await puedeModerarPalabra(ctx, asamblea, user))) {
+      throw new Error("Solo la mesa o el presidente pueden gestionar el tiempo de palabra.");
+    }
 
     const inv = args.codigoInvitado?.trim().toUpperCase() || undefined;
     const fila = inv

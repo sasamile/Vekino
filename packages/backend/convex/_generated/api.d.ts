@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as acta from "../acta.js";
 import type * as asambleaInvitados from "../asambleaInvitados.js";
 import type * as asambleaSala from "../asambleaSala.js";
 import type * as asambleas from "../asambleas.js";
@@ -25,10 +26,12 @@ import type * as files from "../files.js";
 import type * as guardia from "../guardia.js";
 import type * as historial from "../historial.js";
 import type * as http from "../http.js";
+import type * as intervenciones from "../intervenciones.js";
 import type * as lib_brevo from "../lib/brevo.js";
 import type * as lib_codigoAsistencia from "../lib/codigoAsistencia.js";
 import type * as lib_livekitJwt from "../lib/livekitJwt.js";
 import type * as lib_permanencia from "../lib/permanencia.js";
+import type * as lib_redactor from "../lib/redactor.js";
 import type * as memberships from "../memberships.js";
 import type * as migrations from "../migrations.js";
 import type * as model_authz from "../model/authz.js";
@@ -64,6 +67,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  acta: typeof acta;
   asambleaInvitados: typeof asambleaInvitados;
   asambleaSala: typeof asambleaSala;
   asambleas: typeof asambleas;
@@ -81,10 +85,12 @@ declare const fullApi: ApiFromModules<{
   guardia: typeof guardia;
   historial: typeof historial;
   http: typeof http;
+  intervenciones: typeof intervenciones;
   "lib/brevo": typeof lib_brevo;
   "lib/codigoAsistencia": typeof lib_codigoAsistencia;
   "lib/livekitJwt": typeof lib_livekitJwt;
   "lib/permanencia": typeof lib_permanencia;
+  "lib/redactor": typeof lib_redactor;
   memberships: typeof memberships;
   migrations: typeof migrations;
   "model/authz": typeof model_authz;

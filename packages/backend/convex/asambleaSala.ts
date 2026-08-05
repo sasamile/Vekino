@@ -1028,6 +1028,11 @@ export const miSala = query({
           (WRITE_ROLES as readonly string[]).includes(r),
         ));
 
+    /** Solo administrador (o plataforma) gestiona el enlace de invitados. */
+    const puedeGestionarInvitados =
+      esPlataforma ||
+      (!!membresia?.isActive && membresia.roles.includes("administrador"));
+
     /* La palabra: quien la tiene concedida puede publicar en el servidor de
      * medios. El permiso se resuelve AQUÍ y viaja firmado en el token
      * (`salaToken.ts`); si se calculara en el cliente, cualquiera se daría
@@ -1039,12 +1044,18 @@ export const miSala = query({
       )
       .first();
 
+    const esPresidente = asamblea.presidenteUserId === user._id;
+
     return {
       esMesa,
+      esPresidente,
+      puedeGestionarInvitados,
       /** Identidad y nombre para el servidor de medios. */
       identidad: user._id as string,
       nombre: user.name,
       tienePalabra: palabra?.estado === "concedida",
+      /** Mesa, presidente o con palabra concedida pueden publicar A/V. */
+      puedePublicar: esMesa || esPresidente || palabra?.estado === "concedida",
       enCurso: asamblea.estado === "en_curso",
       registrado: asistencias.length > 0,
       unidades: asistencias.length,

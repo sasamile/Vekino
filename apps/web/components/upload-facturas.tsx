@@ -5,6 +5,7 @@ import { useMutation, useQuery } from "convex/react";
 import { Upload, FileText, AlertCircle, CheckCircle, Loader2 } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
+import { emparejarLote, type ModoEmparejado } from "@/lib/emparejar-unidad";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { Select } from "@/components/ui/input";
@@ -28,6 +29,10 @@ interface InvoiceRow {
   // resolved after matching
   unidadId?: Id<"unidades">;
   matchStatus?: "ok" | "no-match";
+  /** Cómo se resolvió: por número exacto o deduciendo la torre. */
+  matchModo?: ModoEmparejado;
+  /** "T II · 604" — solo cuando se dedujo la torre. */
+  matchDetalle?: string;
 }
 
 function cop(n: number) {
@@ -87,16 +92,31 @@ export function UploadFacturas({
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Error desconocido");
 
-      // Match each invoice to a unidad
-      const unitMap = new Map<string, Id<"unidades">>();
-      for (const u of unidades ?? []) {
-        unitMap.set(u.numero.trim(), u._id);
-      }
+      /* Emparejamiento del LOTE COMPLETO, no factura por factura.
+       * Hay conjuntos cuyo PDF pega la torre al número ("2604" = Torre II,
+       * apto 604) y dejan una torre sin prefijo, lo que vuelve ambiguos
+       * identificadores como "1101". Resolverlos juntos permite descartar por
+       * eliminación: cada unidad se factura una sola vez por período.
+       * Ver lib/emparejar-unidad.ts. */
+      const crudas = data.invoices as InvoiceRow[];
+      const emparejadas = emparejarLote(
+        crudas.map((i) => i.unitIdentifier),
+        (unidades ?? []).map((u) => ({
+          _id: u._id as string,
+          numero: u.numero,
+          torre: u.torre,
+        })),
+      );
 
-      const rows: InvoiceRow[] = (data.invoices as InvoiceRow[]).map((inv) => {
-        const key = inv.unitIdentifier.trim();
-        const unidadId = unitMap.get(key);
-        return { ...inv, unidadId, matchStatus: unidadId ? "ok" : "no-match" };
+      const rows: InvoiceRow[] = crudas.map((inv, i) => {
+        const r = emparejadas[i]!;
+        return {
+          ...inv,
+          unidadId: (r.unidadId ?? undefined) as Id<"unidades"> | undefined,
+          matchStatus: r.unidadId ? "ok" : "no-match",
+          matchModo: r.modo ?? undefined,
+          matchDetalle: r.detalle,
+        };
       });
 
       setInvoices(rows);
@@ -165,6 +185,10 @@ export function UploadFacturas({
   }
 
   const matchedCount = invoices.filter((i) => i.matchStatus === "ok").length;
+  // Emparejadas deduciendo la torre: merecen una mirada antes de insertar.
+  const porTorreCount = invoices.filter(
+    (i) => i.matchModo === "torre" || i.matchModo === "deducido",
+  ).length;
   const noMatchCount = invoices.filter((i) => i.matchStatus === "no-match").length;
   const twoPageCount = invoices.filter((i) => i.pageCount > 1).length;
 
@@ -303,12 +327,28 @@ export function UploadFacturas({
                 <tbody className="divide-y divide-border">
                   {invoices.map((inv, idx) => (
                     <tr key={idx} className={inv.matchStatus === "no-match" ? "bg-red-500/5" : ""}>
-                      <td className="px-3 py-1.5 font-mono font-medium text-foreground">{inv.unitIdentifier || "?"}</td>
+                      <td className="px-3 py-1.5 font-mono font-medium text-foreground">
+                        {inv.unitIdentifier || "?"}
+                        {inv.matchDetalle ? (
+                          <span className="ml-1.5 font-sans text-[11px] font-normal text-muted-foreground">
+                            → {inv.matchDetalle}
+                          </span>
+                        ) : null}
+                      </td>
                       <td className="max-w-[160px] truncate px-3 py-1.5 text-muted-foreground">{inv.residenteNombre}</td>
                       <td className="px-3 py-1.5 text-right font-semibold tabular-nums text-foreground">{cop(inv.totalAPagar)}</td>
                       <td className="px-3 py-1.5 text-center">
                         {inv.matchStatus === "ok" ? (
-                          <CheckCircle className="inline h-3.5 w-3.5 text-emerald-500" aria-hidden />
+                          inv.matchModo === "torre" || inv.matchModo === "deducido" ? (
+                            <span
+                              className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400"
+                              title="La unidad se dedujo del identificador y del resto del lote. Revísala."
+                            >
+                              <CheckCircle className="h-3.5 w-3.5" aria-hidden /> por torre
+                            </span>
+                          ) : (
+                            <CheckCircle className="inline h-3.5 w-3.5 text-emerald-500" aria-hidden />
+                          )
                         ) : (
                           <span className="inline-flex items-center gap-0.5 text-red-500">
                             <AlertCircle className="h-3.5 w-3.5" aria-hidden /> sin unidad

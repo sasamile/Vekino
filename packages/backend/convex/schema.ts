@@ -612,11 +612,26 @@ export default defineSchema({
      * si la mesa le da la palabra; no registra asistencia.
      */
     codigoInvitado: v.optional(v.string()),
+    /**
+     * Transcripción en vivo encendida (ver `salaIntervenciones`).
+     *
+     * Va APAGADA por defecto y solo la enciende la mesa, porque transcribir
+     * es tratamiento de datos personales: mientras esté encendida la sala
+     * muestra el aviso y sin ese aviso previo la grabación no es defendible.
+     * El transcriptor consulta este campo y se sale de la sala si se apaga.
+     */
+    transcripcionActiva: v.optional(v.boolean()),
+    /** Instante en que se encendió: es la constancia de cuándo se avisó. */
+    transcripcionIniciadaEn: v.optional(v.number()),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
     .index("by_condominio", ["condominioId"])
-    .index("by_codigo_invitado", ["codigoInvitado"]),
+    .index("by_codigo_invitado", ["codigoInvitado"])
+    // El transcriptor pregunta cada pocos segundos a qué salas debe entrar.
+    // Sin este índice esa consulta barrería todas las asambleas históricas
+    // del sistema en cada vuelta.
+    .index("by_estado", ["estado"]),
 
   // ─────────────────────────────────────────────────────────────
   // Asistencia a asambleas (quórum en tiempo real)
@@ -864,6 +879,8 @@ export default defineSchema({
       v.literal("reaccion"),
       v.literal("grabacion_inicio"),
       v.literal("grabacion_fin"),
+      v.literal("transcripcion_inicio"),
+      v.literal("transcripcion_fin"),
       v.literal("presidente_asignado"),
     ),
     nombre: v.string(),
@@ -871,6 +888,111 @@ export default defineSchema({
     userId: v.optional(v.id("users")),
     createdAt: v.number(),
   }).index("by_asamblea_created", ["asambleaId", "createdAt"]),
+
+  /**
+   * Lo que se habló, transcrito en vivo.
+   *
+   * Vive aparte de `salaBitacora` por volumen: una asamblea de cuatro horas
+   * deja decenas de eventos y varios miles de intervenciones. Mezclarlas
+   * volvería lenta la consulta de la bitácora, que es la que se pinta en
+   * pantalla durante toda la reunión.
+   *
+   * Quién habla NO se deduce del audio. El servidor de medios entrega una
+   * pista por participante y el token trae la identidad firmada, así que
+   * cada segmento llega ya atribuido: no hay diarización ni conjeturas.
+   *
+   * El audio no se guarda en ningún momento. Pasa por el transcriptor, se
+   * convierte en texto y se descarta; esto es lo único que queda.
+   */
+  salaIntervenciones: defineTable({
+    condominioId: v.id("condominios"),
+    asambleaId: v.id("asambleas"),
+
+    // Misma identidad que el resto de la sala: usuario con cuenta o invitado
+    // externo por código de sesión.
+    userId: v.optional(v.id("users")),
+    codigoInvitado: v.optional(v.string()),
+    /**
+     * Nombre y unidad tal como estaban AL HABLAR. Copiados a propósito: un
+     * acta ya emitida no puede cambiar porque después se renombre a alguien
+     * o se le reasigne la unidad.
+     */
+    nombre: v.string(),
+    unidadNumero: v.optional(v.string()),
+
+    /** Ventana real del segmento hablado. */
+    inicioEn: v.number(),
+    finEn: v.number(),
+
+    texto: v.string(),
+    /** 0–1 del motor. Por debajo de 0.6 la interfaz lo marca como dudoso. */
+    confianza: v.optional(v.number()),
+
+    /**
+     * Contexto del momento, resuelto AL INSERTAR y no al leer.
+     *
+     * El orden del día se reordena y se edita durante la asamblea. Si esto
+     * se calculara al generar el acta, una intervención terminaría colgada
+     * del punto equivocado. Congelarlo aquí es lo que hace que la frase
+     * quede pegada al punto que de verdad se estaba discutiendo.
+     */
+    puntoIndice: v.optional(v.number()),
+    /**
+     * Votación abierta en ese instante, si la había. Es lo que permite
+     * responder «qué se dijo justo antes de decidir este punto», que es
+     * exactamente lo que se pide cuando impugnan un acta.
+     */
+    votacionId: v.optional(v.id("votaciones")),
+
+    fuente: v.union(
+      v.literal("stt"),    // motor de transcripción
+      v.literal("manual"), // la secretaría la escribió a mano
+    ),
+
+    /**
+     * Corrección de la secretaría.
+     *
+     * El texto original NO se pisa. Una transcripción automática se
+     * equivoca con nombres y cifras, y hay que poder corregirla; pero si la
+     * corrección borrara el original, el acta dejaría de ser auditable y
+     * cualquiera podría reescribir lo que se dijo sin dejar rastro.
+     */
+    textoOriginal: v.optional(v.string()),
+    editadoPorUserId: v.optional(v.id("users")),
+    editadoEn: v.optional(v.number()),
+
+    createdAt: v.number(),
+  })
+    .index("by_asamblea_inicio", ["asambleaId", "inicioEn"])
+    .index("by_asamblea_votacion", ["asambleaId", "votacionId"]),
+
+  /**
+   * Resumen redactado de cada punto del orden del día.
+   *
+   * Es la ÚNICA parte del acta que escribe un modelo, y por eso vive en su
+   * propia tabla y no mezclada con los datos duros: el quórum, los votos y
+   * los coeficientes se calculan de la base y se pueden reproducir; esto no.
+   * Tenerlo separado deja claro qué hay que revisar antes de firmar.
+   */
+  asambleaResumenes: defineTable({
+    condominioId: v.id("condominios"),
+    asambleaId: v.id("asambleas"),
+    puntos: v.array(
+      v.object({
+        puntoIndice: v.number(),
+        titulo: v.string(),
+        resumen: v.string(),
+        /** Cuántas intervenciones se resumieron. Cero = no se habló del punto. */
+        intervenciones: v.number(),
+        /** La secretaría reescribió este punto a mano. */
+        editado: v.optional(v.boolean()),
+      }),
+    ),
+    /** Qué modelo lo redactó. Va impreso en el acta. */
+    modelo: v.string(),
+    generadoEn: v.number(),
+    generadoPorUserId: v.id("users"),
+  }).index("by_asamblea", ["asambleaId"]),
 
   /** Sesión de grabación activa (la mesa graba en el navegador). */
   salaGrabacion: defineTable({

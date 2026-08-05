@@ -11,8 +11,9 @@ import {
   XCircle, Vote, ListOrdered, Scale, Save, Plus, Trash2, ChevronUp, ChevronDown,
   Lock, LayoutDashboard, Table2, TrendingUp, UserPlus,
   UserSquare, QrCode, Mail, Search, Download, Wifi, KeyRound, ClipboardList, X,
-  FileText, FileArchive, MonitorPlay, Radio, Camera, FileUp,
+  FileText, FileArchive, MonitorPlay, Radio, Camera, FileUp, NotebookPen,
 } from "lucide-react";
+import { BitacoraTab } from "@/components/asamblea/bitacora-tab";
 import { MostrarCodigoAsistencia } from "@/components/asamblea/mostrar-codigo-asistencia";
 import { SalaTab } from "@/components/asamblea/sala-tab";
 import { PanelEnlaceInvitados } from "@/components/asamblea/panel-enlace-invitados";
@@ -57,6 +58,7 @@ const TABS = [
   { key: "votacion", label: "En vivo", icon: Vote },
   { key: "detalle_votos", label: "Detalle", icon: ClipboardList },
   { key: "tabla", label: "Tabla", icon: Table2 },
+  { key: "bitacora", label: "Bitácora", icon: NotebookPen },
   { key: "resultados", label: "Resultados", icon: TrendingUp },
   { key: "poderes", label: "Poderes", icon: UserPlus },
   { key: "representantes", label: "Reps", icon: UserSquare },
@@ -166,6 +168,13 @@ export default function AsambleaAdmin() {
       {tab === "votacion" && <VotacionEnVivoTab asambleaId={asambleaId} agenda={a.agenda} />}
       {tab === "detalle_votos" && <DetalleVotosTab asambleaId={asambleaId} />}
       {tab === "tabla" && <TablaTab asambleaId={asambleaId} tituloAsamblea={a.titulo} />}
+      {tab === "bitacora" && (
+        <BitacoraTab
+          asambleaId={asambleaId}
+          modalidad={a.modalidad}
+          estado={a.estado}
+        />
+      )}
       {tab === "resultados" && <ResultadosTab asambleaId={asambleaId} />}
       {tab === "poderes" && <PoderesTab asambleaId={asambleaId} />}
       {tab === "representantes" && <RepresentantesTab asambleaId={asambleaId} />}

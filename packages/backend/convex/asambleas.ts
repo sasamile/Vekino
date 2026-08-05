@@ -1050,7 +1050,10 @@ export const miParticipacion = query({
       presente: misAsistencias.length > 0,
       userId: user._id,
       nombre: user.name,
+      email: user.email ?? null,
       imageUrl: await resolveUserImage(ctx, user),
+      /** Rol de plataforma (si aplica): superadmin | admin. */
+      platformRole: user.platformRole ?? null,
       unidades: misAsistencias.map((a) => a.unidadNumero),
       representa,
       delegoTodo,

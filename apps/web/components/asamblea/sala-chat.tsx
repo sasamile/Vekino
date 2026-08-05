@@ -12,7 +12,45 @@ import {
   Volume2,
   X,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, initials, mensajeErrorUsuario } from "@/lib/utils";
+
+type MensajeSala = {
+  _id: Id<"salaMensajes">;
+  texto: string;
+  nombre: string;
+  createdAt: number;
+  userId: Id<"users"> | null;
+  codigoPoder: string | null;
+  codigoInvitado: string | null;
+};
+
+function mismoAutor(a: MensajeSala, b: MensajeSala) {
+  if (a.userId && b.userId) return a.userId === b.userId;
+  if (a.codigoInvitado && b.codigoInvitado) {
+    return a.codigoInvitado === b.codigoInvitado;
+  }
+  if (a.codigoPoder && b.codigoPoder) return a.codigoPoder === b.codigoPoder;
+  return a.nombre.trim().toLowerCase() === b.nombre.trim().toLowerCase();
+}
+
+/** Nombres suelen venir en mayúsculas de la cédula; se muestran legibles. */
+function nombreLegible(nombre: string) {
+  const t = nombre.trim();
+  if (!t) return "Participante";
+  if (t !== t.toUpperCase() || t.length < 4) return t;
+  return t
+    .toLowerCase()
+    .split(/\s+/)
+    .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
+    .join(" ");
+}
+
+function horaMsg(ts: number) {
+  return new Date(ts).toLocaleTimeString("es-CO", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
 
 /**
  * Chat compartido de la sala: sheet desde abajo (móvil) / centrado (desktop).
@@ -52,10 +90,12 @@ export function SalaChatSheet({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const listaRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   const mesa = esMesa || !!estado?.esMesa;
   const silenciado = !!estado?.silenciado;
   const puedoEscribir = estado ? estado.puedoEscribir : true;
+  const silenciados = estado?.silenciados ?? [];
 
   useEffect(() => {
     if (!abierto || !mensajes?.length) return;
@@ -64,7 +104,35 @@ export function SalaChatSheet({
     el.scrollTop = el.scrollHeight;
   }, [abierto, mensajes]);
 
+  useEffect(() => {
+    if (!abierto || silenciado || !puedoEscribir) return;
+    const t = window.setTimeout(() => inputRef.current?.focus(), 80);
+    return () => window.clearTimeout(t);
+  }, [abierto, silenciado, puedoEscribir]);
+
   if (!abierto) return null;
+
+  function esMio(m: MensajeSala) {
+    return (
+      (!!miUserId && m.userId === miUserId) ||
+      (!!codigoInvitado && m.codigoInvitado === codigoInvitado) ||
+      (!!codigoPoder && m.codigoPoder === codigoPoder) ||
+      (!!miNombre &&
+        !m.userId &&
+        !m.codigoInvitado &&
+        !m.codigoPoder &&
+        m.nombre.trim().toLowerCase() === miNombre.trim().toLowerCase())
+    );
+  }
+
+  function estaSilenciadoMsg(m: MensajeSala) {
+    return silenciados.some(
+      (s) =>
+        (m.userId && s.userId === m.userId) ||
+        (m.codigoInvitado && s.codigoInvitado === m.codigoInvitado) ||
+        (m.codigoPoder && s.codigoPoder === m.codigoPoder),
+    );
+  }
 
   async function mandar() {
     const t = texto.trim();
@@ -74,19 +142,15 @@ export function SalaChatSheet({
     try {
       await enviar({ asambleaId, texto: t, codigoPoder, codigoInvitado });
       setTexto("");
+      if (inputRef.current) inputRef.current.style.height = "auto";
     } catch (e) {
-      setError(e instanceof Error ? e.message : "No se pudo enviar.");
+      setError(mensajeErrorUsuario(e, "No se pudo enviar."));
     } finally {
       setBusy(false);
     }
   }
 
-  async function silenciarMsg(m: {
-    nombre: string;
-    userId: Id<"users"> | null;
-    codigoPoder: string | null;
-    codigoInvitado: string | null;
-  }) {
+  async function silenciarMsg(m: MensajeSala) {
     if (!m.userId && !m.codigoPoder && !m.codigoInvitado) return;
     setError(null);
     try {
@@ -98,22 +162,8 @@ export function SalaChatSheet({
         codigoInvitado: m.codigoInvitado ?? undefined,
       });
     } catch (e) {
-      setError(e instanceof Error ? e.message : "No se pudo silenciar.");
+      setError(mensajeErrorUsuario(e, "No se pudo silenciar."));
     }
-  }
-
-  function estaSilenciadoMsg(m: {
-    userId: Id<"users"> | null;
-    codigoPoder: string | null;
-    codigoInvitado: string | null;
-  }) {
-    const lista = estado?.silenciados ?? [];
-    return lista.some(
-      (s) =>
-        (m.userId && s.userId === m.userId) ||
-        (m.codigoInvitado && s.codigoInvitado === m.codigoInvitado) ||
-        (m.codigoPoder && s.codigoPoder === m.codigoPoder),
-    );
   }
 
   return (
@@ -121,168 +171,221 @@ export function SalaChatSheet({
       <button
         type="button"
         aria-label="Cerrar chat"
-        className="absolute inset-0 bg-black/55 backdrop-blur-sm"
+        className="absolute inset-0 bg-black/60 backdrop-blur-sm transition-opacity"
         onClick={onClose}
       />
       <div
         role="dialog"
         aria-modal
         aria-label="Chat de la sala"
-        className="relative z-10 flex h-[min(70dvh,560px)] w-full max-w-md flex-col overflow-hidden rounded-t-2xl border border-white/10 bg-[#14161b] shadow-2xl sm:h-[min(75vh,600px)] sm:rounded-2xl"
+        className="relative z-10 flex h-[min(78dvh,620px)] w-full max-w-md flex-col overflow-hidden rounded-t-2xl border border-white/[0.08] bg-[#12141a] shadow-2xl sm:h-[min(80vh,640px)] sm:rounded-2xl"
       >
-        <div className="flex shrink-0 flex-col border-b border-white/10">
+        {/* Header */}
+        <div className="flex shrink-0 flex-col border-b border-white/[0.08]">
           <div className="flex justify-center pt-2.5 sm:hidden">
-            <div className="h-1 w-10 rounded-full bg-white/20" />
+            <div className="h-1 w-9 rounded-full bg-white/20" />
           </div>
-          <div className="flex items-center gap-2 px-4 py-3">
-            <MessageCircle className="h-5 w-5 text-white/50" aria-hidden />
+          <div className="flex items-center gap-3 px-4 py-3.5">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/[0.06]">
+              <MessageCircle className="h-4 w-4 text-white/70" aria-hidden />
+            </div>
             <div className="min-w-0 flex-1">
-              <p className="text-sm font-semibold text-white">Chat de la sala</p>
-              <p className="text-[11px] text-white/45">
+              <p className="text-sm font-semibold tracking-tight text-white">
+                Chat
+              </p>
+              <p className="text-[11px] text-white/40">
                 {mesa
-                  ? "Puedes silenciar a quien se pase de la raya"
-                  : "Visible para todos los que están aquí"}
+                  ? "Moderas el chat de la asamblea"
+                  : "Visible para todos en la sala"}
               </p>
             </div>
             <button
               type="button"
               onClick={onClose}
               aria-label="Cerrar"
-              className="rounded-lg p-1.5 text-white/50 hover:bg-white/10 hover:text-white"
+              className="rounded-lg p-2 text-white/40 transition-colors hover:bg-white/10 hover:text-white"
             >
-              <X className="h-5 w-5" aria-hidden />
+              <X className="h-4 w-4" aria-hidden />
             </button>
           </div>
+
+          {mesa && silenciados.length > 0 ? (
+            <div className="flex flex-wrap gap-1.5 border-t border-white/[0.06] px-4 py-2.5">
+              <span className="w-full text-[10px] font-medium uppercase tracking-wider text-white/35">
+                Silenciados · tocar para rehabilitar
+              </span>
+              {silenciados.map((s) => (
+                <button
+                  key={s._id as string}
+                  type="button"
+                  onClick={() =>
+                    void habilitar({
+                      asambleaId,
+                      userId: s.userId ?? undefined,
+                      codigoPoder: s.codigoPoder ?? undefined,
+                      codigoInvitado: s.codigoInvitado ?? undefined,
+                    }).catch(() => {})
+                  }
+                  title="Permitir escribir de nuevo"
+                  className="inline-flex items-center gap-1.5 rounded-full border border-red-400/20 bg-red-500/10 px-2.5 py-1 text-[11px] font-medium text-red-200/90 transition-colors hover:bg-red-500/20"
+                >
+                  <Ban className="h-3 w-3 shrink-0 opacity-70" aria-hidden />
+                  <span className="max-w-[10rem] truncate">
+                    {nombreLegible(s.nombre)}
+                  </span>
+                  <X className="h-3 w-3 shrink-0 opacity-50" aria-hidden />
+                </button>
+              ))}
+            </div>
+          ) : null}
         </div>
 
+        {/* Mensajes */}
         <div
           ref={listaRef}
-          className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-3"
+          className="min-h-0 flex-1 overflow-y-auto px-3 py-4 sm:px-4"
         >
           {mensajes === undefined ? (
-            <div className="flex justify-center py-10">
-              <Loader2 className="h-5 w-5 animate-spin text-white/40" />
+            <div className="flex h-full flex-col items-center justify-center gap-3 py-16">
+              <Loader2 className="h-5 w-5 animate-spin text-white/30" />
+              <p className="text-xs text-white/30">Cargando mensajes…</p>
             </div>
           ) : mensajes.length === 0 ? (
-            <p className="py-10 text-center text-sm text-white/40">
-              Aún no hay mensajes. Sé el primero en escribir.
-            </p>
+            <div className="flex h-full flex-col items-center justify-center gap-3 px-6 py-16 text-center">
+              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white/[0.04]">
+                <MessageCircle className="h-5 w-5 text-white/25" aria-hidden />
+              </div>
+              <div>
+                <p className="text-sm font-medium text-white/55">
+                  Todavía no hay mensajes
+                </p>
+                <p className="mt-1 text-xs leading-relaxed text-white/30">
+                  Escribe abajo para saludar a quienes están en la sala.
+                </p>
+              </div>
+            </div>
           ) : (
-            mensajes.map((m) => {
-              const mio =
-                (miUserId && m.userId === miUserId) ||
-                (!!codigoInvitado &&
-                  m.codigoInvitado === codigoInvitado) ||
-                (!!codigoPoder && m.codigoPoder === codigoPoder) ||
-                (!!miNombre &&
-                  !m.userId &&
-                  !m.codigoInvitado &&
-                  !m.codigoPoder &&
-                  m.nombre.trim().toLowerCase() ===
-                    miNombre.trim().toLowerCase());
-              const puedeSilenciar =
-                mesa &&
-                !mio &&
-                !!(m.userId || m.codigoPoder || m.codigoInvitado);
-              const yaSilenciado = puedeSilenciar && estaSilenciadoMsg(m);
-              return (
-                <div
-                  key={m._id as string}
-                  className={cn(
-                    "flex flex-col gap-0.5",
-                    mio ? "items-end" : "items-start",
-                  )}
-                >
-                  <div className="flex items-center gap-1.5 px-1">
-                    <span className="text-[10px] font-medium text-white/40">
-                      {mio ? "Tú" : m.nombre}
-                    </span>
-                    {puedeSilenciar ? (
-                      yaSilenciado ? (
-                        <button
-                          type="button"
-                          title="Permitir escribir de nuevo"
-                          onClick={() =>
-                            void habilitar({
-                              asambleaId,
-                              userId: m.userId ?? undefined,
-                              codigoPoder: m.codigoPoder ?? undefined,
-                              codigoInvitado: m.codigoInvitado ?? undefined,
-                            }).catch(() => {})
-                          }
-                          className="rounded p-0.5 text-amber-300/80 hover:bg-white/10 hover:text-amber-200"
-                        >
-                          <Volume2 className="h-3 w-3" aria-hidden />
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          title="Silenciar en el chat"
-                          onClick={() => void silenciarMsg(m)}
-                          className="rounded p-0.5 text-white/30 hover:bg-red-500/20 hover:text-red-300"
-                        >
-                          <Ban className="h-3 w-3" aria-hidden />
-                        </button>
-                      )
-                    ) : null}
-                  </div>
-                  <div
+            <ul className="space-y-1">
+              {mensajes.map((m, i) => {
+                const prev = i > 0 ? mensajes[i - 1]! : null;
+                const mio = esMio(m);
+                const agrupado =
+                  !!prev &&
+                  mismoAutor(prev, m) &&
+                  m.createdAt - prev.createdAt < 120_000;
+                const puedeSilenciar =
+                  mesa &&
+                  !mio &&
+                  !!(m.userId || m.codigoPoder || m.codigoInvitado);
+                const yaSilenciado = puedeSilenciar && estaSilenciadoMsg(m);
+                const label = mio ? "Tú" : nombreLegible(m.nombre);
+
+                return (
+                  <li
+                    key={m._id as string}
                     className={cn(
-                      "max-w-[85%] rounded-2xl px-3 py-2 text-sm leading-relaxed",
-                      mio
-                        ? "rounded-br-md bg-emerald-500 text-white"
-                        : "rounded-bl-md bg-white/10 text-white/90",
+                      "group flex gap-2",
+                      mio ? "flex-row-reverse" : "flex-row",
+                      agrupado ? "mt-0.5" : "mt-3 first:mt-0",
                     )}
                   >
-                    {m.texto}
-                  </div>
-                </div>
-              );
-            })
+                    {!mio ? (
+                      <div
+                        className={cn(
+                          "flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/[0.08] text-[10px] font-semibold text-white/55",
+                          agrupado && "invisible",
+                        )}
+                        aria-hidden={agrupado}
+                      >
+                        {initials(label) || "?"}
+                      </div>
+                    ) : null}
+
+                    <div
+                      className={cn(
+                        "flex min-w-0 max-w-[78%] flex-col",
+                        mio ? "items-end" : "items-start",
+                      )}
+                    >
+                      {!agrupado ? (
+                        <div
+                          className={cn(
+                            "mb-1 flex items-center gap-1.5 px-1",
+                            mio && "flex-row-reverse",
+                          )}
+                        >
+                          <span className="truncate text-[11px] font-medium text-white/45">
+                            {label}
+                          </span>
+                          <span className="shrink-0 text-[10px] tabular-nums text-white/25">
+                            {horaMsg(m.createdAt)}
+                          </span>
+                          {puedeSilenciar ? (
+                            yaSilenciado ? (
+                              <button
+                                type="button"
+                                title="Permitir escribir de nuevo"
+                                onClick={() =>
+                                  void habilitar({
+                                    asambleaId,
+                                    userId: m.userId ?? undefined,
+                                    codigoPoder: m.codigoPoder ?? undefined,
+                                    codigoInvitado:
+                                      m.codigoInvitado ?? undefined,
+                                  }).catch(() => {})
+                                }
+                                className="rounded-md p-0.5 text-amber-300/70 opacity-100 transition-colors hover:bg-white/10 hover:text-amber-200 sm:opacity-0 sm:group-hover:opacity-100"
+                              >
+                                <Volume2 className="h-3 w-3" aria-hidden />
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                title="Silenciar en el chat"
+                                onClick={() => void silenciarMsg(m)}
+                                className="rounded-md p-0.5 text-white/25 opacity-100 transition-colors hover:bg-red-500/15 hover:text-red-300 sm:opacity-0 sm:group-hover:opacity-100"
+                              >
+                                <Ban className="h-3 w-3" aria-hidden />
+                              </button>
+                            )
+                          ) : null}
+                        </div>
+                      ) : null}
+
+                      <div
+                        className={cn(
+                          "px-3.5 py-2 text-[13px] leading-relaxed break-words",
+                          mio
+                            ? "rounded-2xl rounded-br-md bg-emerald-500 text-white"
+                            : "rounded-2xl rounded-bl-md bg-white/[0.08] text-white/90",
+                        )}
+                      >
+                        {m.texto}
+                      </div>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
           )}
         </div>
 
-        {mesa && (estado?.silenciados?.length ?? 0) > 0 ? (
-          <div className="shrink-0 border-t border-white/10 px-4 py-2">
-            <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-white/40">
-              Silenciados
-            </p>
-            <ul className="flex flex-wrap gap-1.5">
-              {estado!.silenciados.map((s) => (
-                <li key={s._id as string}>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      void habilitar({
-                        asambleaId,
-                        userId: s.userId ?? undefined,
-                        codigoPoder: s.codigoPoder ?? undefined,
-                        codigoInvitado: s.codigoInvitado ?? undefined,
-                      }).catch(() => {})
-                    }
-                    title="Permitir escribir de nuevo"
-                    className="inline-flex items-center gap-1 rounded-full bg-red-500/15 px-2.5 py-1 text-[11px] font-semibold text-red-200 hover:bg-red-500/25"
-                  >
-                    <Ban className="h-3 w-3" aria-hidden />
-                    {s.nombre}
-                    <X className="h-3 w-3 opacity-60" aria-hidden />
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
-
-        <div className="shrink-0 border-t border-white/10 px-3 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+        {/* Composer */}
+        <div className="shrink-0 border-t border-white/[0.08] bg-[#0e1014]/80 px-3 py-3 pb-[max(0.85rem,env(safe-area-inset-bottom))] backdrop-blur-sm sm:px-4">
           {error ? (
             <p className="mb-2 text-xs text-red-300" role="alert">
               {error}
             </p>
           ) : null}
           {silenciado ? (
-            <p className="rounded-xl bg-amber-500/15 px-3 py-2.5 text-center text-sm text-amber-100">
-              La mesa te silenció en el chat. Solo puedes leer.
-            </p>
+            <div className="rounded-xl border border-amber-400/20 bg-amber-500/10 px-3.5 py-3 text-center">
+              <p className="text-sm font-medium text-amber-100">
+                Estás silenciado en el chat
+              </p>
+              <p className="mt-0.5 text-xs text-amber-100/60">
+                Puedes leer, pero no enviar mensajes.
+              </p>
+            </div>
           ) : (
             <form
               className="flex items-end gap-2"
@@ -291,19 +394,32 @@ export function SalaChatSheet({
                 void mandar();
               }}
             >
-              <input
+              <textarea
+                ref={inputRef}
                 value={texto}
-                onChange={(e) => setTexto(e.target.value)}
+                rows={1}
+                onChange={(e) => {
+                  setTexto(e.target.value);
+                  const el = e.target;
+                  el.style.height = "auto";
+                  el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    void mandar();
+                  }
+                }}
                 placeholder="Escribe un mensaje…"
                 maxLength={400}
                 disabled={!puedoEscribir}
-                className="min-w-0 flex-1 rounded-xl border border-white/10 bg-black/30 px-3 py-2.5 text-base text-white placeholder:text-white/35 outline-none focus:border-white/25 disabled:opacity-50"
+                className="max-h-[120px] min-h-[42px] min-w-0 flex-1 resize-none rounded-xl border border-white/[0.08] bg-white/[0.04] px-3.5 py-2.5 text-[15px] leading-snug text-white placeholder:text-white/30 outline-none transition-colors focus:border-white/20 focus:bg-white/[0.06] disabled:opacity-50"
               />
               <button
                 type="submit"
                 disabled={busy || !texto.trim() || !puedoEscribir}
                 aria-label="Enviar"
-                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-500 text-white hover:bg-emerald-600 disabled:opacity-40"
+                className="flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-xl bg-emerald-500 text-white transition-colors hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-35"
               >
                 {busy ? (
                   <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
