@@ -11,6 +11,7 @@ import {
   hasPlatformRole,
 } from "./model/authz";
 import { registrarBitacora } from "./salaBitacora";
+import { resolveUserImage } from "./model/userImage";
 
 /**
  * Señalización del video propio de la sala.
@@ -1396,7 +1397,7 @@ export const estadoChat = query({
   },
 });
 
-/** Últimos mensajes de la sala (reactivo). */
+/** Últimos mensajes de la sala (reactivo). Incluye foto de perfil si hay. */
 export const mensajesSala = query({
   args: {
     asambleaId: v.id("asambleas"),
@@ -1421,10 +1422,51 @@ export const mensajesSala = query({
       )
       .order("desc")
       .take(CHAT_LIMITE);
-    return filas
-      .slice()
-      .reverse()
-      .map((m) => ({
+    const ordenadas = filas.slice().reverse();
+
+    /* Fotos: usuarios con cuenta + presencia (por si el avatar ya está ahí). */
+    const userIds = [
+      ...new Set(
+        ordenadas
+          .map((m) => m.userId)
+          .filter((id): id is Id<"users"> => !!id),
+      ),
+    ];
+    const fotos = new Map<string, string | null>();
+    await Promise.all(
+      userIds.map(async (id) => {
+        const u = await ctx.db.get(id);
+        fotos.set(id as string, u ? await resolveUserImage(ctx, u) : null);
+      }),
+    );
+
+    const presencias = await ctx.db
+      .query("salaPresencias")
+      .withIndex("by_asamblea", (q) => q.eq("asambleaId", args.asambleaId))
+      .collect();
+    const fotoPresencia = new Map<string, string>();
+    for (const p of presencias) {
+      if (!p.imageUrl) continue;
+      if (p.userId) fotoPresencia.set(`u:${p.userId as string}`, p.imageUrl);
+      if (p.codigoInvitado) {
+        fotoPresencia.set(`i:${p.codigoInvitado}`, p.imageUrl);
+      }
+      if (p.codigoPoder) fotoPresencia.set(`p:${p.codigoPoder}`, p.imageUrl);
+    }
+
+    return ordenadas.map((m) => {
+      let imageUrl: string | null = null;
+      if (m.userId) {
+        imageUrl =
+          fotos.get(m.userId as string) ??
+          fotoPresencia.get(`u:${m.userId as string}`) ??
+          null;
+      } else if (m.codigoInvitado) {
+        imageUrl = fotoPresencia.get(`i:${m.codigoInvitado}`) ?? null;
+      } else if (m.codigoPoder) {
+        imageUrl = fotoPresencia.get(`p:${m.codigoPoder}`) ?? null;
+      }
+      return {
         _id: m._id,
         texto: m.texto,
         nombre: m.nombre,
@@ -1432,7 +1474,9 @@ export const mensajesSala = query({
         userId: m.userId ?? null,
         codigoPoder: m.codigoPoder ?? null,
         codigoInvitado: m.codigoInvitado ?? null,
-      }));
+        imageUrl,
+      };
+    });
   },
 });
 

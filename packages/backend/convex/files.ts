@@ -42,6 +42,14 @@ function sanitizeFileName(name: string) {
     .slice(0, 120);
 }
 
+/** Key \u00fanico en el bucket: `{folder}/{timestamp}-{uuid corto}-{nombre saneado}`. */
+function buildObjectKey(folderArg: string, fileNameArg?: string) {
+  const folder = folderArg.replace(/^\/+|\/+$/g, "") || "uploads";
+  const rawName = fileNameArg?.trim() || "file";
+  const safe = sanitizeFileName(rawName);
+  return `${folder}/${Date.now()}-${randomUUID().slice(0, 8)}-${safe}`;
+}
+
 /**
  * URL firmada (PUT) para subir directo al bucket S3.
  * El cliente debe hacer PUT con el Content-Type indicado.
@@ -64,10 +72,7 @@ export const generateUploadUrl = action({
 
     const { bucket } = requireS3Env();
     const client = s3Client();
-    const folder = args.folder.replace(/^\/+|\/+$/g, "") || "uploads";
-    const rawName = args.fileName?.trim() || "file";
-    const safe = sanitizeFileName(rawName);
-    const key = `${folder}/${Date.now()}-${randomUUID().slice(0, 8)}-${safe}`;
+    const key = buildObjectKey(args.folder, args.fileName);
 
     const command = new PutObjectCommand({
       Bucket: bucket,
@@ -110,10 +115,7 @@ export const uploadBytes = action({
 
     const { bucket } = requireS3Env();
     const client = s3Client();
-    const folder = args.folder.replace(/^\/+|\/+$/g, "") || "uploads";
-    const rawName = args.fileName?.trim() || "file";
-    const safe = sanitizeFileName(rawName);
-    const key = `${folder}/${Date.now()}-${randomUUID().slice(0, 8)}-${safe}`;
+    const key = buildObjectKey(args.folder, args.fileName);
 
     await client.send(
       new PutObjectCommand({
@@ -171,5 +173,71 @@ export const ping = action({
   handler: async (ctx): Promise<{ ok: boolean }> => {
     const me: unknown = await ctx.runQuery(api.users.me, {});
     return { ok: Boolean(me) };
+  },
+});
+
+/**
+ * Descarga un archivo desde una URL y lo sube al bucket S3.
+ * Pensado para el bot de WhatsApp: la media de YCloud viene como URL temporal
+ * (requiere el header X-API-Key y caduca en ~30 días), así que la persistimos
+ * de una vez en S3. Sin ctx.auth: es una internalAction invocada por el bot.
+ */
+export const uploadFromUrl = internalAction({
+  args: {
+    url: v.string(),
+    folder: v.string(),
+    fileName: v.optional(v.string()),
+    contentType: v.optional(v.string()),
+    conApiKeyYCloud: v.optional(v.boolean()),
+  },
+  handler: async (
+    _ctx,
+    args,
+  ): Promise<{ key: string; publicUrl: string }> => {
+    const maxBytes = 25 * 1024 * 1024;
+
+    const headers: Record<string, string> = {};
+    if (args.conApiKeyYCloud) {
+      headers["X-API-Key"] = process.env.YCLOUD_API_KEY ?? "";
+    }
+
+    const response = await fetch(args.url, { headers });
+    if (!response.ok) {
+      throw new Error(
+        `No se pudo descargar el archivo (HTTP ${response.status}).`,
+      );
+    }
+
+    // Límite defensivo: primero por header, luego por el buffer real.
+    const contentLength = Number(response.headers.get("content-length"));
+    if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+      throw new Error("El archivo supera el límite de 25 MB.");
+    }
+
+    const bytes = Buffer.from(await response.arrayBuffer());
+    if (bytes.byteLength <= 0) throw new Error("Archivo vacío.");
+    if (bytes.byteLength > maxBytes) {
+      throw new Error("El archivo supera el límite de 25 MB.");
+    }
+
+    const contentType =
+      args.contentType ||
+      response.headers.get("content-type") ||
+      "application/octet-stream";
+
+    const { bucket } = requireS3Env();
+    const client = s3Client();
+    const key = buildObjectKey(args.folder, args.fileName);
+
+    await client.send(
+      new PutObjectCommand({
+        Bucket: bucket,
+        Key: key,
+        ContentType: contentType,
+        Body: bytes,
+      }),
+    );
+
+    return { key, publicUrl: publicUrlFor(key) };
   },
 });

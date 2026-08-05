@@ -32,11 +32,14 @@ import type * as lib_codigoAsistencia from "../lib/codigoAsistencia.js";
 import type * as lib_livekitJwt from "../lib/livekitJwt.js";
 import type * as lib_permanencia from "../lib/permanencia.js";
 import type * as lib_redactor from "../lib/redactor.js";
+import type * as lib_telefono from "../lib/telefono.js";
+import type * as lib_ycloud from "../lib/ycloud.js";
 import type * as memberships from "../memberships.js";
 import type * as migrations from "../migrations.js";
 import type * as model_authz from "../model/authz.js";
 import type * as model_displayName from "../model/displayName.js";
 import type * as model_files from "../model/files.js";
+import type * as model_latidos from "../model/latidos.js";
 import type * as model_minuta from "../model/minuta.js";
 import type * as model_placa from "../model/placa.js";
 import type * as model_roles from "../model/roles.js";
@@ -49,16 +52,22 @@ import type * as pagos from "../pagos.js";
 import type * as platform from "../platform.js";
 import type * as portal from "../portal.js";
 import type * as pqrs from "../pqrs.js";
+import type * as preguntaIa from "../preguntaIa.js";
 import type * as reservas from "../reservas.js";
 import type * as salaBitacora from "../salaBitacora.js";
 import type * as salaPermisos from "../salaPermisos.js";
 import type * as salaToken from "../salaToken.js";
 import type * as salaVideo from "../salaVideo.js";
 import type * as soporte from "../soporte.js";
+import type * as soportesPago from "../soportesPago.js";
 import type * as unidades from "../unidades.js";
 import type * as users from "../users.js";
 import type * as vehiculos from "../vehiculos.js";
 import type * as visitantes from "../visitantes.js";
+import type * as whatsapp from "../whatsapp.js";
+import type * as whatsappBroadcast from "../whatsappBroadcast.js";
+import type * as whatsappNotifs from "../whatsappNotifs.js";
+import type * as whatsappTemplates from "../whatsappTemplates.js";
 
 import type {
   ApiFromModules,
@@ -91,11 +100,14 @@ declare const fullApi: ApiFromModules<{
   "lib/livekitJwt": typeof lib_livekitJwt;
   "lib/permanencia": typeof lib_permanencia;
   "lib/redactor": typeof lib_redactor;
+  "lib/telefono": typeof lib_telefono;
+  "lib/ycloud": typeof lib_ycloud;
   memberships: typeof memberships;
   migrations: typeof migrations;
   "model/authz": typeof model_authz;
   "model/displayName": typeof model_displayName;
   "model/files": typeof model_files;
+  "model/latidos": typeof model_latidos;
   "model/minuta": typeof model_minuta;
   "model/placa": typeof model_placa;
   "model/roles": typeof model_roles;
@@ -108,16 +120,22 @@ declare const fullApi: ApiFromModules<{
   platform: typeof platform;
   portal: typeof portal;
   pqrs: typeof pqrs;
+  preguntaIa: typeof preguntaIa;
   reservas: typeof reservas;
   salaBitacora: typeof salaBitacora;
   salaPermisos: typeof salaPermisos;
   salaToken: typeof salaToken;
   salaVideo: typeof salaVideo;
   soporte: typeof soporte;
+  soportesPago: typeof soportesPago;
   unidades: typeof unidades;
   users: typeof users;
   vehiculos: typeof vehiculos;
   visitantes: typeof visitantes;
+  whatsapp: typeof whatsapp;
+  whatsappBroadcast: typeof whatsappBroadcast;
+  whatsappNotifs: typeof whatsappNotifs;
+  whatsappTemplates: typeof whatsappTemplates;
 }>;
 
 /**

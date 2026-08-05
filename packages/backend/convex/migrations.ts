@@ -10,6 +10,8 @@ import {
   vinculoUnidadValidator,
 } from "./model/roles";
 import { resolveTipoVehiculo } from "./model/placa";
+import { normalizarTelefonoE164 } from "./lib/telefono";
+import { internal } from "./_generated/api";
 
 /**
  * FUNCIONES DE MIGRACIÓN (Fase 2)
@@ -98,6 +100,7 @@ export const upsertUser = internalMutation({
       tipoDocumento: args.tipoDocumento,
       numeroDocumento: args.numeroDocumento,
       telefono: args.telefono,
+      telefonoE164: normalizarTelefonoE164(args.telefono) ?? undefined,
       active: args.active ?? true,
       platformRole: args.platformRole,
       legacyId: args.legacyId,
@@ -213,6 +216,7 @@ export const bulkUsers = internalMutation({
         tipoDocumento: u.tipoDocumento,
         numeroDocumento: u.numeroDocumento,
         telefono: u.telefono,
+        telefonoE164: normalizarTelefonoE164(u.telefono) ?? undefined,
         active: u.active ?? true,
         legacyId: u.legacyId,
         legacyDatabaseName: args.legacyDatabaseName,
@@ -669,5 +673,39 @@ export const fixSaldoAFavorEstado = internalMutation({
       }
     }
     return { scanned: candidatas.length, fixed };
+  },
+});
+
+/**
+ * Backfill de `users.telefonoE164` desde `telefono` (formato libre migrado).
+ *
+ * Idempotente y por lotes: procesa 300 usuarios por invocación y se
+ * auto-encadena vía scheduler hasta recorrer toda la tabla.
+ *
+ * Ejecutar una sola vez tras el deploy:
+ *   bunx convex run migrations:backfillTelefonoE164
+ */
+export const backfillTelefonoE164 = internalMutation({
+  args: { cursor: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const page = await ctx.db
+      .query("users")
+      .paginate({ cursor: args.cursor ?? null, numItems: 300 });
+
+    let actualizados = 0;
+    for (const user of page.page) {
+      const e164 = normalizarTelefonoE164(user.telefono) ?? undefined;
+      if (user.telefonoE164 !== e164) {
+        await ctx.db.patch(user._id, { telefonoE164: e164 });
+        actualizados++;
+      }
+    }
+
+    if (!page.isDone) {
+      await ctx.scheduler.runAfter(0, internal.migrations.backfillTelefonoE164, {
+        cursor: page.continueCursor,
+      });
+    }
+    return { procesados: page.page.length, actualizados, continua: !page.isDone };
   },
 });

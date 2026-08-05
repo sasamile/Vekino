@@ -12,6 +12,7 @@ import {
   vinculoUnidadValidator,
 } from "./model/roles";
 import { resolveUserImage } from "./model/userImage";
+import { normalizarTelefonoE164 } from "./lib/telefono";
 
 function vinculoFromRoles(
   roles: string[],
@@ -226,6 +227,7 @@ export const updateMember = mutation({
     const profilePatch: {
       name?: string;
       telefono?: string;
+      telefonoE164?: string;
       updatedAt: number;
     } = { updatedAt: now };
 
@@ -236,6 +238,8 @@ export const updateMember = mutation({
     }
     if (args.telefono !== undefined) {
       profilePatch.telefono = args.telefono.trim() || undefined;
+      profilePatch.telefonoE164 =
+        normalizarTelefonoE164(args.telefono) ?? undefined;
     }
     await ctx.db.patch(args.userId, profilePatch);
 
@@ -293,6 +297,7 @@ export const upsertCondoMemberProfile = mutation({
 
     const now = Date.now();
     const telefono = args.telefono?.trim() || undefined;
+    const telefonoE164 = normalizarTelefonoE164(telefono) ?? undefined;
     let userId: Id<"users">;
     let existed = false;
 
@@ -302,6 +307,7 @@ export const upsertCondoMemberProfile = mutation({
       await ctx.db.patch(existing._id, {
         name,
         telefono,
+        telefonoE164,
         active: true,
         updatedAt: now,
       });
@@ -310,6 +316,7 @@ export const upsertCondoMemberProfile = mutation({
         name,
         email,
         telefono,
+        telefonoE164,
         emailVerified: false,
         active: true,
         createdAt: now,

@@ -20,6 +20,10 @@ const inter = Inter({
 export const metadata: Metadata = {
   title: "Vekino",
   description: "Plataforma de gestión de condominios",
+  icons: {
+    icon: [{ url: "/logos/isotipo-vekino.svg", type: "image/svg+xml" }],
+    apple: [{ url: "/logos/vekino-mark.png" }],
+  },
 };
 
 export default function RootLayout({

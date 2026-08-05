@@ -44,9 +44,9 @@ const limpio = (s: string | undefined) => s?.trim() || "";
 /**
  * Arma la configuración desde el entorno.
  *
- * Si no se dice qué proveedor usar, se deduce de la llave que esté puesta:
- * tener que declarar `ACTA_PROVEEDOR=anthropic` cuando lo único configurado
- * es `ANTHROPIC_API_KEY` sería una forma tonta de que no funcione.
+ * OpenAI gana si hay `OPENAI_API_KEY` (más barato para preguntas/acta).
+ * Anthropic solo si no hay OpenAI, o si se fuerza `ACTA_PROVEEDOR=anthropic`
+ * sin llave OpenAI.
  *
  * Devuelve `null` cuando no hay llave. No es un error: el acta se genera
  * igual con todos sus datos, solo que sin los resúmenes redactados.
@@ -61,29 +61,80 @@ export function configRedactor(
   /* Llave neutra: quien use Kimi o DeepSeek no debería tener que guardar su
    * llave en una variable que se llama OPENAI_API_KEY. */
   const generica = limpio(env.ACTA_API_KEY);
+  const modeloOverride = limpio(env.ACTA_MODELO);
+  const baseOverride = limpio(env.ACTA_BASE_URL);
 
   let proveedor: Proveedor;
-  if (declarado === "anthropic" || declarado === "openai") {
-    proveedor = declarado;
+  if (openaiKey) {
+    /* Barato y ya configurado: no mandar gpt-* a Anthropic. */
+    proveedor = "openai";
+  } else if (declarado === "openai" && generica) {
+    proveedor = "openai";
+  } else if (declarado === "anthropic" && anthropicKey) {
+    proveedor = "anthropic";
+  } else if (generica) {
+    proveedor = "openai";
   } else if (anthropicKey) {
     proveedor = "anthropic";
-  } else if (openaiKey || generica) {
-    proveedor = "openai";
   } else {
     return null;
   }
 
+  let modelo = modeloOverride || PREDETERMINADO[proveedor].modelo;
+  if (proveedor === "openai" && /^claude/i.test(modelo)) {
+    modelo = PREDETERMINADO.openai.modelo;
+  }
+  if (proveedor === "anthropic" && /^gpt-|^o[1-9]|^chatgpt-/i.test(modelo)) {
+    modelo = PREDETERMINADO.anthropic.modelo;
+  }
+
   const apiKey =
-    generica || (proveedor === "anthropic" ? anthropicKey : openaiKey);
+    proveedor === "openai" ? openaiKey || generica : anthropicKey || generica;
   if (!apiKey) return null;
+
+  let baseUrl = (
+    baseOverride || PREDETERMINADO[proveedor].baseUrl
+  ).replace(/\/+$/, "");
+  if (proveedor === "openai" && /anthropic\.com/i.test(baseUrl)) {
+    baseUrl = PREDETERMINADO.openai.baseUrl;
+  }
+  if (proveedor === "anthropic" && /openai\.com/i.test(baseUrl)) {
+    baseUrl = PREDETERMINADO.anthropic.baseUrl;
+  }
 
   return {
     proveedor,
     apiKey,
-    modelo: limpio(env.ACTA_MODELO) || PREDETERMINADO[proveedor].modelo,
-    baseUrl: (
-      limpio(env.ACTA_BASE_URL) || PREDETERMINADO[proveedor].baseUrl
-    ).replace(/\/+$/, ""),
+    modelo,
+    baseUrl,
+  };
+}
+
+/**
+ * Solo OpenAI (`OPENAI_API_KEY`). Para features baratas (preguntas, etc.)
+ * donde no queremos caer en Anthropic por una ACTA_* mal puesta.
+ */
+export function configOpenAI(
+  env: Record<string, string | undefined> = process.env,
+): ConfigRedactor | null {
+  const apiKey = limpio(env.OPENAI_API_KEY);
+  if (!apiKey) return null;
+  const modelo =
+    limpio(env.ACTA_MODELO) &&
+    !/^claude/i.test(limpio(env.ACTA_MODELO))
+      ? limpio(env.ACTA_MODELO)
+      : PREDETERMINADO.openai.modelo;
+  let baseUrl = (
+    limpio(env.ACTA_BASE_URL) || PREDETERMINADO.openai.baseUrl
+  ).replace(/\/+$/, "");
+  if (/anthropic\.com/i.test(baseUrl)) {
+    baseUrl = PREDETERMINADO.openai.baseUrl;
+  }
+  return {
+    proveedor: "openai",
+    apiKey,
+    modelo: modelo || PREDETERMINADO.openai.modelo,
+    baseUrl,
   };
 }
 

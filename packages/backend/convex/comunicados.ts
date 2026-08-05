@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
 import { query, mutation } from "./_generated/server";
+import { internal } from "./_generated/api";
 import { requireCondominioRole } from "./model/authz";
 import { resolveMediaUrl } from "./model/files";
 import { scheduleDeleteS3Keys, s3KeyFromPublicUrl } from "./model/s3";
@@ -181,7 +182,7 @@ export const create = mutation({
       ...ADMIN_ROLES,
     ]);
     const now = Date.now();
-    return await ctx.db.insert("comunicados", {
+    const comunicadoId = await ctx.db.insert("comunicados", {
       condominioId: args.condominioId,
       autorUserId: user._id,
       autorNombre: user.name,
@@ -194,6 +195,14 @@ export const create = mutation({
       createdAt: now,
       updatedAt: now,
     });
+
+    // Fan-out de WhatsApp a la audiencia del comunicado (solo al crear, no al
+    // editar). El gating por tenant (módulo "whatsapp") se decide en la action.
+    await ctx.scheduler.runAfter(0, internal.whatsappBroadcast.broadcastComunicado, {
+      comunicadoId,
+    });
+
+    return comunicadoId;
   },
 });
 

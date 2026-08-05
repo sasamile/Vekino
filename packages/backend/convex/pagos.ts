@@ -6,6 +6,7 @@ import {
   internalQuery,
   query,
 } from "./_generated/server";
+import type { ActionCtx, QueryCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { requireAppUser } from "./model/authz";
@@ -222,6 +223,94 @@ function mapStatusCode(code: string): EstadoConsulta {
 // ─────────────────────────────────────────────────────────────
 
 /**
+ * Cuerpo común de datosParaTrn / datosParaTrnDeUsuario: valida que `user`
+ * puede pagar la factura y devuelve todos los datos necesarios para armar la
+ * transacción Trn. `conBypassPlataforma` deja pasar libre al staff de
+ * plataforma (flujo web autenticado); el bot de WhatsApp siempre valida como
+ * residente.
+ */
+async function armarDatosTrn(
+  ctx: QueryCtx,
+  user: Doc<"users">,
+  facturaId: Id<"facturas">,
+  conBypassPlataforma: boolean,
+) {
+  const factura = await ctx.db.get(facturaId);
+  if (!factura) throw new Error("Factura no encontrada.");
+
+  const condominio = await ctx.db.get(factura.condominioId);
+  if (!condominio) throw new Error("Condominio no encontrado.");
+
+  // Autorización: staff de plataforma pasa libre (si aplica); si no, debe
+  // estar vinculado a la unidad de la factura en este condominio.
+  const esPlataforma =
+    conBypassPlataforma &&
+    (user.platformRole === "superadmin" || user.platformRole === "admin");
+
+  let membership: Doc<"memberships"> | null = null;
+  if (!esPlataforma) {
+    membership = await ctx.db
+      .query("memberships")
+      .withIndex("by_condominio_user", (q) =>
+        q.eq("condominioId", factura.condominioId).eq("userId", user._id),
+      )
+      .unique();
+    if (!membership || !membership.isActive) {
+      throw new Error("No pertenece a este condominio.");
+    }
+    const link = await ctx.db
+      .query("usuarioUnidad")
+      .withIndex("by_membership", (q) => q.eq("membershipId", membership!._id))
+      .filter((q) => q.eq(q.field("unidadId"), factura.unidadId))
+      .first();
+    if (!link) {
+      throw new Error("Esta factura no corresponde a una de sus unidades.");
+    }
+  }
+
+  if (factura.estado === "pagada") {
+    throw new Error("Esta factura ya está pagada.");
+  }
+
+  // Monto a pagar: aplica descuento si aún estamos dentro del plazo con descuento.
+  const conDescuentoVigente =
+    typeof factura.totalConDescuento === "number" &&
+    Date.now() <= factura.fechaVencimiento;
+  const monto = conDescuentoVigente
+    ? factura.totalConDescuento!
+    : factura.totalAPagar;
+
+  return {
+    factura: {
+      _id: factura._id,
+      condominioId: factura.condominioId,
+      unidadId: factura.unidadId,
+      membershipId: factura.membershipId,
+      numeroInterno: factura.numeroInterno,
+      numeroFactura: factura.numeroFactura,
+      periodoLabel: factura.periodoLabel,
+    },
+    monto: Math.round(monto),
+    condominioNombre: condominio.name,
+    logoUrl: condominio.logo ?? "",
+    user: {
+      _id: user._id,
+      firstName: user.firstName ?? user.name?.split(" ")[0] ?? "",
+      lastName:
+        user.lastName ??
+        user.name?.split(" ").slice(1).join(" ") ??
+        "",
+      fullName: user.name ?? "",
+      email: user.email ?? "",
+      telefono: user.telefono ?? "",
+      govType: mapGovType(user.tipoDocumento),
+      identNum: user.numeroDocumento ?? "0",
+    },
+    membershipId: membership?._id,
+  };
+}
+
+/**
  * Valida que el usuario autenticado puede pagar la factura y devuelve todos
  * los datos necesarios para armar la transacción Trn.
  */
@@ -229,79 +318,23 @@ export const datosParaTrn = internalQuery({
   args: { facturaId: v.id("facturas") },
   handler: async (ctx, args) => {
     const user = await requireAppUser(ctx);
+    return await armarDatosTrn(ctx, user, args.facturaId, true);
+  },
+});
 
-    const factura = await ctx.db.get(args.facturaId);
-    if (!factura) throw new Error("Factura no encontrada.");
-
-    const condominio = await ctx.db.get(factura.condominioId);
-    if (!condominio) throw new Error("Condominio no encontrado.");
-
-    // Autorización: staff de plataforma pasa libre; si no, debe estar vinculado
-    // a la unidad de la factura en este condominio.
-    const esPlataforma =
-      user.platformRole === "superadmin" || user.platformRole === "admin";
-
-    let membership: Doc<"memberships"> | null = null;
-    if (!esPlataforma) {
-      membership = await ctx.db
-        .query("memberships")
-        .withIndex("by_condominio_user", (q) =>
-          q.eq("condominioId", factura.condominioId).eq("userId", user._id),
-        )
-        .unique();
-      if (!membership || !membership.isActive) {
-        throw new Error("No pertenece a este condominio.");
-      }
-      const link = await ctx.db
-        .query("usuarioUnidad")
-        .withIndex("by_membership", (q) => q.eq("membershipId", membership!._id))
-        .filter((q) => q.eq(q.field("unidadId"), factura.unidadId))
-        .first();
-      if (!link) {
-        throw new Error("Esta factura no corresponde a una de sus unidades.");
-      }
-    }
-
-    if (factura.estado === "pagada") {
-      throw new Error("Esta factura ya está pagada.");
-    }
-
-    // Monto a pagar: aplica descuento si aún estamos dentro del plazo con descuento.
-    const conDescuentoVigente =
-      typeof factura.totalConDescuento === "number" &&
-      Date.now() <= factura.fechaVencimiento;
-    const monto = conDescuentoVigente
-      ? factura.totalConDescuento!
-      : factura.totalAPagar;
-
-    return {
-      factura: {
-        _id: factura._id,
-        condominioId: factura.condominioId,
-        unidadId: factura.unidadId,
-        membershipId: factura.membershipId,
-        numeroInterno: factura.numeroInterno,
-        numeroFactura: factura.numeroFactura,
-        periodoLabel: factura.periodoLabel,
-      },
-      monto: Math.round(monto),
-      condominioNombre: condominio.name,
-      logoUrl: condominio.logo ?? "",
-      user: {
-        _id: user._id,
-        firstName: user.firstName ?? user.name?.split(" ")[0] ?? "",
-        lastName:
-          user.lastName ??
-          user.name?.split(" ").slice(1).join(" ") ??
-          "",
-        fullName: user.name ?? "",
-        email: user.email ?? "",
-        telefono: user.telefono ?? "",
-        govType: mapGovType(user.tipoDocumento),
-        identNum: user.numeroDocumento ?? "0",
-      },
-      membershipId: membership?._id,
-    };
+/**
+ * Variante para el bot de WhatsApp: mismos datos y validaciones que
+ * datosParaTrn, pero partiendo del usuario cargado por id (el bot ya lo
+ * identificó por teléfono). Sin bypass de plataforma: el bot siempre actúa en
+ * nombre de un residente.
+ */
+export const datosParaTrnDeUsuario = internalQuery({
+  args: { facturaId: v.id("facturas"), userId: v.id("users") },
+  handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.userId);
+    if (!user) throw new Error("Usuario no encontrado.");
+    if (!user.active) throw new Error("Usuario inactivo.");
+    return await armarDatosTrn(ctx, user, args.facturaId, false);
   },
 });
 
@@ -396,6 +429,13 @@ export const aplicarEstado = internalMutation({
           updatedAt: now,
         });
       }
+
+      // Aviso por WhatsApp: solo en la transición a aprobada (no si ya lo estaba).
+      if (pago.estado !== "aprobada") {
+        await ctx.scheduler.runAfter(0, internal.whatsappNotifs.pagoAprobado, {
+          pagoId: args.pagoId,
+        });
+      }
     }
   },
 });
@@ -436,6 +476,164 @@ const MAX_INTENTOS = 10;
 const INTERVALO_CONSULTA_MS = 2 * 60 * 1000;
 
 /**
+ * Flujo compartido de creación del pago (web y bot de WhatsApp) a partir de
+ * los datos ya validados: token oauth2 → Payments_Trn → registrarPago →
+ * agenda consultarEstado como red de seguridad.
+ */
+async function crearTrnYRegistrar(
+  ctx: ActionCtx,
+  datos: Awaited<ReturnType<typeof armarDatosTrn>>,
+  ipAddr: string,
+): Promise<{ pagoId: Id<"pagos">; redirectUrl: string }> {
+  const cfg = avalConfig();
+
+  const rqUID = generarRqUID();
+  const invoiceNum = datos.factura.numeroInterno || datos.factura.numeroFactura;
+
+  // URL de retorno: httpAction de Convex (.site). Aval le concatena ?pmtId=...
+  const site = convexSiteUrl();
+  const portalUrl = site ? `${site}/aval/retorno` : `${webAppUrl()}/pago/retorno`;
+
+  try {
+    const token = await obtenerToken(ctx, cfg);
+
+    const headers = avalHeaders(
+      cfg,
+      token,
+      rqUID,
+      datos.user.govType,
+      datos.user.identNum,
+      ipAddr,
+    );
+
+    const body = {
+      Agreement: { AgrmId: cfg.agrmId },
+      SecretList: [
+        { SecretId: "user", Secret: cfg.secretUser },
+        { SecretId: "password", Secret: cfg.secretPassword },
+      ],
+      Fee: { CurAmt: { Amt: String(datos.monto), CurCode: "COP" } },
+      TaxPmtInfo: { CurAmt: { Amt: "0", CurCode: "COP" } },
+      InvoicePmtInfo: {
+        InvoiceInfo: {
+          InvoiceType: "1",
+          InvoiceNum: invoiceNum,
+          Desc: `Administracion ${datos.factura.periodoLabel} - ${datos.condominioNombre}`.slice(0, 150),
+          NIE: [invoiceNum],
+          InvoiceSender: { Category: "0" },
+        },
+        PmtStatus: { PmtMethod: "2" },
+      },
+      RefInfo: [
+        { RefId: "PortalURL", RefType: portalUrl },
+        { RefId: "LogoURL", RefType: datos.logoUrl },
+        { RefId: "Template", RefType: "0" },
+        { RefId: "TokenizedData", RefType: "0" },
+      ],
+      TrnSrcInfo: { TrnSrc: cfg.trnSrc },
+      CustInfo: {
+        PersonInfo: {
+          PersonName: {
+            FirstName: datos.user.firstName || datos.factura.periodoLabel,
+            LastName: datos.user.lastName || "-",
+            FullName: datos.user.fullName,
+          },
+          ContactInfo: {
+            EmailAddr: datos.user.email,
+            PhoneNum: { Phone: datos.user.telefono },
+          },
+        },
+      },
+    };
+
+    const res = await avalRequest(ctx, cfg, {
+      url: `${cfg.endpoint}/payment/Payments_Trn/Trn`,
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+    });
+
+    let json: any;
+    try {
+      json = JSON.parse(res.text);
+    } catch {
+      throw new Error(`Trn: respuesta no-JSON (HTTP ${res.status}): ${res.text.slice(0, 300)}`);
+    }
+
+    // Error de negocio de Aval
+    const errDesc = json?.MsgRsHdr?.Status?.StatusDesc;
+    const pmtAuthId = json?.InvoicePmtInfo?.PmtStatus?.PmtAuthId;
+    const urlRef = Array.isArray(json?.RefInfo)
+      ? json.RefInfo.find((r: any) => r.RefId === "URL")?.RefType
+      : undefined;
+
+    const resOk = res.status >= 200 && res.status < 300;
+    if (!resOk || errDesc || !pmtAuthId || !urlRef) {
+      const msg = errDesc ?? `HTTP ${res.status}`;
+      const pagoId = await ctx.runMutation(internal.pagos.registrarPago, {
+        condominioId: datos.factura.condominioId,
+        unidadId: datos.factura.unidadId,
+        facturaId: datos.factura._id,
+        membershipId: datos.membershipId,
+        userId: datos.user._id,
+        rqUID,
+        invoiceNum,
+        monto: datos.monto,
+        estado: "error",
+        ambiente: cfg.ambiente,
+        trnRaw: json,
+        error: String(msg),
+      });
+      throw new Error(`No se pudo crear el pago en la pasarela: ${msg} (pagoId ${pagoId})`);
+    }
+
+    const pagoId = await ctx.runMutation(internal.pagos.registrarPago, {
+      condominioId: datos.factura.condominioId,
+      unidadId: datos.factura.unidadId,
+      facturaId: datos.factura._id,
+      membershipId: datos.membershipId,
+      userId: datos.user._id,
+      rqUID,
+      pmtAuthId: String(pmtAuthId),
+      invoiceNum,
+      monto: datos.monto,
+      estado: "iniciada",
+      redirectUrl: urlRef,
+      ambiente: cfg.ambiente,
+      trnRaw: json,
+    });
+
+    // Red de seguridad: consulta el estado aunque el usuario no vuelva.
+    await ctx.scheduler.runAfter(
+      INTERVALO_CONSULTA_MS,
+      internal.pagos.consultarEstado,
+      { pagoId },
+    );
+
+    return { pagoId, redirectUrl: urlRef as string };
+  } catch (e) {
+    if (e instanceof Error && e.message.startsWith("No se pudo crear el pago")) {
+      throw e;
+    }
+    // Falla de red/token: deja rastro y propaga.
+    await ctx.runMutation(internal.pagos.registrarPago, {
+      condominioId: datos.factura.condominioId,
+      unidadId: datos.factura.unidadId,
+      facturaId: datos.factura._id,
+      membershipId: datos.membershipId,
+      userId: datos.user._id,
+      rqUID,
+      invoiceNum,
+      monto: datos.monto,
+      estado: "error",
+      ambiente: cfg.ambiente,
+      error: e instanceof Error ? e.message : String(e),
+    });
+    throw e;
+  }
+}
+
+/**
  * Crea la transacción en la pasarela Aval para una factura y devuelve la URL a
  * la que se debe redirigir al usuario. Llamada por el propietario desde la web.
  */
@@ -448,157 +646,33 @@ export const crearPagoFactura = action({
     ctx,
     args,
   ): Promise<{ pagoId: Id<"pagos">; redirectUrl: string }> => {
-    const cfg = avalConfig();
-
     const datos = await ctx.runQuery(internal.pagos.datosParaTrn, {
       facturaId: args.facturaId,
     });
+    return await crearTrnYRegistrar(ctx, datos, args.ipAddr ?? "127.0.0.1");
+  },
+});
 
-    const rqUID = generarRqUID();
-    const ipAddr = args.ipAddr ?? "127.0.0.1";
-    const invoiceNum = datos.factura.numeroInterno || datos.factura.numeroFactura;
-
-    // URL de retorno: httpAction de Convex (.site). Aval le concatena ?pmtId=...
-    const site = convexSiteUrl();
-    const portalUrl = site ? `${site}/aval/retorno` : `${webAppUrl()}/pago/retorno`;
-
-    try {
-      const token = await obtenerToken(ctx, cfg);
-
-      const headers = avalHeaders(
-        cfg,
-        token,
-        rqUID,
-        datos.user.govType,
-        datos.user.identNum,
-        ipAddr,
-      );
-
-      const body = {
-        Agreement: { AgrmId: cfg.agrmId },
-        SecretList: [
-          { SecretId: "user", Secret: cfg.secretUser },
-          { SecretId: "password", Secret: cfg.secretPassword },
-        ],
-        Fee: { CurAmt: { Amt: String(datos.monto), CurCode: "COP" } },
-        TaxPmtInfo: { CurAmt: { Amt: "0", CurCode: "COP" } },
-        InvoicePmtInfo: {
-          InvoiceInfo: {
-            InvoiceType: "1",
-            InvoiceNum: invoiceNum,
-            Desc: `Administracion ${datos.factura.periodoLabel} - ${datos.condominioNombre}`.slice(0, 150),
-            NIE: [invoiceNum],
-            InvoiceSender: { Category: "0" },
-          },
-          PmtStatus: { PmtMethod: "2" },
-        },
-        RefInfo: [
-          { RefId: "PortalURL", RefType: portalUrl },
-          { RefId: "LogoURL", RefType: datos.logoUrl },
-          { RefId: "Template", RefType: "0" },
-          { RefId: "TokenizedData", RefType: "0" },
-        ],
-        TrnSrcInfo: { TrnSrc: cfg.trnSrc },
-        CustInfo: {
-          PersonInfo: {
-            PersonName: {
-              FirstName: datos.user.firstName || datos.factura.periodoLabel,
-              LastName: datos.user.lastName || "-",
-              FullName: datos.user.fullName,
-            },
-            ContactInfo: {
-              EmailAddr: datos.user.email,
-              PhoneNum: { Phone: datos.user.telefono },
-            },
-          },
-        },
-      };
-
-      const res = await avalRequest(ctx, cfg, {
-        url: `${cfg.endpoint}/payment/Payments_Trn/Trn`,
-        method: "POST",
-        headers,
-        body: JSON.stringify(body),
-      });
-
-      let json: any;
-      try {
-        json = JSON.parse(res.text);
-      } catch {
-        throw new Error(`Trn: respuesta no-JSON (HTTP ${res.status}): ${res.text.slice(0, 300)}`);
-      }
-
-      // Error de negocio de Aval
-      const errDesc = json?.MsgRsHdr?.Status?.StatusDesc;
-      const pmtAuthId = json?.InvoicePmtInfo?.PmtStatus?.PmtAuthId;
-      const urlRef = Array.isArray(json?.RefInfo)
-        ? json.RefInfo.find((r: any) => r.RefId === "URL")?.RefType
-        : undefined;
-
-      const resOk = res.status >= 200 && res.status < 300;
-      if (!resOk || errDesc || !pmtAuthId || !urlRef) {
-        const msg = errDesc ?? `HTTP ${res.status}`;
-        const pagoId = await ctx.runMutation(internal.pagos.registrarPago, {
-          condominioId: datos.factura.condominioId,
-          unidadId: datos.factura.unidadId,
-          facturaId: datos.factura._id,
-          membershipId: datos.membershipId,
-          userId: datos.user._id,
-          rqUID,
-          invoiceNum,
-          monto: datos.monto,
-          estado: "error",
-          ambiente: cfg.ambiente,
-          trnRaw: json,
-          error: String(msg),
-        });
-        throw new Error(`No se pudo crear el pago en la pasarela: ${msg} (pagoId ${pagoId})`);
-      }
-
-      const pagoId = await ctx.runMutation(internal.pagos.registrarPago, {
-        condominioId: datos.factura.condominioId,
-        unidadId: datos.factura.unidadId,
-        facturaId: datos.factura._id,
-        membershipId: datos.membershipId,
-        userId: datos.user._id,
-        rqUID,
-        pmtAuthId: String(pmtAuthId),
-        invoiceNum,
-        monto: datos.monto,
-        estado: "iniciada",
-        redirectUrl: urlRef,
-        ambiente: cfg.ambiente,
-        trnRaw: json,
-      });
-
-      // Red de seguridad: consulta el estado aunque el usuario no vuelva.
-      await ctx.scheduler.runAfter(
-        INTERVALO_CONSULTA_MS,
-        internal.pagos.consultarEstado,
-        { pagoId },
-      );
-
-      return { pagoId, redirectUrl: urlRef as string };
-    } catch (e) {
-      if (e instanceof Error && e.message.startsWith("No se pudo crear el pago")) {
-        throw e;
-      }
-      // Falla de red/token: deja rastro y propaga.
-      await ctx.runMutation(internal.pagos.registrarPago, {
-        condominioId: datos.factura.condominioId,
-        unidadId: datos.factura.unidadId,
-        facturaId: datos.factura._id,
-        membershipId: datos.membershipId,
-        userId: datos.user._id,
-        rqUID,
-        invoiceNum,
-        monto: datos.monto,
-        estado: "error",
-        ambiente: cfg.ambiente,
-        error: e instanceof Error ? e.message : String(e),
-      });
-      throw e;
-    }
+/**
+ * Variante para el bot de WhatsApp: crea la transacción para un usuario ya
+ * identificado por teléfono (sin ctx.auth) y devuelve el enlace de pago para
+ * enviarlo al chat. Los errores llevan mensaje en español porque el bot los
+ * muestra tal cual al usuario.
+ */
+export const crearPagoFacturaBot = internalAction({
+  args: {
+    facturaId: v.id("facturas"),
+    userId: v.id("users"),
+  },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{ pagoId: Id<"pagos">; redirectUrl: string }> => {
+    const datos = await ctx.runQuery(internal.pagos.datosParaTrnDeUsuario, {
+      facturaId: args.facturaId,
+      userId: args.userId,
+    });
+    return await crearTrnYRegistrar(ctx, datos, "127.0.0.1");
   },
 });
 

@@ -87,6 +87,13 @@ export default defineSchema({
     tipoDocumento: v.optional(tipoDocumentoValidator),
     numeroDocumento: v.optional(v.string()),
     telefono: v.optional(v.string()),
+    /**
+     * Teléfono canónico E.164 ("+573001234567"), derivado de `telefono` en
+     * cada escritura (lib/telefono.ts). Es lo único indexado: WhatsApp/YCloud
+     * identifica al remitente por este valor. OJO: no es único (parejas
+     * comparten número) — consultar con .collect(), nunca .unique().
+     */
+    telefonoE164: v.optional(v.string()),
 
     active: v.boolean(),
 
@@ -104,7 +111,8 @@ export default defineSchema({
     .index("by_email", ["email"])
     .index("by_numeroDocumento", ["numeroDocumento"])
     .index("by_platformRole", ["platformRole"])
-    .index("by_legacyId", ["legacyId"]),
+    .index("by_legacyId", ["legacyId"])
+    .index("by_telefono", ["telefonoE164"]),
 
   // ─────────────────────────────────────────────────────────────
   // Membresías (usuario ↔ condominio) — Capa 2 de roles
@@ -816,6 +824,43 @@ export default defineSchema({
     .index("by_asamblea_user", ["asambleaId", "userId"])
     .index("by_asamblea_invitado", ["asambleaId", "codigoInvitado"]),
 
+  /**
+   * El pulso de quien está conectado, separado de todo lo demás.
+   *
+   * ── Por qué existe esta tabla ─────────────────────────────────────────
+   * Convex reejecuta una consulta cuando cambia CUALQUIER documento que
+   * leyó, y la granularidad es el documento entero, no el campo. Mientras
+   * `ultimoLatido` vivía dentro de `asambleaSesiones` y `salaPresencias`
+   * —las dos tablas que lee `salaEnVivo`—, cada latido de cada persona
+   * invalidaba la consulta de TODAS las demás.
+   *
+   * Con N personas en la sala eso son 2N escrituras cada 30 s, y cada una
+   * dispara N reejecuciones: **2N² llamadas cada medio minuto**. Medido en
+   * la práctica: `salaEnVivo` era la mitad del consumo de todo el proyecto,
+   * y una asamblea de 300 personas —el tope del servidor de medios— habría
+   * costado del orden de 87 millones de llamadas.
+   *
+   * Aquí el pulso cae en documentos que `salaEnVivo` no lee jamás, así que
+   * latir dejó de despertar a nadie. La consulta solo se recalcula cuando
+   * alguien entra o sale de verdad.
+   *
+   * El precio: a quien se le cae la conexión sin cerrar la pestaña deja de
+   * verse en la lista cuando pasa el cron (hasta un minuto más tarde que
+   * antes) en vez de al vencer su propio latido. El quórum no cambia —ya
+   * dependía del cron, porque se calcula sobre `abierta`.
+   */
+  salaLatidos: defineTable({
+    asambleaId: v.id("asambleas"),
+    // Uno de los dos. Qué documento mantiene vivo este pulso.
+    sesionId: v.optional(v.id("asambleaSesiones")),
+    presenciaId: v.optional(v.id("salaPresencias")),
+    ultimoLatido: v.number(),
+  })
+    .index("by_sesion", ["sesionId"])
+    .index("by_presencia", ["presenciaId"])
+    // Para el cron, que barre por antigüedad sin importar la asamblea.
+    .index("by_latido", ["ultimoLatido"]),
+
   /** Reacciones efímeras tipo Meet (👍👏❤️…): viven unos segundos en pantalla. */
   salaReacciones: defineTable({
     condominioId: v.id("condominios"),
@@ -1506,4 +1551,106 @@ export default defineSchema({
     .index("by_user", ["userId"])
     .index("by_condominio", ["condominioId"])
     .index("by_estado", ["estado"]),
+
+  // ─────────────────────────────────────────────────────────────
+  // WhatsApp (YCloud) — bot conversacional + fan-out de plantillas
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Una conversación por teléfono (número WABA compartido entre condominios:
+   * el tenant activo se resuelve por el usuario y se fija aquí).
+   */
+  waConversations: defineTable({
+    telefono: v.string(), // E.164 con "+"
+    userId: v.optional(v.id("users")),
+    nombrePerfil: v.optional(v.string()), // customerProfile.name de WhatsApp
+    condominioId: v.optional(v.id("condominios")),
+    membershipId: v.optional(v.id("memberships")),
+
+    /** Paso de la máquina de estados del bot ("menu", "reserva:fecha", ...). */
+    paso: v.string(),
+    /** Datos del paso en curso (borrador de reserva, factura elegida, etc.). */
+    contexto: v.optional(v.any()),
+
+    /** Fin de la ventana de 24 h (último entrante + 24 h). Fuera de ella solo plantillas. */
+    ventanaExpiraAt: v.optional(v.number()),
+    ultimoMensajeAt: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_telefono", ["telefono"])
+    .index("by_user", ["userId"]),
+
+  waMessages: defineTable({
+    conversacionId: v.id("waConversations"),
+    telefono: v.string(),
+    direccion: v.union(v.literal("entrante"), v.literal("saliente")),
+    tipo: v.string(), // text | image | document | interactive | template | ...
+    contenido: v.string(),
+    /** Media re-alojada en nuestro S3 (los links de YCloud caducan). */
+    mediaUrl: v.optional(v.string()),
+    /** Id del mensaje en YCloud: idempotencia de entrantes y correlación de estados. */
+    ycloudMessageId: v.optional(v.string()),
+    estado: v.optional(v.string()), // sent | delivered | read | failed
+    error: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index("by_conversacion", ["conversacionId"])
+    .index("by_ycloudMessageId", ["ycloudMessageId"]),
+
+  /** Registro de cada plantilla enviada en un fan-out (auditoría + no re-enviar). */
+  waEnvios: defineTable({
+    tipo: v.union(
+      v.literal("comunicado"),
+      v.literal("pago_aprobado"),
+      v.literal("manual"),
+    ),
+    comunicadoId: v.optional(v.id("comunicados")),
+    condominioId: v.id("condominios"),
+    userId: v.optional(v.id("users")),
+    telefono: v.optional(v.string()),
+    template: v.string(),
+    ycloudMessageId: v.optional(v.string()),
+    estado: v.union(
+      v.literal("enviado"),
+      v.literal("fallido"),
+      v.literal("sin_telefono"),
+    ),
+    error: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index("by_comunicado", ["comunicadoId"])
+    .index("by_condominio", ["condominioId"]),
+
+  /**
+   * Comprobante de pago subido por el propietario (foto/PDF por WhatsApp o web).
+   * La administración lo revisa: aprobar marca la factura vinculada como pagada.
+   */
+  soportesPago: defineTable({
+    condominioId: v.id("condominios"),
+    unidadId: v.optional(v.id("unidades")),
+    facturaId: v.optional(v.id("facturas")),
+    userId: v.optional(v.id("users")),
+    telefono: v.optional(v.string()),
+    origen: v.union(v.literal("whatsapp"), v.literal("web")),
+
+    url: v.string(), // comprobante en S3
+    mimeType: v.optional(v.string()),
+    nota: v.optional(v.string()), // caption que acompañó la imagen
+
+    estado: v.union(
+      v.literal("pendiente_revision"),
+      v.literal("aprobado"),
+      v.literal("rechazado"),
+    ),
+    revisadoPorUserId: v.optional(v.id("users")),
+    revisadoPorNombre: v.optional(v.string()),
+    revisadoAt: v.optional(v.number()),
+    notaRevision: v.optional(v.string()),
+
+    createdAt: v.number(),
+  })
+    .index("by_condominio", ["condominioId"])
+    .index("by_condominio_estado", ["condominioId", "estado"])
+    .index("by_factura", ["facturaId"]),
 });

@@ -1,8 +1,8 @@
 import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
-import { query, mutation } from "./_generated/server";
+import { query, mutation, internalQuery, internalMutation } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import {
   requireCondominioRole,
   requireAppUser,
@@ -387,5 +387,184 @@ export const createMia = mutation({
       createdAt: now,
       updatedAt: now,
     });
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// Bot de WhatsApp: funciones internas (sin sesión Better Auth).
+// El router de whatsapp.ts identifica al propietario por teléfono
+// y llama estas funciones con el userId ya resuelto.
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Verifica horarios de la zona y solape con otras reservas.
+ * Lógica compartida entre verificarDisponibilidad y createFromBot.
+ * Asume que la zona ya fue validada (existe y está activa).
+ */
+async function checkDisponibilidadZona(
+  ctx: QueryCtx | MutationCtx,
+  zona: Doc<"zonasComunes">,
+  fecha: string,
+  horaInicio: string,
+  horaFin: string,
+): Promise<{ ok: boolean; motivo?: string }> {
+  // Horarios de funcionamiento (0=domingo … 6=sábado, igual que el schema).
+  // Mediodía + getUTCDay para que el día no dependa del timezone del runtime.
+  const horarios = zona.horariosPorDia ?? [];
+  if (horarios.length > 0) {
+    const dia = new Date(fecha + "T12:00:00").getUTCDay();
+    const franjas = horarios.filter((h) => h.dia === dia);
+    if (franjas.length === 0) {
+      return { ok: false, motivo: "La zona no abre ese día." };
+    }
+    // Comparación lexicográfica de "HH:MM" (convención del archivo).
+    const cabe = franjas.some(
+      (f) => horaInicio >= f.horaInicio && horaFin <= f.horaFin,
+    );
+    if (!cabe) {
+      const rangos = franjas
+        .map((f) => `de ${f.horaInicio} a ${f.horaFin}`)
+        .join(" y ");
+      return { ok: false, motivo: `Ese día la zona funciona ${rangos}.` };
+    }
+  }
+
+  // Solape con reservas vigentes (pendientes o aprobadas) de esa zona y fecha.
+  const existentes = await ctx.db
+    .query("reservas")
+    .withIndex("by_zona", (q) => q.eq("zonaId", zona._id))
+    .collect();
+  const conflicto = existentes.find(
+    (r) =>
+      r.fecha === fecha &&
+      (r.estado === "pendiente" || r.estado === "aprobada") &&
+      horaInicio < r.horaFin &&
+      horaFin > r.horaInicio,
+  );
+  if (conflicto) {
+    return {
+      ok: false,
+      motivo: `Ya hay una reserva de ${conflicto.horaInicio} a ${conflicto.horaFin} ese día.`,
+    };
+  }
+
+  return { ok: true };
+}
+
+/** Zonas comunes activas del condominio (para el menú del bot). */
+export const zonasActivas = internalQuery({
+  args: { condominioId: v.id("condominios") },
+  handler: async (ctx, args) => {
+    const zonas = await ctx.db
+      .query("zonasComunes")
+      .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
+      .collect();
+    return zonas.filter((z) => z.activa);
+  },
+});
+
+/** ¿Está libre la zona en esa fecha y franja? Devuelve { ok, motivo? }. */
+export const verificarDisponibilidad = internalQuery({
+  args: {
+    zonaId: v.id("zonasComunes"),
+    fecha: v.string(),
+    horaInicio: v.string(),
+    horaFin: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const zona = await ctx.db.get(args.zonaId);
+    if (!zona || !zona.activa) {
+      return { ok: false, motivo: "La zona no está disponible." };
+    }
+    return await checkDisponibilidadZona(
+      ctx,
+      zona,
+      args.fecha,
+      args.horaInicio,
+      args.horaFin,
+    );
+  },
+});
+
+/**
+ * Crea una reserva EN NOMBRE de un propietario identificado por el bot
+ * (mismas validaciones que createMia, pero con el usuario explícito).
+ * Los mensajes de error se muestran tal cual en WhatsApp.
+ */
+export const createFromBot = internalMutation({
+  args: {
+    userId: v.id("users"),
+    condominioId: v.id("condominios"),
+    unidadId: v.id("unidades"),
+    zonaId: v.id("zonasComunes"),
+    fecha: v.string(),
+    horaInicio: v.string(),
+    horaFin: v.string(),
+    observaciones: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.userId);
+    if (!user || !user.active) {
+      throw new Error("Tu cuenta no está activa. Contacta a la administración.");
+    }
+
+    const membership = await getMembership(ctx, args.userId, args.condominioId);
+    if (!membership || !membership.isActive) {
+      throw new Error("No tienes una cuenta activa en este conjunto.");
+    }
+
+    // La unidad debe estar vinculada a la membresía del usuario.
+    const links = await ctx.db
+      .query("usuarioUnidad")
+      .withIndex("by_membership", (q) => q.eq("membershipId", membership._id))
+      .collect();
+    if (!links.some((l) => l.unidadId === args.unidadId)) {
+      throw new Error("Esa unidad no está vinculada a tu cuenta.");
+    }
+    const unidad = await ctx.db.get(args.unidadId);
+    if (!unidad) throw new Error("Unidad no encontrada.");
+
+    const zona = await ctx.db.get(args.zonaId);
+    if (!zona || zona.condominioId !== args.condominioId) {
+      throw new Error("Zona no encontrada.");
+    }
+    if (!zona.activa) throw new Error("Esa zona no está disponible.");
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(args.fecha)) {
+      throw new Error("La fecha no es válida.");
+    }
+    if (args.horaFin <= args.horaInicio) {
+      throw new Error("La hora de fin debe ser posterior a la de inicio.");
+    }
+
+    // Misma lógica de disponibilidad que verificarDisponibilidad.
+    const disponible = await checkDisponibilidadZona(
+      ctx,
+      zona,
+      args.fecha,
+      args.horaInicio,
+      args.horaFin,
+    );
+    if (!disponible.ok) {
+      throw new Error(disponible.motivo ?? "Ese horario no está disponible.");
+    }
+
+    const now = Date.now();
+    const reservaId = await ctx.db.insert("reservas", {
+      condominioId: args.condominioId,
+      unidadId: args.unidadId,
+      zonaId: args.zonaId,
+      zonaNombre: zona.nombre,
+      unidadNumero: unidad.numero,
+      solicitanteNombre: user.name,
+      fecha: args.fecha,
+      horaInicio: args.horaInicio,
+      horaFin: args.horaFin,
+      estado: "pendiente",
+      observaciones: args.observaciones?.trim(),
+      createdAt: now,
+      updatedAt: now,
+    });
+    return { reservaId, estado: "pendiente" as const };
   },
 });

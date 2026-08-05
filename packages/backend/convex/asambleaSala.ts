@@ -338,7 +338,10 @@ export const latido = mutation({
         .first();
 
       if (abierta) {
-        await ctx.db.patch(abierta._id, { ultimoLatido: now });
+        /* Nada de `patch` sobre la sesión: `salaEnVivo` lee esta tabla y
+         * tocarla despertaría la consulta de todos los conectados. El pulso
+         * va a `salaLatidos`, que no observa nadie. */
+        await latirSesion(ctx, abierta.asambleaId, abierta._id);
         refrescadas++;
         continue;
       }
@@ -418,6 +421,32 @@ async function upsertPresencia(
 ) {
   const now = Date.now();
   const imageUrl = args.imageUrl?.trim() || undefined;
+
+  /**
+   * Refresca la fila SOLO si algo cambió de verdad.
+   *
+   * Ésta es la mitad del arreglo de consumo. Antes se hacía `patch` en cada
+   * latido para mover `ultimoLatido`, y como `salaEnVivo` lee esta tabla,
+   * cada pulso de cada persona reejecutaba la consulta de todas las demás.
+   * El nombre, la foto y el rol casi nunca cambian: en régimen normal esto
+   * no escribe nada y el pulso se va a `salaLatidos`, que nadie observa.
+   */
+  const refrescar = async (ex: {
+    _id: Id<"salaPresencias">;
+    nombre: string;
+    imageUrl?: string;
+    esMesa: boolean;
+  }, esMesa: boolean) => {
+    if (
+      ex.nombre !== args.nombre ||
+      ex.imageUrl !== imageUrl ||
+      ex.esMesa !== esMesa
+    ) {
+      await ctx.db.patch(ex._id, { nombre: args.nombre, imageUrl, esMesa });
+    }
+    await latirPresencia(ctx, args.asambleaId, ex._id);
+  };
+
   if (args.userId) {
     const ex = await ctx.db
       .query("salaPresencias")
@@ -426,12 +455,7 @@ async function upsertPresencia(
       )
       .first();
     if (ex) {
-      await ctx.db.patch(ex._id, {
-        nombre: args.nombre,
-        imageUrl,
-        esMesa: args.esMesa,
-        ultimoLatido: now,
-      });
+      await refrescar(ex, args.esMesa);
       return;
     }
   } else if (args.codigoPoder) {
@@ -444,19 +468,14 @@ async function upsertPresencia(
       )
       .first();
     if (ex) {
-      await ctx.db.patch(ex._id, {
-        nombre: args.nombre,
-        imageUrl,
-        esMesa: false,
-        ultimoLatido: now,
-      });
+      await refrescar(ex, false);
       return;
     }
   } else {
     return;
   }
 
-  await ctx.db.insert("salaPresencias", {
+  const presenciaId = await ctx.db.insert("salaPresencias", {
     condominioId: args.condominioId,
     asambleaId: args.asambleaId,
     userId: args.userId,
@@ -464,8 +483,10 @@ async function upsertPresencia(
     nombre: args.nombre,
     imageUrl,
     esMesa: args.esMesa,
+    // Queda como "desde cuándo está"; el pulso vivo va en `salaLatidos`.
     ultimoLatido: now,
   });
+  await latirPresencia(ctx, args.asambleaId, presenciaId);
 }
 
 async function borrarPresencia(
@@ -505,6 +526,8 @@ async function borrarPresencia(
       .first();
     if (ex) {
       await registrar(ex);
+      // El pulso primero: uno huérfano haría al cron perseguir un fantasma.
+      await olvidarLatidoPresencia(ctx, ex._id);
       await ctx.db.delete(ex._id);
     }
   }
@@ -519,6 +542,8 @@ async function borrarPresencia(
       .first();
     if (ex) {
       await registrar(ex);
+      // El pulso primero: uno huérfano haría al cron perseguir un fantasma.
+      await olvidarLatidoPresencia(ctx, ex._id);
       await ctx.db.delete(ex._id);
     }
   }
@@ -1163,7 +1188,10 @@ export const latidoConCodigo = mutation({
         .first();
 
       if (abierta) {
-        await ctx.db.patch(abierta._id, { ultimoLatido: now });
+        /* Nada de `patch` sobre la sesión: `salaEnVivo` lee esta tabla y
+         * tocarla despertaría la consulta de todos los conectados. El pulso
+         * va a `salaLatidos`, que no observa nadie. */
+        await latirSesion(ctx, abierta.asambleaId, abierta._id);
         refrescadas++;
         continue;
       }

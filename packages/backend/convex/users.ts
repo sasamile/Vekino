@@ -12,6 +12,7 @@ import {
 import { tipoDocumentoValidator } from "./model/roles";
 import { resolveUserImage } from "./model/userImage";
 import { scheduleDeleteS3Keys, s3KeyFromPublicUrl } from "./model/s3";
+import { normalizarTelefonoE164 } from "./lib/telefono";
 
 /**
  * Estado de sesión + perfil + membresías del usuario actual.
@@ -125,7 +126,11 @@ export const updateMyProfile = mutation({
   },
   handler: async (ctx, args) => {
     const user = await requireAppUser(ctx);
-    await ctx.db.patch(user._id, { ...args, updatedAt: Date.now() });
+    const patch: Record<string, unknown> = { ...args, updatedAt: Date.now() };
+    if (args.telefono !== undefined) {
+      patch.telefonoE164 = normalizarTelefonoE164(args.telefono) ?? undefined;
+    }
+    await ctx.db.patch(user._id, patch);
     return user._id;
   },
 });
@@ -273,6 +278,7 @@ export const anonymizeUserRecords = internalMutation({
       firstName: undefined,
       lastName: undefined,
       telefono: undefined,
+      telefonoE164: undefined,
       tipoDocumento: undefined,
       numeroDocumento: undefined,
       image: undefined,

@@ -1,8 +1,8 @@
 import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
-import { query, mutation } from "./_generated/server";
+import { query, mutation, internalMutation } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
-import { requireCondominioRole } from "./model/authz";
+import { getMembership, requireCondominioRole } from "./model/authz";
 
 const GESTION_ROLES = ["administrador", "junta_directiva", "contadora"] as const;
 
@@ -308,5 +308,64 @@ export const removeMio = mutation({
       throw new Error("Solo puedes eliminar tus propias solicitudes.");
     }
     await ctx.db.delete(args.id);
+  },
+});
+
+/**
+ * Crea un PQRS EN NOMBRE de un usuario ya identificado (bot de WhatsApp).
+ * Sin ctx.auth: valida que el usuario esté activo y tenga membresía activa
+ * en el condominio. Setea solicitanteUserId para que `comentar` funcione.
+ */
+export const crearInterno = internalMutation({
+  args: {
+    condominioId: v.id("condominios"),
+    userId: v.id("users"),
+    tipo: tipoValidator,
+    asunto: v.string(),
+    descripcion: v.string(),
+    unidadNumero: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.userId);
+    if (!user) throw new Error("Usuario no encontrado.");
+    if (!user.active) throw new Error("El usuario está inactivo.");
+
+    const membership = await getMembership(ctx, args.userId, args.condominioId);
+    if (!membership || !membership.isActive) {
+      throw new Error("El usuario no tiene una membresía activa en este condominio.");
+    }
+
+    const asunto = args.asunto.trim();
+    const descripcion = args.descripcion.trim();
+    if (!asunto || !descripcion) {
+      throw new Error("Asunto y descripción son obligatorios.");
+    }
+
+    const now = Date.now();
+
+    // Consecutivo del año (mismo algoritmo que `create`)
+    const year = new Date(now).getFullYear();
+    const existing = await ctx.db
+      .query("pqrs")
+      .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
+      .collect();
+    const countThisYear = existing.filter((p) => p.radicado.includes(`-${year}-`)).length;
+    const radicado = `PQRS-${year}-${String(countThisYear + 1).padStart(4, "0")}`;
+
+    const id = await ctx.db.insert("pqrs", {
+      condominioId: args.condominioId,
+      radicado,
+      tipo: args.tipo,
+      asunto,
+      descripcion,
+      solicitanteNombre: user.name,
+      solicitanteUserId: user._id,
+      unidadNumero: args.unidadNumero?.trim(),
+      estado: "abierto",
+      prioridad: "media",
+      createdAt: now,
+      updatedAt: now,
+    });
+    return { id, radicado };
   },
 });

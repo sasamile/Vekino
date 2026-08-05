@@ -22,6 +22,7 @@ type MensajeSala = {
   userId: Id<"users"> | null;
   codigoPoder: string | null;
   codigoInvitado: string | null;
+  imageUrl?: string | null;
 };
 
 function mismoAutor(a: MensajeSala, b: MensajeSala) {
@@ -52,9 +53,40 @@ function horaMsg(ts: number) {
   });
 }
 
+function AvatarChat({
+  nombre,
+  imageUrl,
+  invisible = false,
+}: {
+  nombre: string;
+  imageUrl?: string | null;
+  invisible?: boolean;
+}) {
+  const [broken, setBroken] = useState(false);
+  if (invisible) {
+    return <div className="h-8 w-8 shrink-0" aria-hidden />;
+  }
+  if (imageUrl && !broken) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src={imageUrl}
+        alt=""
+        onError={() => setBroken(true)}
+        className="h-8 w-8 shrink-0 rounded-full object-cover ring-1 ring-white/10"
+      />
+    );
+  }
+  return (
+    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/[0.1] text-[10px] font-semibold text-white/60 ring-1 ring-white/10">
+      {initials(nombre) || "?"}
+    </div>
+  );
+}
+
 /**
- * Chat compartido de la sala: sheet desde abajo (móvil) / centrado (desktop).
- * La mesa puede silenciar a quien se pase de la raya.
+ * Chat de la sala: sheet inferior en móvil, panel lateral derecho en desktop
+ * (como Meet / Slack). La mesa puede silenciar.
  */
 export function SalaChatSheet({
   asambleaId,
@@ -64,6 +96,7 @@ export function SalaChatSheet({
   codigoInvitado,
   miNombre,
   miUserId,
+  miImageUrl,
   esMesa = false,
 }: {
   asambleaId: Id<"asambleas">;
@@ -73,6 +106,7 @@ export function SalaChatSheet({
   codigoInvitado?: string;
   miNombre?: string;
   miUserId?: Id<"users"> | null;
+  miImageUrl?: string | null;
   esMesa?: boolean;
 }) {
   const mensajes = useQuery(
@@ -167,18 +201,24 @@ export function SalaChatSheet({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
+    <div className="fixed inset-0 z-50 flex justify-end">
       <button
         type="button"
         aria-label="Cerrar chat"
-        className="absolute inset-0 bg-black/60 backdrop-blur-sm transition-opacity"
+        className="absolute inset-0 bg-black/50 backdrop-blur-[2px] transition-opacity"
         onClick={onClose}
       />
       <div
         role="dialog"
         aria-modal
         aria-label="Chat de la sala"
-        className="relative z-10 flex h-[min(78dvh,620px)] w-full max-w-md flex-col overflow-hidden rounded-t-2xl border border-white/[0.08] bg-[#12141a] shadow-2xl sm:h-[min(80vh,640px)] sm:rounded-2xl"
+        className={cn(
+          "relative z-10 flex w-full flex-col overflow-hidden border-white/[0.08] bg-[#12141a] shadow-2xl",
+          /* Móvil: sheet desde abajo */
+          "mt-auto h-[min(85dvh,640px)] rounded-t-2xl border-t",
+          /* Desktop: panel lateral derecho a altura completa */
+          "sm:mt-0 sm:h-full sm:max-w-[380px] sm:rounded-none sm:border-l sm:border-t-0",
+        )}
       >
         {/* Header */}
         <div className="flex shrink-0 flex-col border-b border-white/[0.08]">
@@ -279,6 +319,7 @@ export function SalaChatSheet({
                   !!(m.userId || m.codigoPoder || m.codigoInvitado);
                 const yaSilenciado = puedeSilenciar && estaSilenciadoMsg(m);
                 const label = mio ? "Tú" : nombreLegible(m.nombre);
+                const foto = mio ? (miImageUrl ?? m.imageUrl) : m.imageUrl;
 
                 return (
                   <li
@@ -289,17 +330,11 @@ export function SalaChatSheet({
                       agrupado ? "mt-0.5" : "mt-3 first:mt-0",
                     )}
                   >
-                    {!mio ? (
-                      <div
-                        className={cn(
-                          "flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/[0.08] text-[10px] font-semibold text-white/55",
-                          agrupado && "invisible",
-                        )}
-                        aria-hidden={agrupado}
-                      >
-                        {initials(label) || "?"}
-                      </div>
-                    ) : null}
+                    <AvatarChat
+                      nombre={label}
+                      imageUrl={foto}
+                      invisible={agrupado}
+                    />
 
                     <div
                       className={cn(
@@ -371,7 +406,7 @@ export function SalaChatSheet({
         </div>
 
         {/* Composer */}
-        <div className="shrink-0 border-t border-white/[0.08] bg-[#0e1014]/80 px-3 py-3 pb-[max(0.85rem,env(safe-area-inset-bottom))] backdrop-blur-sm sm:px-4">
+        <div className="shrink-0 border-t border-white/[0.08] bg-[#0e1014]/90 px-3 py-3 pb-[max(0.85rem,env(safe-area-inset-bottom))] backdrop-blur-sm sm:px-4">
           {error ? (
             <p className="mb-2 text-xs text-red-300" role="alert">
               {error}

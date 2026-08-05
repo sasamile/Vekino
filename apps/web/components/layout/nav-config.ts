@@ -5,6 +5,7 @@ import {
   CarFront,
   CalendarDays,
   CircleDollarSign,
+  ReceiptText,
   Megaphone,
   Inbox,
   LifeBuoy,
@@ -86,6 +87,13 @@ export const NAV_GROUPS: NavGroup[] = [
         ready: true,
         keywords: ["facturas", "cartera", "pagos", "cobros", "cuotas", "mora", "recaudo"],
       },
+      {
+        label: "Comprobantes",
+        segment: "comprobantes",
+        icon: ReceiptText,
+        ready: true,
+        keywords: ["soportes", "pagos", "whatsapp", "transferencias", "consignaciones", "recibos"],
+      },
     ],
   },
   {
@@ -158,7 +166,7 @@ export const NAV_GROUPS: NavGroup[] = [
 
 const ROLE_SEGMENTS: Record<string, string[]> = {
   // Misma lógica que VekinoWeb CONTADORA: finanzas + reportes + docs + consejo.
-  contadora: ["", "finanzas", "reportes", "documentos", "consejo"],
+  contadora: ["", "finanzas", "comprobantes", "reportes", "documentos", "consejo"],
   // junta_directiva vive en el portal (/mi) con sección Consejo; no abre shell admin.
   representante_asamblea: ["", "asamblea", "consejo", "documentos", "historial"],
 };

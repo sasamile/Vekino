@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery, useMutation, useAction } from "convex/react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
 import {
@@ -11,7 +11,7 @@ import {
   XCircle, Vote, ListOrdered, Scale, Save, Plus, Trash2, ChevronUp, ChevronDown,
   Lock, LayoutDashboard, Table2, TrendingUp, UserPlus,
   UserSquare, QrCode, Mail, Search, Download, Wifi, KeyRound, ClipboardList, X,
-  FileText, FileArchive, MonitorPlay, Radio, Camera, FileUp, NotebookPen,
+  FileText, FileArchive, MonitorPlay, Radio, Camera, FileUp, NotebookPen, Sparkles,
 } from "lucide-react";
 import { BitacoraTab } from "@/components/asamblea/bitacora-tab";
 import { MostrarCodigoAsistencia } from "@/components/asamblea/mostrar-codigo-asistencia";
@@ -23,7 +23,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
-import { cn } from "@/lib/utils";
+import { cn, mensajeErrorUsuario } from "@/lib/utils";
 import {
   descargarActaPDF,
   descargarPoderesCSV,
@@ -418,13 +418,29 @@ function PuntoModal({
   const agregar = useMutation(api.asambleas.agregarPunto);
   const editar = useMutation(api.asambleas.editarPunto);
   const toggleVot = useMutation(api.asambleas.toggleVotacionPunto);
+  const mejorarIa = useAction(api.preguntaIa.mejorarPregunta);
   const esEdicion = index != null;
   const [titulo, setTitulo] = useState(punto?.titulo ?? "");
   const [descripcion, setDescripcion] = useState(punto?.descripcion ?? "");
   const [habilitar, setHabilitar] = useState(!esEdicion ? false : tieneVotacion);
   const [opciones, setOpciones] = useState<string[]>(["A favor", "En contra", "Abstención"]);
   const [busy, setBusy] = useState(false);
+  const [iaBusy, setIaBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  async function arreglarConIa() {
+    if (!titulo.trim()) return setError("Escribe primero la pregunta.");
+    setIaBusy(true);
+    setError(null);
+    try {
+      const r = await mejorarIa({ asambleaId, texto: titulo });
+      setTitulo(r.pregunta);
+    } catch (e) {
+      setError(mensajeErrorUsuario(e));
+    } finally {
+      setIaBusy(false);
+    }
+  }
 
   async function guardar() {
     if (!titulo.trim()) return setError("El título es obligatorio.");
@@ -460,7 +476,18 @@ function PuntoModal({
         </div>
         <div className="space-y-4">
           <label className="block space-y-1.5">
-            <span className="text-sm font-medium text-foreground">Pregunta / Título</span>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-sm font-medium text-foreground">Pregunta / Título</span>
+              <button
+                type="button"
+                disabled={iaBusy || busy || !titulo.trim()}
+                onClick={() => void arreglarConIa()}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-muted/40 px-2.5 py-1 text-xs font-semibold text-foreground hover:bg-muted disabled:opacity-50"
+              >
+                {iaBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                Arreglar con IA
+              </button>
+            </div>
             <Input value={titulo} onChange={(e) => setTitulo(e.target.value)} placeholder="Ej: Aprobación del presupuesto 2026" autoFocus />
           </label>
           <label className="block space-y-1.5">

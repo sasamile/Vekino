@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { mutation, query } from "./_generated/server";
+import { internalMutation, mutation, query } from "./_generated/server";
 import {
   getCurrentAppUser,
   getMembership,
@@ -168,5 +168,51 @@ export const setEstado = mutation({
       ]);
     }
     await ctx.db.patch(args.id, { estado: args.estado, updatedAt: Date.now() });
+  },
+});
+
+/**
+ * Crea un ticket EN NOMBRE de un usuario ya identificado (bot de WhatsApp).
+ * Sin ctx.auth: el bot ya validó la identidad y la membresía del usuario;
+ * aquí solo se verifica que el usuario esté activo y que el condominio exista.
+ */
+export const crearInterno = internalMutation({
+  args: {
+    userId: v.id("users"),
+    condominioId: v.optional(v.id("condominios")),
+    categoria: categoriaValidator,
+    asunto: v.string(),
+    mensaje: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.userId);
+    if (!user) throw new Error("Usuario no encontrado.");
+    if (!user.active) throw new Error("El usuario está inactivo.");
+
+    const asunto = args.asunto.trim();
+    const mensaje = args.mensaje.trim();
+    if (!asunto || !mensaje) throw new Error("Asunto y mensaje son obligatorios.");
+
+    let condominioNombre: string | undefined;
+    if (args.condominioId) {
+      const condo = await ctx.db.get(args.condominioId);
+      if (!condo) throw new Error("Condominio no encontrado.");
+      condominioNombre = condo.name;
+    }
+
+    const now = Date.now();
+    return await ctx.db.insert("soporteTickets", {
+      condominioId: args.condominioId,
+      condominioNombre,
+      userId: user._id,
+      userNombre: displayNameFromUser(user),
+      userEmail: user.email,
+      categoria: args.categoria,
+      asunto,
+      mensaje,
+      estado: "abierto",
+      createdAt: now,
+      updatedAt: now,
+    });
   },
 });
