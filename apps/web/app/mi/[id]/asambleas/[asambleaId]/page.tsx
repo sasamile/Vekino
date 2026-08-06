@@ -49,9 +49,17 @@ export default function AsambleaSala() {
   const a = useQuery(api.asambleas.get, { id: asambleaId });
   const home = useQuery(api.portal.home, { condominioId });
   const mi = useQuery(api.asambleas.miParticipacion, { asambleaId });
-  const [tab, setTab] = useState<TabKey>("votar");
-
   const poderPublicoAbierto = a?.estado === "programada";
+
+  const [tab, setTab] = useState<TabKey>("votar");
+  const tabInicialRef = useRef(false);
+
+  useEffect(() => {
+    if (!a || tabInicialRef.current) return;
+    tabInicialRef.current = true;
+    if (a.estado === "programada") setTab("poderes");
+    else if (a.estado === "finalizada") setTab("resultados");
+  }, [a]);
 
   useEffect(() => {
     if (!a) return;
@@ -94,6 +102,18 @@ export default function AsambleaSala() {
           ) : null}
         </div>
       </div>
+
+      {poderPublicoAbierto && a.modalidad !== "presencial" ? (
+        <div className="mx-auto flex max-w-2xl flex-col items-center gap-1 rounded-2xl border border-amber-500/25 bg-amber-500/5 px-5 py-4 text-center">
+          <p className="text-sm font-semibold text-foreground">
+            Sala cerrada · puedes cargar poderes
+          </p>
+          <p className="max-w-md text-xs text-muted-foreground">
+            La administración abrirá la sala cuando inicie la reunión. Mientras
+            tanto otorga o recibe poderes desde la pestaña Poderes.
+          </p>
+        </div>
+      ) : null}
 
       {/* Estado cerrado */}
       {cerrada && (

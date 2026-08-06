@@ -105,9 +105,87 @@ export default function AsambleaAdmin() {
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
-            {a.estado === "programada" && <Button size="sm" onClick={() => setEstado({ id: a._id, estado: "en_curso" })}><Play className="h-4 w-4" /> Iniciar asamblea</Button>}
-            {a.estado === "en_curso" && <Button size="sm" onClick={() => setEstado({ id: a._id, estado: "finalizada" })}><CheckCircle2 className="h-4 w-4" /> Finalizar</Button>}
-            {(a.estado === "programada" || a.estado === "en_curso") && <Button variant="outline" size="sm" onClick={() => setEstado({ id: a._id, estado: "cancelada" })}><XCircle className="h-4 w-4" /> Cancelar</Button>}
+            {a.estado === "programada" && (
+              <Button
+                size="sm"
+                onClick={() => {
+                  if (
+                    !confirm(
+                      "¿Iniciar la asamblea y abrir la sala a los propietarios?\n\nA partir de ahí, los propietarios ya no podrán cargar poderes por sí mismos (solo la administración).",
+                    )
+                  ) {
+                    return;
+                  }
+                  void setEstado({ id: a._id, estado: "en_curso" });
+                }}
+              >
+                <Play className="h-4 w-4" /> Abrir a propietarios
+              </Button>
+            )}
+            {a.estado === "en_curso" && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  if (
+                    !confirm(
+                      "¿Volver la sala a no abierta?\n\nLos propietarios saldrán de la sala y podrán volver a cargar poderes. La mesa puede seguir entrando a preparar.",
+                    )
+                  ) {
+                    return;
+                  }
+                  void setEstado({ id: a._id, estado: "programada" });
+                }}
+              >
+                <Lock className="h-4 w-4" /> Cerrar sala (no abierta)
+              </Button>
+            )}
+            {a.estado === "en_curso" && (
+              <Button
+                size="sm"
+                onClick={() => {
+                  if (!confirm("¿Finalizar la asamblea? Se cerrarán las votaciones.")) return;
+                  void setEstado({ id: a._id, estado: "finalizada" });
+                }}
+              >
+                <CheckCircle2 className="h-4 w-4" /> Finalizar
+              </Button>
+            )}
+            {a.estado === "cancelada" && (
+              <Button
+                size="sm"
+                onClick={() => {
+                  if (
+                    !confirm(
+                      "¿Reactivar esta asamblea?\n\nVolverá a programada (sala no abierta). Los propietarios podrán cargar poderes otra vez.",
+                    )
+                  ) {
+                    return;
+                  }
+                  void setEstado({ id: a._id, estado: "programada" });
+                }}
+              >
+                <Play className="h-4 w-4" /> Reactivar asamblea
+              </Button>
+            )}
+            {(a.estado === "programada" || a.estado === "en_curso") && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  if (
+                    !confirm(
+                      "¿CANCELAR la asamblea?\n\nEsto no es cerrar la sala: anula la convocatoria. Si solo quieres que los propietarios no entren, usa «Cerrar sala (no abierta)».",
+                    )
+                  ) {
+                    return;
+                  }
+                  void setEstado({ id: a._id, estado: "cancelada" });
+                }}
+              >
+                <XCircle className="h-4 w-4" /> Cancelar asamblea
+              </Button>
+            )}
           </div>
         </div>
       </Card>
@@ -146,16 +224,56 @@ export default function AsambleaAdmin() {
                   <MonitorPlay className="h-5 w-5 text-brand" /> Sala de la asamblea
                 </h2>
                 <p className="mt-1 max-w-lg text-sm text-muted-foreground">
-                  Ahí se proyecta el código de asistencia y se sigue la reunión.
-                  Ábrela en una pantalla aparte para compartirla.
+                  {a.estado === "programada"
+                    ? "Puedes entrar a preparar la sala. Los propietarios aún no entran: mientras tanto pueden cargar poderes."
+                    : "Ahí se proyecta el código de asistencia y se sigue la reunión. Ábrela en una pantalla aparte para compartirla."}
                 </p>
               </div>
-              <Link
-                href={`/sala/${condominioId}/${asambleaId}`}
-                className="inline-flex h-11 items-center gap-2 rounded-lg bg-brand px-5 text-sm font-semibold text-brand-foreground shadow-sm transition-colors hover:bg-brand/90"
-              >
-                <Radio className="h-4 w-4" /> Entrar a la sala
-              </Link>
+              <div className="flex flex-wrap items-center gap-2">
+                {a.estado === "programada" ? (
+                  <Button
+                    size="sm"
+                    onClick={() => {
+                      if (
+                        !confirm(
+                          "¿Iniciar la asamblea y abrir la sala a los propietarios?\n\nA partir de ahí, los propietarios ya no podrán cargar poderes por sí mismos (solo la administración).",
+                        )
+                      ) {
+                        return;
+                      }
+                      void setEstado({ id: a._id, estado: "en_curso" });
+                    }}
+                  >
+                    <Play className="h-4 w-4" /> Abrir a propietarios
+                  </Button>
+                ) : null}
+                {a.estado === "en_curso" ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      if (
+                        !confirm(
+                          "¿Cerrar la sala (dejarla no abierta)?\n\nLos propietarios saldrán y podrán cargar poderes otra vez.",
+                        )
+                      ) {
+                        return;
+                      }
+                      void setEstado({ id: a._id, estado: "programada" });
+                    }}
+                  >
+                    <Lock className="h-4 w-4" /> Cerrar sala (no abierta)
+                  </Button>
+                ) : null}
+                {(a.estado === "programada" || a.estado === "en_curso") ? (
+                  <Link
+                    href={`/sala/${condominioId}/${asambleaId}`}
+                    className="inline-flex h-11 items-center gap-2 rounded-lg bg-brand px-5 text-sm font-semibold text-brand-foreground shadow-sm transition-colors hover:bg-brand/90"
+                  >
+                    <Radio className="h-4 w-4" /> Entrar a la sala
+                  </Link>
+                ) : null}
+              </div>
             </Card>
           ) : null}
           {a.modalidad !== "presencial" ? (

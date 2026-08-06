@@ -88,6 +88,7 @@ export function SalaReunion({
    * también se intenta registrar (un administrador puede ser propietario) y
    * su fallo por "sin unidades" se silencia porque es lo esperado. */
   const entrar = useMutation(api.asambleas.entrarYRegistrar);
+  const setEstado = useMutation(api.asambleas.setEstado);
   const palabras = useQuery(api.salaVideo.palabras, { asambleaId });
   const pedirPalabra = useMutation(api.salaVideo.pedirPalabra);
   const bajarMano = useMutation(api.salaVideo.bajarMano);
@@ -593,8 +594,9 @@ export function SalaReunion({
             }
           />
 
-          {/* Sala sin abrir: la tarjeta de apertura flota sobre el lienzo. */}
-          {!enCurso ? (
+          {/* Propietarios: sala bloqueada hasta que la mesa abra.
+              La mesa puede entrar siempre a preparar (sin tapar el lienzo). */}
+          {!enCurso && !esMesa ? (
             <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/40 p-6">
               <div className="w-full max-w-md">
                 <SalaCerrada
@@ -602,6 +604,26 @@ export function SalaReunion({
                   estado={a.estado}
                   esMesa={esMesa}
                 />
+              </div>
+            </div>
+          ) : null}
+          {!enCurso && esMesa && a.estado === "programada" ? (
+            <div className="absolute inset-x-0 bottom-24 z-20 flex justify-center px-4 sm:bottom-28">
+              <div className="flex max-w-lg flex-wrap items-center gap-3 rounded-2xl border border-amber-400/30 bg-black/75 px-4 py-3 shadow-xl backdrop-blur-md">
+                <p className="min-w-0 flex-1 text-xs leading-snug text-white/80">
+                  Sala no abierta a propietarios. Pueden cargar poderes.
+                </p>
+                <button
+                  type="button"
+                  onClick={() =>
+                    void setEstado({ id: asambleaId, estado: "en_curso" }).catch(
+                      () => {},
+                    )
+                  }
+                  className="shrink-0 rounded-lg bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-600"
+                >
+                  Abrir a propietarios
+                </button>
               </div>
             </div>
           ) : null}
@@ -1136,8 +1158,8 @@ function SalaCerrada({
         {finalizada
           ? "Las votaciones quedaron cerradas y la permanencia ya está calculada."
           : esMesa
-            ? "Al abrirla se inicia la asamblea, empieza a contar la permanencia y los residentes pueden registrar su asistencia."
-            : "Espera a que la administración abra la sala. Puedes dejar esta ventana abierta."}
+            ? "La mesa puede preparar la sala. Los propietarios aún no entran ni registran asistencia hasta que abras la asamblea (Abrir a propietarios)."
+            : "La administración aún no abrió la sala a propietarios. Mientras tanto puedes cargar poderes desde tu portal."}
       </p>
 
       {esMesa && !finalizada ? (

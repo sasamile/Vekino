@@ -211,7 +211,19 @@ function AsambleaCard({
         </Button>
         {a.estado === "programada" && (
           <Button variant="ghost" size="sm" onClick={() => setEstado({ id: a._id, estado: "en_curso" })}>
-            <Play className="h-4 w-4" />Iniciar
+            <Play className="h-4 w-4" />Abrir a propietarios
+          </Button>
+        )}
+        {a.estado === "en_curso" && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              if (!confirm("¿Cerrar la sala (no abierta)? Los propietarios podrán cargar poderes otra vez.")) return;
+              void setEstado({ id: a._id, estado: "programada" });
+            }}
+          >
+            <Lock className="h-4 w-4" />Cerrar sala
           </Button>
         )}
         {a.estado === "en_curso" && (
@@ -219,9 +231,28 @@ function AsambleaCard({
             <CheckCircle2 className="h-4 w-4" />Finalizar
           </Button>
         )}
+        {a.estado === "cancelada" && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              if (!confirm("¿Reactivar esta asamblea? Volverá a programada.")) return;
+              void setEstado({ id: a._id, estado: "programada" });
+            }}
+          >
+            <Play className="h-4 w-4" />Reactivar
+          </Button>
+        )}
         {(a.estado === "programada" || a.estado === "en_curso") && (
-          <Button variant="ghost" size="sm" onClick={() => setEstado({ id: a._id, estado: "cancelada" })}>
-            <XCircle className="h-4 w-4" />Cancelar
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              if (!confirm("¿CANCELAR la asamblea? Esto anula la convocatoria (no es cerrar la sala).")) return;
+              void setEstado({ id: a._id, estado: "cancelada" });
+            }}
+          >
+            <XCircle className="h-4 w-4" />Cancelar asamblea
           </Button>
         )}
       </div>
