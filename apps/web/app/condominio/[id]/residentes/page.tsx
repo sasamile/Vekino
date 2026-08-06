@@ -570,7 +570,7 @@ function ResidentFormDialog({
   const updateMember = useMutation(api.memberships.updateMember);
   const setUnidades = useMutation(api.memberships.setMemberUnidades);
   const setPassword = useAction(api.users.setMemberPassword);
-  const setEmail = useAction(api.users.setMemberEmail);
+  const cambiarCorreo = useAction(api.users.setMemberEmail);
 
   const [name, setName] = useState(member?.name ?? "");
   const [email, setEmail] = useState(member?.email ?? "");
@@ -657,7 +657,7 @@ function ResidentFormDialog({
         });
         const nuevoCorreo = email.trim().toLowerCase();
         if (nuevoCorreo !== (member.email ?? "").trim().toLowerCase()) {
-          await setEmail({
+          await cambiarCorreo({
             condominioId,
             userId: member.userId,
             email: nuevoCorreo,
