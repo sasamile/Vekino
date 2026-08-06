@@ -7,6 +7,7 @@ import { api } from "@vekino/backend/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
+import { authClient } from "@/lib/auth-client";
 
 /**
  * Marca de "ya lo cerré" por usuario y por sesión del navegador: al navegar
@@ -17,6 +18,17 @@ import { Spinner } from "@/components/ui/spinner";
 const STORAGE_PREFIX = "vekino:clave-temporal-omitida:";
 
 const MIN_LEN = 8;
+
+/**
+ * Convex antepone "[CONVEX A(...)][Request ID: ...] Server Error Uncaught
+ * Error:" y añade la traza al final. Nada de eso le sirve al residente.
+ */
+function mensajeLimpio(err: unknown): string {
+  const crudo = err instanceof Error ? err.message : String(err ?? "");
+  const m = crudo.match(/Uncaught Error:\s*([^\n]*)/);
+  const texto = (m?.[1] ?? crudo).split(" at handler")[0]!.trim();
+  return texto || "No se pudo cambiar la contraseña.";
+}
 
 function leerOmitido(userId: string): boolean {
   try {
@@ -55,6 +67,8 @@ export function CambiarClaveTemporalModal() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [exito, setExito] = useState(false);
+  const [enviandoEnlace, setEnviandoEnlace] = useState(false);
+  const [enlaceMsg, setEnlaceMsg] = useState<string | null>(null);
   const timerRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -115,13 +129,39 @@ export function CambiarClaveTemporalModal() {
       // Breve confirmación; luego se cierra (y `me.claveTemporal` ya es false).
       timerRef.current = window.setTimeout(() => setCerrado(true), 1800);
     } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : "No se pudo cambiar la contraseña.",
-      );
+      setError(mensajeLimpio(err));
     } finally {
       setBusy(false);
+    }
+  }
+
+  /**
+   * Salida para quien no conoce su contraseña real.
+   *
+   * Muchos residentes recibieron una clave temporal que en realidad era la
+   * clave maestra de soporte: entran con ella, pero no es la contraseña de su
+   * cuenta, así que "contraseña actual" nunca coincide. El enlace por correo
+   * les deja fijar una propia sin depender de eso.
+   */
+  async function pedirEnlace() {
+    if (!me?.email) return;
+    setError(null);
+    setEnlaceMsg(null);
+    setEnviandoEnlace(true);
+    try {
+      await authClient.requestPasswordReset({
+        email: me.email,
+        redirectTo: `${window.location.origin}/reset-password`,
+      });
+      setEnlaceMsg(
+        "Te enviamos un enlace a tu correo para que crees una contraseña nueva. Revisa también la carpeta de spam.",
+      );
+    } catch {
+      setEnlaceMsg(
+        "No pudimos enviar el enlace. Escríbele a la administración de tu conjunto.",
+      );
+    } finally {
+      setEnviandoEnlace(false);
     }
   }
 
@@ -248,8 +288,29 @@ export function CambiarClaveTemporalModal() {
               </div>
 
               {error && (
-                <p className="text-sm text-red-600" role="alert">
-                  {error}
+                <div className="space-y-1.5" role="alert">
+                  <p className="text-sm text-red-600">{error}</p>
+                  <p className="text-xs leading-relaxed text-muted-foreground">
+                    ¿La clave que te enviaron no funciona aquí? Puede que sea
+                    una clave de acceso temporal y no la contraseña de tu
+                    cuenta. Crea una nueva desde tu correo:
+                  </p>
+                  <button
+                    type="button"
+                    onClick={pedirEnlace}
+                    disabled={enviandoEnlace}
+                    className="text-xs font-medium text-brand underline underline-offset-2 disabled:opacity-50"
+                  >
+                    {enviandoEnlace
+                      ? "Enviando enlace…"
+                      : "Enviarme un enlace a mi correo"}
+                  </button>
+                </div>
+              )}
+
+              {enlaceMsg && (
+                <p className="text-sm text-emerald-600" role="status">
+                  {enlaceMsg}
                 </p>
               )}
 

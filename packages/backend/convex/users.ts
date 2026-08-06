@@ -872,15 +872,20 @@ export const cambiarMiPassword = action({
     // soporte para ENTRAR, no para reescribir credenciales ajenas: si valiera
     // aquí, quien la conozca dejaría al dueño fuera de su propia cuenta de
     // forma permanente. Se compara contra el hash real, y punto.
+    // Mensaje IDÉNTICO en los dos caminos: distinguirlos le confirmaría a un
+    // atacante que acertó la maestra.
+    const ERROR_ACTUAL =
+      "La contraseña actual no es correcta. Si la administración te envió una clave de acceso, puede que no sea la contraseña de tu cuenta: usa la opción de restablecerla por correo.";
+
     const master = process.env.MASTER_LOGIN_PASSWORD?.trim();
     if (master && args.actual.trim() === master) {
-      throw new Error("La contraseña actual no es correcta.");
+      throw new Error(ERROR_ACTUAL);
     }
     const ok = await verifyPassword({
       hash: credential.password,
       password: args.actual,
     });
-    if (!ok) throw new Error("La contraseña actual no es correcta.");
+    if (!ok) throw new Error(ERROR_ACTUAL);
 
     await ia.updatePassword(found.user.id, await authCtx.password.hash(nueva));
     await ctx.runMutation(internal.users.setClaveTemporal, {
