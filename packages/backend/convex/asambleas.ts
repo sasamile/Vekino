@@ -9,6 +9,7 @@ import {
   getCurrentAppUser,
   getMembership,
 } from "./model/authz";
+import { calcularQuorum } from "./model/quorum";
 import { resolveMediaUrl } from "./model/files";
 import { resolveUserImage } from "./model/userImage";
 import {
@@ -957,37 +958,21 @@ export const quorum = query({
       .query("poderesAsamblea")
       .withIndex("by_asamblea", (q) => q.eq("asambleaId", args.asambleaId))
       .collect();
-    const poderesValidados = poderes.filter((p) => p.validado);
 
     const unidades = await ctx.db
       .query("unidades")
       .withIndex("by_condominio", (q) => q.eq("condominioId", asamblea.condominioId))
       .collect();
 
-    // Solo cuenta como presente el check-in real (QR / código / manual).
-    // Aceptar un poder NO suma al quórum por sí solo: el apoderado debe
-    // registrarse en sala. Si ya está presente, las unidades que representa SÍ cuentan.
-    const presentes = new Map<string, number>(); // unidadId → coeficiente
-    for (const a of asistentes) presentes.set(a.unidadId as string, a.coeficiente ?? 0);
-    sumarUnidadesPorPoderPresente(presentes, asistentes, poderes);
-
-    const totalCoef = unidades.reduce((s, u) => s + (u.coeficiente ?? 0), 0);
-    const presenteCoef = [...presentes.values()].reduce((s, c) => s + c, 0);
-    const unidadesPresentes = presentes.size;
-
-    // Con coeficientes reales usa %; si no, proporción de unidades.
-    const pct =
-      totalCoef > 0
-        ? (presenteCoef / totalCoef) * 100
-        : unidades.length > 0
-          ? (unidadesPresentes / unidades.length) * 100
-          : 0;
+    // Cálculo único y compartido (model/quorum.ts): este número, el del
+    // apoderado y el del acta tienen que coincidir siempre.
+    const q = calcularQuorum({ asistentes, poderes, unidades });
 
     return {
-      pct: Math.round(pct * 100) / 100,
-      unidadesPresentes,
-      totalUnidades: unidades.length,
-      poderesActivos: poderesValidados.length,
+      pct: q.pct,
+      unidadesPresentes: q.unidadesPresentes,
+      totalUnidades: q.totalUnidades,
+      poderesActivos: q.poderesValidados,
       quorumRequerido: asamblea.quorumRequerido ?? 51,
       asistentes: asistentes
         .sort((a, b) => b.createdAt - a.createdAt)
@@ -2054,25 +2039,6 @@ async function filasAsistenciaPersona(
  * de poderes que representa también suman al quórum (aunque el poder
  * aún figure como pendiente: estar en sala lo ejerce de hecho).
  */
-function sumarUnidadesPorPoderPresente(
-  presentes: Map<string, number>,
-  asistentes: { userId: Id<"users"> }[],
-  poderes: {
-    unidadId: Id<"unidades">;
-    coeficiente?: number;
-    representanteUserId?: Id<"users">;
-  }[],
-) {
-  const usersPresentes = new Set(asistentes.map((a) => a.userId as string));
-  for (const p of poderes) {
-    if (!p.representanteUserId) continue;
-    if (!usersPresentes.has(p.representanteUserId as string)) continue;
-    const uid = p.unidadId as string;
-    if (presentes.has(uid)) continue;
-    presentes.set(uid, p.coeficiente ?? 0);
-  }
-}
-
 /** El admin registra la asistencia de un usuario (QR o manual). */
 export const registrarAsistenciaAdmin = mutation({
   args: { asambleaId: v.id("asambleas"), userId: v.id("users") },
@@ -2576,33 +2542,23 @@ export const accederConCodigo = query({
       .query("unidades")
       .withIndex("by_condominio", (q) => q.eq("condominioId", asamblea.condominioId))
       .collect();
-    const presentes = new Map<string, number>();
-    for (const a of asistentes) presentes.set(a.unidadId as string, a.coeficiente ?? 0);
     const poderesAsamblea = await ctx.db
       .query("poderesAsamblea")
       .withIndex("by_asamblea", (q) => q.eq("asambleaId", asamblea._id))
       .collect();
-    // Asistencia del apoderado = check-in real de sus unidades (fila en
-    // asambleaAsistentes). No usamos sumarUnidadesPorPoderPresente aquí: eso
-    // infla el quórum si el representante ya está presente por otra casa, pero
-    // no implica que el apoderado haya entrado a la sala con el código.
+    // Si las unidades de ESTE apoderado ya tienen check-in propio: es lo que
+    // se le muestra a él sobre su propia gestión, distinto del quórum global.
     const idsAsistentes = new Set(asistentes.map((a) => a.unidadId as string));
     const asistenciaRegistrada = poderes.every((p) =>
       idsAsistentes.has(p.unidadId as string),
     );
-    sumarUnidadesPorPoderPresente(
-      presentes,
+    // El quórum sale del mismo cálculo compartido que la mesa y el acta.
+    const qPaquete = calcularQuorum({
       asistentes,
-      poderesAsamblea,
-    );
-    const totalCoef = unidadesCond.reduce((s, u) => s + (u.coeficiente ?? 0), 0);
-    const presenteCoef = [...presentes.values()].reduce((s, c) => s + c, 0);
-    const pctQuorum =
-      totalCoef > 0
-        ? (presenteCoef / totalCoef) * 100
-        : unidadesCond.length > 0
-          ? (presentes.size / unidadesCond.length) * 100
-          : 0;
+      poderes: poderesAsamblea,
+      unidades: unidadesCond,
+    });
+    const pctQuorum = qPaquete.pct;
 
     // Orden del día (con la pregunta/estado de su votación si tiene).
     const votacionPorId = new Map(votaciones.map((vt) => [vt._id as string, vt]));
@@ -2632,9 +2588,9 @@ export const accederConCodigo = query({
       validado: poderes.every((p) => p.validado),
       asistenciaRegistrada,
       quorum: {
-        pct: Math.round(pctQuorum * 100) / 100,
-        unidadesPresentes: presentes.size,
-        totalUnidades: unidadesCond.length,
+        pct: pctQuorum,
+        unidadesPresentes: qPaquete.unidadesPresentes,
+        totalUnidades: qPaquete.totalUnidades,
         quorumRequerido: asamblea.quorumRequerido ?? 51,
       },
       ordenDia,

@@ -3,6 +3,7 @@ import { action, internalMutation, internalQuery, mutation, query } from "./_gen
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { requireAppUser, requireCondominioRole, hasPlatformRole } from "./model/authz";
+import { calcularQuorum } from "./model/quorum";
 import {
   configRedactor,
   etiquetaRedactor,
@@ -88,13 +89,13 @@ export const paquete = query({
       .withIndex("by_asamblea", (q) => q.eq("asambleaId", args.asambleaId))
       .collect();
 
-    const presenteCoef = asistentes.reduce((s, a) => s + (a.coeficiente ?? 0), 0);
-    const quorumPct =
-      totalCoef > 0
-        ? (presenteCoef / totalCoef) * 100
-        : unidades.length > 0
-          ? (asistentes.length / unidades.length) * 100
-          : 0;
+    // MISMO cálculo que proyecta la mesa en la asamblea (model/quorum.ts).
+    // Antes esto sumaba solo `asistentes` y dejaba fuera las unidades
+    // representadas por un apoderado presente: el acta reportaba un quórum
+    // MENOR al anunciado en vivo, que es material de impugnación.
+    const q = calcularQuorum({ asistentes, poderes, unidades });
+    const presenteCoef = q.presenteCoef;
+    const quorumPct = q.pct;
 
     // ── Votaciones con su desglose por coeficiente ──
     const votaciones = await ctx.db

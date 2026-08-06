@@ -45,6 +45,7 @@ import type * as model_files from "../model/files.js";
 import type * as model_latidos from "../model/latidos.js";
 import type * as model_minuta from "../model/minuta.js";
 import type * as model_placa from "../model/placa.js";
+import type * as model_quorum from "../model/quorum.js";
 import type * as model_roles from "../model/roles.js";
 import type * as model_s3 from "../model/s3.js";
 import type * as model_userImage from "../model/userImage.js";
@@ -116,6 +117,7 @@ declare const fullApi: ApiFromModules<{
   "model/latidos": typeof model_latidos;
   "model/minuta": typeof model_minuta;
   "model/placa": typeof model_placa;
+  "model/quorum": typeof model_quorum;
   "model/roles": typeof model_roles;
   "model/s3": typeof model_s3;
   "model/userImage": typeof model_userImage;
