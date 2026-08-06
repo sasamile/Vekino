@@ -641,10 +641,15 @@ function PoderesSection({
     }
   }
 
-  const grupos = new Map<string, { nombre: string; codigo: string; esProp: boolean; poderes: { _id: Id<"poderesAsamblea">; unidadNumero: string }[] }>();
+  const grupos = new Map<string, { nombre: string; codigo: string; esProp: boolean; poderes: { _id: Id<"poderesAsamblea">; unidadNumero: string; unidadTorre?: string | null; unidadBloque?: string | null }[] }>();
   for (const p of otorgados ?? []) {
     const g = grupos.get(p.codigoAcceso) ?? { nombre: p.representanteNombre, codigo: p.codigoAcceso, esProp: !!p.representanteUserId, poderes: [] };
-    g.poderes.push({ _id: p._id, unidadNumero: p.unidadNumero });
+    g.poderes.push({
+      _id: p._id,
+      unidadNumero: p.unidadNumero,
+      unidadTorre: p.unidadTorre,
+      unidadBloque: p.unidadBloque,
+    });
     grupos.set(p.codigoAcceso, g);
   }
   const representa = mi?.representa ?? [];
@@ -714,7 +719,14 @@ function PoderesSection({
           {recibidos.map((p) => (
             <Card key={p._id} className="flex flex-wrap items-center justify-between gap-2 p-3">
               <div>
-                <p className="text-sm font-medium text-foreground">Unidad {p.unidadNumero} · de {p.otorganteNombre}</p>
+                <p className="text-sm font-medium text-foreground">
+                  {etiquetaUnidad({
+                    unidadNumero: p.unidadNumero,
+                    unidadTorre: p.unidadTorre,
+                    unidadBloque: p.unidadBloque,
+                  })}{" "}
+                  · de {p.otorganteNombre}
+                </p>
                 <p className="text-xs text-muted-foreground">
                   {p.validado ? "Aceptado — votas por esta casa" : "Pendiente de tu aceptación"}
                   {p.documentoUrl && <> · <a href={p.documentoUrl} target="_blank" rel="noopener noreferrer" className="text-brand hover:underline">Ver documento</a></>}
@@ -782,7 +794,11 @@ function PoderesSection({
                     className="flex items-center justify-between text-sm"
                   >
                     <span className="text-muted-foreground">
-                      Unidad {p.unidadNumero}
+                      {etiquetaUnidad({
+                        unidadNumero: p.unidadNumero,
+                        unidadTorre: p.unidadTorre,
+                        unidadBloque: p.unidadBloque,
+                      })}
                     </span>
                     <button
                       type="button"
@@ -801,7 +817,15 @@ function PoderesSection({
                 codigo={g.codigo}
                 nombre={g.nombre}
                 asambleaTitulo={asambleaTitulo}
-                unidadesLabel={g.poderes.map((p) => p.unidadNumero).join(", ")}
+                unidadesLabel={g.poderes
+                  .map((p) =>
+                    etiquetaUnidad({
+                      unidadNumero: p.unidadNumero,
+                      unidadTorre: p.unidadTorre,
+                      unidadBloque: p.unidadBloque,
+                    }),
+                  )
+                  .join(", ")}
               />
             </Card>
           ))}

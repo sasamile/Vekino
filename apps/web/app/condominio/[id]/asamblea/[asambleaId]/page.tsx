@@ -30,6 +30,7 @@ import {
   descargarPoderesZIP,
 } from "@/lib/asamblea-auditoria";
 import { ensurePoderPdf } from "@/lib/poder-documento";
+import { etiquetaUnidad } from "@/components/portal/portal-ui";
 import { VotacionEnVivoTab, DetalleVotosTab } from "./votacion-en-vivo";
 import { useUploadToS3 } from "@/hooks/use-upload-s3";
 
@@ -909,7 +910,15 @@ function PoderesTab({ asambleaId }: { asambleaId: Id<"asambleas"> }) {
   const ocupadas = new Set((poderes ?? []).map((p) => p.unidadId as string));
   const disponibles = (unidades ?? [])
     .filter((u) => !ocupadas.has(u._id as string))
-    .sort((x, y) => x.numero.localeCompare(y.numero, undefined, { numeric: true }));
+    .sort((x, y) => {
+      const tx = `${x.torre ?? ""} ${x.bloque ?? ""}`.localeCompare(
+        `${y.torre ?? ""} ${y.bloque ?? ""}`,
+        undefined,
+        { numeric: true },
+      );
+      if (tx !== 0) return tx;
+      return x.numero.localeCompare(y.numero, undefined, { numeric: true });
+    });
 
   const puedeRegistrar = a?.estado === "programada" || a?.estado === "en_curso";
   const conDocumento = (poderes ?? []).filter((p) => p.documentoUrl).length;
@@ -1087,7 +1096,7 @@ function PoderesTab({ asambleaId }: { asambleaId: Id<"asambleas"> }) {
                 <option value="">Selecciona…</option>
                 {disponibles.map((u) => (
                   <option key={u._id} value={u._id}>
-                    Unidad {u.numero}
+                    {etiquetaUnidad(u)}
                   </option>
                 ))}
               </select>
@@ -1210,7 +1219,12 @@ function PoderesTab({ asambleaId }: { asambleaId: Id<"asambleas"> }) {
             >
               <div>
                 <p className="text-sm font-medium text-foreground">
-                  Unidad {p.unidadNumero}: {p.otorganteNombre} → {p.representanteNombre}
+                  {etiquetaUnidad({
+                    unidadNumero: p.unidadNumero,
+                    unidadTorre: p.unidadTorre,
+                    unidadBloque: p.unidadBloque,
+                  })}
+                  : {p.otorganteNombre} → {p.representanteNombre}
                 </p>
                 <p className="text-xs text-muted-foreground">
                   {p.validado ? "Validado" : "Pendiente de validación"}
@@ -1351,7 +1365,13 @@ function RepresentantesTab({ asambleaId }: { asambleaId: Id<"asambleas"> }) {
     for (const p of poderes ?? []) {
       if (!p.validado) continue;
       const e = map.get(p.representanteUserId as string) ?? { nombre: p.representanteNombre, unidades: [] };
-      e.unidades.push(p.unidadNumero);
+      e.unidades.push(
+        etiquetaUnidad({
+          unidadNumero: p.unidadNumero,
+          unidadTorre: p.unidadTorre,
+          unidadBloque: p.unidadBloque,
+        }),
+      );
       map.set(p.representanteUserId as string, e);
     }
     return [...map.values()];

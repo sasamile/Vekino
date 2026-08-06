@@ -60,20 +60,30 @@ export const TIPO_UNIDAD_LABEL: Record<string, string> = {
   otro: "Unidad",
 };
 
-/** "Apartamento 204" · "Apartamento 204 · Torre A" */
+/** "Apartamento 204" · "Apartamento 204 · Torre A" · "… · Bloque B" */
 export function etiquetaUnidad(u: {
   numero?: string | null;
   tipo?: string | null;
   torre?: string | null;
+  bloque?: string | null;
   unidadNumero?: string | null;
   unidadTipo?: string | null;
   unidadTorre?: string | null;
+  unidadBloque?: string | null;
 }): string {
   const numero = u.numero ?? u.unidadNumero;
   if (!numero) return "Unidad";
   const tipo = TIPO_UNIDAD_LABEL[u.tipo ?? u.unidadTipo ?? ""] ?? "Unidad";
-  const torre = u.torre ?? u.unidadTorre;
-  return torre ? `${tipo} ${numero} · ${torre}` : `${tipo} ${numero}`;
+  const partes = [`${tipo} ${numero}`];
+  const torre = (u.torre ?? u.unidadTorre)?.trim();
+  const bloque = (u.bloque ?? u.unidadBloque)?.trim();
+  if (torre) {
+    partes.push(/^torre\b/i.test(torre) ? torre : `Torre ${torre}`);
+  }
+  if (bloque && bloque.toLowerCase() !== torre?.toLowerCase()) {
+    partes.push(/^bloque\b/i.test(bloque) ? bloque : `Bloque ${bloque}`);
+  }
+  return partes.join(" · ");
 }
 
 const MESES_ES = [

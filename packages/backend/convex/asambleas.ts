@@ -1606,14 +1606,19 @@ export const poderesRecibidos = query({
       )
       .collect();
     return await Promise.all(
-      poderes.map(async (p) => ({
-        ...p,
-        documentoUrl:
-          (await resolveMediaUrl(ctx, {
-            url: p.documentoUrl,
-            storageId: p.documentoStorageId,
-          })) || null,
-      })),
+      poderes.map(async (p) => {
+        const unidad = await ctx.db.get(p.unidadId);
+        return {
+          ...p,
+          unidadTorre: unidad?.torre ?? null,
+          unidadBloque: unidad?.bloque ?? null,
+          documentoUrl:
+            (await resolveMediaUrl(ctx, {
+              url: p.documentoUrl,
+              storageId: p.documentoStorageId,
+            })) || null,
+        };
+      }),
     );
   },
 });
@@ -1631,14 +1636,19 @@ export const poderesOtorgados = query({
       )
       .collect();
     return await Promise.all(
-      poderes.map(async (p) => ({
-        ...p,
-        documentoUrl:
-          (await resolveMediaUrl(ctx, {
-            url: p.documentoUrl,
-            storageId: p.documentoStorageId,
-          })) || null,
-      })),
+      poderes.map(async (p) => {
+        const unidad = await ctx.db.get(p.unidadId);
+        return {
+          ...p,
+          unidadTorre: unidad?.torre ?? null,
+          unidadBloque: unidad?.bloque ?? null,
+          documentoUrl:
+            (await resolveMediaUrl(ctx, {
+              url: p.documentoUrl,
+              storageId: p.documentoStorageId,
+            })) || null,
+        };
+      }),
     );
   },
 });
@@ -1680,9 +1690,12 @@ export const listPoderes = query({
             url: p.documentoUrl,
             storageId: p.documentoStorageId,
           })) || null;
+        const unidad = await ctx.db.get(p.unidadId);
         return {
           ...p,
           documentoUrl,
+          unidadTorre: unidad?.torre ?? null,
+          unidadBloque: unidad?.bloque ?? null,
           representanteTipo: esPropietario ? ("propietario" as const) : ("externo" as const),
         };
       }),
