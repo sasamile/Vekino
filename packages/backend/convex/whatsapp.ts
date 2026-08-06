@@ -3,6 +3,7 @@ import {
   internalAction,
   internalMutation,
   internalQuery,
+  query,
 } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -13,6 +14,10 @@ import {
   msgLista,
   msgTexto,
 } from "./lib/ycloud";
+import {
+  parseFechaFlexible,
+  parseRangoHorasFlexible,
+} from "./lib/fechaTexto";
 
 /**
  * Bot de WhatsApp (YCloud).
@@ -29,6 +34,32 @@ import {
  */
 
 const VENTANA_24H = 24 * 60 * 60 * 1000;
+
+/**
+ * Número del bot para el botón flotante de la web/app.
+ *
+ * Solo lo devuelve si el condominio tiene el módulo "whatsapp" encendido: un
+ * botón que lleva a un bot que va a contestar "no está habilitado" es peor
+ * que no tener botón.
+ */
+export const contactoBot = query({
+  args: { condominioId: v.optional(v.id("condominios")) },
+  handler: async (ctx, args) => {
+    const crudo = (process.env.YCLOUD_PHONE_NUMBER_ID ?? "").trim();
+    const numero = crudo.replace(/\D/g, "");
+    if (!numero) return { numero: null, habilitado: false };
+
+    if (!args.condominioId) return { numero, habilitado: false };
+
+    const condominio = await ctx.db.get(args.condominioId);
+    const habilitado =
+      !!condominio &&
+      condominio.isActive &&
+      condominio.activeModules.includes("whatsapp");
+
+    return { numero, habilitado };
+  },
+});
 
 // ─────────────────────────────────────────────────────────────
 // Persistencia (mutations/queries internas)
@@ -358,39 +389,45 @@ function normalizarComando(texto: string): string {
     .trim();
 }
 
-/** "15/08/2026", "15-08-2026" o "2026-08-15" → "2026-08-15" | null */
-function parseFecha(texto: string): string | null {
-  const t = texto.trim();
-  let m = t.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
-  if (m) {
-    const [, y, mo, d] = m;
-    return `${y}-${mo!.padStart(2, "0")}-${d!.padStart(2, "0")}`;
-  }
-  m = t.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})$/);
-  if (m) {
-    const [, d, mo, y] = m;
-    const mes = Number(mo);
-    const dia = Number(d);
-    if (mes < 1 || mes > 12 || dia < 1 || dia > 31) return null;
-    return `${y}-${mo!.padStart(2, "0")}-${d!.padStart(2, "0")}`;
-  }
-  return null;
+/** Etiqueta corta para la lista de fechas: "Hoy · jue 6 ago". */
+function etiquetaFecha(fechaISO: string, hoyISO: string, timezone: string): string {
+  const d = new Date(`${fechaISO}T12:00:00Z`);
+  const dia = new Intl.DateTimeFormat("es-CO", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    timeZone: "UTC",
+  }).format(d);
+  const manana = new Date(`${hoyISO}T12:00:00Z`);
+  manana.setUTCDate(manana.getUTCDate() + 1);
+  const mananaISO = manana.toISOString().slice(0, 10);
+  if (fechaISO === hoyISO) return `Hoy · ${dia}`;
+  if (fechaISO === mananaISO) return `Mañana · ${dia}`;
+  void timezone;
+  return dia.charAt(0).toUpperCase() + dia.slice(1);
 }
 
-/** "14:00-18:00", "14 a 18", "9:30 - 12:00" → ["14:00","18:00"] | null */
-function parseRangoHoras(texto: string): [string, string] | null {
-  const m = texto
-    .trim()
-    .match(/^(\d{1,2})(?::(\d{2}))?\s*(?:-|a|hasta)\s*(\d{1,2})(?::(\d{2}))?$/i);
-  if (!m) return null;
-  const h1 = Number(m[1]);
-  const h2 = Number(m[3]);
-  if (h1 > 23 || h2 > 24) return null;
-  const inicio = `${String(h1).padStart(2, "0")}:${m[2] ?? "00"}`;
-  const fin = `${String(h2).padStart(2, "0")}:${m[4] ?? "00"}`;
-  if (fin <= inicio) return null;
-  return [inicio, fin];
+/** Próximos días como filas de lista, para no obligar a escribir la fecha. */
+function proximasFechas(hoyISO: string, n: number): string[] {
+  const salida: string[] = [];
+  const base = new Date(`${hoyISO}T12:00:00Z`);
+  for (let i = 0; i < n; i++) {
+    const d = new Date(base);
+    d.setUTCDate(d.getUTCDate() + i);
+    salida.push(d.toISOString().slice(0, 10));
+  }
+  return salida;
 }
+
+/** Bloques típicos de reserva; siempre queda la opción de escribir otro. */
+const HORARIOS_SUGERIDOS: Array<{ rango: [string, string]; etiqueta: string }> = [
+  { rango: ["08:00", "12:00"], etiqueta: "Mañana · 8:00 a 12:00" },
+  { rango: ["12:00", "16:00"], etiqueta: "Medio día · 12:00 a 4:00" },
+  { rango: ["14:00", "18:00"], etiqueta: "Tarde · 2:00 a 6:00" },
+  { rango: ["16:00", "20:00"], etiqueta: "Tarde · 4:00 a 8:00" },
+  { rango: ["18:00", "22:00"], etiqueta: "Noche · 6:00 a 10:00" },
+  { rango: ["08:00", "18:00"], etiqueta: "Todo el día · 8 a 6" },
+];
 
 type CtxBot = {
   conversacion: Doc<"waConversations">;
@@ -572,11 +609,96 @@ export const procesarEntrante = internalAction({
             { id: "menu:reserva", title: "🏝 Reservar zona común", description: "Salón social, BBQ y más" },
             { id: "menu:comprobante", title: "🧾 Enviar comprobante", description: "Reporta tu pago con una foto" },
             { id: "menu:problema", title: "🛠 Reportar un problema", description: "Queja, petición o daño" },
+            { id: "menu:acceso", title: "🔑 Datos de acceso", description: "Tu usuario y clave de la app" },
             { id: "menu:consulta", title: "💬 Otra consulta", description: "Pregúntame lo que necesites" },
           ],
         ),
       );
       await setConv({ paso: "menu", contexto: null });
+    }
+
+    /**
+     * Pide la fecha ofreciendo los próximos días como lista.
+     * Escribirla también funciona (parseFechaFlexible), pero tocar una fila
+     * es más rápido y no hay forma de equivocarse de formato.
+     */
+    async function pedirFecha() {
+      const hoy = hoyEn(timezone);
+      const filas = proximasFechas(hoy, 7).map((f) => ({
+        id: `fecha:${f}`,
+        title: etiquetaFecha(f, hoy, timezone),
+      }));
+      filas.push({ id: "fecha:otra", title: "📅 Otra fecha" });
+      await enviar(
+        msgLista(
+          to,
+          "📅 ¿Para qué día?\n\nToca una opción o escríbeme la fecha (ej: *20 de agosto*).",
+          "Ver fechas",
+          filas,
+        ),
+      );
+    }
+
+    /** Horarios típicos como lista; también acepta texto libre. */
+    async function pedirHora() {
+      const filas = HORARIOS_SUGERIDOS.map((h) => ({
+        id: `hora:${h.rango[0]}-${h.rango[1]}`,
+        title: h.etiqueta,
+      }));
+      filas.push({ id: "hora:otro", title: "🕐 Otro horario" });
+      await enviar(
+        msgLista(
+          to,
+          "🕐 ¿En qué horario?\n\nToca una opción o escríbemelo (ej: *de 2 a 6*).",
+          "Ver horarios",
+          filas,
+        ),
+      );
+    }
+
+    /** Valida disponibilidad y pide confirmación final. */
+    async function confirmarReserva(horaInicio: string, horaFin: string) {
+      const draft = { ...contexto.reserva, horaInicio, horaFin };
+      if (!draft?.zonaId || !draft?.fecha) {
+        await enviarMenu();
+        return;
+      }
+
+      const disponible: { ok: boolean; motivo?: string } = await ctx.runQuery(
+        internal.reservas.verificarDisponibilidad,
+        {
+          zonaId: draft.zonaId as Id<"zonasComunes">,
+          fecha: draft.fecha,
+          horaInicio,
+          horaFin,
+        },
+      );
+      if (!disponible.ok) {
+        await enviar(
+          msgTexto(
+            to,
+            `😕 ${disponible.motivo ?? "Ese horario no está disponible."}`,
+          ),
+        );
+        await pedirHora();
+        return;
+      }
+
+      await setConv({
+        paso: "reserva:confirmar",
+        contexto: { ...contexto, reserva: draft },
+      });
+      const [d1, m1, y1] = draft.fecha.split("-").reverse();
+      await enviar(
+        msgBotones(
+          to,
+          `¿Confirmas la reserva?\n\n📅 ${d1}/${m1}/${y1}\n🕐 ${horaInicio} a ${horaFin}`,
+          [
+            { id: "reserva:confirmar", title: "✅ Confirmar" },
+            { id: "reserva:cancelar", title: "❌ Cancelar" },
+          ],
+        ),
+      );
     }
 
     /** Unidad de trabajo: la única, la elegida antes, o pedimos elegir. */
@@ -826,20 +948,65 @@ export const procesarEntrante = internalAction({
           paso: "reserva:fecha",
           contexto: { ...contexto, reserva: { zonaId } },
         });
-        await enviar(
-          msgTexto(to, "📅 ¿Para qué fecha? Escríbela así: *DD/MM/AAAA* (ej: 15/09/2026)"),
-        );
+        await pedirFecha();
+        return;
+      }
+
+      if (id.startsWith("fecha:")) {
+        const valor = id.slice("fecha:".length);
+        if (valor === "otra") {
+          await enviar(
+            msgTexto(
+              to,
+              "📅 Escríbeme la fecha como quieras: *20 de agosto*, *20/08*, *el sábado*…",
+            ),
+          );
+          return;
+        }
+        await setConv({
+          paso: "reserva:hora",
+          contexto: { ...contexto, reserva: { ...contexto.reserva, fecha: valor } },
+        });
+        await pedirHora();
+        return;
+      }
+
+      if (id.startsWith("hora:")) {
+        const valor = id.slice("hora:".length);
+        if (valor === "otro") {
+          await enviar(
+            msgTexto(
+              to,
+              "🕐 Escríbeme el horario como quieras: *de 2 a 6*, *14:00-18:00*, *9 am a 12*…",
+            ),
+          );
+          return;
+        }
+        const [ini, fin] = valor.split("-");
+        if (!ini || !fin) return;
+        await confirmarReserva(ini, fin);
         return;
       }
 
       if (id === "reserva:confirmar") {
-        const draft = contexto.reserva;
         const unidad = await resolverUnidad("reserva:confirmar");
-        if (!unidad || !draft?.zonaId || !draft?.fecha || !draft?.horaInicio || !draft?.horaFin) {
+        if (!unidad) return;
+        // Reclamo atómico: un segundo tap de "Confirmar" recibe null.
+        const draft = await ctx.runMutation(
+          internal.whatsapp.reclamarDraftReserva,
+          { conversacionId: args.conversacionId },
+        );
+        if (!draft) {
+          await enviar(
+            msgTexto(
+              to,
+              "Esa confirmación ya se procesó o expiró. Escribe *menú* para empezar de nuevo.",
+            ),
+          );
           return;
         }
         try {
-          const res: { reservaId: string } = await ctx.runMutation(
+          await ctx.runMutation(
             internal.reservas.createFromBot,
             {
               userId: datos!.user!._id,
@@ -852,7 +1019,6 @@ export const procesarEntrante = internalAction({
               observaciones: "Creada por WhatsApp",
             },
           );
-          void res;
           await enviar(
             msgTexto(
               to,
@@ -940,6 +1106,49 @@ export const procesarEntrante = internalAction({
         return;
       }
 
+      if (id === "menu:acceso") {
+        await enviar(
+          msgBotones(
+            to,
+            "🔑 Te puedo generar una *clave nueva* para entrar a la plataforma.\n\nOjo: la contraseña que tengas ahora dejará de funcionar.",
+            [
+              { id: "acceso:confirmar", title: "🔑 Generar clave" },
+              { id: "menu:inicio", title: "Cancelar" },
+            ],
+          ),
+        );
+        await setConv({ paso: "menu", contexto });
+        return;
+      }
+
+      if (id === "acceso:confirmar") {
+        // WhatsApp garantiza el remitente y el número está registrado en la
+        // plataforma: equivale al "te mandamos un enlace a tu correo".
+        const res: { ok: boolean; email?: string; password?: string; motivo?: string } =
+          await ctx.runAction(internal.credenciales.generarClaveParaEntrega, {
+            userId: datos!.user!._id,
+          });
+
+        if (!res.ok || !res.password) {
+          await enviar(
+            msgTexto(
+              to,
+              `😕 No pude generar tu clave${res.motivo ? `: ${res.motivo}` : ""}.\n\nEscríbele a tu administración para que revise tus datos.`,
+            ),
+          );
+          return;
+        }
+
+        await enviar(
+          msgTexto(
+            to,
+            `🔑 *Tus datos de acceso a Vekino*\n\nUsuario: ${res.email}\nContraseña: ${res.password}\n\nIngresa en https://www.vekino.com/login\n\nEs una clave temporal y personal: cámbiala apenas entres y no la compartas con nadie.`,
+          ),
+        );
+        await setConv({ paso: "menu", contexto });
+        return;
+      }
+
       if (id === "menu:consulta") {
         await enviar(msgTexto(to, "💬 Claro, escríbeme tu pregunta."));
         await setConv({ paso: "consulta", contexto });
@@ -963,67 +1172,44 @@ export const procesarEntrante = internalAction({
     }
 
     if (paso === "reserva:fecha") {
-      const fecha = parseFecha(texto);
+      const fecha = parseFechaFlexible(texto, hoyEn(timezone));
       if (!fecha) {
-        await enviar(msgTexto(to, "No entendí la fecha 😅. Escríbela así: *15/09/2026*"));
+        await enviar(
+          msgTexto(
+            to,
+            "No me quedó clara la fecha 😅. Puedes decírmela como quieras: *20 de agosto*, *20/08*, *mañana* o *el sábado*.",
+          ),
+        );
+        await pedirFecha();
         return null;
       }
       if (fecha < hoyEn(timezone)) {
-        await enviar(msgTexto(to, "Esa fecha ya pasó. Elige una fecha futura. 📅"));
+        await enviar(msgTexto(to, "Esa fecha ya pasó 📅. Elige una futura."));
+        await pedirFecha();
         return null;
       }
       await setConv({
         paso: "reserva:hora",
         contexto: { ...contexto, reserva: { ...contexto.reserva, fecha } },
       });
-      await enviar(
-        msgTexto(to, "🕐 ¿En qué horario? Escríbelo así: *14:00-18:00*"),
-      );
+      contexto.reserva = { ...contexto.reserva, fecha };
+      await pedirHora();
       return null;
     }
 
     if (paso === "reserva:hora") {
-      const rango = parseRangoHoras(texto);
+      const rango = parseRangoHorasFlexible(texto);
       if (!rango) {
-        await enviar(
-          msgTexto(to, "No entendí el horario 😅. Escríbelo así: *14:00-18:00*"),
-        );
-        return null;
-      }
-      const draft = { ...contexto.reserva, horaInicio: rango[0], horaFin: rango[1] };
-      const disponible: { ok: boolean; motivo?: string } = await ctx.runQuery(
-        internal.reservas.verificarDisponibilidad,
-        {
-          zonaId: draft.zonaId as Id<"zonasComunes">,
-          fecha: draft.fecha,
-          horaInicio: draft.horaInicio,
-          horaFin: draft.horaFin,
-        },
-      );
-      if (!disponible.ok) {
         await enviar(
           msgTexto(
             to,
-            `😕 ${disponible.motivo ?? "Ese horario no está disponible."}\n\nPrueba con otro horario (*14:00-18:00*) o escribe *menú*.`,
+            "No me quedó claro el horario 😅. Puedes decírmelo así: *de 2 a 6*, *14:00-18:00* o *9 am a 12*.",
           ),
         );
+        await pedirHora();
         return null;
       }
-      await setConv({
-        paso: "reserva:confirmar",
-        contexto: { ...contexto, reserva: draft },
-      });
-      const [d1, m1, y1] = draft.fecha.split("-").reverse();
-      await enviar(
-        msgBotones(
-          to,
-          `¿Confirmas la reserva?\n\n📅 ${d1}/${m1}/${y1}\n🕐 ${draft.horaInicio} a ${draft.horaFin}`,
-          [
-            { id: "reserva:confirmar", title: "✅ Confirmar" },
-            { id: "reserva:cancelar", title: "❌ Cancelar" },
-          ],
-        ),
-      );
+      await confirmarReserva(rango[0], rango[1]);
       return null;
     }
 
@@ -1063,6 +1249,14 @@ export const procesarEntrante = internalAction({
     }
     if (/problema|queja|reclamo|dano|daño|reportar/.test(comando)) {
       await manejarAccion("menu:problema");
+      return null;
+    }
+    if (
+      /clave|contrasena|password|no puedo entrar|no me deja entrar|acceso|usuario|olvide/.test(
+        comando,
+      )
+    ) {
+      await manejarAccion("menu:acceso");
       return null;
     }
 

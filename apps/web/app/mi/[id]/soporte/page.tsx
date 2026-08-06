@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { useParams } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
 import { LifeBuoy, Plus, Loader2 } from "lucide-react";
@@ -14,6 +14,12 @@ import { Modal } from "@/components/ui/modal";
 import { Input, Textarea, Select } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { EmptyState } from "@/components/ui/empty-state";
+import {
+  AdjuntosLista,
+  AdjuntosPicker,
+  carpetaSoporte,
+  type ArchivoAdjunto,
+} from "@/components/soporte/adjuntos-picker";
 
 type Ticket = Doc<"soporteTickets">;
 type Categoria = Ticket["categoria"];
@@ -103,6 +109,11 @@ export default function PortalSoportePage() {
                 <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
                   {t.mensaje}
                 </p>
+                <AdjuntosLista
+                  archivos={t.archivos}
+                  titulo="Adjuntos"
+                  className="mt-3"
+                />
                 {t.respuesta ? (
                   <div className="mt-3 rounded-xl border border-border/70 bg-muted/40 px-3 py-2.5">
                     <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
@@ -112,6 +123,10 @@ export default function PortalSoportePage() {
                         : ""}
                     </p>
                     <p className="mt-1 text-sm text-foreground">{t.respuesta}</p>
+                    <AdjuntosLista
+                      archivos={t.archivosRespuesta}
+                      className="mt-2.5"
+                    />
                   </div>
                 ) : null}
               </Card>
@@ -142,13 +157,21 @@ function NuevaSolicitud({
   const [categoria, setCategoria] = useState<Categoria>("factura");
   const [asunto, setAsunto] = useState("");
   const [mensaje, setMensaje] = useState("");
+  const [archivos, setArchivos] = useState<ArchivoAdjunto[]>([]);
+  const [subiendo, setSubiendo] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const onUploadingChange = useCallback((v: boolean) => setSubiendo(v), []);
 
   async function submit() {
     setError(null);
     if (!asunto.trim() || !mensaje.trim()) {
       setError("Asunto y mensaje son obligatorios.");
+      return;
+    }
+    if (subiendo) {
+      setError("Espera a que terminen de subir los adjuntos.");
       return;
     }
     setBusy(true);
@@ -158,10 +181,12 @@ function NuevaSolicitud({
         categoria,
         asunto: asunto.trim(),
         mensaje: mensaje.trim(),
+        archivos: archivos.length ? archivos : undefined,
       });
       setAsunto("");
       setMensaje("");
       setCategoria("factura");
+      setArchivos([]);
       onClose();
     } catch (e) {
       setError(e instanceof Error ? e.message : "No se pudo enviar.");
@@ -212,18 +237,31 @@ function NuevaSolicitud({
             onChange={(e) => setMensaje(e.target.value)}
             rows={4}
             placeholder="Cuéntanos qué pasó…"
+            disabled={busy}
           />
         </div>
+        <AdjuntosPicker
+          folder={carpetaSoporte(condominioId)}
+          archivos={archivos}
+          onChange={setArchivos}
+          onUploadingChange={onUploadingChange}
+          disabled={busy}
+          label="Capturas o documentos (opcional)"
+        />
         {error ? (
           <p className="text-sm text-destructive">{error}</p>
         ) : null}
         <div className="flex justify-end gap-2">
-          <Button variant="secondary" onClick={onClose} disabled={busy}>
+          <Button variant="secondary" onClick={onClose} disabled={busy || subiendo}>
             Cancelar
           </Button>
-          <Button variant="brand" onClick={submit} disabled={busy}>
+          <Button
+            variant="brand"
+            onClick={submit}
+            disabled={busy || subiendo || !asunto.trim() || !mensaje.trim()}
+          >
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-            Enviar
+            {subiendo ? "Subiendo adjuntos…" : "Enviar"}
           </Button>
         </div>
       </div>

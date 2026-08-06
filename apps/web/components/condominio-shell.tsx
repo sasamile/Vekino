@@ -11,6 +11,8 @@ import { AdminTopbar } from "@/components/layout/admin-topbar";
 import { AdminTopbarProvider } from "@/components/layout/admin-topbar-context";
 import { canAccessCondoSegment } from "@/components/layout/nav-config";
 import { Spinner } from "@/components/ui/spinner";
+import { CambiarClaveTemporalModal } from "@/components/cambiar-clave-temporal-modal";
+import { WhatsappFab } from "@/components/whatsapp-fab";
 import { hexToHslChannels, hexToBrandForeground } from "@/lib/utils";
 import { BrandThemeProvider } from "@/lib/brand-theme";
 
@@ -152,6 +154,10 @@ function Guard({ children }: { children: React.ReactNode }) {
             </AdminTopbarProvider>
           </div>
         </div>
+
+        <CambiarClaveTemporalModal />
+        {/* Sin barra inferior en móvil: `MobileNav` es solo header superior. */}
+        <WhatsappFab condominioId={condominioId} />
       </div>
     </BrandThemeProvider>
   );

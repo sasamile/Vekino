@@ -361,6 +361,9 @@ function EliminarCuenta() {
 }
 
 function CambiarPassword() {
+  // Vía Convex (no `authClient`) para que el backend limpie `claveTemporal`
+  // y deje de aparecer el aviso de contraseña temporal.
+  const cambiarPassword = useAction(api.users.cambiarMiPassword);
   const [actual, setActual] = useState("");
   const [nueva, setNueva] = useState("");
   const [confirmar, setConfirmar] = useState("");
@@ -376,12 +379,7 @@ function CambiarPassword() {
     if (nueva !== confirmar) return setError("Las contraseñas no coinciden.");
     setBusy(true);
     try {
-      const { error: err } = await authClient.changePassword({
-        currentPassword: actual,
-        newPassword: nueva,
-        revokeOtherSessions: false,
-      });
-      if (err) throw new Error(err.message ?? "No se pudo cambiar la contraseña.");
+      await cambiarPassword({ actual, nueva });
       setOk(true);
       setActual("");
       setNueva("");

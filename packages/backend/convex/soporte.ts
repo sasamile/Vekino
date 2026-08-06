@@ -28,12 +28,21 @@ const estadoValidator = v.union(
  * El residente pide ayuda (factura, acceso, app…).
  * Llega al administrador del condominio y a superadmins de plataforma.
  */
+const archivoValidator = v.object({
+  url: v.string(),
+  s3Key: v.optional(v.string()),
+  mimeType: v.string(),
+  nombre: v.string(),
+});
+
 export const crear = mutation({
   args: {
     condominioId: v.optional(v.id("condominios")),
     categoria: categoriaValidator,
     asunto: v.string(),
     mensaje: v.string(),
+    /** Capturas o archivos ya subidos a S3 (api.files.generateUploadUrl). */
+    archivos: v.optional(v.array(archivoValidator)),
   },
   handler: async (ctx, args) => {
     const user = await requireAppUser(ctx);
@@ -63,6 +72,7 @@ export const crear = mutation({
       categoria: args.categoria,
       asunto,
       mensaje,
+      archivos: args.archivos?.length ? args.archivos : undefined,
       estado: "abierto",
       createdAt: now,
       updatedAt: now,
@@ -119,6 +129,7 @@ export const responder = mutation({
     id: v.id("soporteTickets"),
     respuesta: v.string(),
     estado: v.optional(estadoValidator),
+    archivos: v.optional(v.array(archivoValidator)),
   },
   handler: async (ctx, args) => {
     const ticket = await ctx.db.get(args.id);
@@ -141,6 +152,7 @@ export const responder = mutation({
     const now = Date.now();
     await ctx.db.patch(args.id, {
       respuesta,
+      archivosRespuesta: args.archivos?.length ? args.archivos : undefined,
       estado: args.estado ?? "resuelto",
       respondidoPorUserId: user._id,
       respondidoPorNombre: displayNameFromUser(user),

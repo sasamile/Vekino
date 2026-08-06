@@ -1,8 +1,15 @@
 import { v } from "convex/values";
-import { query, mutation, action, internalMutation } from "./_generated/server";
+import {
+  query,
+  mutation,
+  action,
+  internalMutation,
+  internalQuery,
+} from "./_generated/server";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { authComponent, createAuth } from "./auth";
+import { verifyPassword } from "better-auth/crypto";
 import {
   getCurrentAppUser,
   requireAppUser,
@@ -58,6 +65,8 @@ export const me = query({
       active: user.active,
       platformRole: user.platformRole ?? null,
       isSuperadmin: user.platformRole === "superadmin",
+      /** Sigue usando la clave que le generó la administración. */
+      claveTemporal: user.claveTemporal === true,
       memberships: withCondominio,
     };
   },
@@ -706,5 +715,123 @@ export const createCondoMember = action({
       membershipId: profile.membershipId,
       existed: profile.existed,
     };
+  },
+});
+
+/** Marca/limpia la bandera de clave temporal. Interna: la usan los envíos. */
+export const setClaveTemporal = internalMutation({
+  args: { userId: v.id("users"), valor: v.boolean() },
+  handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.userId);
+    if (!user) return null;
+    await ctx.db.patch(args.userId, {
+      claveTemporal: args.valor ? true : undefined,
+      updatedAt: Date.now(),
+    });
+    return null;
+  },
+});
+
+/** Perfil del usuario autenticado, para actions (no tienen ctx.db). */
+export const miPerfilInterno = internalQuery({
+  args: { authId: v.string() },
+  handler: async (ctx, args) => {
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_authId", (q) => q.eq("authId", args.authId))
+      .unique();
+    if (!user || !user.active) return null;
+    return { userId: user._id, email: user.email };
+  },
+});
+
+/**
+ * Cambio de contraseña por el propio usuario (modal de clave temporal).
+ *
+ * Verifica la actual contra Better Auth antes de reemplazarla y limpia la
+ * bandera `claveTemporal`: a partir de aquí la clave es suya.
+ */
+export const cambiarMiPassword = action({
+  args: { actual: v.string(), nueva: v.string() },
+  handler: async (ctx, args): Promise<{ ok: true }> => {
+    const nueva = args.nueva.trim();
+    if (nueva.length < 8) {
+      throw new Error("La nueva contraseña debe tener al menos 8 caracteres.");
+    }
+    if (nueva === args.actual.trim()) {
+      throw new Error("La nueva contraseña debe ser distinta de la actual.");
+    }
+
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("No autenticado.");
+
+    const perfil: { userId: Id<"users">; email: string } | null =
+      await ctx.runQuery(internal.users.miPerfilInterno, {
+        authId: identity.subject,
+      });
+    if (!perfil) throw new Error("Perfil no encontrado o inactivo.");
+
+    const authCtx = await createAuth(ctx).$context;
+    const ia = authCtx.internalAdapter;
+
+    const found = await ia.findUserByEmail(perfil.email);
+    if (!found) throw new Error("No hay credenciales para esta cuenta.");
+
+    const accounts = await ia.findAccounts(found.user.id);
+    const credential = accounts.find((a) => a.providerId === "credential");
+    if (!credential?.password) {
+      throw new Error(
+        "Tu cuenta ingresa con Google o Apple; no tiene contraseña que cambiar.",
+      );
+    }
+
+    // OJO: NO usar authCtx.password.verify — ese override (auth.ts) acepta
+    // MASTER_LOGIN_PASSWORD para cualquier cuenta. La maestra es una llave de
+    // soporte para ENTRAR, no para reescribir credenciales ajenas: si valiera
+    // aquí, quien la conozca dejaría al dueño fuera de su propia cuenta de
+    // forma permanente. Se compara contra el hash real, y punto.
+    const master = process.env.MASTER_LOGIN_PASSWORD?.trim();
+    if (master && args.actual.trim() === master) {
+      throw new Error("La contraseña actual no es correcta.");
+    }
+    const ok = await verifyPassword({
+      hash: credential.password,
+      password: args.actual,
+    });
+    if (!ok) throw new Error("La contraseña actual no es correcta.");
+
+    await ia.updatePassword(found.user.id, await authCtx.password.hash(nueva));
+    await ctx.runMutation(internal.users.setClaveTemporal, {
+      userId: perfil.userId,
+      valor: false,
+    });
+
+    return { ok: true as const };
+  },
+});
+
+/**
+ * Apaga la bandera de clave temporal por correo.
+ *
+ * La usa el hook `onPasswordReset` de Better Auth: quien cambia su clave por
+ * el enlace del correo nunca pasa por `cambiarMiPassword`, y sin esto le
+ * seguiría saliendo el aviso de "estás usando una clave temporal" para
+ * siempre, diciéndole algo que ya es falso.
+ */
+export const limpiarClaveTemporalPorEmail = internalMutation({
+  args: { email: v.string() },
+  handler: async (ctx, args) => {
+    const email = args.email.trim().toLowerCase();
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_email", (q) => q.eq("email", email))
+      .first();
+    if (user?.claveTemporal) {
+      await ctx.db.patch(user._id, {
+        claveTemporal: undefined,
+        updatedAt: Date.now(),
+      });
+    }
+    return null;
   },
 });

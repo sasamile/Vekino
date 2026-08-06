@@ -11,6 +11,8 @@ export async function sendBrevoEmail(args: {
   to: BrevoRecipient[];
   subject: string;
   htmlContent: string;
+  /** Alternativa en texto plano. Mejora la entregabilidad en envíos masivos. */
+  textContent?: string;
 }): Promise<void> {
   const apiKey = process.env.BREVO_API_KEY?.trim();
   if (!apiKey) {
@@ -29,6 +31,9 @@ export async function sendBrevoEmail(args: {
 
   const res = await fetch("https://api.brevo.com/v3/smtp/email", {
     method: "POST",
+    // Sin tope, una conexión colgada de Brevo se come el presupuesto entero
+    // de la action que la llama (los envíos en lote van secuenciales).
+    signal: AbortSignal.timeout(20_000),
     headers: {
       accept: "application/json",
       "content-type": "application/json",
@@ -42,13 +47,18 @@ export async function sendBrevoEmail(args: {
       })),
       subject: args.subject,
       htmlContent: args.htmlContent,
+      ...(args.textContent ? { textContent: args.textContent } : {}),
     }),
   });
 
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
     console.error(`[brevo] HTTP ${res.status}: ${detail}`);
-    throw new Error("No se pudo enviar el correo. Inténtalo de nuevo.");
+    // El status viaja en el mensaje: en envíos masivos es lo único que
+    // distingue "correo rebotado" de "nos quedamos sin cuota".
+    throw new Error(
+      `No se pudo enviar el correo (HTTP ${res.status}). Inténtalo de nuevo.`,
+    );
   }
 }
 

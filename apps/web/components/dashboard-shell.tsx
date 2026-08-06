@@ -22,6 +22,7 @@ import {
 import { AdminTopbar } from "@/components/layout/admin-topbar";
 import { AdminTopbarProvider } from "@/components/layout/admin-topbar-context";
 import { Spinner } from "@/components/ui/spinner";
+import { CambiarClaveTemporalModal } from "@/components/cambiar-clave-temporal-modal";
 
 export function DashboardShell({ children }: { children: React.ReactNode }) {
   return (
@@ -150,6 +151,8 @@ function Shell({ children }: { children: React.ReactNode }) {
           </AdminTopbarProvider>
         </div>
       </div>
+
+      <CambiarClaveTemporalModal />
     </div>
   );
 }
@@ -211,6 +214,8 @@ function UserMultiCondoShell({
           {children}
         </div>
       </div>
+
+      <CambiarClaveTemporalModal />
     </div>
   );
 }

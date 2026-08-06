@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import { query, mutation, internalMutation, internalQuery } from "./_generated/server";
+import { internal } from "./_generated/api";
 import { requireCondominioRole } from "./model/authz";
 
 /**
@@ -182,6 +183,11 @@ export const aprobar = mutation({
         });
       }
     }
+
+    // El bot le prometió al residente avisarle del resultado.
+    await ctx.scheduler.runAfter(0, internal.whatsappNotifs.soporteRevisado, {
+      soporteId: args.id,
+    });
     return args.id;
   },
 });
@@ -207,6 +213,10 @@ export const rechazar = mutation({
       revisadoPorNombre: user.name,
       revisadoAt: Date.now(),
       notaRevision: args.notaRevision,
+    });
+
+    await ctx.scheduler.runAfter(0, internal.whatsappNotifs.soporteRevisado, {
+      soporteId: args.id,
     });
     return args.id;
   },

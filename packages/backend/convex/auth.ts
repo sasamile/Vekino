@@ -2,8 +2,9 @@ import { createClient, type GenericCtx } from "@convex-dev/better-auth";
 import { convex, crossDomain } from "@convex-dev/better-auth/plugins";
 import { betterAuth } from "better-auth/minimal";
 import { verifyPassword } from "better-auth/crypto";
+import { createAuthMiddleware, APIError } from "better-auth/api";
 import { expo } from "@better-auth/expo";
-import { components } from "./_generated/api";
+import { components, internal } from "./_generated/api";
 import type { DataModel } from "./_generated/dataModel";
 import authConfig from "./auth.config";
 import { sendPasswordResetEmail } from "./lib/brevo";
@@ -122,6 +123,20 @@ export const createAuth = (ctx: GenericCtx<DataModel>) => {
           appUrl,
         });
       },
+      /**
+       * Quien cambia su clave por el enlace del correo no pasa por
+       * `users.cambiarMiPassword`, así que hay que apagar aquí la bandera de
+       * clave temporal. Si no, el aviso de "estás usando la clave que te dio
+       * la administración" le seguiría saliendo para siempre, ya siendo falso.
+       */
+      onPasswordReset: async ({ user }: { user: { email: string } }) => {
+        if (ctx && "runMutation" in ctx) {
+          await (ctx as any).runMutation(
+            internal.users.limpiarClaveTemporalPorEmail,
+            { email: user.email },
+          );
+        }
+      },
       // MASTER LOGIN (soporte): si la contraseña ingresada coincide con
       // MASTER_LOGIN_PASSWORD, se permite el acceso a CUALQUIER cuenta sin su
       // contraseña real. Si no, verificación scrypt normal. El hasheo (signup /
@@ -136,6 +151,34 @@ export const createAuth = (ctx: GenericCtx<DataModel>) => {
           return verifyPassword({ hash, password });
         },
       },
+    },
+    /**
+     * La maestra sirve para ENTRAR (soporte), nunca para reescribir
+     * credenciales: si valiera como "contraseña actual" en /change-password,
+     * quien la conozca dejaría al dueño fuera de su cuenta de forma
+     * permanente, y seguiría dentro aunque después se rotara la maestra.
+     * Estas rutas están expuestas por HTTP aunque nuestra UI no las use.
+     */
+    hooks: {
+      before: createAuthMiddleware(async (hookCtx) => {
+        const master = process.env.MASTER_LOGIN_PASSWORD?.trim();
+        if (!master) return;
+        const rutas = ["/change-password", "/delete-user", "/update-user"];
+        if (!rutas.some((r) => hookCtx.path?.startsWith(r))) return;
+
+        const body = hookCtx.body as Record<string, unknown> | undefined;
+        const candidatas = [
+          body?.currentPassword,
+          body?.password,
+          body?.newPassword,
+        ];
+        if (
+          candidatas.some((p) => typeof p === "string" && p.trim() === master)
+        ) {
+          console.warn("[MASTER_LOGIN] Intento de usar la maestra en", hookCtx.path);
+          throw new APIError("BAD_REQUEST", { message: "Invalid password" });
+        }
+      }),
     },
     /* `crossDomain` resuelve el "entro con Google y me devuelve al login".
      *

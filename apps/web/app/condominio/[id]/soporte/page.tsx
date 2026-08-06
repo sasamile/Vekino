@@ -1,9 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { useParams } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
-import { LifeBuoy, Loader2 } from "lucide-react";
+import { LifeBuoy, Loader2, Paperclip, Plus } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import type { Id, Doc } from "@vekino/backend/dataModel";
 import { Card } from "@/components/ui/card";
@@ -14,6 +14,13 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/input";
 import { PageContainer } from "@/components/layout/page-container";
+import { NuevoTicketDialog } from "@/components/soporte/nuevo-ticket-dialog";
+import {
+  AdjuntosLista,
+  AdjuntosPicker,
+  carpetaSoporte,
+  type ArchivoAdjunto,
+} from "@/components/soporte/adjuntos-picker";
 
 type Ticket = Doc<"soporteTickets">;
 
@@ -48,16 +55,27 @@ export default function CondominioSoportePage() {
   const condominioId = params.id as Id<"condominios">;
   const tickets = useQuery(api.soporte.listByCondominio, { condominioId });
   const [selected, setSelected] = useState<Ticket | null>(null);
+  const [nuevoAbierto, setNuevoAbierto] = useState(false);
 
   return (
     <PageContainer>
-      <div className="mb-6">
-        <h1 className="flex items-center gap-2 text-xl font-bold tracking-tight">
-          <LifeBuoy className="h-5 w-5 text-brand" /> Soporte
-        </h1>
-        <p className="text-sm text-muted-foreground">
-          Solicitudes de ayuda de residentes (también las ve el equipo Vekino)
-        </p>
+      <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="flex items-center gap-2 text-xl font-bold tracking-tight">
+            <LifeBuoy className="h-5 w-5 text-brand" /> Soporte
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            Solicitudes de residentes y tus propias solicitudes al equipo Vekino
+          </p>
+        </div>
+        <Button
+          variant="brand"
+          className="shrink-0 self-start sm:self-auto"
+          onClick={() => setNuevoAbierto(true)}
+        >
+          <Plus className="h-4 w-4" />
+          Nueva solicitud
+        </Button>
       </div>
 
       {tickets === undefined ? (
@@ -70,12 +88,19 @@ export default function CondominioSoportePage() {
         <EmptyState
           icon={LifeBuoy}
           title="Sin solicitudes"
-          description="Cuando un residente pida ayuda desde la app, aparecerá aquí."
+          description="Cuando un residente pida ayuda desde la app aparecerá aquí. También puedes abrir tú una solicitud al equipo Vekino."
+          action={
+            <Button variant="brand" onClick={() => setNuevoAbierto(true)}>
+              <Plus className="h-4 w-4" />
+              Nueva solicitud
+            </Button>
+          }
         />
       ) : (
         <div className="space-y-3">
           {tickets.map((t) => {
             const est = ESTADO[t.estado];
+            const adjuntos = t.archivos?.length ?? 0;
             return (
               <Card
                 key={t._id}
@@ -86,6 +111,12 @@ export default function CondominioSoportePage() {
                   <p className="font-semibold text-foreground">{t.asunto}</p>
                   <Badge tone={est.tone}>{est.label}</Badge>
                   <Badge tone="neutral">{CAT[t.categoria]}</Badge>
+                  {adjuntos > 0 ? (
+                    <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                      <Paperclip className="h-3.5 w-3.5" aria-hidden />
+                      {adjuntos}
+                    </span>
+                  ) : null}
                 </div>
                 <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">{t.mensaje}</p>
                 <p className="mt-2 text-xs text-muted-foreground">
@@ -98,23 +129,53 @@ export default function CondominioSoportePage() {
       )}
 
       {selected ? (
-        <ResponderModal ticket={selected} onClose={() => setSelected(null)} />
+        <ResponderModal
+          ticket={selected}
+          condominioId={condominioId}
+          onClose={() => setSelected(null)}
+        />
+      ) : null}
+
+      {nuevoAbierto ? (
+        <NuevoTicketDialog
+          condominioId={condominioId}
+          onClose={() => setNuevoAbierto(false)}
+        />
       ) : null}
     </PageContainer>
   );
 }
 
-function ResponderModal({ ticket, onClose }: { ticket: Ticket; onClose: () => void }) {
+function ResponderModal({
+  ticket,
+  condominioId,
+  onClose,
+}: {
+  ticket: Ticket;
+  condominioId: Id<"condominios">;
+  onClose: () => void;
+}) {
   const responder = useMutation(api.soporte.responder);
   const [respuesta, setRespuesta] = useState(ticket.respuesta ?? "");
+  const [archivos, setArchivos] = useState<ArchivoAdjunto[]>(
+    ticket.archivosRespuesta ?? [],
+  );
+  const [subiendo, setSubiendo] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const onUploadingChange = useCallback((v: boolean) => setSubiendo(v), []);
 
   async function confirmar() {
     setBusy(true);
     setError(null);
     try {
-      await responder({ id: ticket._id, respuesta, estado: "resuelto" });
+      await responder({
+        id: ticket._id,
+        respuesta,
+        estado: "resuelto",
+        archivos: archivos.length ? archivos : undefined,
+      });
       onClose();
     } catch (e) {
       setError(e instanceof Error ? e.message : "No se pudo responder.");
@@ -133,20 +194,34 @@ function ResponderModal({ ticket, onClose }: { ticket: Ticket; onClose: () => vo
           <Button variant="ghost" size="sm" onClick={onClose} disabled={busy}>
             Cerrar
           </Button>
-          <Button size="sm" onClick={confirmar} disabled={busy || !respuesta.trim()}>
+          <Button
+            size="sm"
+            onClick={confirmar}
+            disabled={busy || subiendo || !respuesta.trim()}
+          >
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-            Responder y resolver
+            {subiendo ? "Subiendo adjuntos…" : "Responder y resolver"}
           </Button>
         </>
       }
     >
       <div className="space-y-3">
         <p className="whitespace-pre-line text-sm text-foreground">{ticket.mensaje}</p>
+        <AdjuntosLista archivos={ticket.archivos} titulo="Adjuntos" />
         <Textarea
           value={respuesta}
           onChange={(e) => setRespuesta(e.target.value)}
           rows={4}
           placeholder="Tu respuesta al residente…"
+          disabled={busy}
+        />
+        <AdjuntosPicker
+          folder={carpetaSoporte(ticket.condominioId ?? condominioId)}
+          archivos={archivos}
+          onChange={setArchivos}
+          onUploadingChange={onUploadingChange}
+          disabled={busy}
+          label="Adjuntar a la respuesta (opcional)"
         />
         {error ? <p className="text-sm text-destructive">{error}</p> : null}
       </div>

@@ -95,6 +95,13 @@ export default defineSchema({
      */
     telefonoE164: v.optional(v.string()),
 
+    /**
+     * La contraseña actual la generó la administración (envío masivo de
+     * credenciales) y el usuario todavía no la ha cambiado. Sirve para
+     * recordárselo al entrar; NO bloquea el acceso.
+     */
+    claveTemporal: v.optional(v.boolean()),
+
     active: v.boolean(),
 
     // Capa 1: rol de plataforma. undefined = usuario normal.
@@ -1535,6 +1542,17 @@ export default defineSchema({
     ),
     asunto: v.string(),
     mensaje: v.string(),
+    /** Capturas de pantalla y archivos que adjunta quien reporta (S3). */
+    archivos: v.optional(
+      v.array(
+        v.object({
+          url: v.string(),
+          s3Key: v.optional(v.string()),
+          mimeType: v.string(),
+          nombre: v.string(),
+        }),
+      ),
+    ),
     estado: v.union(
       v.literal("abierto"),
       v.literal("en_gestion"),
@@ -1542,6 +1560,17 @@ export default defineSchema({
       v.literal("cerrado"),
     ),
     respuesta: v.optional(v.string()),
+    /** Adjuntos de la respuesta de soporte. */
+    archivosRespuesta: v.optional(
+      v.array(
+        v.object({
+          url: v.string(),
+          s3Key: v.optional(v.string()),
+          mimeType: v.string(),
+          nombre: v.string(),
+        }),
+      ),
+    ),
     respondidoPorUserId: v.optional(v.id("users")),
     respondidoPorNombre: v.optional(v.string()),
     respondidoAt: v.optional(v.number()),
@@ -1551,6 +1580,59 @@ export default defineSchema({
     .index("by_user", ["userId"])
     .index("by_condominio", ["condominioId"])
     .index("by_estado", ["estado"]),
+
+  // ─────────────────────────────────────────────────────────────
+  // Envío masivo de credenciales de acceso (onboarding por correo)
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Un envío masivo en curso o terminado. La cola (`pendientes`) vive en el
+   * documento para que el proceso pueda reanudarse por lotes sin perder el
+   * hilo si una tanda falla.
+   */
+  envioCredencialesJobs: defineTable({
+    condominioId: v.id("condominios"),
+    /** solo_sin_clave = no toca a quien ya tiene contraseña propia. */
+    modo: v.union(v.literal("solo_sin_clave"), v.literal("todos")),
+    estado: v.union(
+      v.literal("en_curso"),
+      v.literal("completado"),
+      v.literal("cancelado"),
+    ),
+    pendientes: v.array(v.id("users")),
+    total: v.number(),
+    procesados: v.number(),
+    enviados: v.number(),
+    fallidos: v.number(),
+    omitidos: v.number(),
+    iniciadoPorUserId: v.id("users"),
+    iniciadoPorNombre: v.string(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_condominio", ["condominioId"])
+    .index("by_condominio_estado", ["condominioId", "estado"]),
+
+  /**
+   * Resultado por destinatario. NUNCA guarda la contraseña en claro: solo
+   * queda constancia de a quién se le envió, cuándo y con qué resultado.
+   */
+  envioCredenciales: defineTable({
+    jobId: v.optional(v.id("envioCredencialesJobs")),
+    condominioId: v.id("condominios"),
+    userId: v.id("users"),
+    nombre: v.string(),
+    email: v.string(),
+    estado: v.union(
+      v.literal("enviado"),
+      v.literal("fallido"),
+      v.literal("omitido"),
+    ),
+    motivo: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index("by_condominio", ["condominioId"])
+    .index("by_job", ["jobId"]),
 
   // ─────────────────────────────────────────────────────────────
   // WhatsApp (YCloud) — bot conversacional + fan-out de plantillas
@@ -1603,6 +1685,7 @@ export default defineSchema({
     tipo: v.union(
       v.literal("comunicado"),
       v.literal("pago_aprobado"),
+      v.literal("soporte_revisado"),
       v.literal("manual"),
     ),
     comunicadoId: v.optional(v.id("comunicados")),

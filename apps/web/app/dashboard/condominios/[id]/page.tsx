@@ -15,6 +15,7 @@ import {
   X,
   UserPlus,
   ExternalLink,
+  KeyRound,
 } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
@@ -25,6 +26,7 @@ import { Card } from "@/components/ui/card";
 import { UserAvatar } from "@/components/ui/user-avatar";
 import { CreateCondoAdminDialog } from "@/components/dashboard/create-condo-admin-dialog";
 import { EditCondoDialog } from "@/components/dashboard/edit-condo-dialog";
+import { SendCredentialsDialog } from "@/components/dashboard/send-credentials-dialog";
 import { initials } from "@/lib/utils";
 
 const PAGE_SIZE = 30;
@@ -78,6 +80,7 @@ export default function CondominioDetailPage() {
   const detail = useQuery(api.condominios.detail, { condominioId });
   const [tab, setTab] = useState<"usuarios" | "unidades">("usuarios");
   const [showCreateAdmin, setShowCreateAdmin] = useState(false);
+  const [sendingCredentials, setSendingCredentials] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editingAdmin, setEditingAdmin] = useState<{
     userId: Id<"users">;
@@ -176,6 +179,15 @@ export default function CondominioDetailPage() {
               <ExternalLink className="h-3.5 w-3.5" />
               Abrir panel
             </Link>
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            type="button"
+            onClick={() => setSendingCredentials(true)}
+          >
+            <KeyRound className="h-3.5 w-3.5" />
+            Enviar credenciales por correo
           </Button>
           <Button
             variant="brand"
@@ -305,6 +317,14 @@ export default function CondominioDetailPage() {
           condominioId={condominioId}
           condominioName={c.name}
           onClose={() => setShowCreateAdmin(false)}
+        />
+      )}
+
+      {sendingCredentials && (
+        <SendCredentialsDialog
+          condominioId={condominioId}
+          condominioName={c.name}
+          onClose={() => setSendingCredentials(false)}
         />
       )}
 

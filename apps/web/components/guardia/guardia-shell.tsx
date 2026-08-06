@@ -20,6 +20,8 @@ import {
 } from "lucide-react";
 import { authClient } from "@/lib/auth-client";
 import { Spinner } from "@/components/ui/spinner";
+import { CambiarClaveTemporalModal } from "@/components/cambiar-clave-temporal-modal";
+import { WhatsappFab } from "@/components/whatsapp-fab";
 import { hexToHslChannels, hexToBrandForeground, cn, initials } from "@/lib/utils";
 import { BrandThemeProvider } from "@/lib/brand-theme";
 import type { LucideIcon } from "lucide-react";
@@ -135,6 +137,10 @@ function Guard({ children }: { children: React.ReactNode }) {
             />
           </div>
         </div>
+
+        <CambiarClaveTemporalModal />
+        {/* `MobileBottomNav` es `lg:hidden`: por debajo de lg el botón se sube. */}
+        <WhatsappFab condominioId={condominioId} bottomNav="lg" />
       </div>
     </BrandThemeProvider>
   );

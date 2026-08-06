@@ -13,6 +13,8 @@ import type { Id } from "@vekino/backend/dataModel";
 import { PortalSidebarContent } from "@/components/portal/portal-sidebar";
 import { PortalMobileNav } from "@/components/portal/portal-mobile-nav";
 import { Spinner } from "@/components/ui/spinner";
+import { CambiarClaveTemporalModal } from "@/components/cambiar-clave-temporal-modal";
+import { WhatsappFab } from "@/components/whatsapp-fab";
 import { hexToHslChannels, hexToBrandForeground } from "@/lib/utils";
 import { BrandThemeProvider } from "@/lib/brand-theme";
 
@@ -121,6 +123,11 @@ function Guard({ children }: { children: React.ReactNode }) {
             </div>
           </div>
         </div>
+
+        <CambiarClaveTemporalModal />
+        {/* Hoy el portal no monta `PortalBottomNav`; si se monta, cambiar a
+            bottomNav="md" (esa barra es `md:hidden`). */}
+        <WhatsappFab condominioId={condominioId} />
       </div>
     </BrandThemeProvider>
   );

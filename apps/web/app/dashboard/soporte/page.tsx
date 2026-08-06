@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
-import { LifeBuoy, Loader2 } from "lucide-react";
+import { LifeBuoy, Loader2, Paperclip } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import type { Doc } from "@vekino/backend/dataModel";
 import { Card } from "@/components/ui/card";
@@ -14,6 +14,12 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/input";
 import { PageContainer } from "@/components/layout/page-container";
 import { PageHeader } from "@/components/layout/page-header";
+import {
+  AdjuntosLista,
+  AdjuntosPicker,
+  carpetaSoporte,
+  type ArchivoAdjunto,
+} from "@/components/soporte/adjuntos-picker";
 import { cn } from "@/lib/utils";
 
 type Ticket = Doc<"soporteTickets">;
@@ -104,6 +110,12 @@ export default function PlatformSoportePage() {
                     <p className="font-semibold">{t.asunto}</p>
                     <Badge tone={est.tone}>{est.label}</Badge>
                     <Badge tone="neutral">{CAT[t.categoria]}</Badge>
+                    {t.archivos?.length ? (
+                      <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                        <Paperclip className="h-3.5 w-3.5" aria-hidden />
+                        {t.archivos.length}
+                      </span>
+                    ) : null}
                   </div>
                   <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">{t.mensaje}</p>
                   <p className="mt-2 text-xs text-muted-foreground">
@@ -126,14 +138,25 @@ export default function PlatformSoportePage() {
 function ResponderModal({ ticket, onClose }: { ticket: Ticket; onClose: () => void }) {
   const responder = useMutation(api.soporte.responder);
   const [respuesta, setRespuesta] = useState(ticket.respuesta ?? "");
+  const [archivos, setArchivos] = useState<ArchivoAdjunto[]>(
+    ticket.archivosRespuesta ?? [],
+  );
+  const [subiendo, setSubiendo] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const onUploadingChange = useCallback((v: boolean) => setSubiendo(v), []);
 
   async function confirmar() {
     setBusy(true);
     setError(null);
     try {
-      await responder({ id: ticket._id, respuesta, estado: "resuelto" });
+      await responder({
+        id: ticket._id,
+        respuesta,
+        estado: "resuelto",
+        archivos: archivos.length ? archivos : undefined,
+      });
       onClose();
     } catch (e) {
       setError(e instanceof Error ? e.message : "No se pudo responder.");
@@ -152,20 +175,34 @@ function ResponderModal({ ticket, onClose }: { ticket: Ticket; onClose: () => vo
           <Button variant="ghost" size="sm" onClick={onClose} disabled={busy}>
             Cerrar
           </Button>
-          <Button size="sm" onClick={confirmar} disabled={busy || !respuesta.trim()}>
+          <Button
+            size="sm"
+            onClick={confirmar}
+            disabled={busy || subiendo || !respuesta.trim()}
+          >
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-            Responder y resolver
+            {subiendo ? "Subiendo adjuntos…" : "Responder y resolver"}
           </Button>
         </>
       }
     >
       <div className="space-y-3">
         <p className="whitespace-pre-line text-sm">{ticket.mensaje}</p>
+        <AdjuntosLista archivos={ticket.archivos} titulo="Adjuntos del reporte" />
         <Textarea
           value={respuesta}
           onChange={(e) => setRespuesta(e.target.value)}
           rows={4}
           placeholder="Respuesta…"
+          disabled={busy}
+        />
+        <AdjuntosPicker
+          folder={carpetaSoporte(ticket.condominioId)}
+          archivos={archivos}
+          onChange={setArchivos}
+          onUploadingChange={onUploadingChange}
+          disabled={busy}
+          label="Adjuntar a la respuesta (opcional)"
         />
         {error ? <p className="text-sm text-destructive">{error}</p> : null}
       </div>

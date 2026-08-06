@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 import { Authenticated, Unauthenticated, AuthLoading } from "convex/react";
 import { ArrowLeft, Eye, EyeOff } from "lucide-react";
 import { authClient } from "@/lib/auth-client";
+import { WhatsAppFlotante } from "@/components/whatsapp-flotante";
 import { cn } from "@/lib/utils";
 
 /** El botón de Apple en web requiere un Services ID + client secret de Apple.
@@ -111,6 +112,8 @@ export default function LoginPage() {
           />
         </div>
       </div>
+
+      <WhatsAppFlotante />
     </div>
   );
 }

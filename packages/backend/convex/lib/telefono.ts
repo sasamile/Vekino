@@ -13,6 +13,41 @@
  * - Si el original traía "+", se respeta el país que traiga (8–15 dígitos).
  * - Cualquier otra cosa → null (no adivinamos).
  */
+/**
+ * ¿Este E.164 puede recibir WhatsApp de verdad?
+ *
+ * La base trae rellenos de la migración ("1111111", "3111111111") y fijos.
+ * Mandarles plantillas cuesta plata y ensucia la calidad del número WABA,
+ * que Meta castiga bajando el límite de envío.
+ */
+export function esCelularWhatsApp(e164: string | null | undefined): boolean {
+  if (!e164 || !e164.startsWith("+")) return false;
+  const digitos = e164.slice(1);
+  if (digitos.length < 10 || digitos.length > 15) return false;
+
+  if (digitos.startsWith("57")) {
+    // En Colombia WhatsApp solo vive en celulares (3XX); los fijos (60X) no.
+    const nacional = digitos.slice(2);
+    if (nacional.length !== 10 || !nacional.startsWith("3")) return false;
+    return pareceTelefonoReal(nacional);
+  }
+  return pareceTelefonoReal(digitos);
+}
+
+/** Descarta rellenos: dígitos repetidos y escaleras (1234567890). */
+function pareceTelefonoReal(n: string): boolean {
+  if (new Set(n).size <= 2) return false;
+
+  let ascendente = true;
+  let descendente = true;
+  for (let i = 1; i < n.length; i++) {
+    const paso = n.charCodeAt(i) - n.charCodeAt(i - 1);
+    if (paso !== 1) ascendente = false;
+    if (paso !== -1) descendente = false;
+  }
+  return !ascendente && !descendente;
+}
+
 export function normalizarTelefonoE164(raw: string | null | undefined): string | null {
   if (!raw) return null;
   const teniaMas = raw.trim().startsWith("+");

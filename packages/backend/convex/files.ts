@@ -196,8 +196,37 @@ export const uploadFromUrl = internalAction({
   ): Promise<{ key: string; publicUrl: string }> => {
     const maxBytes = 25 * 1024 * 1024;
 
+    // Anti-SSRF: la URL viene del payload del webhook (autenticado por
+    // secreto, pero defensa en profundidad): solo HTTPS y nunca hosts
+    // internos/IP privadas. Y el API key de YCloud solo viaja a YCloud.
+    let destino: URL;
+    try {
+      destino = new URL(args.url);
+    } catch {
+      throw new Error("URL de descarga inválida.");
+    }
+    if (destino.protocol !== "https:") {
+      throw new Error("Solo se permiten descargas por HTTPS.");
+    }
+    const host = destino.hostname.toLowerCase();
+    const esIpPrivada =
+      host === "localhost" ||
+      /^127\./.test(host) ||
+      /^10\./.test(host) ||
+      /^192\.168\./.test(host) ||
+      /^169\.254\./.test(host) ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
+      host === "[::1]" ||
+      host.endsWith(".internal");
+    if (esIpPrivada) {
+      throw new Error("Host de descarga no permitido.");
+    }
+
     const headers: Record<string, string> = {};
-    if (args.conApiKeyYCloud) {
+    if (
+      args.conApiKeyYCloud &&
+      (host === "ycloud.com" || host.endsWith(".ycloud.com"))
+    ) {
       headers["X-API-Key"] = process.env.YCLOUD_API_KEY ?? "";
     }
 
