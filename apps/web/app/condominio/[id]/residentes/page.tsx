@@ -570,6 +570,7 @@ function ResidentFormDialog({
   const updateMember = useMutation(api.memberships.updateMember);
   const setUnidades = useMutation(api.memberships.setMemberUnidades);
   const setPassword = useAction(api.users.setMemberPassword);
+  const setEmail = useAction(api.users.setMemberEmail);
 
   const [name, setName] = useState(member?.name ?? "");
   const [email, setEmail] = useState(member?.email ?? "");
@@ -612,7 +613,7 @@ function ResidentFormDialog({
       setError("El nombre es obligatorio.");
       return;
     }
-    if (mode === "create" && !email.trim()) {
+    if (!email.trim()) {
       setError("El correo es obligatorio.");
       return;
     }
@@ -654,6 +655,14 @@ function ResidentFormDialog({
           telefono,
           roles,
         });
+        const nuevoCorreo = email.trim().toLowerCase();
+        if (nuevoCorreo !== (member.email ?? "").trim().toLowerCase()) {
+          await setEmail({
+            condominioId,
+            userId: member.userId,
+            email: nuevoCorreo,
+          });
+        }
         await setUnidades({
           condominioId,
           membershipId: member.membershipId,
@@ -721,11 +730,10 @@ function ResidentFormDialog({
             onChange={(e) => setEmail(e.target.value)}
             placeholder="correo@ejemplo.com"
             autoComplete="email"
-            disabled={mode === "edit"}
           />
           {mode === "edit" ? (
             <p className="mt-1 text-xs text-muted-foreground">
-              El correo no se puede cambiar desde aquí.
+              Si lo cambias, el residente entrará con el correo nuevo.
             </p>
           ) : null}
         </div>

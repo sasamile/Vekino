@@ -483,6 +483,88 @@ export const setMemberPassword = action({
   },
 });
 
+/** ¿Hay otro usuario de app con este correo? */
+export const emailEnUso = internalQuery({
+  args: {
+    email: v.string(),
+    exceptUserId: v.optional(v.id("users")),
+  },
+  handler: async (ctx, args) => {
+    const u = await ctx.db
+      .query("users")
+      .withIndex("by_email", (q) => q.eq("email", args.email))
+      .unique();
+    if (!u) return false;
+    if (args.exceptUserId && u._id === args.exceptUserId) return false;
+    return true;
+  },
+});
+
+export const patchMemberEmail = internalMutation({
+  args: { userId: v.id("users"), email: v.string() },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.userId, {
+      email: args.email,
+      emailVerified: false,
+      updatedAt: Date.now(),
+    });
+  },
+});
+
+/**
+ * Cambia el correo de un miembro (perfil + Better Auth).
+ * Sin esto el login seguiría pidiendo el correo viejo.
+ */
+export const setMemberEmail = action({
+  args: {
+    condominioId: v.id("condominios"),
+    userId: v.id("users"),
+    email: v.string(),
+  },
+  handler: async (ctx, args): Promise<{ ok: true; changed: boolean }> => {
+    const email = args.email.trim().toLowerCase();
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      throw new Error("Correo inválido.");
+    }
+
+    const member = await ctx.runQuery(api.users.assertCanEditMember, {
+      condominioId: args.condominioId,
+      userId: args.userId,
+    });
+
+    const actual = member.email.trim().toLowerCase();
+    if (actual === email) return { ok: true as const, changed: false };
+
+    const ocupado = await ctx.runQuery(internal.users.emailEnUso, {
+      email,
+      exceptUserId: args.userId,
+    });
+    if (ocupado) {
+      throw new Error("Ese correo ya está en uso por otra cuenta.");
+    }
+
+    const auth = createAuth(ctx);
+    const ia = (await auth.$context).internalAdapter;
+
+    const enAuth = await ia.findUserByEmail(email);
+    if (enAuth) {
+      throw new Error("Ese correo ya está en uso por otra cuenta.");
+    }
+
+    const found = await ia.findUserByEmail(actual);
+    if (found) {
+      await ia.updateUser(found.user.id, { email, emailVerified: false });
+    }
+
+    await ctx.runMutation(internal.users.patchMemberEmail, {
+      userId: args.userId,
+      email,
+    });
+
+    return { ok: true as const, changed: true };
+  },
+});
+
 /**
  * Crea (o actualiza) el perfil de app de un admin de plataforma.
  * La credencial se crea en la action `createPlatformAdmin`.
