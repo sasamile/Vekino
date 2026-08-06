@@ -71,7 +71,9 @@ export const contactoBot = query({
  */
 export const registrarEntrante = internalMutation({
   args: {
-    telefono: v.string(), // E.164 con "+"
+    telefono: v.optional(v.string()), // E.164 con "+", si Meta lo manda
+    bsuid: v.optional(v.string()), // identidad estable por negocio
+    username: v.optional(v.string()),
     ycloudMessageId: v.string(),
     tipo: v.string(),
     contenido: v.string(),
@@ -102,23 +104,43 @@ export const registrarEntrante = internalMutation({
     }
 
     const now = Date.now();
-    let conversacion = await ctx.db
-      .query("waConversations")
-      .withIndex("by_telefono", (q) => q.eq("telefono", args.telefono))
-      .first();
+
+    /* El BSUID manda: es la única identidad que Meta garantiza en todos los
+     * mensajes. El teléfono se busca solo como respaldo, y sirve además para
+     * reencontrar la conversación de alguien que activó su @usuario después
+     * de haber escrito antes con el número visible. */
+    let conversacion = args.bsuid
+      ? await ctx.db
+          .query("waConversations")
+          .withIndex("by_bsuid", (q) => q.eq("bsuid", args.bsuid))
+          .first()
+      : null;
+    if (!conversacion && args.telefono) {
+      conversacion = await ctx.db
+        .query("waConversations")
+        .withIndex("by_telefono", (q) => q.eq("telefono", args.telefono))
+        .first();
+    }
 
     let conversacionId: Id<"waConversations">;
     if (conversacion) {
       conversacionId = conversacion._id;
       await ctx.db.patch(conversacionId, {
+        // Se completan sin pisar con undefined lo que ya se sabía.
+        bsuid: args.bsuid ?? conversacion.bsuid,
+        telefono: args.telefono ?? conversacion.telefono,
+        username: args.username ?? conversacion.username,
         ultimoMensajeAt: now,
         ventanaExpiraAt: now + VENTANA_24H,
         nombrePerfil: args.nombrePerfil ?? conversacion.nombrePerfil,
         updatedAt: now,
       });
+      conversacion = await ctx.db.get(conversacionId);
     } else {
       conversacionId = await ctx.db.insert("waConversations", {
         telefono: args.telefono,
+        bsuid: args.bsuid,
+        username: args.username,
         nombrePerfil: args.nombrePerfil,
         paso: "nueva",
         ultimoMensajeAt: now,
@@ -133,19 +155,20 @@ export const registrarEntrante = internalMutation({
     // fue reasignado a otra persona (el admin corrigió teléfonos), el vínculo
     // viejo expondría facturas y unidades del dueño anterior. No es único
     // (parejas comparten número): tomamos el primer usuario ACTIVO.
-    if (conversacion) {
+    // Sin teléfono no hay nada que revalidar: la identidad la sostiene el
+    // BSUID y el vínculo que se haya confirmado antes (flujo de vinculación).
+    if (conversacion && args.telefono) {
+      const telefono = args.telefono;
       const vigente = conversacion.userId
         ? await ctx.db.get(conversacion.userId)
         : null;
       const vinculoValido =
-        vigente != null &&
-        vigente.active &&
-        vigente.telefonoE164 === args.telefono;
+        vigente != null && vigente.active && vigente.telefonoE164 === telefono;
 
       if (!vinculoValido) {
         const candidatos = await ctx.db
           .query("users")
-          .withIndex("by_telefono", (q) => q.eq("telefonoE164", args.telefono))
+          .withIndex("by_telefono", (q) => q.eq("telefonoE164", telefono))
           .collect();
         const usuario = candidatos.find((u) => u.active);
         if (usuario?._id !== conversacion.userId) {
@@ -229,6 +252,33 @@ export const actualizarEstadoMensaje = internalMutation({
     if (mensaje) {
       await ctx.db.patch(mensaje._id, { estado: args.estado, error: args.error });
     }
+    return null;
+  },
+});
+
+/**
+ * Ata esta conversación (y por tanto el BSUID) a un residente, tras haber
+ * verificado el código enviado a su correo. Es la vía para quien activó su
+ * @usuario de WhatsApp y ya no comparte el teléfono con Meta.
+ */
+export const vincularUsuario = internalMutation({
+  args: {
+    conversacionId: v.id("waConversations"),
+    userId: v.id("users"),
+  },
+  handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.userId);
+    if (!user || !user.active) return null;
+
+    await ctx.db.patch(args.conversacionId, {
+      userId: args.userId,
+      // Contexto y condominio se resuelven de cero con la identidad nueva.
+      membershipId: undefined,
+      condominioId: undefined,
+      paso: "menu",
+      contexto: null,
+      updatedAt: Date.now(),
+    });
     return null;
   },
 });
@@ -491,7 +541,14 @@ export const procesarEntrante = internalAction({
       }
     };
 
-    const to = datos.conversacion.telefono;
+    /* A quién se le responde. Con usernames de WhatsApp puede no haber
+     * teléfono; en ese caso se contesta al BSUID, que Meta acepta como
+     * destinatario. `registrarEntrante` garantiza que al menos uno existe. */
+    const destino = datos.conversacion.telefono ?? datos.conversacion.bsuid;
+    if (!destino) return null;
+    // `const` + guardia arriba: el invariante lo garantiza `registrarEntrante`,
+    // que nunca crea una conversación sin al menos una de las dos identidades.
+    const to: string = destino;
     const setConv = (cambios: {
       paso?: string;
       contexto?: unknown;
@@ -503,12 +560,115 @@ export const procesarEntrante = internalAction({
         ...cambios,
       });
 
-    // 1) Número no registrado: mensaje informativo y nada más.
+    // 1) No sabemos quién escribe.
     if (!datos.user) {
+      const pasoActual = datos.conversacion.paso;
+      const contextoVinc = (datos.conversacion.contexto ?? {}) as Record<string, any>;
+
+      const pidioVincular =
+        args.interactiveId === "vincular:iniciar" ||
+        /^vincul/.test(normalizarComando(args.texto ?? ""));
+      if (pidioVincular) {
+        await setConv({ paso: "vincular:documento", contexto: null });
+        await enviar(
+          msgTexto(
+            to,
+            "🔗 Para reconocerte, escríbeme tu *número de documento* (el mismo que tiene registrado la administración).",
+          ),
+        );
+        return null;
+      }
+
+      // Paso 2 del alta: contrastar el código que le llegó al correo.
+      if (pasoActual === "vincular:codigo" && contextoVinc.vinculacion) {
+        const vinc = contextoVinc.vinculacion;
+        const tecleado = (args.texto ?? "").replace(/\D/g, "");
+
+        if (Date.now() > (vinc.expiraAt ?? 0)) {
+          await enviar(
+            msgTexto(to, "⌛ Ese código venció. Escribe *vincular* para empezar de nuevo."),
+          );
+          await setConv({ paso: "nueva", contexto: null });
+          return null;
+        }
+        if ((vinc.intentos ?? 0) >= 3) {
+          await enviar(
+            msgTexto(to, "🚫 Demasiados intentos. Escribe *vincular* para empezar de nuevo."),
+          );
+          await setConv({ paso: "nueva", contexto: null });
+          return null;
+        }
+        if (!tecleado || tecleado !== vinc.codigo) {
+          await setConv({
+            paso: "vincular:codigo",
+            contexto: {
+              vinculacion: { ...vinc, intentos: (vinc.intentos ?? 0) + 1 },
+            },
+          });
+          await enviar(
+            msgTexto(to, "El código no coincide 🤔. Revísalo en tu correo y escríbelo de nuevo."),
+          );
+          return null;
+        }
+
+        // Correcto: el BSUID queda atado a esa persona de forma permanente.
+        await ctx.runMutation(internal.whatsapp.vincularUsuario, {
+          conversacionId: args.conversacionId,
+          userId: vinc.userId as Id<"users">,
+        });
+        await enviar(
+          msgTexto(to, "✅ ¡Listo! Tu WhatsApp quedó vinculado. Escribe *menú* para empezar."),
+        );
+        return null;
+      }
+
+      // Paso 1 del alta: pedir el documento.
+      if (pasoActual === "vincular:documento") {
+        const doc = (args.texto ?? "").replace(/\D/g, "");
+        if (doc.length < 5) {
+          await enviar(
+            msgTexto(to, "Escríbeme solo tu número de documento, sin puntos ni espacios."),
+          );
+          return null;
+        }
+        const res: { ok: boolean; motivo?: string; nombre?: string; emailOculto?: string } =
+          await ctx.runAction(internal.whatsappVinculacion.enviarCodigo, {
+            conversacionId: args.conversacionId,
+            documento: doc,
+          });
+        if (!res.ok) {
+          await enviar(msgTexto(to, `😕 ${res.motivo}`));
+          await setConv({ paso: "nueva", contexto: null });
+          return null;
+        }
+        await enviar(
+          msgTexto(
+            to,
+            `Perfecto, ${res.nombre?.split(" ")[0] ?? ""} 👍\n\nTe envié un código de 6 dígitos a *${res.emailOculto}*.\n\nEscríbelo aquí para confirmar que eres tú.`,
+          ),
+        );
+        return null;
+      }
+
+      // Sin teléfono (activó su @usuario de WhatsApp): se ofrece vincular.
+      if (!datos.conversacion.telefono) {
+        await enviar(
+          msgBotones(
+            to,
+            "👋 Hola. Este es el canal de *Vekino*.\n\nComo tienes activado tu usuario de WhatsApp, no puedo ver tu número para reconocerte. Puedo vincular tu cuenta en un minuto: verifico tu documento y te envío un código a tu correo.",
+            [
+              { id: "vincular:iniciar", title: "🔗 Vincular mi cuenta" },
+            ],
+          ),
+        );
+        return null;
+      }
+
+      // Con teléfono visible pero sin registrar: lo resuelve la administración.
       await enviar(
         msgTexto(
           to,
-          "👋 Hola. Este es el canal de *Vekino*.\n\nNo encontramos tu número en la plataforma. Pídele a la administración de tu conjunto que registre o actualice tu teléfono, y con gusto te atiendo por aquí.",
+          "👋 Hola. Este es el canal de *Vekino*.\n\nNo encontramos tu número en la plataforma. Pídele a la administración de tu conjunto que registre o actualice tu teléfono, y con gusto te atiendo por aquí.\n\nSi prefieres, escribe *vincular* y lo hacemos con tu documento.",
         ),
       );
       return null;

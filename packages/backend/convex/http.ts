@@ -206,10 +206,21 @@ http.route({
     if (tipoEvento === "whatsapp.inbound_message.received") {
       // Forma actual (whatsappInboundMessage) y forma vieja (data.object).
       const msg = payload.whatsappInboundMessage ?? payload.data?.object;
-      if (!msg?.id || !msg?.from) return Response.json({ ok: true });
+      if (!msg?.id) return Response.json({ ok: true });
 
-      const telefono = normalizarTelefonoE164(String(msg.from));
-      if (!telefono) return Response.json({ ok: true });
+      /* Usernames de WhatsApp (Meta, 2026): si el usuario activó su @usuario,
+       * `from` deja de traer el teléfono y puede venir el BSUID. YCloud manda
+       * el BSUID aparte en `fromUserId` ("US.1349…"), que llega SIEMPRE y es
+       * estable por negocio: esa es la identidad de la conversación. El
+       * teléfono pasa a ser un dato opcional que a veces acompaña. */
+      const bsuid =
+        typeof msg.fromUserId === "string" ? msg.fromUserId : undefined;
+      const telefono = msg.from
+        ? (normalizarTelefonoE164(String(msg.from)) ?? undefined)
+        : undefined;
+
+      // Sin ninguna de las dos identidades no hay a quién responderle.
+      if (!bsuid && !telefono) return Response.json({ ok: true });
 
       const tipoMsg = String(msg.type ?? "text");
       let texto: string | undefined;
@@ -247,6 +258,11 @@ http.route({
       // mutation: o queda todo, o YCloud reintenta.
       await ctx.runMutation(internal.whatsapp.registrarEntrante, {
         telefono,
+        bsuid,
+        username:
+          typeof msg.customerProfile?.username === "string"
+            ? msg.customerProfile.username
+            : undefined,
         ycloudMessageId: String(msg.id),
         tipo: tipoMsg,
         contenido: contenido.slice(0, 4000),

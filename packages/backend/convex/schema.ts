@@ -1643,7 +1643,20 @@ export default defineSchema({
    * el tenant activo se resuelve por el usuario y se fija aquí).
    */
   waConversations: defineTable({
-    telefono: v.string(), // E.164 con "+"
+    /**
+     * E.164 con "+". OPCIONAL desde los usernames de WhatsApp: si el usuario
+     * activó su @usuario, Meta deja de mandar el teléfono y solo llega el
+     * BSUID (salvo interacción en los últimos 30 días).
+     */
+    telefono: v.optional(v.string()),
+    /**
+     * Business-Scoped User ID de Meta (`fromUserId`, formato "US.1349...").
+     * Es estable por negocio y SIEMPRE viene, con o sin username: es la
+     * identidad primaria de la conversación.
+     */
+    bsuid: v.optional(v.string()),
+    /** @usuario de WhatsApp, si lo tiene. Solo para mostrar. */
+    username: v.optional(v.string()),
     userId: v.optional(v.id("users")),
     nombrePerfil: v.optional(v.string()), // customerProfile.name de WhatsApp
     condominioId: v.optional(v.id("condominios")),
@@ -1661,11 +1674,12 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_telefono", ["telefono"])
+    .index("by_bsuid", ["bsuid"])
     .index("by_user", ["userId"]),
 
   waMessages: defineTable({
     conversacionId: v.id("waConversations"),
-    telefono: v.string(),
+    telefono: v.optional(v.string()),
     direccion: v.union(v.literal("entrante"), v.literal("saliente")),
     tipo: v.string(), // text | image | document | interactive | template | ...
     contenido: v.string(),

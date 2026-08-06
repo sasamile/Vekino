@@ -72,6 +72,7 @@ import type * as whatsapp from "../whatsapp.js";
 import type * as whatsappBroadcast from "../whatsappBroadcast.js";
 import type * as whatsappNotifs from "../whatsappNotifs.js";
 import type * as whatsappTemplates from "../whatsappTemplates.js";
+import type * as whatsappVinculacion from "../whatsappVinculacion.js";
 
 import type {
   ApiFromModules,
@@ -144,6 +145,7 @@ declare const fullApi: ApiFromModules<{
   whatsappBroadcast: typeof whatsappBroadcast;
   whatsappNotifs: typeof whatsappNotifs;
   whatsappTemplates: typeof whatsappTemplates;
+  whatsappVinculacion: typeof whatsappVinculacion;
 }>;
 
 /**
