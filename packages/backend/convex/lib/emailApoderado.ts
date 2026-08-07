@@ -165,3 +165,41 @@ function esc(s: string) {
 function escAttr(s: string) {
   return esc(s).replace(/'/g, "&#39;");
 }
+
+/** Correo de un mensaje libre de la administración a los residentes. */
+export function htmlMensajeLibre(a: {
+  nombre: string;
+  condominioNombre: string;
+  mensaje: string;
+}): string {
+  // El mensaje lo escribe la administración en un textarea: se escapa y los
+  // saltos de línea se vuelven <br> para que llegue tal como lo redactaron.
+  const cuerpo = esc(a.mensaje).replace(/\n/g, "<br>");
+  return `<!doctype html>
+<html lang="es">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light">
+<title>Mensaje de ${esc(a.condominioNombre)}</title></head>
+<body style="margin:0;padding:0;background:#f3f5f7;font-family:Arial,Helvetica,sans-serif;color:#14213d;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background:#f3f5f7;">
+    <tr><td align="center" style="padding:24px 12px;">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"
+             style="width:100%;max-width:640px;background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 4px 18px rgba(12,31,72,.08);">
+        <tr><td style="height:6px;background:#ff4f0a;font-size:0;line-height:0;">&nbsp;</td></tr>
+        <tr><td style="padding:30px 34px 8px;">
+          <p style="margin:0 0 6px;color:#ff4f0a;font-size:13px;line-height:20px;font-weight:bold;letter-spacing:.8px;text-transform:uppercase;">Administración</p>
+          <h1 style="margin:0;color:#0b235a;font-size:24px;line-height:32px;font-weight:700;">${esc(a.condominioNombre)}</h1>
+        </td></tr>
+        <tr><td style="padding:14px 34px 26px;">
+          <p style="margin:0 0 16px;font-size:17px;line-height:26px;color:#202b46;">Hola, <strong>${esc(a.nombre)}</strong>:</p>
+          <div style="font-size:16px;line-height:26px;color:#3b4356;">${cuerpo}</div>
+        </td></tr>
+        <tr><td style="padding:20px 28px;background:#0b235a;text-align:center;">
+          <p style="margin:0 0 6px;color:#fff;font-size:15px;line-height:22px;font-weight:bold;">Vekino · Gestión residencial en un solo lugar</p>
+          <p style="margin:0;color:#dbe3f3;font-size:12px;line-height:19px;">Mensaje enviado por la Administración de ${esc(a.condominioNombre)}.</p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`;
+}

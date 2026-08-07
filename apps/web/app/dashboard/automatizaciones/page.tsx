@@ -7,8 +7,10 @@ import {
   CalendarClock,
   Check,
   FlaskConical,
+  Link2,
   Loader2,
   Mail,
+  Megaphone,
   MessageCircle,
   Plus,
   Send,
@@ -25,7 +27,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
-import { Input, Select } from "@/components/ui/input";
+import { Input, Select, Textarea } from "@/components/ui/input";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
@@ -36,6 +38,8 @@ import { cn } from "@/lib/utils";
 /* -------------------------------------------------------------------------- */
 
 type Canal = "correo" | "whatsapp" | "ambos";
+/** Qué se manda: un mensaje libre, o el enlace de ingreso a una asamblea. */
+type TipoEnvio = "mensaje_residentes" | "apoderados_asamblea";
 type EstadoEnvio =
   | "programado"
   | "enviando"
@@ -48,9 +52,12 @@ type AutomatizacionRow = {
   _id: Id<"enviosProgramados">;
   condominioId: Id<"condominios">;
   condominioNombre: string;
-  tipo: "apoderados_asamblea";
+  tipo: TipoEnvio;
   asambleaId: Id<"asambleas"> | null;
   asambleaTitulo: string | null;
+  asunto: string | null;
+  mensaje: string | null;
+  audiencia: string | null;
   canal: Canal;
   programadoPara: number;
   estado: EstadoEnvio;
@@ -106,6 +113,51 @@ const ESTADO_META: Record<
   fallido: { label: "Fallido", tone: "destructive" },
 };
 
+const TIPO_META: Record<
+  TipoEnvio,
+  { label: string; icon: LucideIcon; descripcion: string }
+> = {
+  mensaje_residentes: {
+    label: "Mensaje a residentes",
+    icon: Megaphone,
+    descripcion: "Un mensaje libre a los residentes del condominio.",
+  },
+  apoderados_asamblea: {
+    label: "Enlace de asamblea",
+    icon: Link2,
+    descripcion:
+      "El enlace de ingreso, al propietario, para que se lo comparta a su apoderado.",
+  },
+};
+
+/** Orden de las tarjetas del selector: primero el caso más común. */
+const TIPO_OPCIONES: TipoEnvio[] = ["mensaje_residentes", "apoderados_asamblea"];
+
+/** Valores que acepta `audiencia` en el backend (roles de membresía). */
+const AUDIENCIA_OPCIONES: { value: string; label: string }[] = [
+  { value: "todos", label: "Todos" },
+  { value: "propietario", label: "Propietarios" },
+  { value: "arrendatario", label: "Arrendatarios" },
+  { value: "residente", label: "Residentes" },
+  { value: "junta_directiva", label: "Junta directiva" },
+  { value: "guardia", label: "Guardias" },
+];
+
+function audienciaLabel(valor: string | null) {
+  return (
+    AUDIENCIA_OPCIONES.find((a) => a.value === (valor ?? "todos"))?.label ??
+    valor ??
+    "Todos"
+  );
+}
+
+/** Primeras ~100 letras del mensaje, para la tarjeta del listado. */
+function resumenMensaje(texto: string | null) {
+  const limpio = (texto ?? "").replace(/\s+/g, " ").trim();
+  if (!limpio) return "Mensaje sin texto";
+  return limpio.length > 100 ? `${limpio.slice(0, 100)}…` : limpio;
+}
+
 const CANAL_META: Record<Canal, { label: string; icon: LucideIcon }> = {
   correo: { label: "Correo", icon: Mail },
   whatsapp: { label: "WhatsApp", icon: MessageCircle },
@@ -125,13 +177,13 @@ const CANAL_OPCIONES: {
     value: "correo",
     label: "Correo",
     icon: Mail,
-    descripcion: "Se envía al correo registrado de cada apoderado.",
+    descripcion: "Se envía al correo registrado de cada destinatario.",
   },
   {
     value: "whatsapp",
     label: "WhatsApp",
     icon: MessageCircle,
-    descripcion: "Se envía al teléfono registrado de cada apoderado.",
+    descripcion: "Se envía al teléfono registrado de cada destinatario.",
     nota: NOTA_WHATSAPP,
   },
   {
@@ -265,7 +317,7 @@ export default function AutomatizacionesPage() {
       <div className="space-y-6">
         <PageHeader
           title="Automatizaciones"
-          description="Programa envíos a los apoderados de una asamblea con fecha y hora exactas."
+          description="Programa envíos a los residentes con fecha y hora exactas."
           action={
             <Button variant="brand" onClick={() => setShowProgramar(true)}>
               <Plus className="h-3.75 w-3.75" aria-hidden />
@@ -316,7 +368,7 @@ export default function AutomatizacionesPage() {
             }
             description={
               filtro === "todos"
-                ? "Programa el primer envío a los apoderados de una asamblea y aparecerá aquí."
+                ? "Programa el primer envío a los residentes y aparecerá aquí."
                 : "Cambia el filtro para ver los demás envíos."
             }
             action={
@@ -378,6 +430,9 @@ function EnvioCard({
   const estado = ESTADO_META[envio.estado];
   const canal = CANAL_META[envio.canal];
   const CanalIcon = canal.icon;
+  const tipo = TIPO_META[envio.tipo];
+  const TipoIcon = tipo.icon;
+  const esMensaje = envio.tipo === "mensaje_residentes";
 
   const procesados = envio.enviados + envio.fallidos + envio.sinContacto;
   const yaCorrio =
@@ -416,18 +471,35 @@ function EnvioCard({
               {estado.label}
             </Badge>
             <Badge tone="neutral">
+              <TipoIcon className="h-3 w-3" aria-hidden />
+              {tipo.label}
+            </Badge>
+            <Badge tone="neutral">
               <CanalIcon className="h-3 w-3" aria-hidden />
               {canal.label}
             </Badge>
           </div>
 
-          <p className="text-sm text-foreground/90">
-            {envio.asambleaTitulo ?? "Asamblea sin título"}
-            <span className="text-muted-foreground">
-              {" "}
-              · Enlace de apoderados
-            </span>
-          </p>
+          {esMensaje ? (
+            <p className="text-sm text-foreground/90">
+              {envio.asunto ? (
+                <span className="font-medium">{envio.asunto} · </span>
+              ) : null}
+              {resumenMensaje(envio.mensaje)}
+              <span className="text-muted-foreground">
+                {" "}
+                · Para {audienciaLabel(envio.audiencia).toLowerCase()}
+              </span>
+            </p>
+          ) : (
+            <p className="text-sm text-foreground/90">
+              {envio.asambleaTitulo ?? "Asamblea sin título"}
+              <span className="text-muted-foreground">
+                {" "}
+                · Enlace de apoderados
+              </span>
+            </p>
+          )}
 
           <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
             <CalendarClock className="h-3.5 w-3.5 shrink-0" aria-hidden />
@@ -528,7 +600,11 @@ function ProgramarDialog({ onClose }: { onClose: () => void }) {
   // Los `<select>` manejan strings; el API exige ids tipados de Convex, así
   // que el estado se declara ya con la marca y arranca vacío.
   const [condominioId, setCondominioId] = useState<Id<"condominios"> | "">("");
+  const [tipo, setTipo] = useState<TipoEnvio>("mensaje_residentes");
   const [asambleaId, setAsambleaId] = useState<Id<"asambleas"> | "">("");
+  const [audiencia, setAudiencia] = useState("todos");
+  const [asunto, setAsunto] = useState("");
+  const [mensaje, setMensaje] = useState("");
   const [canal, setCanal] = useState<Canal>("correo");
   const [cuando, setCuando] = useState(() =>
     aDatetimeLocal(new Date(Date.now() + 60 * 60 * 1000)),
@@ -547,6 +623,8 @@ function ProgramarDialog({ onClose }: { onClose: () => void }) {
     null,
   );
 
+  const esMensaje = tipo === "mensaje_residentes";
+
   const condo = condos?.find((c) => c.condominioId === condominioId) ?? null;
   const asamblea =
     condo?.asambleas.find((a) => a.asambleaId === asambleaId) ?? null;
@@ -556,11 +634,22 @@ function ProgramarDialog({ onClose }: { onClose: () => void }) {
 
   const cargando = condos === undefined;
   const sinCondominios = condos != null && condos.length === 0;
-  const listo = Boolean(condominioId && asambleaId) && !busy;
+  const listo =
+    Boolean(condominioId) &&
+    (esMensaje ? mensaje.trim().length > 0 : Boolean(asambleaId)) &&
+    !busy;
 
   async function enviar(programadoPara: number) {
-    if (!condominioId || !asambleaId) {
-      setError("Selecciona un condominio y una asamblea.");
+    if (!condominioId) {
+      setError("Selecciona un condominio.");
+      return;
+    }
+    if (esMensaje && !mensaje.trim()) {
+      setError("Escribe el mensaje que quieres enviar.");
+      return;
+    }
+    if (!esMensaje && !asambleaId) {
+      setError("Selecciona una asamblea.");
       return;
     }
     setBusy(true);
@@ -568,8 +657,11 @@ function ProgramarDialog({ onClose }: { onClose: () => void }) {
     try {
       await programar({
         condominioId,
-        tipo: "apoderados_asamblea",
-        asambleaId,
+        tipo,
+        asambleaId: esMensaje ? undefined : (asambleaId as Id<"asambleas">),
+        asunto: esMensaje ? asunto.trim() || undefined : undefined,
+        mensaje: esMensaje ? mensaje.trim() : undefined,
+        audiencia: esMensaje ? audiencia : undefined,
         canal,
         programadoPara,
       });
@@ -631,14 +723,19 @@ function ProgramarDialog({ onClose }: { onClose: () => void }) {
     }
   }
 
-  const pruebaLista = Boolean(condominioId && asambleaId) && !pruebaBusy;
+  const pruebaLista =
+    !esMensaje && Boolean(condominioId && asambleaId) && !pruebaBusy;
 
   return (
     <Modal
       open
       onClose={onClose}
       title="Programar envío"
-      description="Manda el enlace de la asamblea a los apoderados registrados."
+      description={
+        esMensaje
+          ? "Manda un mensaje de la administración a los residentes del condominio."
+          : "Manda el enlace de la asamblea a los apoderados registrados."
+      }
       className="max-w-lg"
       footer={
         <>
@@ -675,6 +772,53 @@ function ProgramarDialog({ onClose }: { onClose: () => void }) {
         </p>
       ) : (
         <div className="space-y-4">
+          <div>
+            <p className="mb-2 text-xs font-medium text-foreground">
+              Tipo de envío
+            </p>
+            <div className="space-y-2">
+              {TIPO_OPCIONES.map((valor) => {
+                const meta = TIPO_META[valor];
+                const Icon = meta.icon;
+                const checked = tipo === valor;
+                return (
+                  <label
+                    key={valor}
+                    className={cn(
+                      "flex cursor-pointer items-start gap-3 rounded-xl border px-3.5 py-2.5 transition-colors",
+                      checked
+                        ? "border-brand bg-brand/5"
+                        : "border-border hover:bg-accent",
+                      busy && "cursor-not-allowed opacity-60",
+                    )}
+                  >
+                    <input
+                      type="radio"
+                      name="tipo-automatizacion"
+                      checked={checked}
+                      disabled={busy}
+                      onChange={() => {
+                        setTipo(valor);
+                        setError(null);
+                        setPruebaError(null);
+                      }}
+                      className="mt-0.5 h-4 w-4 shrink-0 border-border accent-[var(--color-brand)]"
+                    />
+                    <span className="min-w-0">
+                      <span className="flex items-center gap-1.5 text-sm font-medium text-foreground">
+                        <Icon className="h-3.5 w-3.5" aria-hidden />
+                        {meta.label}
+                      </span>
+                      <span className="mt-0.5 block text-xs leading-relaxed text-muted-foreground">
+                        {meta.descripcion}
+                      </span>
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+
           <div className="space-y-1.5">
             <label
               htmlFor="auto-condominio"
@@ -682,6 +826,10 @@ function ProgramarDialog({ onClose }: { onClose: () => void }) {
             >
               Condominio
             </label>
+            {/* TODO: `condominiosConAsambleas` solo devuelve condominios con
+                asambleas abiertas. Para «Mensaje a residentes» convendría una
+                query con todos los condominios activos; mientras tanto se usa
+                la lista que ya existe. */}
             <Select
               id="auto-condominio"
               value={condominioId}
@@ -701,43 +849,123 @@ function ProgramarDialog({ onClose }: { onClose: () => void }) {
             </Select>
           </div>
 
-          <div className="space-y-1.5">
-            <label
-              htmlFor="auto-asamblea"
-              className="block text-xs font-medium text-foreground"
-            >
-              Asamblea
-            </label>
-            <Select
-              id="auto-asamblea"
-              value={asambleaId}
-              disabled={busy || !condo}
-              onChange={(e) => {
-                setAsambleaId(e.target.value as Id<"asambleas"> | "");
-                setError(null);
-              }}
-            >
-              <option value="">
-                {condo
-                  ? "Selecciona una asamblea…"
-                  : "Primero elige el condominio"}
-              </option>
-              {(condo?.asambleas ?? []).map((a) => (
-                <option key={a.asambleaId} value={a.asambleaId}>
-                  {a.titulo} · {a.fecha} {a.hora} · {a.apoderados} apoderado
-                  {a.apoderados === 1 ? "" : "s"} ({a.apoderadosConContacto} con
-                  contacto)
-                </option>
-              ))}
-            </Select>
-            {condo && condo.asambleas.length === 0 && (
-              <p className="text-xs text-muted-foreground">
-                Este condominio no tiene asambleas con apoderados registrados.
-              </p>
-            )}
-          </div>
+          {esMensaje && (
+            <>
+              <div className="space-y-1.5">
+                <label
+                  htmlFor="auto-audiencia"
+                  className="block text-xs font-medium text-foreground"
+                >
+                  Audiencia
+                </label>
+                <Select
+                  id="auto-audiencia"
+                  value={audiencia}
+                  disabled={busy}
+                  onChange={(e) => {
+                    setAudiencia(e.target.value);
+                    setError(null);
+                  }}
+                >
+                  {AUDIENCIA_OPCIONES.map((a) => (
+                    <option key={a.value} value={a.value}>
+                      {a.label}
+                    </option>
+                  ))}
+                </Select>
+                <p className="text-[11px] text-muted-foreground">
+                  Se manda a las personas activas del condominio con ese rol.
+                </p>
+              </div>
 
-          {asamblea && (
+              <div className="space-y-1.5">
+                <label
+                  htmlFor="auto-asunto"
+                  className="block text-xs font-medium text-foreground"
+                >
+                  Asunto del correo{" "}
+                  <span className="font-normal text-muted-foreground">
+                    (opcional)
+                  </span>
+                </label>
+                <Input
+                  id="auto-asunto"
+                  type="text"
+                  value={asunto}
+                  placeholder="Mensaje de la administración"
+                  disabled={busy}
+                  onChange={(e) => {
+                    setAsunto(e.target.value);
+                    setError(null);
+                  }}
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label
+                  htmlFor="auto-mensaje"
+                  className="block text-xs font-medium text-foreground"
+                >
+                  Mensaje
+                </label>
+                <Textarea
+                  id="auto-mensaje"
+                  rows={5}
+                  value={mensaje}
+                  maxLength={MENSAJE_MAX}
+                  placeholder="Escribe aquí el mensaje que van a recibir los residentes…"
+                  disabled={busy}
+                  onChange={(e) => {
+                    setMensaje(e.target.value.slice(0, MENSAJE_MAX));
+                    setError(null);
+                  }}
+                />
+                <p className="text-right text-[11px] tabular-nums text-muted-foreground">
+                  {mensaje.length}/{MENSAJE_MAX}
+                </p>
+              </div>
+            </>
+          )}
+
+          {!esMensaje && (
+            <div className="space-y-1.5">
+              <label
+                htmlFor="auto-asamblea"
+                className="block text-xs font-medium text-foreground"
+              >
+                Asamblea
+              </label>
+              <Select
+                id="auto-asamblea"
+                value={asambleaId}
+                disabled={busy || !condo}
+                onChange={(e) => {
+                  setAsambleaId(e.target.value as Id<"asambleas"> | "");
+                  setError(null);
+                }}
+              >
+                <option value="">
+                  {condo
+                    ? "Selecciona una asamblea…"
+                    : "Primero elige el condominio"}
+                </option>
+                {(condo?.asambleas ?? []).map((a) => (
+                  <option key={a.asambleaId} value={a.asambleaId}>
+                    {a.titulo} · {a.fecha} {a.hora} · {a.apoderados} apoderado
+                    {a.apoderados === 1 ? "" : "s"} ({a.apoderadosConContacto}{" "}
+                    con contacto)
+                  </option>
+                ))}
+              </Select>
+              {condo && condo.asambleas.length === 0 && (
+                <p className="text-xs text-muted-foreground">
+                  Este condominio no tiene asambleas con apoderados registrados.
+                </p>
+              )}
+            </div>
+          )}
+
+          {!esMensaje && asamblea && (
             <div className="rounded-xl border border-border bg-muted/40 px-3.5 py-3">
               <p className="text-sm font-medium text-foreground">
                 {asamblea.titulo}

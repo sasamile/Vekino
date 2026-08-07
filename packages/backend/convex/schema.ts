@@ -1597,8 +1597,18 @@ export default defineSchema({
    */
   enviosProgramados: defineTable({
     condominioId: v.id("condominios"),
-    tipo: v.literal("apoderados_asamblea"),
+    tipo: v.union(
+      /** Enlace de la asamblea al propietario, para que se lo pase a su apoderado. */
+      v.literal("apoderados_asamblea"),
+      /** Mensaje libre a los residentes del condominio. */
+      v.literal("mensaje_residentes"),
+    ),
     asambleaId: v.optional(v.id("asambleas")),
+    /** Solo en `mensaje_residentes`. */
+    asunto: v.optional(v.string()),
+    mensaje: v.optional(v.string()),
+    /** A quién va: rol operativo, o "todos". */
+    audiencia: v.optional(v.string()),
     canal: v.union(
       v.literal("correo"),
       v.literal("whatsapp"),

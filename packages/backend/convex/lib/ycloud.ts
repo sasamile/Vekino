@@ -136,6 +136,48 @@ export function msgLista(
   };
 }
 
+/**
+ * Plantilla con parámetros de cuerpo y, si la plantilla tiene botón de URL
+ * dinámica, el sufijo que lo completa.
+ *
+ * OJO: los `components` van DENTRO de `template`, no en la raíz del mensaje.
+ * Ponerlos arriba hace que Meta no los vea y responda
+ * "(#131008) Required parameter is missing".
+ */
+export function msgPlantillaConBoton(
+  to: string,
+  nombre: string,
+  codigoIdioma: string,
+  parametrosBody: string[],
+  sufijoUrl?: string,
+) {
+  const components: Array<Record<string, unknown>> = [];
+  if (parametrosBody.length > 0) {
+    components.push({
+      type: "body",
+      parameters: parametrosBody.map((t) => ({ type: "text", text: t })),
+    });
+  }
+  if (sufijoUrl) {
+    components.push({
+      type: "button",
+      sub_type: "url",
+      index: "0",
+      parameters: [{ type: "text", text: sufijoUrl }],
+    });
+  }
+
+  return {
+    to,
+    type: "template",
+    template: {
+      name: nombre,
+      language: { code: codigoIdioma, policy: "deterministic" },
+      ...(components.length > 0 ? { components } : {}),
+    },
+  };
+}
+
 /** Plantilla pre-aprobada (obligatoria fuera de la ventana de 24 h). */
 export function msgPlantilla(
   to: string,
