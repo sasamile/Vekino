@@ -130,6 +130,24 @@ async function resolverHablante(
     return { codigoInvitado, nombre: sesion.nombre };
   }
 
+  if (id.startsWith("pod:")) {
+    const codigoPoder = id.slice(4).toUpperCase();
+    const presencia = await ctx.db
+      .query("salaPresencias")
+      .withIndex("by_asamblea_codigo", (q) =>
+        q.eq("asambleaId", asambleaId).eq("codigoPoder", codigoPoder),
+      )
+      .first();
+    if (presencia) return { nombre: presencia.nombre };
+
+    const poder = await ctx.db
+      .query("poderesAsamblea")
+      .withIndex("by_codigo", (q) => q.eq("codigoAcceso", codigoPoder))
+      .first();
+    if (!poder || poder.asambleaId !== asambleaId) return null;
+    return { nombre: poder.representanteNombre };
+  }
+
   const userId = ctx.db.normalizeId("users", id);
   if (!userId) return null;
   const user = await ctx.db.get(userId);

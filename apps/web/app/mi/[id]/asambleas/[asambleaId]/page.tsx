@@ -463,10 +463,10 @@ function mensajePoderWhatsApp(opts: {
   const unidades = opts.unidadesLabel ? `\nUnidad(es): ${opts.unidadesLabel}` : "";
   return (
     `Hola ${opts.nombre},\n\n` +
-    `Te otorgué poder para votar en la asamblea "${opts.asambleaTitulo}".${unidades}\n\n` +
-    `Código: ${opts.codigo}\n` +
-    `Enlace: ${link}\n\n` +
-    `Abre el enlace e ingresa con ese código. ¡Gracias!`
+    `Te otorgué poder para representarme en la asamblea "${opts.asambleaTitulo}".${unidades}\n\n` +
+    `El día de la asamblea, abre este enlace para entrar a la sala:\n${link}\n\n` +
+    `Código: ${opts.codigo}\n\n` +
+    `¡Gracias!`
   );
 }
 
@@ -484,11 +484,14 @@ function PoderCompartir({
   nombre,
   asambleaTitulo,
   unidadesLabel,
+  mostrarInstruccion = true,
 }: {
   codigo: string;
   nombre: string;
   asambleaTitulo: string;
   unidadesLabel?: string;
+  /** Si ya se explicó arriba (p. ej. al crear el poder), omitir el texto. */
+  mostrarInstruccion?: boolean;
 }) {
   const [tel, setTel] = useState("");
   const [feedback, setFeedback] = useState<string | null>(null);
@@ -526,20 +529,27 @@ function PoderCompartir({
 
   return (
     <div className="mt-3 space-y-2.5 text-left">
+      {mostrarInstruccion ? (
+        <p className="text-center text-sm text-foreground">
+          Comparte este enlace con{" "}
+          <span className="font-semibold">{nombre}</span> para que pueda entrar
+          a la sala el día de la asamblea.
+        </p>
+      ) : null}
       <div className="flex flex-wrap justify-center gap-2">
-        <button
-          type="button"
-          onClick={() => void copiar(codigo, "Código copiado")}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-sm font-medium text-foreground hover:bg-accent"
-        >
-          <Copy className="h-4 w-4" /> Copiar código
-        </button>
         <button
           type="button"
           onClick={() => void copiar(link, "Enlace copiado")}
           className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-sm font-medium text-foreground hover:bg-accent"
         >
           <Copy className="h-4 w-4" /> Copiar enlace
+        </button>
+        <button
+          type="button"
+          onClick={() => void copiar(codigo, "Código copiado")}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-sm font-medium text-foreground hover:bg-accent"
+        >
+          <Copy className="h-4 w-4" /> Copiar código
         </button>
         <button
           type="button"
@@ -552,13 +562,13 @@ function PoderCompartir({
 
       <div className="rounded-lg border border-border bg-card/80 p-3">
         <p className="mb-2 text-xs font-medium text-muted-foreground">
-          Enviar por WhatsApp
+          Enviárselo por WhatsApp
         </p>
         <div className="flex flex-col gap-2 sm:flex-row">
           <input
             value={tel}
             onChange={(e) => setTel(e.target.value)}
-            placeholder="Celular (opcional) ej. 3001234567"
+            placeholder="Celular de tu apoderado (opcional)"
             inputMode="tel"
             className={cn(inputCls, "sm:flex-1")}
           />
@@ -572,8 +582,8 @@ function PoderCompartir({
           </button>
         </div>
         <p className="mt-1.5 text-[11px] text-muted-foreground">
-          Si dejas el número vacío, WhatsApp te deja elegir el contacto. El
-          mensaje incluye el código y el enlace.
+          El mensaje incluye el enlace y el código. Si dejas el número vacío,
+          WhatsApp te deja elegir el contacto.
         </p>
       </div>
 
@@ -745,17 +755,26 @@ function PoderesSection({
 
       {nuevo && (
         <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-4 text-center">
-          <p className="text-sm text-muted-foreground">
-            {nuevo.esPropietario ? "Enlazado con" : "Código para"}{" "}
-            <b className="text-foreground">{nuevo.nombre}</b>
+          <p className="text-sm font-semibold text-foreground">
+            {nuevo.esPropietario
+              ? `Poder enlazado con ${nuevo.nombre}`
+              : `Poder listo para ${nuevo.nombre}`}
             {nuevo.unidades > 1 ? (
-              <> · <b className="text-foreground">{nuevo.unidades} unidades</b></>
+              <span className="font-normal text-muted-foreground">
+                {" "}
+                · {nuevo.unidades} unidades
+              </span>
             ) : null}
           </p>
-          {nuevo.esPropietario && (
-            <p className="mt-2 text-sm text-foreground">
+          {nuevo.esPropietario ? (
+            <p className="mt-2 text-sm text-muted-foreground">
               Es propietario del conjunto: verá tus unidades en su cuenta y su
               voto contará por todas. También puede usar este código:
+            </p>
+          ) : (
+            <p className="mt-2 text-sm text-muted-foreground">
+              Compártele este enlace a tu apoderado para que pueda entrar a la
+              sala el día de la asamblea.
             </p>
           )}
           <p className="my-2 select-all font-mono text-3xl font-bold tracking-[0.3em] text-emerald-700 dark:text-emerald-400">
@@ -765,6 +784,7 @@ function PoderesSection({
             codigo={nuevo.codigo}
             nombre={nuevo.nombre}
             asambleaTitulo={asambleaTitulo}
+            mostrarInstruccion={false}
           />
         </div>
       )}

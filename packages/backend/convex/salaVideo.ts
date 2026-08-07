@@ -85,7 +85,12 @@ async function requireAccesoSala(
   const user = await getCurrentAppUser(ctx);
   if (user) {
     await requireCondominioRole(ctx, asamblea.condominioId, []);
-    return { asamblea, user, codigoInvitado: null as string | null };
+    return {
+      asamblea,
+      user,
+      codigoInvitado: null as string | null,
+      codigoPoder: null as string | null,
+    };
   }
 
   const inv = codigoInvitado?.trim().toUpperCase() ?? "";
@@ -97,7 +102,12 @@ async function requireAccesoSala(
     if (sesion && sesion.asambleaId === asambleaId) {
       const enlace = asamblea.codigoInvitado?.trim().toUpperCase();
       if (enlace && enlace === sesion.codigoEnlace) {
-        return { asamblea, user: null, codigoInvitado: inv };
+        return {
+          asamblea,
+          user: null,
+          codigoInvitado: inv,
+          codigoPoder: null as string | null,
+        };
       }
     }
   }
@@ -109,10 +119,20 @@ async function requireAccesoSala(
       .withIndex("by_codigo", (q) => q.eq("codigoAcceso", codigo))
       .first();
     if (poder && poder.asambleaId === asambleaId) {
-      return { asamblea, user: null, codigoInvitado: null as string | null };
+      return {
+        asamblea,
+        user: null,
+        codigoInvitado: null as string | null,
+        codigoPoder: codigo,
+      };
     }
   }
   throw new Error("Sin acceso a la sala.");
+}
+
+/** Identidad LiveKit / bitácora para apoderado por código. */
+export function identidadPoder(codigo: string): string {
+  return `pod:${codigo.trim().toUpperCase()}`;
 }
 
 async function palabraConcedida(
@@ -143,17 +163,33 @@ async function palabraConcedidaInvitado(
   return fila?.estado === "concedida";
 }
 
+async function palabraConcedidaPoder(
+  ctx: QueryCtx | MutationCtx,
+  asambleaId: Id<"asambleas">,
+  codigoPoder: string,
+) {
+  const codigo = codigoPoder.trim().toUpperCase();
+  const fila = await ctx.db
+    .query("salaPalabra")
+    .withIndex("by_asamblea_poder", (q) =>
+      q.eq("asambleaId", asambleaId).eq("codigoPoder", codigo),
+    )
+    .first();
+  return fila?.estado === "concedida";
+}
+
 // ─────────────────────────────────────────────────────────────
 // Emisores
 // ─────────────────────────────────────────────────────────────
 
-/** Enciende un medio. Mesa siempre; residente/invitado solo con la palabra. */
+/** Enciende un medio. Mesa siempre; residente/invitado/apoderado solo con la palabra. */
 export const registrarEmisor = mutation({
   args: {
     asambleaId: v.id("asambleas"),
     clienteId: v.string(),
     medio: v.union(v.literal("camara"), v.literal("pantalla")),
     codigoInvitado: v.optional(v.string()),
+    codigoPoder: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const asamblea = await ctx.db.get(args.asambleaId);
@@ -163,8 +199,10 @@ export const registrarEmisor = mutation({
     }
 
     const inv = args.codigoInvitado?.trim().toUpperCase() || undefined;
+    const poder = args.codigoPoder?.trim().toUpperCase() || undefined;
     let userId: Id<"users"> | undefined;
     let codigoInvitado: string | undefined;
+    let codigoPoder: string | undefined;
     let nombre: string;
 
     if (inv) {
@@ -184,6 +222,18 @@ export const registrarEmisor = mutation({
         .first();
       nombre = sesion?.nombre ?? "Invitado";
       codigoInvitado = ok;
+    } else if (poder) {
+      const acceso = await requireAccesoSala(ctx, args.asambleaId, poder);
+      if (!acceso.codigoPoder) throw new Error("Código de poder inválido.");
+      if (!(await palabraConcedidaPoder(ctx, args.asambleaId, acceso.codigoPoder))) {
+        throw new Error("Pide la palabra para poder hablar.");
+      }
+      const filaPoder = await ctx.db
+        .query("poderesAsamblea")
+        .withIndex("by_codigo", (q) => q.eq("codigoAcceso", acceso.codigoPoder!))
+        .first();
+      nombre = filaPoder?.representanteNombre ?? "Apoderado";
+      codigoPoder = acceso.codigoPoder;
     } else {
       const user = await requireAppUser(ctx);
       const mesa = await esMesa(ctx, asamblea.condominioId, user);
@@ -208,7 +258,9 @@ export const registrarEmisor = mutation({
     for (const e of enAsamblea) {
       const mismaPersona = userId
         ? e.userId === userId
-        : e.codigoInvitado === codigoInvitado;
+        : codigoPoder
+          ? e.codigoPoder === codigoPoder
+          : e.codigoInvitado === codigoInvitado;
       if (
         mismaPersona &&
         e.medio === args.medio &&
@@ -232,6 +284,7 @@ export const registrarEmisor = mutation({
       clienteId: args.clienteId,
       userId,
       codigoInvitado,
+      codigoPoder,
       nombre,
       medio: args.medio,
       ultimoLatido: now,
@@ -248,12 +301,13 @@ export const detenerEmisor = mutation({
     clienteId: v.string(),
     medio: v.optional(v.union(v.literal("camara"), v.literal("pantalla"))),
     codigoInvitado: v.optional(v.string()),
+    codigoPoder: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     await requireAccesoSala(
       ctx,
       args.asambleaId,
-      undefined,
+      args.codigoPoder,
       args.codigoInvitado,
     );
     const mios = await ctx.db
@@ -275,12 +329,13 @@ export const latidoEmisor = mutation({
     asambleaId: v.id("asambleas"),
     clienteId: v.string(),
     codigoInvitado: v.optional(v.string()),
+    codigoPoder: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     await requireAccesoSala(
       ctx,
       args.asambleaId,
-      undefined,
+      args.codigoPoder,
       args.codigoInvitado,
     );
     const now = Date.now();
@@ -338,12 +393,13 @@ export const actualizarEstadoMedios = mutation({
     micOn: v.boolean(),
     camOn: v.boolean(),
     codigoInvitado: v.optional(v.string()),
+    codigoPoder: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     await requireAccesoSala(
       ctx,
       args.asambleaId,
-      undefined,
+      args.codigoPoder,
       args.codigoInvitado,
     );
     const mios = await ctx.db
@@ -370,6 +426,7 @@ export const pedirPalabra = mutation({
   args: {
     asambleaId: v.id("asambleas"),
     codigoInvitado: v.optional(v.string()),
+    codigoPoder: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const asamblea = await ctx.db.get(args.asambleaId);
@@ -409,6 +466,44 @@ export const pedirPalabra = mutation({
         tipo: "palabra_pedida",
         nombre: sesion.nombre,
         detalle: "Invitado · levantó la mano",
+      });
+      return { estado: "pedida" as const };
+    }
+
+    const poder = args.codigoPoder?.trim().toUpperCase() || undefined;
+    if (poder) {
+      await requireAccesoSala(ctx, args.asambleaId, poder);
+      const filaPoder = await ctx.db
+        .query("poderesAsamblea")
+        .withIndex("by_codigo", (q) => q.eq("codigoAcceso", poder))
+        .first();
+      if (!filaPoder || filaPoder.asambleaId !== args.asambleaId) {
+        throw new Error("Código de poder inválido.");
+      }
+
+      const previa = await ctx.db
+        .query("salaPalabra")
+        .withIndex("by_asamblea_poder", (q) =>
+          q.eq("asambleaId", args.asambleaId).eq("codigoPoder", poder),
+        )
+        .first();
+      if (previa) return { estado: previa.estado };
+
+      const nombre = filaPoder.representanteNombre;
+      await ctx.db.insert("salaPalabra", {
+        condominioId: asamblea.condominioId,
+        asambleaId: args.asambleaId,
+        codigoPoder: poder,
+        nombre: `${nombre} (apoderado)`,
+        estado: "pedida",
+        createdAt: Date.now(),
+      });
+      await registrarBitacora(ctx, {
+        condominioId: asamblea.condominioId,
+        asambleaId: args.asambleaId,
+        tipo: "palabra_pedida",
+        nombre,
+        detalle: "Apoderado · levantó la mano",
       });
       return { estado: "pedida" as const };
     }
@@ -458,6 +553,7 @@ export const bajarMano = mutation({
   args: {
     asambleaId: v.id("asambleas"),
     codigoInvitado: v.optional(v.string()),
+    codigoPoder: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const inv = args.codigoInvitado?.trim().toUpperCase() || undefined;
@@ -472,6 +568,21 @@ export const bajarMano = mutation({
       if (fila) await ctx.db.delete(fila._id);
       await apagarEmisionesInvitado(ctx, args.asambleaId, inv);
       await revocarEnServidorDeMediosInvitado(ctx, args.asambleaId, inv);
+      return;
+    }
+
+    const poder = args.codigoPoder?.trim().toUpperCase() || undefined;
+    if (poder) {
+      await requireAccesoSala(ctx, args.asambleaId, poder);
+      const fila = await ctx.db
+        .query("salaPalabra")
+        .withIndex("by_asamblea_poder", (q) =>
+          q.eq("asambleaId", args.asambleaId).eq("codigoPoder", poder),
+        )
+        .first();
+      if (fila) await ctx.db.delete(fila._id);
+      await apagarEmisionesPoder(ctx, args.asambleaId, poder);
+      await revocarEnServidorDeMediosPoder(ctx, args.asambleaId, poder);
       return;
     }
 
@@ -495,6 +606,7 @@ export const resolverPalabra = mutation({
     asambleaId: v.id("asambleas"),
     userId: v.optional(v.id("users")),
     codigoInvitado: v.optional(v.string()),
+    codigoPoder: v.optional(v.string()),
     conceder: v.boolean(),
     /** Al conceder: segundos de palabra. 0 / omitido = sin límite. */
     duracionSegundos: v.optional(v.number()),
@@ -558,6 +670,61 @@ export const resolverPalabra = mutation({
         tipo: "palabra_retirada",
         nombre: fila?.nombre ?? "Invitado",
         detalle: "Palabra retirada / silenciado (invitado)",
+      });
+      return;
+    }
+
+    const poder = args.codigoPoder?.trim().toUpperCase() || undefined;
+    if (poder) {
+      const fila = await ctx.db
+        .query("salaPalabra")
+        .withIndex("by_asamblea_poder", (q) =>
+          q.eq("asambleaId", args.asambleaId).eq("codigoPoder", poder),
+        )
+        .first();
+      if (args.conceder) {
+        if (!fila) throw new Error("Esa persona no tiene la mano levantada.");
+        const ahora = Date.now();
+        const dur = Math.max(0, Math.floor(args.duracionSegundos ?? 0));
+        const cierraEn = dur > 0 ? ahora + dur * 1000 : undefined;
+        await ctx.db.patch(fila._id, {
+          estado: "concedida",
+          concedidaEn: ahora,
+          cierraEn,
+        });
+        await sincronizarPalabraPoder(ctx, args.asambleaId, poder, true);
+        await registrarBitacora(ctx, {
+          condominioId: asamblea.condominioId,
+          asambleaId: args.asambleaId,
+          tipo: "palabra_concedida",
+          nombre: fila.nombre,
+          detalle:
+            dur > 0
+              ? `Apoderado · tiempo: ${Math.round(dur / 60)} min`
+              : "Apoderado · sin límite de tiempo",
+        });
+        if (cierraEn != null) {
+          await ctx.scheduler.runAfter(
+            cierraEn - ahora,
+            internal.salaVideo.retirarPalabraPoderSiExpiro,
+            {
+              asambleaId: args.asambleaId,
+              codigoPoder: poder,
+              cierraEn,
+            },
+          );
+        }
+        return;
+      }
+      if (fila) await ctx.db.delete(fila._id);
+      await apagarEmisionesPoder(ctx, args.asambleaId, poder);
+      await revocarEnServidorDeMediosPoder(ctx, args.asambleaId, poder);
+      await registrarBitacora(ctx, {
+        condominioId: asamblea.condominioId,
+        asambleaId: args.asambleaId,
+        tipo: "palabra_retirada",
+        nombre: fila?.nombre ?? "Apoderado",
+        detalle: "Palabra retirada / silenciado (apoderado)",
       });
       return;
     }
@@ -626,6 +793,7 @@ export const extenderPalabra = mutation({
     asambleaId: v.id("asambleas"),
     userId: v.optional(v.id("users")),
     codigoInvitado: v.optional(v.string()),
+    codigoPoder: v.optional(v.string()),
     segundosExtra: v.number(),
   },
   handler: async (ctx, args) => {
@@ -637,6 +805,7 @@ export const extenderPalabra = mutation({
     }
 
     const inv = args.codigoInvitado?.trim().toUpperCase() || undefined;
+    const poder = args.codigoPoder?.trim().toUpperCase() || undefined;
     const fila = inv
       ? await ctx.db
           .query("salaPalabra")
@@ -644,14 +813,21 @@ export const extenderPalabra = mutation({
             q.eq("asambleaId", args.asambleaId).eq("codigoInvitado", inv),
           )
           .first()
-      : args.userId
+      : poder
         ? await ctx.db
             .query("salaPalabra")
-            .withIndex("by_asamblea_user", (q) =>
-              q.eq("asambleaId", args.asambleaId).eq("userId", args.userId!),
+            .withIndex("by_asamblea_poder", (q) =>
+              q.eq("asambleaId", args.asambleaId).eq("codigoPoder", poder),
             )
             .first()
-        : null;
+        : args.userId
+          ? await ctx.db
+              .query("salaPalabra")
+              .withIndex("by_asamblea_user", (q) =>
+                q.eq("asambleaId", args.asambleaId).eq("userId", args.userId!),
+              )
+              .first()
+          : null;
     if (!fila || fila.estado !== "concedida") {
       throw new Error("Esa persona no tiene la palabra.");
     }
@@ -668,6 +844,16 @@ export const extenderPalabra = mutation({
         {
           asambleaId: args.asambleaId,
           codigoInvitado: inv,
+          cierraEn,
+        },
+      );
+    } else if (poder) {
+      await ctx.scheduler.runAfter(
+        cierraEn - ahora,
+        internal.salaVideo.retirarPalabraPoderSiExpiro,
+        {
+          asambleaId: args.asambleaId,
+          codigoPoder: poder,
           cierraEn,
         },
       );
@@ -753,6 +939,39 @@ export const retirarPalabraInvitadoSiExpiro = internalMutation({
   },
 });
 
+export const retirarPalabraPoderSiExpiro = internalMutation({
+  args: {
+    asambleaId: v.id("asambleas"),
+    codigoPoder: v.string(),
+    cierraEn: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const poder = args.codigoPoder.trim().toUpperCase();
+    const fila = await ctx.db
+      .query("salaPalabra")
+      .withIndex("by_asamblea_poder", (q) =>
+        q.eq("asambleaId", args.asambleaId).eq("codigoPoder", poder),
+      )
+      .first();
+    if (!fila || fila.estado !== "concedida") return;
+    if (fila.cierraEn !== args.cierraEn) return;
+    if ((fila.cierraEn ?? 0) > Date.now() + 750) return;
+    const asamblea = await ctx.db.get(args.asambleaId);
+    await ctx.db.delete(fila._id);
+    await apagarEmisionesPoder(ctx, args.asambleaId, poder);
+    await revocarEnServidorDeMediosPoder(ctx, args.asambleaId, poder);
+    if (asamblea) {
+      await registrarBitacora(ctx, {
+        condominioId: asamblea.condominioId,
+        asambleaId: args.asambleaId,
+        tipo: "palabra_retirada",
+        nombre: fila.nombre,
+        detalle: "Tiempo de palabra agotado (apoderado)",
+      });
+    }
+  },
+});
+
 /**
  * Le avisa al servidor de medios que esta persona cambió de permiso.
  *
@@ -788,6 +1007,19 @@ async function sincronizarPalabraInvitado(
   });
 }
 
+async function sincronizarPalabraPoder(
+  ctx: MutationCtx,
+  asambleaId: Id<"asambleas">,
+  codigoPoder: string,
+  puedePublicar: boolean,
+) {
+  await ctx.scheduler.runAfter(0, internal.salaPermisos.sincronizarPalabra, {
+    asambleaId,
+    identidad: identidadPoder(codigoPoder),
+    puedePublicar,
+  });
+}
+
 const revocarEnServidorDeMedios = (
   ctx: MutationCtx,
   asambleaId: Id<"asambleas">,
@@ -799,6 +1031,12 @@ const revocarEnServidorDeMediosInvitado = (
   asambleaId: Id<"asambleas">,
   codigoInvitado: string,
 ) => sincronizarPalabraInvitado(ctx, asambleaId, codigoInvitado, false);
+
+const revocarEnServidorDeMediosPoder = (
+  ctx: MutationCtx,
+  asambleaId: Id<"asambleas">,
+  codigoPoder: string,
+) => sincronizarPalabraPoder(ctx, asambleaId, codigoPoder, false);
 
 async function apagarEmisionesDeUsuario(
   ctx: MutationCtx,
@@ -828,20 +1066,43 @@ async function apagarEmisionesInvitado(
   }
 }
 
+async function apagarEmisionesPoder(
+  ctx: MutationCtx,
+  asambleaId: Id<"asambleas">,
+  codigoPoder: string,
+) {
+  const codigo = codigoPoder.trim().toUpperCase();
+  const emisiones = await ctx.db
+    .query("salaEmisores")
+    .withIndex("by_asamblea", (q) => q.eq("asambleaId", asambleaId))
+    .collect();
+  for (const e of emisiones) {
+    if (e.codigoPoder === codigo) await ctx.db.delete(e._id);
+  }
+}
+
 /** Manos y palabra en curso. `mia` marca la fila del usuario que consulta. */
 export const palabras = query({
   args: {
     asambleaId: v.id("asambleas"),
     codigoInvitado: v.optional(v.string()),
+    codigoPoder: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const asamblea = await ctx.db.get(args.asambleaId);
     if (!asamblea) return [];
 
     const inv = args.codigoInvitado?.trim().toUpperCase() || undefined;
+    const poder = args.codigoPoder?.trim().toUpperCase() || undefined;
     if (inv) {
       try {
         await requireAccesoSala(ctx, args.asambleaId, undefined, inv);
+      } catch {
+        return [];
+      }
+    } else if (poder) {
+      try {
+        await requireAccesoSala(ctx, args.asambleaId, poder);
       } catch {
         return [];
       }
@@ -859,15 +1120,18 @@ export const palabras = query({
       .map((f) => ({
         userId: f.userId ?? null,
         codigoInvitado: f.codigoInvitado ?? null,
+        codigoPoder: f.codigoPoder ?? null,
         nombre: f.nombre,
         estado: f.estado,
         cierraEn: f.cierraEn ?? null,
         concedidaEn: f.concedidaEn ?? null,
         mia: inv
           ? f.codigoInvitado === inv
-          : user
-            ? f.userId === user._id
-            : false,
+          : poder
+            ? f.codigoPoder === poder
+            : user
+              ? f.userId === user._id
+              : false,
       }));
   },
 });

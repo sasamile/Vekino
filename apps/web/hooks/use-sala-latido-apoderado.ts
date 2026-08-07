@@ -87,5 +87,10 @@ export function useSalaLatidoApoderado(codigo: string | null) {
     unidades: sala?.unidades ?? 0,
     unidadesConectadas: sala?.unidadesConectadas ?? 0,
     exigeConexionParaVotar: !!sala?.exigeConexionParaVotar,
+    personas: sala?.personas ?? [],
+    personasEnSala: sala?.personasEnSala ?? 0,
+    tienePalabra: !!sala?.tienePalabra,
+    estadoPalabra: sala?.estadoPalabra ?? null,
+    cierraEn: sala?.cierraEn ?? null,
   };
 }

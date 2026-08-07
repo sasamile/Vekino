@@ -123,3 +123,55 @@ export const tokenSalaInvitado = action({
     };
   },
 });
+
+/** Token LiveKit para un apoderado (código de poder, sin cuenta). */
+export const tokenSalaPoder = action({
+  args: {
+    asambleaId: v.id("asambleas"),
+    codigo: v.string(),
+  },
+  handler: async (ctx, args): Promise<{
+    url: string;
+    token: string;
+    sala: string;
+    puedePublicar: boolean;
+  } | null> => {
+    const cfg = configMedios();
+    if (!cfg) return null;
+
+    const sala = await ctx.runQuery(api.asambleaSala.miSalaConCodigo, {
+      codigo: args.codigo,
+    });
+    if (!sala) return null;
+    if (!sala.enCurso) return null;
+    if (sala.asambleaId !== args.asambleaId) return null;
+
+    const puedePublicar = sala.tienePalabra === true;
+    const nombre = nombreSala(args.asambleaId);
+    const ahora = Math.floor(Date.now() / 1000);
+    const token = await firmarJwt(
+      {
+        iss: cfg.apiKey,
+        sub: sala.identidad,
+        name: sala.nombre,
+        nbf: ahora - 10,
+        exp: ahora + 6 * 60 * 60,
+        video: {
+          room: nombre,
+          roomJoin: true,
+          canSubscribe: true,
+          canPublish: puedePublicar,
+          canPublishData: true,
+        },
+      },
+      cfg.apiSecret,
+    );
+
+    return {
+      url: process.env.LIVEKIT_URL!,
+      token,
+      sala: nombre,
+      puedePublicar,
+    };
+  },
+});

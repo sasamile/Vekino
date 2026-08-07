@@ -519,9 +519,10 @@ function PoderesTab({
       {nuevo ? (
         <GlassCard style={{ padding: 18, alignItems: "center", gap: 8 }}>
           <Ionicons name="checkmark-circle" size={28} color={C.success} />
-          <Text style={{ color: C.textMuted, fontSize: 13, textAlign: "center" }}>
-            {nuevo.esPropietario ? "Poder enviado a" : "Código para"}{" "}
-            <Text style={{ color: C.text, fontFamily: AuthUI.font.semibold }}>{nuevo.nombre}</Text>
+          <Text style={{ color: C.text, fontSize: 14, fontFamily: AuthUI.font.semibold, textAlign: "center" }}>
+            {nuevo.esPropietario
+              ? `Poder enviado a ${nuevo.nombre}`
+              : `Poder listo para ${nuevo.nombre}`}
           </Text>
           {nuevo.esPropietario ? (
             <Text style={{ color: C.textMuted, fontSize: 12, textAlign: "center" }}>
@@ -529,7 +530,7 @@ function PoderesTab({
             </Text>
           ) : (
             <Text style={{ color: C.textMuted, fontSize: 12, textAlign: "center" }}>
-              Compártelo para que entre con el código o se lo dé al administrador.
+              Compártele este enlace a tu apoderado para que pueda entrar a la sala el día de la asamblea.
             </Text>
           )}
           <Text

@@ -37,9 +37,11 @@ export function useVideoSala(
 ): SalaVideo & { motor: "sfu" | "malla" | "cargando" } {
   const pedirToken = useAction(api.salaToken.tokenSala);
   const pedirTokenInvitado = useAction(api.salaToken.tokenSalaInvitado);
+  const pedirTokenPoder = useAction(api.salaToken.tokenSalaPoder);
   const [conexion, setConexion] = useState<ConexionSala | null>(null);
   const [resuelto, setResuelto] = useState(false);
   const codigoInvitado = opts.codigoInvitado;
+  const codigoPoder = opts.codigoPoder;
 
   /* Se pide una vez por sala. El token dura seis horas: más que la asamblea
    * más larga, así que no hace falta renovarlo en pleno acto.
@@ -58,7 +60,7 @@ export function useVideoSala(
       setResuelto(false);
       return;
     }
-    const clave = `${asambleaId as string}:${codigoInvitado ?? ""}`;
+    const clave = `${asambleaId as string}:${codigoInvitado ?? ""}:${codigoPoder ?? ""}`;
     if (pedido.current === clave) return;
     pedido.current = clave;
 
@@ -73,7 +75,9 @@ export function useVideoSala(
                 asambleaId,
                 sesionCodigo: codigoInvitado,
               })
-            : await pedirToken({ asambleaId });
+            : codigoPoder
+              ? await pedirTokenPoder({ asambleaId, codigo: codigoPoder })
+              : await pedirToken({ asambleaId });
           if (pedido.current !== clave) return;
           setConexion(r);
           setResuelto(true);
@@ -88,7 +92,15 @@ export function useVideoSala(
       setConexion(null);
       setResuelto(true);
     })();
-  }, [activo, asambleaId, codigoInvitado, pedirToken, pedirTokenInvitado]);
+  }, [
+    activo,
+    asambleaId,
+    codigoInvitado,
+    codigoPoder,
+    pedirToken,
+    pedirTokenInvitado,
+    pedirTokenPoder,
+  ]);
 
   const usarSfu = resuelto && conexion !== null;
   const usarMalla = resuelto && conexion === null;

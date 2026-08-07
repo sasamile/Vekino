@@ -1185,6 +1185,31 @@ export const miSalaConCodigo = query({
       }
     }
 
+    /* Misma fuente que la sala autenticada / invitado: quién tiene la
+     * pestaña abierta. Sin esto el apoderado solo se veía a sí mismo. */
+    const presencias = await ctx.db
+      .query("salaPresencias")
+      .withIndex("by_asamblea", (q) => q.eq("asambleaId", asamblea._id))
+      .collect();
+    const personas = presencias
+      .sort((a, b) => a._creationTime - b._creationTime)
+      .slice(0, 100)
+      .map((p) => ({
+        userId: p.userId ?? null,
+        nombre: p.nombre,
+        esMesa: !!p.esMesa,
+        esInvitado: !!p.codigoInvitado,
+        imageUrl: p.imageUrl ?? null,
+      }));
+
+    const codigo = pack.codigo;
+    const palabra = await ctx.db
+      .query("salaPalabra")
+      .withIndex("by_asamblea_poder", (q) =>
+        q.eq("asambleaId", asamblea._id).eq("codigoPoder", codigo),
+      )
+      .first();
+
     return {
       asambleaId: asamblea._id,
       enCurso: asamblea.estado === "en_curso",
@@ -1195,6 +1220,13 @@ export const miSalaConCodigo = query({
       debeLatirPresencia: asamblea.estado === "en_curso",
       latidoMs: LATIDO_MS,
       exigeConexionParaVotar: !!asamblea.exigirConexionParaVotar,
+      personasEnSala: personas.length,
+      personas,
+      nombre: poderes[0]!.representanteNombre,
+      identidad: `pod:${codigo}`,
+      tienePalabra: palabra?.estado === "concedida",
+      estadoPalabra: palabra?.estado ?? null,
+      cierraEn: palabra?.cierraEn ?? null,
     };
   },
 });

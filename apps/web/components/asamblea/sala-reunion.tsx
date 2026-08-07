@@ -234,7 +234,7 @@ export function SalaReunion({
      * el panel lateral aparece solo cuando se pide. */
     <div className="relative flex h-svh flex-col overflow-hidden bg-[#0c0e12] text-white">
       {/* ── Cabecera flotante ──────────────────────────────────────────── */}
-      <header className="pointer-events-none absolute inset-x-0 top-0 z-30 flex items-center gap-3 bg-gradient-to-b from-black/70 via-black/30 to-transparent px-4 pb-8 pt-3 sm:px-5">
+      <header className="pointer-events-none absolute inset-x-0 top-0 z-30 flex items-start gap-2 bg-gradient-to-b from-black/60 via-black/25 to-transparent px-3 pb-6 pt-3 sm:items-center sm:gap-3 sm:px-5 sm:pb-8">
         <Link
           href={volverHref}
           aria-label="Salir de la sala"
@@ -256,7 +256,7 @@ export function SalaReunion({
             ) : null}
           </p>
         </div>
-        <div className="pointer-events-auto flex shrink-0 items-center gap-2">
+        <div className="pointer-events-auto flex max-w-[55%] shrink-0 flex-wrap items-center justify-end gap-1.5 sm:max-w-none sm:gap-2">
           {grabacionActiva ? (
             esMesa ? (
               <button
@@ -376,10 +376,10 @@ export function SalaReunion({
                   ? "Sala, quórum y dar la palabra"
                   : "Ver quién está en la sala"
               }
-              className="relative flex h-10 items-center gap-1.5 rounded-full bg-white/10 px-3 text-sm font-semibold text-white/85 transition-colors hover:bg-white/20"
+              className="relative z-10 flex h-10 shrink-0 items-center gap-1.5 rounded-full bg-white/10 px-3 text-sm font-semibold tabular-nums text-white/85 transition-colors hover:bg-white/20"
             >
-              <Users className="h-4 w-4" aria-hidden />
-              {sala?.personasEnSala ?? 0}
+              <Users className="h-4 w-4 shrink-0" aria-hidden />
+              <span>{sala?.personasEnSala ?? 0}</span>
               {puedeModerarPalabra && manosPedidas > 0 ? (
                 <span className="absolute -right-0.5 -top-0.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] font-bold text-black">
                   {manosPedidas}
@@ -2857,6 +2857,7 @@ function ManosLevantadas({
   filas: {
     userId: Id<"users"> | null;
     codigoInvitado?: string | null;
+    codigoPoder?: string | null;
     nombre: string;
     estado: "pedida" | "concedida";
     cierraEn?: number | null;
@@ -2883,13 +2884,15 @@ function ManosLevantadas({
       ) : (
       <ul className="space-y-2">
         {filas.map((f) => {
-          const id = (f.codigoInvitado ?? f.userId ?? f.nombre) as string;
+          const id = (f.codigoPoder ?? f.codigoInvitado ?? f.userId ?? f.nombre) as string;
           const eligiendo = eligiendoId === id;
           const destino = f.codigoInvitado
             ? { codigoInvitado: f.codigoInvitado }
-            : f.userId
-              ? { userId: f.userId }
-              : null;
+            : f.codigoPoder
+              ? { codigoPoder: f.codigoPoder }
+              : f.userId
+                ? { userId: f.userId }
+                : null;
           if (!destino) return null;
           return (
             <li

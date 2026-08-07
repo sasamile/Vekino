@@ -166,14 +166,20 @@ export function useSalaP2P(
       setLocales(
         [...streamsLocales.current.entries()].map(([m, s]) => ({ medio: m, stream: s })),
       );
-      await registrarEmisor({ asambleaId, clienteId, medio, codigoInvitado });
+      await registrarEmisor({
+        asambleaId,
+        clienteId,
+        medio,
+        codigoInvitado,
+        codigoPoder,
+      });
 
       // "Detener compartir" del propio navegador debe apagar el emisor.
       stream.getVideoTracks()[0]?.addEventListener("ended", () => {
         void apagarRef.current(medio);
       });
     },
-    [registrarEmisor, asambleaId, clienteId, perfil, codigoInvitado],
+    [registrarEmisor, asambleaId, clienteId, perfil, codigoInvitado, codigoPoder],
   );
 
   const [micOn, setMicOn] = useState(false);
@@ -207,9 +213,17 @@ export function useSalaP2P(
         micOn: conMic,
         camOn: conCam,
         codigoInvitado,
+        codigoPoder,
       }).catch(() => {});
     },
-    [encender, actualizarEstadoMedios, asambleaId, clienteId, codigoInvitado],
+    [
+      encender,
+      actualizarEstadoMedios,
+      asambleaId,
+      clienteId,
+      codigoInvitado,
+      codigoPoder,
+    ],
   );
 
   const toggleMic = useCallback(
@@ -248,9 +262,22 @@ export function useSalaP2P(
         }
       }
       refrescarEspectadores();
-      await detenerEmisor({ asambleaId, clienteId, medio, codigoInvitado }).catch(() => {});
+      await detenerEmisor({
+        asambleaId,
+        clienteId,
+        medio,
+        codigoInvitado,
+        codigoPoder,
+      }).catch(() => {});
     },
-    [detenerEmisor, asambleaId, clienteId, refrescarEspectadores],
+    [
+      detenerEmisor,
+      asambleaId,
+      clienteId,
+      codigoInvitado,
+      codigoPoder,
+      refrescarEspectadores,
+    ],
   );
   const apagarRef = useRef(apagar);
   apagarRef.current = apagar;
@@ -259,10 +286,23 @@ export function useSalaP2P(
   useEffect(() => {
     if (!activo || locales.length === 0) return;
     const id = setInterval(() => {
-      void latidoEmisor({ asambleaId, clienteId, codigoInvitado }).catch(() => {});
+      void latidoEmisor({
+        asambleaId,
+        clienteId,
+        codigoInvitado,
+        codigoPoder,
+      }).catch(() => {});
     }, 30_000);
     return () => clearInterval(id);
-  }, [activo, locales.length, latidoEmisor, asambleaId, clienteId]);
+  }, [
+    activo,
+    locales.length,
+    latidoEmisor,
+    asambleaId,
+    clienteId,
+    codigoInvitado,
+    codigoPoder,
+  ]);
 
   /* ── Espectador: una conexión por emisor remoto ──────────────────────── */
   useEffect(() => {
@@ -475,9 +515,14 @@ export function useSalaP2P(
       comoEmisor.clear();
       for (const c of comoEspectador.values()) c.pc.close();
       comoEspectador.clear();
-      void detenerEmisor({ asambleaId, clienteId, codigoInvitado }).catch(() => {});
+      void detenerEmisor({
+        asambleaId,
+        clienteId,
+        codigoInvitado,
+        codigoPoder,
+      }).catch(() => {});
     };
-  }, [activo, detenerEmisor, asambleaId, clienteId]);
+  }, [activo, detenerEmisor, asambleaId, clienteId, codigoInvitado, codigoPoder]);
 
   /* En la malla el audio viaja dentro del mismo stream que el video, pero se
    * extrae igual: el escenario lo reproduce por un elemento aparte para que

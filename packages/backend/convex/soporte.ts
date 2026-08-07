@@ -1,5 +1,7 @@
 import { v } from "convex/values";
 import { internalMutation, mutation, query } from "./_generated/server";
+import type { QueryCtx } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
 import {
   getCurrentAppUser,
   getMembership,
@@ -110,16 +112,74 @@ export const listByCondominio = query({
   },
 });
 
+function etiquetaUnidadSoporte(u: {
+  numero: string;
+  torre?: string;
+  bloque?: string;
+}) {
+  const partes = [`Unidad ${u.numero}`];
+  if (u.torre?.trim()) partes.push(`Torre ${u.torre.trim()}`);
+  if (u.bloque?.trim() && u.bloque.trim() !== u.torre?.trim()) {
+    partes.push(`Bloque ${u.bloque.trim()}`);
+  }
+  return partes.join(" · ");
+}
+
+/** Unidades del usuario en el condominio del ticket (para la bandeja de soporte). */
+async function unidadesDeUsuario(
+  ctx: QueryCtx,
+  userId: Id<"users">,
+  condominioId: Id<"condominios"> | undefined,
+) {
+  if (!condominioId) return [] as string[];
+  const membership = await getMembership(ctx, userId, condominioId);
+  if (!membership?.isActive) return [];
+  const links = await ctx.db
+    .query("usuarioUnidad")
+    .withIndex("by_membership", (q) => q.eq("membershipId", membership._id))
+    .collect();
+  const unidades = await Promise.all(links.map((l) => ctx.db.get(l.unidadId)));
+  return unidades
+    .filter((u): u is NonNullable<typeof u> => u !== null)
+    .map(etiquetaUnidadSoporte)
+    .slice(0, 8);
+}
+
 /** Todos los tickets (superadmin / admin de plataforma). */
 export const listAll = query({
   args: { soloAbiertos: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
     await requirePlatformStaff(ctx);
     const rows = await ctx.db.query("soporteTickets").order("desc").take(200);
-    if (args.soloAbiertos) {
-      return rows.filter((t) => t.estado === "abierto" || t.estado === "en_gestion");
-    }
-    return rows;
+    const filtrados = args.soloAbiertos
+      ? rows.filter((t) => t.estado === "abierto" || t.estado === "en_gestion")
+      : rows;
+
+    return await Promise.all(
+      filtrados.map(async (t) => ({
+        ...t,
+        unidadesLabel: (
+          await unidadesDeUsuario(ctx, t.userId, t.condominioId)
+        ).join(", "),
+      })),
+    );
+  },
+});
+
+/** Contador de tickets pendientes (abiertos + en gestión) para el badge del menú. */
+export const countPendientes = query({
+  args: {},
+  handler: async (ctx) => {
+    await requirePlatformStaff(ctx);
+    const abiertos = await ctx.db
+      .query("soporteTickets")
+      .withIndex("by_estado", (q) => q.eq("estado", "abierto"))
+      .collect();
+    const enGestion = await ctx.db
+      .query("soporteTickets")
+      .withIndex("by_estado", (q) => q.eq("estado", "en_gestion"))
+      .collect();
+    return abiertos.length + enGestion.length;
   },
 });
 

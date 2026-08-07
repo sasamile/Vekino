@@ -9,6 +9,7 @@ import {
   ArrowLeft,
   Check,
   CheckCircle2,
+  Hand,
   ListOrdered,
   Loader2,
   PhoneOff,
@@ -28,6 +29,14 @@ import { cn } from "@/lib/utils";
 export function SalaApoderado({ codigo }: { codigo: string }) {
   const data = useQuery(api.asambleas.accederConCodigo, { codigo });
   const latido = useSalaLatidoApoderado(codigo);
+  const pedirPalabra = useMutation(api.salaVideo.pedirPalabra);
+  const bajarMano = useMutation(api.salaVideo.bajarMano);
+  const palabras = useQuery(
+    api.salaVideo.palabras,
+    data?.asamblea._id
+      ? { asambleaId: data.asamblea._id, codigoPoder: codigo }
+      : "skip",
+  );
   const [panelAbierto, setPanelAbierto] = useState(false);
   const [chatAbierto, setChatAbierto] = useState(false);
 
@@ -60,6 +69,9 @@ export function SalaApoderado({ codigo }: { codigo: string }) {
 
   const a = data.asamblea;
   const enCurso = a.estado === "en_curso";
+  const asambleaId = a._id as Id<"asambleas">;
+  const miPalabra = (palabras ?? []).find((f) => f.mia) ?? null;
+  const puedoHablar = miPalabra?.estado === "concedida";
   const abiertas = data.votaciones.filter((vt) => vt.estado === "abierta");
   const puntos = data.ordenDia;
   const puntoActual = puntos.find((p) => !p.hecho) ?? null;
@@ -69,7 +81,7 @@ export function SalaApoderado({ codigo }: { codigo: string }) {
   return (
     <div className="relative flex h-svh flex-col overflow-hidden bg-[#0c0e12] text-white">
       {/* Cabecera flotante tipo Meet */}
-      <header className="pointer-events-none absolute inset-x-0 top-0 z-30 flex items-center gap-3 bg-gradient-to-b from-black/70 via-black/30 to-transparent px-4 pb-8 pt-3 sm:px-5">
+      <header className="pointer-events-none absolute inset-x-0 top-0 z-30 flex items-start gap-2 bg-gradient-to-b from-black/60 via-black/25 to-transparent px-3 pb-6 pt-3 sm:items-center sm:gap-3 sm:px-5 sm:pb-8">
         <Link
           href="/apoderado"
           aria-label="Salir de la sala"
@@ -92,10 +104,10 @@ export function SalaApoderado({ codigo }: { codigo: string }) {
               onClick={() => setPanelAbierto((v) => !v)}
               aria-label="Panel de la asamblea"
               title="Participantes y votaciones"
-              className="flex h-10 items-center gap-1.5 rounded-full bg-white/10 px-3 text-sm font-semibold text-white/85 transition-colors hover:bg-white/20"
+              className="relative z-10 flex h-10 shrink-0 items-center gap-1.5 rounded-full bg-white/10 px-3 text-sm font-semibold tabular-nums text-white/85 transition-colors hover:bg-white/20"
             >
-              <Users className="h-4 w-4" aria-hidden />
-              {q.unidadesPresentes}
+              <Users className="h-4 w-4 shrink-0" aria-hidden />
+              <span>{latido.personasEnSala || q.unidadesPresentes}</span>
             </button>
           ) : null}
         </div>
@@ -104,16 +116,61 @@ export function SalaApoderado({ codigo }: { codigo: string }) {
       <div className="flex min-h-0 flex-1">
         <main className="relative min-w-0 flex-1">
           <EscenarioVideo
-            asambleaId={a._id}
+            asambleaId={asambleaId}
             enCurso={enCurso}
-            puedoHablar={false}
+            puedoHablar={puedoHablar}
             codigoPoder={codigo}
             nombreEspera={data.apoderadoNombre}
+            personas={latido.personas}
+            extraControles={
+              enCurso ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (miPalabra) {
+                      void bajarMano({
+                        asambleaId,
+                        codigoPoder: codigo,
+                      }).catch(() => {});
+                    } else {
+                      void pedirPalabra({
+                        asambleaId,
+                        codigoPoder: codigo,
+                      }).catch(() => {});
+                    }
+                  }}
+                  aria-label={
+                    miPalabra?.estado === "concedida"
+                      ? "Bajar la mano"
+                      : miPalabra
+                        ? "Mano levantada"
+                        : "Pedir la palabra"
+                  }
+                  title={
+                    miPalabra?.estado === "concedida"
+                      ? "Tienes la palabra — bajar la mano"
+                      : miPalabra
+                        ? "Esperando que la mesa te dé la palabra"
+                        : "Pedir la palabra"
+                  }
+                  className={cn(
+                    "flex h-10 w-10 items-center justify-center rounded-full transition-colors sm:h-12 sm:w-12",
+                    miPalabra?.estado === "concedida"
+                      ? "bg-emerald-500 text-white"
+                      : miPalabra
+                        ? "bg-amber-500/90 text-white"
+                        : "bg-white/15 text-white hover:bg-white/25",
+                  )}
+                >
+                  <Hand className="h-4 w-4 sm:h-5 sm:w-5" aria-hidden />
+                </button>
+              ) : null
+            }
             controlesFin={
               enCurso ? (
                 <>
                   <BotonChatSala
-                    asambleaId={a._id}
+                    asambleaId={asambleaId}
                     abierto={chatAbierto}
                     onToggle={() => setChatAbierto((v) => !v)}
                     codigoPoder={codigo}

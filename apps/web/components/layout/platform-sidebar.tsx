@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
+import { useQuery } from "convex/react";
 import {
   Check,
   ChevronsUpDown,
@@ -17,6 +18,7 @@ import {
   Sun,
   X,
 } from "lucide-react";
+import { api } from "@vekino/backend/api";
 import { authClient } from "@/lib/auth-client";
 import { PLATFORM_NAV } from "@/components/layout/platform-nav-config";
 import { UserAvatar } from "@/components/ui/user-avatar";
@@ -53,6 +55,7 @@ export function PlatformSidebar({
   onNavigate?: () => void;
 }) {
   const pathname = usePathname();
+  const pendientesSoporte = useQuery(api.soporte.countPendientes);
 
   return (
     <div className="relative flex h-full min-h-0 flex-col bg-card">
@@ -86,6 +89,10 @@ export function PlatformSidebar({
                 ? pathname === "/dashboard"
                 : pathname === item.href || pathname.startsWith(`${item.href}/`);
             const Icon = item.icon;
+            const badge =
+              item.segment === "soporte" && (pendientesSoporte ?? 0) > 0
+                ? pendientesSoporte
+                : null;
             return (
               <Link
                 key={item.href}
@@ -108,7 +115,15 @@ export function PlatformSidebar({
                   )}
                   aria-hidden
                 />
-                <span className="truncate">{item.label}</span>
+                <span className="min-w-0 flex-1 truncate">{item.label}</span>
+                {badge != null ? (
+                  <span
+                    className="shrink-0 rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold tabular-nums leading-none text-black"
+                    aria-label={`${badge} tickets pendientes`}
+                  >
+                    {badge > 99 ? "99+" : badge}
+                  </span>
+                ) : null}
               </Link>
             );
           })}

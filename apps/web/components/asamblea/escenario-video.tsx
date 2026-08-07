@@ -175,10 +175,10 @@ function CardPersona({
       ) : null}
       <span
         className={cn(
-          "absolute max-w-[calc(100%-0.75rem)] truncate rounded-md bg-black/55 font-medium text-white/90",
+          "absolute z-10 max-w-[calc(100%-0.75rem)] truncate rounded-md bg-black/70 font-medium leading-tight text-white/95",
           denso
             ? "bottom-1.5 left-1.5 px-1.5 py-0.5 text-[10px]"
-            : "bottom-2.5 left-2.5 px-2 py-0.5 text-xs",
+            : "bottom-2.5 left-2.5 px-2 py-1 text-xs",
         )}
       >
         {label}
@@ -334,7 +334,9 @@ function MosaicoPersonas({
               imageUrl={p.imageUrl}
               esYo={p.esYo}
               esMesa={p.esMesa}
-              silenciado={p.esYo ? !micOn : true}
+              /* Solo el mic local: en tiles de presencia no sabemos el estado
+                 real y el MicOff arriba a la derecha chocaba con el header. */
+              silenciado={!!p.esYo && !micOn && puedoHablar}
               hablando={!!p.esYo && hablandoYo}
               tamano={tamano}
             />
@@ -562,8 +564,11 @@ export function EscenarioVideo({
 
   return (
     <div className="relative h-full w-full overflow-hidden bg-[#0c0e12]">
-      {/* ── Lienzo principal ─────────────────────────────────────────────── */}
-      <div className="absolute inset-0 p-2 pb-16 sm:p-3 sm:pb-16">
+      {/* ── Lienzo principal ───────────────────────────────────────────────
+          pt: la cabecera flotante no debe tapar avatares / badges del tile.
+          pb: la barra de controles es alta (admin ~12 botones) y sin este
+          aire los nombres de la fila inferior quedan tapados. */}
+      <div className="absolute inset-0 p-2 pb-24 pt-14 sm:p-3 sm:pb-28 sm:pt-16">
         {modoPresentacion ? (
           <div className="h-full w-full overflow-hidden rounded-2xl">
             {principalRemoto ? (
@@ -1044,7 +1049,7 @@ function VideoRemoto({
           <MicOff className="h-3.5 w-3.5 text-white" aria-hidden />
         </span>
       ) : null}
-      <span className="absolute bottom-2 left-2 rounded-md bg-black/60 px-2 py-0.5 text-[11px] font-medium text-white/90">
+      <span className="absolute bottom-2 left-2 z-10 max-w-[calc(100%-1rem)] truncate rounded-md bg-black/70 px-2 py-1 text-[11px] font-medium leading-tight text-white/95">
         {emisor.nombre}
         {emisor.medio === "pantalla" ? " · presentando" : ""}
       </span>
@@ -1113,9 +1118,11 @@ function PreviewStream({
           tamano={tamanoAvatar ?? (principal ? "lg" : "sm")}
         />
       ) : null}
-      <span className="absolute bottom-2 left-2 flex items-center gap-1 rounded-md bg-black/60 px-2 py-0.5 text-[11px] font-medium text-white/90">
-        {silenciado ? <MicOff className="h-3 w-3 text-red-400" aria-hidden /> : null}
-        {etiqueta}
+      <span className="absolute bottom-2 left-2 z-10 flex max-w-[calc(100%-1rem)] items-center gap-1 truncate rounded-md bg-black/70 px-2 py-1 text-[11px] font-medium leading-tight text-white/95">
+        {silenciado ? (
+          <MicOff className="h-3 w-3 shrink-0 text-red-400" aria-hidden />
+        ) : null}
+        <span className="truncate">{etiqueta}</span>
       </span>
     </div>
   );

@@ -795,6 +795,8 @@ export default defineSchema({
     userId: v.optional(v.id("users")),
     /** Invitado externo emitiendo con palabra concedida. */
     codigoInvitado: v.optional(v.string()),
+    /** Apoderado por código de poder emitiendo con palabra concedida. */
+    codigoPoder: v.optional(v.string()),
     nombre: v.string(),
     medio: v.union(v.literal("camara"), v.literal("pantalla")),
     /** Cámara deshabilitada (frames negros): el espectador pinta avatar. */
@@ -819,6 +821,8 @@ export default defineSchema({
     userId: v.optional(v.id("users")),
     /** Invitado externo (sesión del enlace de invitados). */
     codigoInvitado: v.optional(v.string()),
+    /** Apoderado externo (código de poder, sin cuenta). */
+    codigoPoder: v.optional(v.string()),
     nombre: v.string(),
     estado: v.union(v.literal("pedida"), v.literal("concedida")),
     /** Instantes de la concesión (auditoría / cronómetro). */
@@ -829,7 +833,8 @@ export default defineSchema({
   })
     .index("by_asamblea", ["asambleaId"])
     .index("by_asamblea_user", ["asambleaId", "userId"])
-    .index("by_asamblea_invitado", ["asambleaId", "codigoInvitado"]),
+    .index("by_asamblea_invitado", ["asambleaId", "codigoInvitado"])
+    .index("by_asamblea_poder", ["asambleaId", "codigoPoder"]),
 
   /**
    * El pulso de quien está conectado, separado de todo lo demás.
