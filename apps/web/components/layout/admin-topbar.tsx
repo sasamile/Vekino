@@ -11,6 +11,7 @@ import {
   Megaphone,
   Landmark,
   CalendarPlus,
+  CalendarClock,
   Building2,
   UserPlus,
   type LucideIcon,
@@ -113,6 +114,14 @@ function PlatformDefaultActions({ segment }: { segment: string }) {
           href="/dashboard/administradores?nuevo=1"
           icon={UserPlus}
           label="Agregar administrador"
+        />
+      );
+    case "automatizaciones":
+      return (
+        <DefaultCreate
+          href="/dashboard/automatizaciones?nuevo=1"
+          icon={CalendarClock}
+          label="Programar envío"
         />
       );
     case "soporte":

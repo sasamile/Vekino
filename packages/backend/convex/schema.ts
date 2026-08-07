@@ -1587,6 +1587,63 @@ export default defineSchema({
     .index("by_estado", ["estado"]),
 
   // ─────────────────────────────────────────────────────────────
+  // Automatizaciones: envíos programados (fecha y hora)
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Un envío agendado. La ejecución la dispara el scheduler de Convex con
+   * `runAt`, no un cron que barre: así el envío sale a la hora exacta y no
+   * hay que revisar la tabla cada minuto.
+   */
+  enviosProgramados: defineTable({
+    condominioId: v.id("condominios"),
+    tipo: v.literal("apoderados_asamblea"),
+    asambleaId: v.optional(v.id("asambleas")),
+    canal: v.union(
+      v.literal("correo"),
+      v.literal("whatsapp"),
+      v.literal("ambos"),
+    ),
+    programadoPara: v.number(),
+    estado: v.union(
+      v.literal("programado"),
+      v.literal("enviando"),
+      v.literal("completado"),
+      v.literal("cancelado"),
+      v.literal("fallido"),
+    ),
+    /** Id del job del scheduler, para poder cancelarlo. */
+    scheduledFunctionId: v.optional(v.id("_scheduled_functions")),
+    total: v.number(),
+    enviados: v.number(),
+    fallidos: v.number(),
+    sinContacto: v.number(),
+    error: v.optional(v.string()),
+    creadoPorUserId: v.id("users"),
+    creadoPorNombre: v.string(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_condominio", ["condominioId"])
+    .index("by_estado", ["estado"]),
+
+  /** Resultado por destinatario de un envío programado. */
+  enviosProgramadosDetalle: defineTable({
+    envioId: v.id("enviosProgramados"),
+    condominioId: v.id("condominios"),
+    nombre: v.string(),
+    destino: v.optional(v.string()),
+    canal: v.string(),
+    estado: v.union(
+      v.literal("enviado"),
+      v.literal("fallido"),
+      v.literal("sin_contacto"),
+    ),
+    motivo: v.optional(v.string()),
+    createdAt: v.number(),
+  }).index("by_envio", ["envioId"]),
+
+  // ─────────────────────────────────────────────────────────────
   // Envío masivo de credenciales de acceso (onboarding por correo)
   // ─────────────────────────────────────────────────────────────
 

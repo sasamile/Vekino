@@ -103,6 +103,7 @@ function Shell({ children }: { children: React.ReactNode }) {
     !isPlatform &&
     (pathname.startsWith("/dashboard/condominios") ||
       pathname.startsWith("/dashboard/administradores") ||
+      pathname.startsWith("/dashboard/automatizaciones") ||
       pathname.startsWith("/dashboard/soporte"))
   ) {
     return <Redirect to="/dashboard" />;

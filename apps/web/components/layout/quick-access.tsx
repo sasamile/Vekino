@@ -13,6 +13,7 @@ import {
   FileUp,
   UserPlus,
   Building2,
+  CalendarClock,
   type LucideIcon,
 } from "lucide-react";
 import { visibleNavGroups } from "./nav-config";
@@ -83,6 +84,15 @@ export function QuickAccess({
           icon: User,
           group: "Acciones rápidas",
           keywords: ["staff", "superadmin", "invitar"],
+        },
+        {
+          id: "act-programar-envio",
+          label: "Programar envío",
+          hint: "Automatizaciones",
+          href: "/dashboard/automatizaciones?nuevo=1",
+          icon: CalendarClock,
+          group: "Acciones rápidas",
+          keywords: ["apoderados", "asamblea", "correo", "whatsapp", "agendar"],
         },
         {
           id: "act-soporte",
