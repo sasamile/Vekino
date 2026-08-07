@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import {
   query,
   mutation,
+  action,
   internalAction,
   internalMutation,
   internalQuery,
@@ -330,6 +331,160 @@ export const reintentarPendientes = mutation({
     );
     await ctx.db.patch(envioId, { scheduledFunctionId: jobId });
     return envioId;
+  },
+});
+
+
+// ─────────────────────────────────────────────────────────────
+// Envío de prueba
+// ─────────────────────────────────────────────────────────────
+
+/** Datos reales de la asamblea + un poder de muestra, para la prueba. */
+export const datosPrueba = internalQuery({
+  args: {
+    condominioId: v.id("condominios"),
+    asambleaId: v.id("asambleas"),
+  },
+  handler: async (ctx, args) => {
+    await requirePlatformStaff(ctx);
+    const condominio = await ctx.db.get(args.condominioId);
+    const asamblea = await ctx.db.get(args.asambleaId);
+    if (!condominio || !asamblea) return null;
+
+    const poder = await ctx.db
+      .query("poderesAsamblea")
+      .withIndex("by_asamblea", (q) => q.eq("asambleaId", args.asambleaId))
+      .first();
+
+    return {
+      condominioNombre: condominio.name,
+      moduloWhatsapp: condominio.activeModules.includes("whatsapp"),
+      asambleaTitulo: asamblea.titulo,
+      fecha: asamblea.fecha,
+      hora: asamblea.hora,
+      // Si aún no hay poderes cargados, se usa un ejemplo para ver el formato.
+      apoderadoNombre: poder?.representanteNombre ?? "Juan Pérez (ejemplo)",
+      codigo: poder?.codigoAcceso ?? "EJEMPLO",
+      unidad: poder?.unidadNumero ?? "101",
+      hayPoderes: !!poder,
+    };
+  },
+});
+
+/**
+ * Manda UNA copia del mensaje a un contacto de prueba, con los datos reales
+ * de la asamblea. No toca la tabla de envíos ni cuenta como envío real: es
+ * para revisar cómo llega antes de dispararlo a todo el condominio.
+ */
+export const enviarPrueba = action({
+  args: {
+    condominioId: v.id("condominios"),
+    asambleaId: v.id("asambleas"),
+    canal: canalValidator,
+    email: v.optional(v.string()),
+    telefono: v.optional(v.string()),
+    /** true = versión que recibe el propietario ("compártele el enlace"). */
+    comoPropietario: v.optional(v.boolean()),
+    nombre: v.optional(v.string()),
+  },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{ correo: string | null; whatsapp: string | null }> => {
+    const datos: {
+      condominioNombre: string;
+      moduloWhatsapp: boolean;
+      asambleaTitulo: string;
+      fecha: string;
+      hora: string;
+      apoderadoNombre: string;
+      codigo: string;
+      unidad: string;
+      hayPoderes: boolean;
+    } | null = await ctx.runQuery(internal.automatizaciones.datosPrueba, {
+      condominioId: args.condominioId,
+      asambleaId: args.asambleaId,
+    });
+    if (!datos) throw new Error("No encontré la asamblea.");
+
+    const email = args.email?.trim();
+    const telefono = args.telefono?.trim();
+    if (!email && !telefono) {
+      throw new Error("Escribe un correo o un celular para la prueba.");
+    }
+
+    const base = (process.env.WEB_APP_URL ?? "https://www.vekino.com").replace(
+      /\/+$/,
+      "",
+    );
+    const enlace = `${base}/apoderado?codigo=${encodeURIComponent(datos.codigo)}`;
+    const esApoderado = !args.comoPropietario;
+    const nombre = args.nombre?.trim() || "Nombre de prueba";
+
+    let correoRes: string | null = null;
+    let waRes: string | null = null;
+
+    if (args.canal !== "whatsapp" && email) {
+      const datosCorreo = {
+        nombre,
+        esApoderado,
+        apoderadoNombre: datos.apoderadoNombre,
+        condominioNombre: datos.condominioNombre,
+        asambleaTitulo: datos.asambleaTitulo,
+        fecha: datos.fecha,
+        hora: datos.hora,
+        enlace,
+        unidades: [datos.unidad],
+      };
+      try {
+        await sendBrevoEmail({
+          to: [{ email, name: nombre }],
+          subject: `[PRUEBA] ${asuntoApoderado(datos.condominioNombre, esApoderado)}`,
+          htmlContent: htmlApoderado(datosCorreo),
+          textContent: textoApoderado(datosCorreo),
+        });
+        correoRes = `Enviado a ${email}`;
+      } catch (e) {
+        correoRes = `Falló: ${e instanceof Error ? e.message : String(e)}`;
+      }
+    }
+
+    if (args.canal !== "correo" && telefono) {
+      const e164 = telefono.startsWith("+") ? telefono : `+${telefono.replace(/\D/g, "")}`;
+      const plantilla = esApoderado
+        ? process.env.YCLOUD_TEMPLATE_APODERADO
+        : (process.env.YCLOUD_TEMPLATE_PODER ?? process.env.YCLOUD_TEMPLATE_APODERADO);
+      const params = esApoderado
+        ? [nombre, datos.condominioNombre, datos.fecha, datos.hora]
+        : [nombre, datos.apoderadoNombre, datos.condominioNombre, datos.fecha];
+
+      if (!plantilla) {
+        waRes = "Falta configurar la plantilla de WhatsApp.";
+      } else {
+        try {
+          await enviarMensaje({
+            ...msgPlantilla(e164, plantilla, "es", params),
+            components: [
+              {
+                type: "body",
+                parameters: params.map((t) => ({ type: "text", text: t })),
+              },
+              {
+                type: "button",
+                sub_type: "url",
+                index: "0",
+                parameters: [{ type: "text", text: datos.codigo }],
+              },
+            ],
+          } as any);
+          waRes = `Enviado a ${e164}`;
+        } catch (e) {
+          waRes = `Falló: ${e instanceof Error ? e.message : String(e)}`;
+        }
+      }
+    }
+
+    return { correo: correoRes, whatsapp: waRes };
   },
 });
 

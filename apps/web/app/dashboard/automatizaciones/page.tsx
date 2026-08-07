@@ -1,11 +1,12 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery, useMutation, useAction } from "convex/react";
 import {
   AlertTriangle,
   CalendarClock,
   Check,
+  FlaskConical,
   Loader2,
   Mail,
   MessageCircle,
@@ -24,9 +25,10 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
-import { Select } from "@/components/ui/input";
+import { Input, Select } from "@/components/ui/input";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 
 /* -------------------------------------------------------------------------- */
@@ -86,6 +88,9 @@ type DetalleRow = {
   createdAt: number;
 };
 
+/** Resultado de `api.automatizaciones.enviarPrueba`: texto legible por canal. */
+type PruebaResultado = { correo: string | null; whatsapp: string | null };
+
 /* -------------------------------------------------------------------------- */
 /* Metadatos de presentación                                                   */
 /* -------------------------------------------------------------------------- */
@@ -136,6 +141,12 @@ const CANAL_OPCIONES: {
     descripcion: "Correo y WhatsApp a quien tenga los dos datos.",
     nota: NOTA_WHATSAPP,
   },
+];
+
+/** Versiones del texto que se puede probar antes del envío real. */
+const PRUEBA_VERSIONES: { label: string; comoPropietario: boolean }[] = [
+  { label: "Como apoderado", comoPropietario: false },
+  { label: "Como propietario", comoPropietario: true },
 ];
 
 const DETALLE_META: Record<
@@ -512,6 +523,7 @@ function ProgramarDialog({ onClose }: { onClose: () => void }) {
     | CondoConAsambleas[]
     | undefined;
   const programar = useMutation(api.automatizaciones.programar);
+  const enviarPrueba = useAction(api.automatizaciones.enviarPrueba);
 
   // Los `<select>` manejan strings; el API exige ids tipados de Convex, así
   // que el estado se declara ya con la marca y arranca vacío.
@@ -523,6 +535,17 @@ function ProgramarDialog({ onClose }: { onClose: () => void }) {
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Envío de prueba: estado propio, aparte del envío real.
+  const [pruebaEmail, setPruebaEmail] = useState("");
+  const [pruebaTelefono, setPruebaTelefono] = useState("");
+  const [pruebaNombre, setPruebaNombre] = useState("");
+  const [pruebaComoPropietario, setPruebaComoPropietario] = useState(false);
+  const [pruebaBusy, setPruebaBusy] = useState(false);
+  const [pruebaError, setPruebaError] = useState<string | null>(null);
+  const [pruebaResultado, setPruebaResultado] = useState<PruebaResultado | null>(
+    null,
+  );
 
   const condo = condos?.find((c) => c.condominioId === condominioId) ?? null;
   const asamblea =
@@ -573,6 +596,42 @@ function ProgramarDialog({ onClose }: { onClose: () => void }) {
     }
     void enviar(ts);
   }
+
+  async function onEnviarPrueba() {
+    if (!condominioId || !asambleaId) {
+      setPruebaError("Selecciona un condominio y una asamblea.");
+      return;
+    }
+    const email = pruebaEmail.trim();
+    const telefono = pruebaTelefono.trim();
+    if (!email && !telefono) {
+      setPruebaError("Escribe un correo o un celular para la prueba.");
+      return;
+    }
+    setPruebaBusy(true);
+    setPruebaError(null);
+    setPruebaResultado(null);
+    try {
+      const res = (await enviarPrueba({
+        condominioId,
+        asambleaId,
+        canal,
+        email: email || undefined,
+        telefono: telefono || undefined,
+        comoPropietario: pruebaComoPropietario,
+        nombre: pruebaNombre.trim() || undefined,
+      })) as PruebaResultado;
+      setPruebaResultado(res);
+    } catch (e) {
+      setPruebaError(
+        e instanceof Error ? e.message : "No se pudo mandar la prueba.",
+      );
+    } finally {
+      setPruebaBusy(false);
+    }
+  }
+
+  const pruebaLista = Boolean(condominioId && asambleaId) && !pruebaBusy;
 
   return (
     <Modal
@@ -793,10 +852,193 @@ function ProgramarDialog({ onClose }: { onClose: () => void }) {
             </p>
           </div>
 
+          {/* ---------------------------------------------------------------- */}
+          {/* Envío de prueba (no cuenta como envío real)                       */}
+          {/* ---------------------------------------------------------------- */}
+          <div className="space-y-3 rounded-xl border border-dashed border-border bg-muted/40 px-3.5 py-3">
+            <div>
+              <p className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+                <FlaskConical className="h-3.5 w-3.5" aria-hidden />
+                Probar antes de enviar
+              </p>
+              <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
+                Se manda una sola copia con los datos reales de la asamblea
+                seleccionada, por el canal elegido arriba. No le llega a nadie
+                del condominio ni cuenta como envío real.
+              </p>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <label
+                  htmlFor="auto-prueba-email"
+                  className="block text-xs font-medium text-foreground"
+                >
+                  Correo de prueba
+                </label>
+                <Input
+                  id="auto-prueba-email"
+                  type="email"
+                  value={pruebaEmail}
+                  placeholder="tucorreo@ejemplo.com"
+                  disabled={busy || pruebaBusy}
+                  onChange={(e) => {
+                    setPruebaEmail(e.target.value);
+                    setPruebaError(null);
+                  }}
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label
+                  htmlFor="auto-prueba-telefono"
+                  className="block text-xs font-medium text-foreground"
+                >
+                  Celular de prueba
+                </label>
+                <Input
+                  id="auto-prueba-telefono"
+                  type="tel"
+                  value={pruebaTelefono}
+                  placeholder="+573001234567"
+                  disabled={busy || pruebaBusy}
+                  onChange={(e) => {
+                    setPruebaTelefono(e.target.value);
+                    setPruebaError(null);
+                  }}
+                />
+              </div>
+            </div>
+
+            <p className="text-[11px] text-muted-foreground">
+              Basta con uno de los dos; si escribes ambos y el canal es «Ambos»,
+              la prueba sale por correo y por WhatsApp.
+            </p>
+
+            <div className="space-y-1.5">
+              <label
+                htmlFor="auto-prueba-nombre"
+                className="block text-xs font-medium text-foreground"
+              >
+                Nombre de prueba{" "}
+                <span className="font-normal text-muted-foreground">
+                  (opcional)
+                </span>
+              </label>
+              <Input
+                id="auto-prueba-nombre"
+                type="text"
+                value={pruebaNombre}
+                placeholder="Nombre de prueba"
+                disabled={busy || pruebaBusy}
+                onChange={(e) => setPruebaNombre(e.target.value)}
+              />
+            </div>
+
+            <div>
+              <p className="mb-1.5 text-xs font-medium text-foreground">
+                Versión del mensaje
+              </p>
+              <div className="inline-flex flex-wrap items-center gap-1 rounded-full border border-border bg-card p-1">
+                {PRUEBA_VERSIONES.map((v) => {
+                  const activo = pruebaComoPropietario === v.comoPropietario;
+                  return (
+                    <button
+                      key={v.label}
+                      type="button"
+                      disabled={busy || pruebaBusy}
+                      onClick={() => {
+                        setPruebaComoPropietario(v.comoPropietario);
+                        setPruebaError(null);
+                      }}
+                      className={cn(
+                        "rounded-full px-3.5 py-1.5 text-[12.5px] font-medium transition-colors",
+                        activo
+                          ? "bg-brand/10 text-foreground"
+                          : "text-muted-foreground hover:text-foreground",
+                        (busy || pruebaBusy) && "cursor-not-allowed opacity-60",
+                      )}
+                    >
+                      {v.label}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
+                {pruebaComoPropietario
+                  ? "El propietario recibe el texto de «compártele el enlace a tu apoderado»."
+                  : "El apoderado recibe el enlace para entrar directo a la asamblea. La versión de propietario dice «compártele el enlace a tu apoderado»."}
+              </p>
+            </div>
+
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => void onEnviarPrueba()}
+              disabled={!pruebaLista || busy}
+            >
+              {pruebaBusy ? (
+                <Spinner />
+              ) : (
+                <FlaskConical className="h-4 w-4" aria-hidden />
+              )}
+              Enviar prueba
+            </Button>
+
+            {pruebaResultado &&
+              (pruebaResultado.correo || pruebaResultado.whatsapp) && (
+                <div className="space-y-1">
+                  {pruebaResultado.correo && (
+                    <LineaPrueba
+                      label="Correo"
+                      texto={pruebaResultado.correo}
+                    />
+                  )}
+                  {pruebaResultado.whatsapp && (
+                    <LineaPrueba
+                      label="WhatsApp"
+                      texto={pruebaResultado.whatsapp}
+                    />
+                  )}
+                </div>
+              )}
+
+            {pruebaError && (
+              <p className="text-sm text-destructive">{pruebaError}</p>
+            )}
+          </div>
+
           {error && <p className="text-sm text-destructive">{error}</p>}
         </div>
       )}
     </Modal>
+  );
+}
+
+/** Una línea del resultado de la prueba: verde si salió, ámbar si falló. */
+function LineaPrueba({ label, texto }: { label: string; texto: string }) {
+  const ok = texto.startsWith("Enviado");
+  const fallo = texto.startsWith("Falló");
+  return (
+    <p
+      className={cn(
+        "flex items-start gap-1.5 text-xs leading-relaxed",
+        ok
+          ? "text-emerald-700 dark:text-emerald-400"
+          : fallo
+            ? "text-amber-700 dark:text-amber-400"
+            : "text-muted-foreground",
+      )}
+    >
+      {ok ? (
+        <Check className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+      ) : fallo ? (
+        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+      ) : null}
+      <span>
+        <span className="font-medium">{label}:</span> {texto}
+      </span>
+    </p>
   );
 }
 
