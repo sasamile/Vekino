@@ -6,6 +6,7 @@ import { X } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
 import { Button } from "@/components/ui/button";
+import { mensajeErrorUsuario } from "@/lib/utils";
 
 /**
  * Crea un administrador operativo del condominio (rol `administrador`).
@@ -59,7 +60,10 @@ export function CreateCondoAdminDialog({
       onClose();
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : "No se pudo crear el administrador.",
+        mensajeErrorUsuario(
+          err,
+          "No se pudo crear el administrador. Intenta de nuevo.",
+        ),
       );
       setBusy(false);
     }

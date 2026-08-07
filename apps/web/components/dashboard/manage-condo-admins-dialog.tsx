@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { UserAvatar } from "@/components/ui/user-avatar";
 import { Skeleton } from "@/components/ui/skeleton";
+import { mensajeErrorUsuario } from "@/lib/utils";
 
 type OpRole =
   | "administrador"
@@ -318,7 +319,10 @@ function CreateAdminForm({
       onDone();
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : "No se pudo crear el administrador.",
+        mensajeErrorUsuario(
+          err,
+          "No se pudo crear el administrador. Intenta de nuevo.",
+        ),
       );
       setBusy(false);
     }

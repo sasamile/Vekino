@@ -107,10 +107,14 @@ export function mensajeErrorUsuario(
     .replace(/^Uncaught Error:\s*/i, "")
     .trim();
   const primera = sinPrefijo.split("\n")[0]?.trim() ?? "";
+
+  if (/connection lost|while action was in flight/i.test(sinPrefijo)) {
+    return "Se perdió la conexión al guardar. Espera un momento e intenta de nuevo; si ya quedó creado, no lo vuelvas a crear.";
+  }
   if (
     !primera ||
     primera.startsWith("at ") ||
-    primera.includes("Called by client")
+    /called by client/i.test(primera)
   ) {
     return fallback;
   }

@@ -29,7 +29,7 @@ import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
-import { cn } from "@/lib/utils";
+import { cn, mensajeErrorUsuario } from "@/lib/utils";
 import { UserAvatar } from "@/components/ui/user-avatar";
 
 const ASSIGNABLE_ROLES = [
@@ -678,7 +678,7 @@ function ResidentFormDialog({
       }
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "No se pudo guardar.");
+      setError(mensajeErrorUsuario(err, "No se pudo guardar."));
     } finally {
       setBusy(false);
     }
