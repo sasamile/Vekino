@@ -74,6 +74,11 @@ export const listar = query({
           fallidos: e.fallidos,
           sinContacto: e.sinContacto,
           error: e.error ?? null,
+          reintentoDe: (e.reintentoDe as string | undefined) ?? null,
+          pendientesDeReenvio:
+            e.estado === "completado" || e.estado === "fallido"
+              ? e.fallidos + e.sinContacto
+              : 0,
           creadoPorNombre: e.creadoPorNombre,
           createdAt: e.createdAt,
         };
@@ -110,17 +115,19 @@ export const condominiosConAsambleas = query({
           .withIndex("by_asamblea", (q) => q.eq("asambleaId", a._id))
           .collect();
 
-        // Un apoderado puede tener varias unidades: se cuenta por persona.
-        const porPersona = new Map<string, boolean>();
+        /* Se cuenta por PODER, y "con contacto" mira al propietario que lo
+         * otorgó: es a él a quien se le manda el enlace para que se lo pase
+         * a su apoderado, porque del apoderado externo no tenemos datos. */
+        const vistos = new Set<string>();
+        let conContacto = 0;
         for (const p of poderes) {
-          const clave = (p.representanteUserId as string) ?? p.codigoAcceso;
-          if (porPersona.has(clave)) continue;
-          let tieneContacto = false;
-          if (p.representanteUserId) {
-            const u = await ctx.db.get(p.representanteUserId);
-            tieneContacto = !!u && (!!u.email || !!u.telefonoE164);
+          const clave = `${p.otorganteUserId}:${p.codigoAcceso}`;
+          if (vistos.has(clave)) continue;
+          vistos.add(clave);
+          const otorgante = await ctx.db.get(p.otorganteUserId);
+          if (otorgante?.active && (otorgante.email || otorgante.telefonoE164)) {
+            conContacto++;
           }
-          porPersona.set(clave, tieneContacto);
         }
 
         filas.push({
@@ -128,8 +135,8 @@ export const condominiosConAsambleas = query({
           titulo: a.titulo,
           fecha: a.fecha,
           hora: a.hora,
-          apoderados: porPersona.size,
-          apoderadosConContacto: [...porPersona.values()].filter(Boolean).length,
+          apoderados: vistos.size,
+          apoderadosConContacto: conContacto,
         });
       }
 
@@ -267,6 +274,65 @@ export const enviarAhora = mutation({
   },
 });
 
+/**
+ * Reenvía SOLO a quienes no recibieron el envío original: los que fallaron y
+ * los que estaban sin contacto. Es lo que se usa después de corregir un
+ * teléfono o un correo en la plataforma, sin volver a molestar a los demás.
+ */
+export const reintentarPendientes = mutation({
+  args: {
+    id: v.id("enviosProgramados"),
+    canal: v.optional(canalValidator),
+    programadoPara: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const staff = await requirePlatformStaff(ctx);
+    const original = await ctx.db.get(args.id);
+    if (!original) throw new Error("Envío no encontrado.");
+    if (original.estado === "programado" || original.estado === "enviando") {
+      throw new Error("Ese envío todavía no ha terminado.");
+    }
+
+    const filas = await ctx.db
+      .query("enviosProgramadosDetalle")
+      .withIndex("by_envio", (q) => q.eq("envioId", args.id))
+      .collect();
+    const pendientes = filas.filter((f) => f.estado !== "enviado").length;
+    if (pendientes === 0) {
+      throw new Error("Todos recibieron el envío: no hay a quién reenviar.");
+    }
+
+    const now = Date.now();
+    const cuando = Math.max(args.programadoPara ?? now, now);
+
+    const envioId = await ctx.db.insert("enviosProgramados", {
+      condominioId: original.condominioId,
+      tipo: original.tipo,
+      asambleaId: original.asambleaId,
+      canal: args.canal ?? original.canal,
+      programadoPara: cuando,
+      reintentoDe: args.id,
+      estado: "programado",
+      total: 0,
+      enviados: 0,
+      fallidos: 0,
+      sinContacto: 0,
+      creadoPorUserId: staff._id,
+      creadoPorNombre: staff.name,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const jobId = await ctx.scheduler.runAt(
+      cuando,
+      internal.automatizaciones.ejecutar,
+      { envioId },
+    );
+    await ctx.db.patch(envioId, { scheduledFunctionId: jobId });
+    return envioId;
+  },
+});
+
 // ─────────────────────────────────────────────────────────────
 // Ejecución
 // ─────────────────────────────────────────────────────────────
@@ -287,40 +353,87 @@ export const datosEnvio = internalQuery({
       .withIndex("by_asamblea", (q) => q.eq("asambleaId", asamblea._id))
       .collect();
 
-    // Una persona puede representar varias unidades: un solo mensaje por
-    // persona, con todas sus unidades listadas.
+    /* El destinatario es el PROPIETARIO que otorgó el poder, no el apoderado.
+     * La tabla de poderes no guarda correo ni celular del apoderado (muchos
+     * son externos y ni siquiera tienen cuenta), pero el otorgante sí es un
+     * residente registrado: se le manda el enlace para que se lo comparta.
+     * Si el apoderado además tiene cuenta, le llega también directo. */
     type Destinatario = {
+      clave: string;
       nombre: string;
+      /** A quién representa el enlace (para redactar el mensaje). */
+      apoderadoNombre: string;
       codigo: string;
       email?: string;
       telefono?: string;
       unidades: string[];
+      /** true = es el propio apoderado; false = es el propietario. */
+      esApoderado: boolean;
     };
-    const porPersona = new Map<string, Destinatario>();
+    const porDestinatario = new Map<string, Destinatario>();
+
+    const agregar = (
+      clave: string,
+      base: Omit<Destinatario, "clave" | "unidades">,
+      unidad: string,
+    ) => {
+      const previo = porDestinatario.get(clave);
+      if (previo) {
+        if (!previo.unidades.includes(unidad)) previo.unidades.push(unidad);
+        return;
+      }
+      porDestinatario.set(clave, { clave, ...base, unidades: [unidad] });
+    };
 
     for (const p of poderes) {
-      const clave = (p.representanteUserId as string) ?? p.codigoAcceso;
-      const existente = porPersona.get(clave);
-      if (existente) {
-        existente.unidades.push(p.unidadNumero);
-        continue;
+      // 1) El propietario que otorgó el poder.
+      const otorgante = await ctx.db.get(p.otorganteUserId);
+      if (otorgante?.active) {
+        agregar(
+          `otorgante:${p.otorganteUserId}:${p.codigoAcceso}`,
+          {
+            nombre: otorgante.name,
+            apoderadoNombre: p.representanteNombre,
+            codigo: p.codigoAcceso,
+            email: otorgante.email,
+            telefono: otorgante.telefonoE164 ?? undefined,
+            esApoderado: false,
+          },
+          p.unidadNumero,
+        );
       }
-      let email: string | undefined;
-      let telefono: string | undefined;
+
+      // 2) El apoderado, solo si tiene cuenta con datos de contacto.
       if (p.representanteUserId) {
-        const u = await ctx.db.get(p.representanteUserId);
-        if (u?.active) {
-          email = u.email;
-          telefono = u.telefonoE164 ?? undefined;
+        const rep = await ctx.db.get(p.representanteUserId);
+        if (rep?.active && (rep.email || rep.telefonoE164)) {
+          agregar(
+            `apoderado:${p.representanteUserId}`,
+            {
+              nombre: rep.name,
+              apoderadoNombre: rep.name,
+              codigo: p.codigoAcceso,
+              email: rep.email,
+              telefono: rep.telefonoE164 ?? undefined,
+              esApoderado: true,
+            },
+            p.unidadNumero,
+          );
         }
       }
-      porPersona.set(clave, {
-        nombre: p.representanteNombre,
-        codigo: p.codigoAcceso,
-        email,
-        telefono,
-        unidades: [p.unidadNumero],
-      });
+    }
+
+    // Reenvío: se excluye a quien ya recibió en el envío original.
+    let destinatarios = [...porDestinatario.values()];
+    if (envio.reintentoDe) {
+      const previos = await ctx.db
+        .query("enviosProgramadosDetalle")
+        .withIndex("by_envio", (q) => q.eq("envioId", envio.reintentoDe!))
+        .collect();
+      const yaRecibieron = new Set(
+        previos.filter((f) => f.estado === "enviado").map((f) => f.clave),
+      );
+      destinatarios = destinatarios.filter((d) => !yaRecibieron.has(d.clave));
     }
 
     return {
@@ -331,7 +444,7 @@ export const datosEnvio = internalQuery({
       fecha: asamblea.fecha,
       hora: asamblea.hora,
       canal: envio.canal,
-      destinatarios: [...porPersona.values()],
+      destinatarios,
     };
   },
 });
@@ -354,6 +467,7 @@ export const registrarResultado = internalMutation({
   args: {
     envioId: v.id("enviosProgramados"),
     condominioId: v.id("condominios"),
+    clave: v.optional(v.string()),
     nombre: v.string(),
     destino: v.optional(v.string()),
     canal: v.string(),
@@ -437,6 +551,8 @@ export const ejecutar = internalAction({
         try {
           const datosCorreo = {
             nombre: d.nombre,
+            esApoderado: d.esApoderado,
+            apoderadoNombre: d.apoderadoNombre,
             condominioNombre: datos.condominioNombre,
             asambleaTitulo: datos.asambleaTitulo,
             fecha: datos.fecha,
@@ -446,7 +562,7 @@ export const ejecutar = internalAction({
           };
           await sendBrevoEmail({
             to: [{ email: d.email, name: d.nombre }],
-            subject: asuntoApoderado(datos.condominioNombre),
+            subject: asuntoApoderado(datos.condominioNombre, d.esApoderado),
             htmlContent: htmlApoderado(datosCorreo),
             textContent: textoApoderado(datosCorreo),
           });
@@ -459,8 +575,17 @@ export const ejecutar = internalAction({
       }
 
       if (quiereWa && esCelularWhatsApp(d.telefono)) {
-        if (!plantillaWa) {
-          motivos.push("WhatsApp: falta YCLOUD_TEMPLATE_APODERADO");
+        // Al apoderado se le habla en primera persona; al propietario se le
+        // pide que reenvíe. Son plantillas distintas aprobadas por separado.
+        const plantillaUsada = d.esApoderado
+          ? plantillaWa
+          : (process.env.YCLOUD_TEMPLATE_PODER ?? plantillaWa);
+        const paramsWa = d.esApoderado
+          ? [d.nombre, datos.condominioNombre, datos.fecha, datos.hora]
+          : [d.nombre, d.apoderadoNombre, datos.condominioNombre, datos.fecha];
+
+        if (!plantillaUsada) {
+          motivos.push("WhatsApp: falta la plantilla configurada");
         } else if (!datos.moduloWhatsapp) {
           motivos.push("WhatsApp: módulo apagado en el condominio");
         } else {
@@ -468,21 +593,11 @@ export const ejecutar = internalAction({
             // {{1}} nombre, {{2}} condominio, {{3}} fecha, {{4}} hora;
             // el botón URL lleva el código como sufijo dinámico.
             await enviarMensaje({
-              ...msgPlantilla(d.telefono!, plantillaWa, "es", [
-                d.nombre,
-                datos.condominioNombre,
-                datos.fecha,
-                datos.hora,
-              ]),
+              ...msgPlantilla(d.telefono!, plantillaUsada, "es", paramsWa),
               components: [
                 {
                   type: "body",
-                  parameters: [
-                    { type: "text", text: d.nombre },
-                    { type: "text", text: datos.condominioNombre },
-                    { type: "text", text: datos.fecha },
-                    { type: "text", text: datos.hora },
-                  ],
+                  parameters: paramsWa.map((t) => ({ type: "text", text: t })),
                 },
                 {
                   type: "button",
@@ -508,6 +623,7 @@ export const ejecutar = internalAction({
       await ctx.runMutation(internal.automatizaciones.registrarResultado, {
         envioId: args.envioId,
         condominioId: datos.condominioId,
+        clave: d.clave,
         nombre: d.nombre,
         destino: d.email ?? d.telefono,
         canal: datos.canal,

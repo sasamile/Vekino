@@ -1605,6 +1605,11 @@ export default defineSchema({
       v.literal("ambos"),
     ),
     programadoPara: v.number(),
+    /**
+     * Reenvío: solo va a quienes NO recibieron el envío original (fallidos y
+     * sin contacto). Sirve tras corregir teléfonos o correos en la plataforma.
+     */
+    reintentoDe: v.optional(v.id("enviosProgramados")),
     estado: v.union(
       v.literal("programado"),
       v.literal("enviando"),
@@ -1631,6 +1636,8 @@ export default defineSchema({
   enviosProgramadosDetalle: defineTable({
     envioId: v.id("enviosProgramados"),
     condominioId: v.id("condominios"),
+    /** Identidad estable del destinatario, para cruzar reenvíos. */
+    clave: v.optional(v.string()),
     nombre: v.string(),
     destino: v.optional(v.string()),
     canal: v.string(),

@@ -7,6 +7,10 @@
 
 export type ApoderadoEmailArgs = {
   nombre: string;
+  /** false = el correo va al PROPIETARIO para que reenvíe el enlace. */
+  esApoderado: boolean;
+  /** Nombre de la persona que usará el enlace. */
+  apoderadoNombre: string;
   condominioNombre: string;
   asambleaTitulo: string;
   fecha: string;
@@ -15,15 +19,19 @@ export type ApoderadoEmailArgs = {
   unidades: string[];
 };
 
-export function asuntoApoderado(condominio: string): string {
-  return `Tu enlace para la asamblea de ${condominio}`;
+export function asuntoApoderado(condominio: string, esApoderado = true): string {
+  return esApoderado
+    ? `Tu enlace para la asamblea de ${condominio}`
+    : `Enlace para tu apoderado — asamblea de ${condominio}`;
 }
 
 export function textoApoderado(a: ApoderadoEmailArgs): string {
   return [
     `Hola ${a.nombre}:`,
     "",
-    `Quedaste registrado como apoderado en la asamblea de ${a.condominioNombre}.`,
+    a.esApoderado
+      ? `Quedaste registrado como apoderado en la asamblea de ${a.condominioNombre}.`
+      : `Registraste a ${a.apoderadoNombre} como tu apoderado para la asamblea de ${a.condominioNombre}.\nPor favor compártele el enlace de abajo: es su acceso personal para ingresar y votar por tu unidad.`,
     "",
     `Asamblea: ${a.asambleaTitulo}`,
     `Fecha: ${a.fecha}`,
@@ -33,8 +41,9 @@ export function textoApoderado(a: ApoderadoEmailArgs): string {
     "Ingresa con este enlace personal:",
     a.enlace,
     "",
-    "Es personal e intransferible: con él quedas registrado y puedes votar por",
-    "las unidades que representas. No lo compartas.",
+    a.esApoderado
+      ? "Es personal e intransferible: con él quedas registrado y puedes votar por las unidades que representas."
+      : `Compártelo únicamente con ${a.apoderadoNombre}: quien tenga ese enlace puede votar por tu unidad.`,
     "",
     "Vekino · Gestión residencial",
   ]
@@ -49,8 +58,20 @@ export function htmlApoderado(a: ApoderadoEmailArgs): string {
   const enlace = escAttr(a.enlace);
   const enlaceTexto = esc(a.enlace);
 
+  const intro = a.esApoderado
+    ? "Quedaste registrado como <strong>apoderado</strong> en esta asamblea. Aquí está tu enlace de ingreso."
+    : `Registraste a <strong>${esc(a.apoderadoNombre)}</strong> como tu apoderado para esta asamblea. <strong>Compártele el enlace de abajo</strong>: es su acceso personal para ingresar y votar por tu unidad.`;
+
+  const aviso = a.esApoderado
+    ? "Este enlace es personal e intransferible. Con él quedas registrado en la asamblea y puedes votar por las unidades que representas, así que no lo compartas."
+    : `Compártelo únicamente con ${esc(a.apoderadoNombre)}. Quien tenga este enlace queda registrado y puede votar por tu unidad, así que no lo publiques en grupos.`;
+
+  const etiquetaUnidades = a.esApoderado
+    ? "Unidades que representas"
+    : "Tus unidades";
+
   const filaUnidades = a.unidades.length
-    ? `<p style="margin:0 0 8px;font-size:13px;line-height:18px;color:#6f7788;text-transform:uppercase;letter-spacing:.5px;">Unidades que representas</p>
+    ? `<p style="margin:0 0 8px;font-size:13px;line-height:18px;color:#6f7788;text-transform:uppercase;letter-spacing:.5px;">${etiquetaUnidades}</p>
        <p style="margin:0;font-size:16px;line-height:24px;color:#0b235a;font-weight:bold;">${esc(a.unidades.join(", "))}</p>`
     : "";
 
@@ -60,7 +81,7 @@ export function htmlApoderado(a: ApoderadoEmailArgs): string {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
-  <title>${asuntoApoderado(a.condominioNombre)}</title>
+  <title>${asuntoApoderado(a.condominioNombre, a.esApoderado)}</title>
 </head>
 <body style="margin:0;padding:0;background:#f3f5f7;font-family:Arial,Helvetica,sans-serif;color:#14213d;">
   <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">
@@ -81,7 +102,7 @@ export function htmlApoderado(a: ApoderadoEmailArgs): string {
         <tr><td style="padding:14px 34px 8px;">
           <p style="margin:0 0 18px;font-size:17px;line-height:27px;color:#202b46;">Hola, <strong>${nombre}</strong>:</p>
           <p style="margin:0 0 18px;font-size:16px;line-height:26px;color:#3b4356;">
-            Quedaste registrado como <strong>apoderado</strong> en esta asamblea. Aquí está tu enlace de ingreso.
+            ${intro}
           </p>
         </td></tr>
 
@@ -101,7 +122,7 @@ export function htmlApoderado(a: ApoderadoEmailArgs): string {
             <tr><td align="center" bgcolor="#ff4f0a" style="border-radius:9px;">
               <a href="${enlace}" target="_blank"
                  style="display:inline-block;padding:15px 34px;color:#ffffff;text-decoration:none;font-size:16px;line-height:20px;font-weight:bold;border-radius:9px;">
-                Ingresar a la asamblea
+                ${a.esApoderado ? "Ingresar a la asamblea" : "Ver el enlace del apoderado"}
               </a>
             </td></tr>
           </table>
@@ -117,8 +138,7 @@ export function htmlApoderado(a: ApoderadoEmailArgs): string {
             <tr><td style="padding:16px 18px;">
               <p style="margin:0;font-size:15px;line-height:23px;color:#4a432e;">
                 <strong style="color:#7a5d00;">Importante:</strong>
-                Este enlace es personal e intransferible. Con él quedas registrado en la asamblea
-                y puedes votar por las unidades que representas, así que no lo compartas.
+                ${aviso}
               </p>
             </td></tr>
           </table>

@@ -78,7 +78,7 @@ export default function PlatformSoportePage() {
 
   return (
     <PageContainer>
-      <div className="mx-auto max-w-5xl space-y-6">
+      <div className="w-full space-y-6">
         <PageHeader
           title="Soporte"
           description={

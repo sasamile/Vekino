@@ -51,6 +51,7 @@ export const datosPagoAprobado = internalQuery({
       factura,
       condominio,
       userId,
+      nombre: user?.name ?? null,
       telefono,
       conversacionId: conversacion?._id ?? null,
       ventanaAbierta:
@@ -111,6 +112,7 @@ export const datosSoporteRevisado = internalQuery({
       condominio,
       factura,
       userId: soporte.userId ?? null,
+      nombre: user?.name ?? null,
       telefono,
       conversacionId: conversacion?._id ?? null,
       ventanaAbierta: (conversacion?.ventanaExpiraAt ?? 0) > Date.now(),
@@ -133,6 +135,7 @@ export const soporteRevisado = internalAction({
 
     const aprobado = datos.soporte.estado === "aprobado";
     const resultado = aprobado ? "aprobado" : "rechazado";
+    const nombreSoporte = datos.nombre?.split(" ")[0] ?? "vecino";
     const plantilla = process.env.YCLOUD_TEMPLATE_COMPROBANTE;
 
     const registrar = (
@@ -178,9 +181,11 @@ export const soporteRevisado = internalAction({
         }
         await registrar("enviado", { ycloudMessageId: res.id });
       } else if (plantilla) {
-        // Plantilla con 2 variables de body: {{1}} condominio, {{2}} resultado.
+        // Plantilla `comprobante_revisado`, aprobada con este orden exacto:
+        // {{1}} nombre, {{2}} condominio, {{3}} resultado.
         const res = await enviarMensaje(
           msgPlantilla(datos.telefono, plantilla, "es", [
+            nombreSoporte,
             datos.condominio.name,
             resultado,
           ]),
@@ -234,6 +239,7 @@ export const pagoAprobado = internalAction({
     }
 
     const monto = pesos.format(datos.pago.monto);
+    const nombreCorto = datos.nombre?.split(" ")[0] ?? "vecino";
     const plantilla = process.env.YCLOUD_TEMPLATE_PAGO_APROBADO;
 
     try {
@@ -254,12 +260,14 @@ export const pagoAprobado = internalAction({
         }
         await registrar("enviado", { ycloudMessageId: res.id });
       } else if (plantilla) {
-        // Plantilla con 3 variables de body: {{1}} condominio, {{2}} factura, {{3}} monto.
+        // Plantilla `pago_confirmado`, aprobada con este orden exacto:
+        // {{1}} nombre, {{2}} monto, {{3}} n.º de factura, {{4}} condominio.
         const res = await enviarMensaje(
           msgPlantilla(datos.telefono, plantilla, "es", [
-            datos.condominio.name,
-            datos.factura.numeroFactura,
+            nombreCorto,
             monto,
+            datos.factura.numeroFactura,
+            datos.condominio.name,
           ]),
         );
         await registrar("enviado", { ycloudMessageId: res.id, template: plantilla });
