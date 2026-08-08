@@ -162,8 +162,8 @@ export default function ConsejoPage() {
   const folderLabel = categoriaActiva?.nombre ?? "Todos los documentos";
 
   if (permisos && !permisos.canView) {
-    return (
-      <PageContainer>
+  return (
+    <PageContainer>
         <EmptyState
           icon={Folder}
           title="Sin acceso"
@@ -239,7 +239,7 @@ export default function ConsejoPage() {
                 Nueva
               </Button>
             )}
-          </div>
+        </div>
 
           {loading ? (
             <div className="flex gap-2 overflow-hidden">
@@ -341,9 +341,9 @@ export default function ConsejoPage() {
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                         </button>
-                      </div>
-                    )}
-                  </div>
+            </div>
+        )}
+      </div>
                 );
               })}
 
@@ -415,14 +415,14 @@ export default function ConsejoPage() {
                   {filtered.map((d) => {
                     const est =
                       ESTADO_META[d.estado as Estado] ?? ESTADO_META.pendiente;
-                    return (
+  return (
                       <TR
                         key={d._id}
                         className="cursor-pointer"
                         onClick={() => setDetalleId(d._id)}
                       >
                         <TD>
-                          <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3">
                             <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-brand/10 text-brand">
                               <FileText className="h-4 w-4" />
                             </span>
@@ -434,7 +434,7 @@ export default function ConsejoPage() {
                                   : ""
                               }`}
                             />
-                          </div>
+          </div>
                         </TD>
                         <TD>
                           <span className="whitespace-nowrap text-muted-foreground">
@@ -449,7 +449,7 @@ export default function ConsejoPage() {
                             <span className="truncate text-foreground">
                               {d.createdByNombre ?? "—"}
                             </span>
-                          </div>
+          </div>
                         </TD>
                         <TD>
                           <span className="tabular-nums text-muted-foreground">
@@ -482,7 +482,7 @@ export default function ConsejoPage() {
                               <Download className="h-4 w-4" />
                             </a>
                             {permisos?.canUpload && (
-                              <button
+        <button
                                 type="button"
                                 className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
                                 aria-label="Eliminar documento"
@@ -492,9 +492,9 @@ export default function ConsejoPage() {
                                     titulo: d.titulo,
                                   })
                                 }
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </button>
+        >
+          <Trash2 className="h-4 w-4" />
+        </button>
                             )}
                             {d.comentariosCount > 0 && (
                               <span className="inline-flex items-center gap-1 px-1.5 text-xs text-muted-foreground">
@@ -502,7 +502,7 @@ export default function ConsejoPage() {
                                 {d.comentariosCount}
                               </span>
                             )}
-                          </div>
+          </div>
                         </TD>
                       </TR>
                     );
@@ -700,9 +700,9 @@ function CategoriaModal({
             placeholder="Ej. Contabilidad, Actas, Reportes…"
             autoFocus
           />
-        </div>
-        {error && <p className="text-sm text-destructive">{error}</p>}
       </div>
+        {error && <p className="text-sm text-destructive">{error}</p>}
+            </div>
     </Modal>
   );
 }
@@ -780,7 +780,7 @@ function SubirDocumentoModal({
       }
     >
       <div className="space-y-3">
-        <div className="space-y-1.5">
+          <div className="space-y-1.5">
           <label className="text-xs font-medium">Categoría</label>
           <Select
             value={categoriaId}
@@ -793,34 +793,34 @@ function SubirDocumentoModal({
               <option key={c._id} value={c._id}>
                 {c.nombre}
               </option>
-            ))}
-          </Select>
-        </div>
-        <div className="space-y-1.5">
+              ))}
+            </Select>
+          </div>
+          <div className="space-y-1.5">
           <label className="text-xs font-medium">Título</label>
           <Input
             value={titulo}
             onChange={(e) => setTitulo(e.target.value)}
             placeholder="Ej: Informe mes de abril 2026"
           />
-        </div>
-        <div className="space-y-1.5">
+          </div>
+          <div className="space-y-1.5">
           <label className="text-xs font-medium">Descripción (opcional)</label>
           <Textarea
             value={descripcion}
             onChange={(e) => setDescripcion(e.target.value)}
             rows={2}
           />
-        </div>
-        <div className="space-y-1.5">
+          </div>
+          <div className="space-y-1.5">
           <label className="text-xs font-medium">Período (opcional)</label>
           <Input
             type="month"
             value={periodoMes}
             onChange={(e) => setPeriodoMes(e.target.value)}
           />
-        </div>
-        <div className="space-y-1.5">
+          </div>
+          <div className="space-y-1.5">
           <label className="text-xs font-medium">Archivo</label>
           <input
             type="file"
@@ -1046,7 +1046,7 @@ function DocumentoDetalleModal({
       footer={
         <Button variant="ghost" size="sm" onClick={onClose}>
           Cerrar
-        </Button>
+          </Button>
       }
     >
       {!doc ? (
@@ -1111,7 +1111,7 @@ function DocumentoDetalleModal({
                   <option value="en_revision">En revisión</option>
                   <option value="pendiente">Por revisar</option>
                   <option value="reemplazado">Archivado</option>
-                </Select>
+            </Select>
               </label>
             )}
             {(canAdmin || canUpload) && (
@@ -1128,14 +1128,14 @@ function DocumentoDetalleModal({
 
           {editing ? (
             <div className="space-y-3 rounded-xl border border-border bg-muted/30 p-3">
-              <div className="space-y-1.5">
+          <div className="space-y-1.5">
                 <label className="text-xs font-medium">Título</label>
                 <Input
                   value={titulo}
                   onChange={(e) => setTitulo(e.target.value)}
                 />
-              </div>
-              <div className="space-y-1.5">
+          </div>
+          <div className="space-y-1.5">
                 <label className="text-xs font-medium">Categoría</label>
                 <Select
                   value={categoriaId}
@@ -1147,23 +1147,23 @@ function DocumentoDetalleModal({
                     </option>
                   ))}
                 </Select>
-              </div>
-              <div className="space-y-1.5">
+        </div>
+        <div className="space-y-1.5">
                 <label className="text-xs font-medium">Descripción</label>
                 <Textarea
                   value={descripcion}
                   onChange={(e) => setDescripcion(e.target.value)}
                   rows={2}
                 />
-              </div>
-              <div className="space-y-1.5">
+        </div>
+        <div className="space-y-1.5">
                 <label className="text-xs font-medium">Período</label>
                 <Input
                   type="month"
                   value={periodoMes}
                   onChange={(e) => setPeriodoMes(e.target.value)}
                 />
-              </div>
+        </div>
               <div className="flex justify-end gap-2">
                 <Button
                   variant="ghost"
@@ -1181,7 +1181,7 @@ function DocumentoDetalleModal({
                   {busy && <Loader2 className="h-4 w-4 animate-spin" />}
                   Guardar
                 </Button>
-              </div>
+      </div>
             </div>
           ) : (
             doc.descripcion && (
@@ -1355,7 +1355,7 @@ function DocumentoDetalleModal({
                     doc.comentarios.filter(
                       (c) => c.parentId && String(c.parentId) === parentId,
                     );
-                  return (
+  return (
                     <>
                       {roots.map((c) => (
                         <div key={c._id} className="space-y-2">
@@ -1529,8 +1529,8 @@ function DocumentoDetalleModal({
           }
           className="max-w-md"
           overlayClassName="z-[110]"
-          footer={
-            <>
+      footer={
+        <>
               <Button
                 variant="ghost"
                 size="sm"
@@ -1547,10 +1547,10 @@ function DocumentoDetalleModal({
               >
                 {busy && <Loader2 className="h-4 w-4 animate-spin" />}
                 Eliminar
-              </Button>
-            </>
-          }
-        >
+          </Button>
+        </>
+      }
+    >
           {deleteConfirm.kind === "version_archivada" ? (
             <p className="text-sm text-muted-foreground">
               Versión:{" "}

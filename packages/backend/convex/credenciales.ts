@@ -1195,6 +1195,7 @@ export const enviarAccesoPorWhatsapp = internalAction({
       conversacionId: Id<"waConversations"> | null;
       /** A dónde escribirle: teléfono E.164 o BSUID de Meta. */
       para: string;
+      ventanaAbierta: boolean;
     } | null = await ctx.runQuery(internal.credenciales.destinoDeAcceso, {
       telefono: telefono ?? undefined,
       conversacionId: args.conversacionId,
@@ -1203,6 +1204,20 @@ export const enviarAccesoPorWhatsapp = internalAction({
       return {
         ok: false as const,
         motivo: "No encontré a esa persona, o su cuenta no está activa.",
+      };
+    }
+
+    /* La ventana se comprueba ANTES de tocar la contraseña.
+     *
+     * Al revés —rotar y luego intentar— dejaba a la persona peor que al
+     * empezar: con una clave nueva que nunca recibió, porque WhatsApp rechaza
+     * el texto libre pasadas 24 h desde su último mensaje. Le pasó a un
+     * propietario el día de una asamblea. */
+    if (!destino.ventanaAbierta) {
+      return {
+        ok: false as const,
+        motivo:
+          "Esa persona no nos escribe hace más de 24 horas, así que WhatsApp no deja mandarle texto libre. No se le tocó la contraseña. Mándaselas por correo.",
       };
     }
 
@@ -1307,6 +1322,8 @@ export const destinoDeAcceso = internalQuery({
       nombre: user.name,
       conversacionId: conv?._id ?? null,
       para,
+      /* Sin conversación no hay ventana que valga: nunca nos ha escrito. */
+      ventanaAbierta: !!conv?.ventanaExpiraAt && conv.ventanaExpiraAt > Date.now(),
     };
   },
 });

@@ -285,7 +285,7 @@ export function SalaReunion({
             </span>
           ) : null}
           {!panelAbierto ? (
-            <EstadoConexion latido={latido} enCurso={enCurso} />
+          <EstadoConexion latido={latido} enCurso={enCurso} />
           ) : null}
           {esMesa && enCurso ? (
             <button
@@ -681,19 +681,19 @@ export function SalaReunion({
                   </div>
                 ) : null}
 
-                {!esMesa ? (
+              {!esMesa ? (
                   <div className="shrink-0 space-y-4 border-t border-white/10 py-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
                     {delegoSinRepresentar ? (
-                      <VotoDelegado apoderado={mi?.apoderadoNombre ?? null} />
-                    ) : (
-                      <EstadoRegistro
-                        presente={mi?.presente ?? false}
-                        conectado={latido.conectado}
-                        error={registro.error}
-                        onReintentar={() =>
-                          setRegistro({ intentado: false, error: null })
-                        }
-                      />
+                  <VotoDelegado apoderado={mi?.apoderadoNombre ?? null} />
+                ) : (
+                  <EstadoRegistro
+                    presente={mi?.presente ?? false}
+                    conectado={latido.conectado}
+                    error={registro.error}
+                    onReintentar={() =>
+                      setRegistro({ intentado: false, error: null })
+                    }
+                  />
                     )}
                   </div>
                 ) : (
@@ -702,15 +702,15 @@ export function SalaReunion({
               </div>
             </div>
           </div>
-        ) : null}
+              ) : null}
 
         {transcripcionAbierta && esMesa && a.modalidad !== "presencial" ? (
           <PanelTranscripcionSala
             asambleaId={asambleaId}
             esMesa={esMesa}
             onCerrar={() => setTranscripcionAbierta(false)}
-          />
-        ) : null}
+                />
+              ) : null}
 
         {/* Modal aparte: enlace de invitados (solo administrador) */}
         {modalInvitados && puedeGestionarInvitados && enCurso ? (
@@ -748,13 +748,13 @@ export function SalaReunion({
               </div>
             </div>
           </div>
-        ) : null}
+              ) : null}
 
         {/* Perfil de la cuenta con la que estás en la sala */}
         {perfilAbierto ? (
           <div className="fixed inset-0 z-[45] flex items-end justify-center sm:items-center">
-            <button
-              type="button"
+                  <button
+                    type="button"
               aria-label="Cerrar"
               className="absolute inset-0 bg-black/55 backdrop-blur-sm"
               onClick={() => setPerfilAbierto(false)}
@@ -774,8 +774,8 @@ export function SalaReunion({
                   className="rounded-lg p-1.5 text-white/50 hover:bg-white/10 hover:text-white"
                 >
                   <X className="h-5 w-5" aria-hidden />
-                </button>
-              </div>
+                  </button>
+                      </div>
               <div className="px-5 py-5 pb-[max(1.25rem,env(safe-area-inset-bottom))]">
                 <div className="flex items-center gap-4">
                   <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-full bg-white/10 ring-2 ring-white/10">
@@ -799,7 +799,7 @@ export function SalaReunion({
                           : "?"}
                       </span>
                     )}
-                  </div>
+                    </div>
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-base font-semibold text-white">
                       {mi?.nombre ?? "Sin nombre"}
@@ -808,7 +808,7 @@ export function SalaReunion({
                       <p className="mt-0.5 truncate text-sm text-white/45">
                         {mi.email}
                       </p>
-                    ) : null}
+                  ) : null}
                     <p className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-white/10 px-2.5 py-0.5 text-[11px] font-semibold text-white/75">
                       {mi?.platformRole === "superadmin" ? (
                         <>
@@ -852,7 +852,7 @@ export function SalaReunion({
                           {mi!.unidades.join(", ")}
                         </p>
                       </div>
-                    ) : null}
+              ) : null}
                     {(mi?.representa?.length ?? 0) > 0 ? (
                       <div>
                         <p className="text-[11px] font-medium uppercase tracking-wider text-white/35">
@@ -861,9 +861,9 @@ export function SalaReunion({
                         <p className="mt-1 text-sm text-white/80">
                           {mi!.representa.join(", ")}
                         </p>
-                      </div>
-                    ) : null}
-                  </div>
+            </div>
+        ) : null}
+      </div>
                 ) : null}
 
                 <p className="mt-5 text-center text-[11px] leading-relaxed text-white/30">
@@ -1252,33 +1252,33 @@ function ResumenSala({ sala }: { sala: SalaEnVivo | null | undefined }) {
   return (
     <section className="flex min-h-0 flex-1 flex-col">
       <div className="shrink-0">
-        <div className="flex items-baseline gap-2">
-          <span
-            className={cn(
-              "text-3xl font-bold tabular-nums",
-              sala.hayQuorum ? "text-emerald-400" : "text-amber-400",
-            )}
-          >
-            {sala.pctCoeficiente.toFixed(2)}%
-          </span>
-          <span className="text-xs text-white/50">
+      <div className="flex items-baseline gap-2">
+        <span
+          className={cn(
+            "text-3xl font-bold tabular-nums",
+            sala.hayQuorum ? "text-emerald-400" : "text-amber-400",
+          )}
+        >
+          {sala.pctCoeficiente.toFixed(2)}%
+        </span>
+        <span className="text-xs text-white/50">
             coeficiente · {sala.unidadesConectadas}/{sala.totalUnidades} unidades
             {personas.length > 0 ? ` · ${personas.length} en sala` : ""}
-          </span>
-        </div>
+        </span>
+      </div>
         <div className="relative mt-3 h-1.5 overflow-hidden rounded-full bg-white/10">
-          <div
-            className={cn(
-              "h-full rounded-full transition-all",
-              sala.hayQuorum ? "bg-emerald-500" : "bg-amber-500",
-            )}
-            style={{ width: `${Math.min(100, sala.pctCoeficiente)}%` }}
-          />
-          <div
-            className="absolute inset-y-0 w-0.5 bg-red-400"
-            style={{ left: `${sala.quorumRequerido}%` }}
-          />
-        </div>
+        <div
+          className={cn(
+            "h-full rounded-full transition-all",
+            sala.hayQuorum ? "bg-emerald-500" : "bg-amber-500",
+          )}
+          style={{ width: `${Math.min(100, sala.pctCoeficiente)}%` }}
+        />
+        <div
+          className="absolute inset-y-0 w-0.5 bg-red-400"
+          style={{ left: `${sala.quorumRequerido}%` }}
+        />
+      </div>
         <p className="mt-1.5 text-[11px] text-white/40">
           Quórum {sala.quorumRequerido}% ·{" "}
           {sala.hayQuorum ? "alcanzado" : "aún sin quórum"}
@@ -1491,7 +1491,7 @@ function CuentaRegresivaVoto({
   }, []);
   const ms = cierraEn - now;
   if (ms <= 0) {
-    return (
+  return (
       <span
         className={cn(
           "inline-flex items-center gap-1 rounded-full font-semibold",
@@ -1605,7 +1605,7 @@ function ModalAsignarPresidente({
           >
             <Crown className="h-5 w-5 text-amber-300" aria-hidden />
             Presidente de la asamblea
-          </h2>
+      </h2>
           <button
             type="button"
             onClick={onClose}
@@ -2013,8 +2013,8 @@ function ModalOrdenDiaSala({
                                     <Lock className="h-3 w-3" aria-hidden />{" "}
                                     Cerrar
                                   </button>
-                                </>
-                              ) : (
+        </>
+      ) : (
                                 <button
                                   type="button"
                                   onClick={() => {
@@ -2394,7 +2394,7 @@ function MesaSeguimientoVotos({
         <ShieldCheck className="h-4 w-4" aria-hidden /> Votaciones abiertas
       </h2>
       <ul className="space-y-2">
-        {abiertas.map((vt) => (
+      {abiertas.map((vt) => (
           <li
             key={vt._id as string}
             className="rounded-xl bg-white/[0.04] px-3 py-2"
@@ -2452,8 +2452,8 @@ function ModalVotarSala({
 }: {
   votacion: {
     _id: Id<"votaciones">;
-    pregunta: string;
-    opciones: { texto: string }[];
+  pregunta: string;
+  opciones: { texto: string }[];
     estado?: string;
     cierraEn?: number | null;
   } | null;
@@ -2516,7 +2516,7 @@ function ModalVotarSala({
             </div>
             <h2 className="mt-1 text-lg font-semibold text-zinc-900">
               {votacion.pregunta}
-            </h2>
+      </h2>
           </div>
           <button
             type="button"
@@ -2547,24 +2547,24 @@ function ModalVotarSala({
             )}
           </div>
         ) : (
-          <div className="space-y-2">
+      <div className="space-y-2">
             {votacion.opciones.map((o, i) => {
-              const elegida = miVoto === i;
-              return (
-                <button
-                  key={i}
-                  type="button"
-                  disabled={busy !== null}
-                  aria-pressed={elegida}
-                  onClick={async () => {
-                    setBusy(i);
-                    setError(null);
-                    try {
+          const elegida = miVoto === i;
+          return (
+            <button
+              key={i}
+              type="button"
+              disabled={busy !== null}
+              aria-pressed={elegida}
+              onClick={async () => {
+                setBusy(i);
+                setError(null);
+                try {
                       await votar({
                         votacionId: votacion._id,
                         opcionIndex: i,
                       });
-                    } catch (e) {
+                } catch (e) {
                       const msg = mensajeErrorUsuario(
                         e,
                         "No se pudo registrar tu voto.",
@@ -2572,46 +2572,46 @@ function ModalVotarSala({
                       if (
                         /cerrada|tiempo|terminó|termino/i.test(msg)
                       ) {
-                        setError(
+                  setError(
                           "Se acabó el tiempo. Ya no se pueden emitir votos.",
-                        );
+                  );
                       } else {
                         setError(msg);
                       }
-                    } finally {
-                      setBusy(null);
-                    }
-                  }}
-                  className={cn(
+                } finally {
+                  setBusy(null);
+                }
+              }}
+              className={cn(
                     "flex h-12 w-full items-center justify-between gap-3 rounded-xl px-4 text-sm font-medium transition-colors",
-                    elegida
+                elegida
                       ? "bg-zinc-900 text-white"
                       : "border border-zinc-200 bg-zinc-50 text-zinc-800 hover:bg-zinc-100",
-                    busy !== null && "opacity-70",
-                  )}
-                >
-                  <span>{o.texto}</span>
-                  {busy === i ? (
+                busy !== null && "opacity-70",
+              )}
+            >
+              <span>{o.texto}</span>
+              {busy === i ? (
                     <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
-                  ) : elegida ? (
+              ) : elegida ? (
                     <CheckCircle2 className="h-4 w-4" aria-hidden />
-                  ) : null}
-                </button>
-              );
-            })}
-          </div>
+              ) : null}
+            </button>
+          );
+        })}
+      </div>
         )}
 
         {!cerrada && miVoto !== undefined ? (
           <p className="mt-3 text-xs text-zinc-500">
-            Tu voto quedó registrado. Puedes cambiarlo mientras siga abierta.
-          </p>
-        ) : null}
-        {error ? (
+          Tu voto quedó registrado. Puedes cambiarlo mientras siga abierta.
+        </p>
+      ) : null}
+      {error ? (
           <p className="mt-2 text-sm text-red-600" role="alert">
-            {error}
-          </p>
-        ) : null}
+          {error}
+        </p>
+      ) : null}
 
         <div className="mt-5 flex flex-wrap justify-end gap-2">
           <button
@@ -2900,14 +2900,14 @@ function ManosLevantadas({
               className="rounded-xl bg-white/[0.04] px-3 py-2"
             >
               <div className="flex items-center gap-2">
-                <span className="min-w-0 flex-1 truncate text-sm text-white/85">
-                  {f.nombre}
+            <span className="min-w-0 flex-1 truncate text-sm text-white/85">
+              {f.nombre}
+            </span>
+            {f.estado === "concedida" ? (
+              <>
+                <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-[11px] font-semibold text-emerald-300">
+                  Al aire
                 </span>
-                {f.estado === "concedida" ? (
-                  <>
-                    <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-[11px] font-semibold text-emerald-300">
-                      Al aire
-                    </span>
                     {f.cierraEn ? (
                       <CuentaRegresivaVoto cierraEn={f.cierraEn} />
                     ) : null}
@@ -2921,8 +2921,8 @@ function ManosLevantadas({
               <div className="mt-2 flex flex-wrap items-center gap-1.5">
                 {f.estado === "concedida" ? (
                   <>
-                    <button
-                      type="button"
+                <button
+                  type="button"
                       onClick={() =>
                         void extender({
                           asambleaId,
@@ -2948,8 +2948,8 @@ function ManosLevantadas({
                     >
                       <MicOff className="h-3 w-3" aria-hidden />
                       Silenciar
-                    </button>
-                  </>
+                </button>
+              </>
                 ) : eligiendo ? (
                   <div className="w-full space-y-2">
                     <p className="text-[11px] text-white/50">
@@ -2997,20 +2997,20 @@ function ManosLevantadas({
                       </button>
                     </div>
                   </div>
-                ) : (
-                  <>
-                    <button
-                      type="button"
+            ) : (
+              <>
+                <button
+                  type="button"
                       onClick={() => {
                         setDuracion(120);
                         setEligiendoId(id);
                       }}
-                      className="rounded-lg bg-emerald-500 px-2.5 py-1 text-xs font-semibold text-white hover:bg-emerald-600"
-                    >
-                      Dar la palabra
-                    </button>
-                    <button
-                      type="button"
+                  className="rounded-lg bg-emerald-500 px-2.5 py-1 text-xs font-semibold text-white hover:bg-emerald-600"
+                >
+                  Dar la palabra
+                </button>
+                <button
+                  type="button"
                       onClick={() =>
                         void resolver({
                           asambleaId,
@@ -3018,14 +3018,14 @@ function ManosLevantadas({
                           conceder: false,
                         }).catch(() => {})
                       }
-                      className="rounded-lg bg-white/10 px-2.5 py-1 text-xs font-semibold text-white hover:bg-white/20"
-                    >
-                      Bajar
-                    </button>
-                  </>
-                )}
+                  className="rounded-lg bg-white/10 px-2.5 py-1 text-xs font-semibold text-white hover:bg-white/20"
+                >
+                  Bajar
+                </button>
+              </>
+            )}
               </div>
-            </li>
+          </li>
           );
         })}
       </ul>
@@ -3059,7 +3059,7 @@ function ListaUnidadesModal({
           )}
         >
           {n}
-        </span>
+            </span>
       ))}
     </div>
   );

@@ -193,10 +193,10 @@ export default function AsambleaAdmin() {
 
       {/* Tabs — full width */}
       <nav className="flex w-full flex-wrap items-stretch gap-1 rounded-xl border border-border bg-card p-1">
-        {TABS.map((t) => {
-          const Icon = t.icon;
-          const active = tab === t.key;
-          return (
+          {TABS.map((t) => {
+            const Icon = t.icon;
+            const active = tab === t.key;
+            return (
             <button
               key={t.key}
               type="button"
@@ -210,10 +210,10 @@ export default function AsambleaAdmin() {
             >
               <Icon className="h-4 w-4 shrink-0" />
               <span className="truncate">{t.label}</span>
-            </button>
-          );
-        })}
-      </nav>
+              </button>
+            );
+          })}
+        </nav>
 
       {tab === "dashboard" && <DashboardTab asambleaId={asambleaId} estado={a.estado} />}
       {tab === "sala" && (
@@ -401,12 +401,12 @@ function DashboardTab({ asambleaId, estado }: { asambleaId: Id<"asambleas">; est
                       </td>
                       <td className="py-2 pr-6 text-right tabular-nums text-muted-foreground">{f.coeficiente != null ? `${f.coeficiente}` : "—"}</td>
                       <td className="py-2 pr-4 text-muted-foreground whitespace-nowrap">{fmtHora(f.horaRegistro)}</td>
-                      <td className="py-2 text-right">
+                    <td className="py-2 text-right">
                         {asisRow ? (
                           <button onClick={() => quitar({ asistenteId: asisRow._id })} aria-label="Quitar" className="rounded p-1 text-muted-foreground hover:text-red-600"><Trash2 className="h-4 w-4" /></button>
                         ) : null}
-                      </td>
-                    </tr>
+                    </td>
+                  </tr>
                   );
                 })}
               </tbody>
@@ -596,7 +596,7 @@ function PuntoModal({
         <div className="space-y-4">
           <label className="block space-y-1.5">
             <div className="flex items-center justify-between gap-2">
-              <span className="text-sm font-medium text-foreground">Pregunta / Título</span>
+            <span className="text-sm font-medium text-foreground">Pregunta / Título</span>
               <button
                 type="button"
                 disabled={iaBusy || busy || !titulo.trim()}
@@ -1217,7 +1217,7 @@ function PoderesTab({ asambleaId }: { asambleaId: Id<"asambleas"> }) {
               key={p._id}
               className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border p-3"
             >
-              <div>
+            <div>
                 <p className="text-sm font-medium text-foreground">
                   {etiquetaUnidad({
                     unidadNumero: p.unidadNumero,
@@ -1226,8 +1226,8 @@ function PoderesTab({ asambleaId }: { asambleaId: Id<"asambleas"> }) {
                   })}
                   : {p.otorganteNombre} → {p.representanteNombre}
                 </p>
-                <p className="text-xs text-muted-foreground">
-                  {p.validado ? "Validado" : "Pendiente de validación"}
+              <p className="text-xs text-muted-foreground">
+                {p.validado ? "Validado" : "Pendiente de validación"}
                   {p.codigoAcceso && (
                     <>
                       {" "}
@@ -1243,9 +1243,9 @@ function PoderesTab({ asambleaId }: { asambleaId: Id<"asambleas"> }) {
                       ? "Apoderado: propietario"
                       : "Apoderado: persona externa"}
                   </span>
-                </p>
-              </div>
-              <div className="flex items-center gap-2">
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
                 {p.documentoUrl ? (
                   <a
                     href={p.documentoUrl}
@@ -1268,8 +1268,8 @@ function PoderesTab({ asambleaId }: { asambleaId: Id<"asambleas"> }) {
                 >
                   <Trash2 className="h-4 w-4" />
                 </button>
-              </div>
             </div>
+          </div>
           ))}
         </div>
       )}
@@ -1674,8 +1674,8 @@ function BuscarAsistenciaForm({
                   <span className="font-medium text-foreground">{u.name}</span>{" "}
                   <span className="text-xs text-muted-foreground">{u.email}</span>
                 </span>
-                <Check className="h-4 w-4 text-brand" />
-              </button>
+              <Check className="h-4 w-4 text-brand" />
+            </button>
             ))
           )}
         </div>
