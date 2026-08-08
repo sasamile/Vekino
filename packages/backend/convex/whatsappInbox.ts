@@ -622,3 +622,59 @@ export const enviarAccesos = action({
     return r.ok ? { ok: true } : { ok: false, motivo: r.motivo };
   },
 });
+
+/**
+ * Borra de la bandeja los mensajes de un bot ajeno que estuvo conectado al
+ * mismo número.
+ *
+ * No es una papelera genérica a propósito: filtra por el texto exacto de ese
+ * bot. Un fallo de envío normal SÍ hay que verlo —es la señal de que a alguien
+ * no le llegó algo—, así que aquí solo se va lo que produjo un sistema que ya
+ * no existe y que nunca llegó a entregarse.
+ */
+export const limpiarBotAjeno = internalMutation({
+  args: {
+    /** Fragmento que identifica al bot ajeno. Se exige para no barrer de más. */
+    contiene: v.string(),
+    /** true borra; false solo cuenta, para ver qué se llevaría por delante. */
+    confirmar: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const aguja = args.contiene.trim();
+    if (aguja.length < 8) throw new Error("El fragmento es demasiado corto.");
+
+    const todos = await ctx.db.query("waMessages").collect();
+    const objetivo = todos.filter(
+      (m) => m.direccion === "saliente" && m.contenido?.includes(aguja),
+    );
+
+    if (!args.confirmar) {
+      return {
+        encontrados: objetivo.length,
+        muestra: objetivo.slice(0, 3).map((m) => m.contenido?.slice(0, 80)),
+        borrados: 0,
+      };
+    }
+
+    for (const m of objetivo) await ctx.db.delete(m._id);
+
+    /* La lista de conversaciones muestra el último mensaje: si se acaba de
+     * borrar, hay que reponer el anterior o la fila queda mintiendo. */
+    const tocadas = new Set(objetivo.map((m) => m.conversacionId));
+    for (const convId of tocadas) {
+      const ultimo = await ctx.db
+        .query("waMessages")
+        .withIndex("by_conversacion", (q) => q.eq("conversacionId", convId))
+        .order("desc")
+        .first();
+      if (ultimo) {
+        await ctx.db.patch(convId, {
+          ultimoMensajeAt: ultimo.createdAt,
+          updatedAt: Date.now(),
+        });
+      }
+    }
+
+    return { encontrados: objetivo.length, borrados: objetivo.length, muestra: [] };
+  },
+});
