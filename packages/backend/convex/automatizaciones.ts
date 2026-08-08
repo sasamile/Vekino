@@ -63,6 +63,7 @@ const tipoValidator = v.union(
   v.literal("mensaje_residentes"),
   v.literal("plantilla_whatsapp"),
   v.literal("credenciales_acceso"),
+  v.literal("comunicado_difusion"),
 );
 
 /**
@@ -149,6 +150,34 @@ export const listar = query({
  * venir vacío). Los tipos de envío que no dependen de una asamblea —mensaje
  * libre y plantilla— necesitan poder elegir cualquier condominio.
  */
+/**
+ * Comunicados publicados de un condominio, los más nuevos primero.
+ *
+ * Para el selector de difusión: el que programa el envío elige de una lista
+ * en vez de volver a escribir el título a mano, que es como se cuelan las
+ * erratas en un mensaje que ven cientos de personas.
+ */
+export const comunicadosDeCondominio = query({
+  args: { condominioId: v.id("condominios") },
+  handler: async (ctx, args) => {
+    await requirePlatformStaff(ctx);
+    const filas = await ctx.db
+      .query("comunicados")
+      .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
+      .order("desc")
+      .take(50);
+    return filas.map((c) => ({
+      comunicadoId: c._id,
+      titulo: c.titulo,
+      cuerpo: c.cuerpo.slice(0, 240),
+      audiencia: c.audiencia,
+      prioridad: c.prioridad,
+      adjuntos: (c.archivos ?? []).length,
+      createdAt: c.createdAt,
+    }));
+  },
+});
+
 export const condominiosConAsambleas = query({
   args: {},
   handler: async (ctx) => {
@@ -329,6 +358,8 @@ export const programar = mutation({
     /** Solo para `plantilla_whatsapp`. */
     plantilla: v.optional(v.string()),
     parametros: v.optional(v.array(v.string())),
+    /** Solo para `comunicado_difusion`. */
+    comunicadoId: v.optional(v.id("comunicados")),
     /** Solo para `credenciales_acceso`. */
     modoCredenciales: v.optional(
       v.union(
@@ -353,6 +384,12 @@ export const programar = mutation({
         throw new Error(
           "El envío de correos no está configurado (BREVO_API_KEY). Sin eso no se pueden entregar accesos.",
         );
+      }
+    } else if (args.tipo === "comunicado_difusion") {
+      if (!args.comunicadoId) throw new Error("Elige el comunicado.");
+      const com = await ctx.db.get(args.comunicadoId);
+      if (!com || com.condominioId !== args.condominioId) {
+        throw new Error("El comunicado no pertenece a ese condominio.");
       }
     } else if (args.tipo === "apoderados_asamblea") {
       if (!args.asambleaId) throw new Error("Elige la asamblea.");
@@ -385,6 +422,7 @@ export const programar = mutation({
       condominioId: args.condominioId,
       tipo: args.tipo,
       asambleaId: args.asambleaId,
+      comunicadoId: args.comunicadoId,
       asunto: args.asunto?.trim() || undefined,
       mensaje: args.mensaje?.trim() || undefined,
       audiencia: args.audiencia ?? "todos",
@@ -817,9 +855,23 @@ export const datosEnvio = internalQuery({
     const condominio = await ctx.db.get(envio.condominioId);
     if (!condominio) return null;
 
-    // ── Mensaje libre a los residentes ──
-    if (envio.tipo === "mensaje_residentes" || envio.tipo === "plantilla_whatsapp") {
-      const audiencia = envio.audiencia ?? "todos";
+    // ── Mensaje libre, plantilla suelta o difusión de un comunicado ──
+    if (
+      envio.tipo === "mensaje_residentes" ||
+      envio.tipo === "plantilla_whatsapp" ||
+      envio.tipo === "comunicado_difusion"
+    ) {
+      /* Un comunicado ya trae dicho a quién va dirigido y qué dice: no se le
+       * vuelve a preguntar al que programa el envío, porque entonces podría
+       * mandarle a los arrendatarios algo que se publicó solo para
+       * propietarios. */
+      const comunicado =
+        envio.tipo === "comunicado_difusion" && envio.comunicadoId
+          ? await ctx.db.get(envio.comunicadoId)
+          : null;
+      if (envio.tipo === "comunicado_difusion" && !comunicado) return null;
+
+      const audiencia = comunicado?.audiencia ?? envio.audiencia ?? "todos";
       const memberships = await ctx.db
         .query("memberships")
         .withIndex("by_condominio", (q) => q.eq("condominioId", envio.condominioId))
@@ -865,18 +917,33 @@ export const datosEnvio = internalQuery({
         finales = destinatarios.filter((d) => !ya.has(d.clave));
       }
 
+      /* Los adjuntos no se pueden mandar por la plantilla de WhatsApp, así
+       * que en el correo van como enlaces al final del cuerpo. Perderlos en
+       * silencio sería peor: son las circulares escaneadas. */
+      const adjuntos = (comunicado?.archivos ?? [])
+        .map((a) => (a.url ? `${a.nombre}: ${a.url}` : null))
+        .filter((x): x is string => x != null);
+
       return {
-        tipo: envio.tipo as "mensaje_residentes" | "plantilla_whatsapp",
+        tipo: envio.tipo as
+          | "mensaje_residentes"
+          | "plantilla_whatsapp"
+          | "comunicado_difusion",
         plantilla: envio.plantilla ?? null,
         parametros: envio.parametros ?? [],
+        comunicadoTitulo: comunicado?.titulo ?? "",
+        comunicadoCuerpo: comunicado?.cuerpo ?? "",
+        comunicadoAdjuntos: adjuntos,
         condominioId: envio.condominioId,
         condominioNombre: condominio.name,
         moduloWhatsapp: condominio.activeModules.includes("whatsapp"),
         asambleaTitulo: "",
         fecha: "",
         hora: "",
-        asunto: envio.asunto ?? `Mensaje de ${condominio.name}`,
-        mensaje: envio.mensaje ?? "",
+        asunto: comunicado?.titulo ?? envio.asunto ?? `Mensaje de ${condominio.name}`,
+        mensaje: comunicado
+          ? [comunicado.cuerpo, ...(adjuntos.length ? ["", "Adjuntos:", ...adjuntos] : [])].join("\n")
+          : (envio.mensaje ?? ""),
         canal: envio.canal,
         destinatarios: finales,
       };
@@ -1127,7 +1194,10 @@ export const ejecutar = internalAction({
     const quiereWa = datos.canal !== "correo";
     const quiereCorreo = datos.canal !== "whatsapp";
 
-    const esMensajeLibre = datos.tipo === "mensaje_residentes";
+    const esComunicado = datos.tipo === "comunicado_difusion";
+    /* La difusión de un comunicado se comporta como el mensaje libre en el
+     * correo (cuerpo completo) y como una plantilla en WhatsApp. */
+    const esMensajeLibre = datos.tipo === "mensaje_residentes" || esComunicado;
     const esPlantilla = datos.tipo === "plantilla_whatsapp";
     const plantillaGenerica = process.env.YCLOUD_TEMPLATE_GENERICO;
 
@@ -1188,9 +1258,11 @@ export const ejecutar = internalAction({
         // pide que reenvíe. Son plantillas distintas aprobadas por separado.
         const plantillaUsada = esPlantilla
           ? datos.plantilla
-          : esMensajeLibre
-            ? plantillaGenerica
-            : plantillaWa;
+          : esComunicado
+            ? (process.env.YCLOUD_TEMPLATE_COMUNICADO ?? "comunicado_v2")
+            : esMensajeLibre
+              ? plantillaGenerica
+              : plantillaWa;
         // {{1}} propietario, {{2}} apoderado, {{3}} condominio, {{4}} fecha,
         // {{5}} hora. El código va solo en el botón: nombrarlo en el cuerpo
         // hace que Meta rechace la plantilla por tratarlo como credencial.
@@ -1202,9 +1274,14 @@ export const ejecutar = internalAction({
         };
         const paramsWa = esPlantilla
           ? datos.parametros.map((t) => rellenarFichas(t, contexto))
-          : esMensajeLibre
-            ? [d.nombre, datos.mensaje]
-            : [d.nombre, d.apoderadoNombre, datos.condominioNombre, cuando];
+          : esComunicado
+            ? // `comunicado_v2`: {{1}} condominio, {{2}} título. El cuerpo
+              // completo va por correo; aquí solo el titular y el botón que
+              // lleva a leerlo en la plataforma.
+              [datos.condominioNombre, datos.comunicadoTitulo]
+            : esMensajeLibre
+              ? [d.nombre, datos.mensaje]
+              : [d.nombre, d.apoderadoNombre, datos.condominioNombre, cuando];
 
         if (!plantillaUsada) {
           motivos.push("WhatsApp: falta la plantilla configurada");

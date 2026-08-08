@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useParams } from "next/navigation";
-import { usePaginatedQuery, useMutation } from "convex/react";
+import { usePaginatedQuery, useMutation, useQuery } from "convex/react";
 import {
-  MessageSquare, Plus, Pin, PinOff, Pencil, Trash2, Loader2,
+  MessageSquare, Plus, Pin, PinOff, Pencil, Trash2, Loader2, Send,
   File as FileIcon, ImageIcon,
 } from "lucide-react";
 import { api } from "@vekino/backend/api";
@@ -98,6 +99,13 @@ export default function ComunicacionPage() {
   const loadingMore = status === "LoadingMore";
   const comunicados = results as ComunicadoRow[];
 
+  /* Difundir crea un envío programado, y eso exige rol de plataforma. Al
+   * administrador del conjunto no se le muestra un botón que le va a dar
+   * error. */
+  const me = useQuery(api.users.me);
+  const puedeDifundir =
+    me?.platformRole === "superadmin" || me?.platformRole === "admin";
+
   function openNew() {
     setEditDraft(null);
     setFormOpen(true);
@@ -188,6 +196,11 @@ export default function ComunicacionPage() {
                   c={c}
                   onEdit={() => openEdit(c)}
                   onDelete={() => setDeleteId(c._id)}
+                  difundirHref={
+                    puedeDifundir
+                      ? `/dashboard/automatizaciones?comunicado=${c._id}&condominio=${condominioId}`
+                      : null
+                  }
                 />
               ))}
             </div>
@@ -232,10 +245,13 @@ export default function ComunicacionPage() {
 function ComunicadoCard({
   c,
   onEdit,
+  difundirHref,
   onDelete,
 }: {
   c: ComunicadoRow;
   onEdit: () => void;
+  /** A dónde lleva «Difundir», o null si esta persona no puede programar envíos. */
+  difundirHref: string | null;
   onDelete: () => void;
 }) {
   const togglePin = useMutation(api.comunicados.togglePin);
@@ -335,6 +351,16 @@ function ComunicadoCard({
           </div>
 
           <div className="flex shrink-0 items-center gap-1">
+            {difundirHref && (
+              <Link
+                href={difundirHref}
+                aria-label="Difundir por WhatsApp y correo"
+                title="Difundir por WhatsApp y correo"
+                className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              >
+                <Send className="h-4 w-4" />
+              </Link>
+            )}
             <button
               onClick={() => togglePin({ id: c._id })}
               aria-label={c.fijado ? "Desfijar" : "Fijar"}

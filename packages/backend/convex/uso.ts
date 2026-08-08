@@ -196,7 +196,7 @@ export const panel = query({
   handler: async (ctx, args) => {
     await requirePlatformStaff(ctx);
 
-    const dias = Math.min(Math.max(args.dias ?? 90, 14), DIAS_MAX);
+    const dias = Math.min(Math.max(args.dias ?? 365, 30), DIAS_MAX);
     const desde = Date.now() - dias * 24 * 60 * 60 * 1000;
 
     const condo = args.condominioId

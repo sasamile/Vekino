@@ -1637,8 +1637,16 @@ export default defineSchema({
        * fila queda como el espejo programable de ese trabajo.
        */
       v.literal("credenciales_acceso"),
+      /**
+       * Difunde un comunicado ya publicado: la plantilla por WhatsApp y el
+       * cuerpo completo por correo. Nace del propio comunicado, no de un
+       * formulario, para que nadie tenga que volver a escribir el título.
+       */
+      v.literal("comunicado_difusion"),
     ),
     asambleaId: v.optional(v.id("asambleas")),
+    /** Solo en `comunicado_difusion`. */
+    comunicadoId: v.optional(v.id("comunicados")),
     /** Solo en `credenciales_acceso`. Por defecto no toca a quien ya entró. */
     modoCredenciales: v.optional(
       v.union(

@@ -25,6 +25,7 @@ import type { Id } from "@vekino/backend/dataModel";
 import { PageContainer } from "@/components/layout/page-container";
 import { PageHeader } from "@/components/layout/page-header";
 import { useNuevoQuery } from "@/hooks/use-nuevo-query";
+import { useComunicadoQuery } from "@/hooks/use-comunicado-query";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -58,7 +59,8 @@ type TipoEnvio =
   | "mensaje_residentes"
   | "apoderados_asamblea"
   | "plantilla_whatsapp"
-  | "credenciales_acceso";
+  | "credenciales_acceso"
+  | "comunicado_difusion";
 type EstadoEnvio =
   | "programado"
   | "enviando"
@@ -152,6 +154,12 @@ const TIPO_META: Record<
     descripcion:
       "Elige una plantilla aprobada por Meta y envíala a los residentes.",
   },
+  comunicado_difusion: {
+    label: "Difundir un comunicado",
+    icon: Megaphone,
+    descripcion:
+      "Manda un comunicado ya publicado: la plantilla por WhatsApp y el texto completo por correo.",
+  },
   credenciales_acceso: {
     label: "Accesos a la plataforma",
     icon: KeyRound,
@@ -162,6 +170,7 @@ const TIPO_META: Record<
 
 /** Orden de las tarjetas del selector: primero el caso más común. */
 const TIPO_OPCIONES: TipoEnvio[] = [
+  "comunicado_difusion",
   "mensaje_residentes",
   "apoderados_asamblea",
   "plantilla_whatsapp",
@@ -315,6 +324,10 @@ export default function AutomatizacionesPage() {
   const [showProgramar, setShowProgramar] = useState(false);
   /** Plantilla con la que se abre el diálogo desde la galería. */
   const [plantillaInicial, setPlantillaInicial] = useState<string | undefined>();
+  /** Comunicado con el que se abre desde el botón «Difundir» de la circular. */
+  const [comunicadoInicial, setComunicadoInicial] = useState<
+    { id: string; condominioId: string } | undefined
+  >();
   const [probarPlantilla, setProbarPlantilla] = useState<PlantillaOpcion | null>(
     null,
   );
@@ -338,9 +351,14 @@ export default function AutomatizacionesPage() {
   function cerrarProgramar() {
     setShowProgramar(false);
     setPlantillaInicial(undefined);
+    setComunicadoInicial(undefined);
   }
 
   useNuevoQuery(() => abrirProgramar());
+  useComunicadoQuery((id, condominioId) => {
+    setComunicadoInicial({ id, condominioId });
+    setShowProgramar(true);
+  });
 
   const ordenados = useMemo(
     () => [...(envios ?? [])].sort((a, b) => b.programadoPara - a.programadoPara),
@@ -476,6 +494,7 @@ export default function AutomatizacionesPage() {
           cargandoPlantillas={cargandoPlantillas}
           errorPlantillas={errorPlantillas}
           plantillaInicial={plantillaInicial}
+          comunicadoInicial={comunicadoInicial}
         />
       )}
       {probarPlantilla && (
@@ -696,6 +715,7 @@ function ProgramarDialog({
   cargandoPlantillas,
   errorPlantillas,
   plantillaInicial,
+  comunicadoInicial,
 }: {
   onClose: () => void;
   plantillas: PlantillaOpcion[] | null;
@@ -703,6 +723,8 @@ function ProgramarDialog({
   errorPlantillas: string | null;
   /** Si viene, el diálogo abre ya en «Plantilla de WhatsApp» con esa elegida. */
   plantillaInicial?: string;
+  /** Si viene, abre en «Difundir un comunicado» con ese ya seleccionado. */
+  comunicadoInicial?: { id: string; condominioId: string };
 }) {
   const condos = useQuery(api.automatizaciones.condominiosConAsambleas, {}) as
     | CondoConAsambleas[]
@@ -712,12 +734,21 @@ function ProgramarDialog({
 
   // Los `<select>` manejan strings; el API exige ids tipados de Convex, así
   // que el estado se declara ya con la marca y arranca vacío.
-  const [condominioId, setCondominioId] = useState<Id<"condominios"> | "">("");
+  const [condominioId, setCondominioId] = useState<Id<"condominios"> | "">(
+    (comunicadoInicial?.condominioId as Id<"condominios">) ?? "",
+  );
   const [tipo, setTipo] = useState<TipoEnvio>(
-    plantillaInicial ? "plantilla_whatsapp" : "mensaje_residentes",
+    comunicadoInicial
+      ? "comunicado_difusion"
+      : plantillaInicial
+        ? "plantilla_whatsapp"
+        : "mensaje_residentes",
   );
   const [asambleaId, setAsambleaId] = useState<Id<"asambleas"> | "">("");
   const [audiencia, setAudiencia] = useState("todos");
+  const [comunicadoId, setComunicadoId] = useState<Id<"comunicados"> | "">(
+    (comunicadoInicial?.id as Id<"comunicados">) ?? "",
+  );
   const [modoCredenciales, setModoCredenciales] = useState<
     "solo_sin_clave" | "nunca_ingreso" | "todos"
   >("nunca_ingreso");
@@ -754,6 +785,7 @@ function ProgramarDialog({
   const esAsamblea = tipo === "apoderados_asamblea";
   const esPlantilla = tipo === "plantilla_whatsapp";
   const esCredenciales = tipo === "credenciales_acceso";
+  const esComunicado = tipo === "comunicado_difusion";
 
   const plantilla =
     plantillas?.find((p) => p.nombre === plantillaNombre) ?? null;
@@ -792,6 +824,13 @@ function ProgramarDialog({
     });
   }
 
+  const comunicados = useQuery(
+    api.automatizaciones.comunicadosDeCondominio,
+    esComunicado && condominioId ? { condominioId } : "skip",
+  );
+  const comunicadoElegido =
+    comunicados?.find((c) => c.comunicadoId === comunicadoId) ?? null;
+
   const condo = condos?.find((c) => c.condominioId === condominioId) ?? null;
   const asamblea =
     condo?.asambleas.find((a) => a.asambleaId === asambleaId) ?? null;
@@ -809,7 +848,9 @@ function ProgramarDialog({
         ? Boolean(plantillaNombre) && variablesCompletas
         : esCredenciales
           ? true // solo hace falta el condominio: el resto lo decide el motor
-          : Boolean(asambleaId)) &&
+          : esComunicado
+            ? Boolean(comunicadoId)
+            : Boolean(asambleaId)) &&
     !busy;
 
   async function enviar(programadoPara: number) {
@@ -819,6 +860,10 @@ function ProgramarDialog({
     }
     if (esMensaje && !mensaje.trim()) {
       setError("Escribe el mensaje que quieres enviar.");
+      return;
+    }
+    if (esComunicado && !comunicadoId) {
+      setError("Elige el comunicado que quieres difundir.");
       return;
     }
     if (esAsamblea && !esCredenciales && !asambleaId) {
@@ -848,6 +893,9 @@ function ProgramarDialog({
         plantilla: esPlantilla ? plantillaNombre : undefined,
         parametros: esPlantilla
           ? Array.from({ length: totalVariables }, (_, i) => parametros[i] ?? "")
+          : undefined,
+        comunicadoId: esComunicado
+          ? (comunicadoId as Id<"comunicados">)
           : undefined,
         modoCredenciales: esCredenciales ? modoCredenciales : undefined,
         // Las credenciales solo salen por correo: Meta rechaza toda plantilla
@@ -1199,6 +1247,67 @@ function ProgramarDialog({
                 </p>
               </div>
             </>
+          )}
+
+          {esComunicado && (
+            <div className="space-y-1.5">
+              <label
+                htmlFor="auto-comunicado"
+                className="block text-xs font-medium text-foreground"
+              >
+                Comunicado
+              </label>
+              <Select
+                id="auto-comunicado"
+                value={comunicadoId}
+                disabled={busy || !condominioId}
+                onChange={(e) => {
+                  setComunicadoId(e.target.value as Id<"comunicados"> | "");
+                  setError(null);
+                }}
+              >
+                <option value="">
+                  {condominioId
+                    ? "Selecciona un comunicado…"
+                    : "Primero elige el condominio"}
+                </option>
+                {(comunicados ?? []).map((c) => (
+                  <option key={c.comunicadoId} value={c.comunicadoId}>
+                    {c.titulo}
+                    {c.adjuntos > 0 ? ` · ${c.adjuntos} adjunto${c.adjuntos === 1 ? "" : "s"}` : ""}
+                  </option>
+                ))}
+              </Select>
+              {comunicadoElegido && (
+                <div className="mt-2 rounded-xl border border-border bg-muted/30 p-3">
+                  <p className="text-xs font-medium text-foreground">
+                    {comunicadoElegido.titulo}
+                  </p>
+                  <p className="mt-1 line-clamp-4 text-xs leading-relaxed whitespace-pre-line text-muted-foreground">
+                    {comunicadoElegido.cuerpo}
+                  </p>
+                  <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+                    Por WhatsApp va el titular con el botón para leerlo; por
+                    correo va el texto completo
+                    {comunicadoElegido.adjuntos > 0
+                      ? " y los adjuntos como enlaces"
+                      : ""}
+                    . Le llega a{" "}
+                    <strong>
+                      {comunicadoElegido.audiencia === "todos"
+                        ? "todos"
+                        : comunicadoElegido.audiencia}
+                    </strong>
+                    , que es a quien se publicó.
+                  </p>
+                </div>
+              )}
+              {condominioId && comunicados != null && comunicados.length === 0 && (
+                <p className="text-xs text-muted-foreground">
+                  Este condominio todavía no tiene comunicados publicados.
+                </p>
+              )}
+            </div>
           )}
 
           {esCredenciales && (
