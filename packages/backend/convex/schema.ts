@@ -1602,6 +1602,8 @@ export default defineSchema({
       v.literal("apoderados_asamblea"),
       /** Mensaje libre a los residentes del condominio. */
       v.literal("mensaje_residentes"),
+      /** Una plantilla aprobada de WhatsApp, elegida y con sus variables. */
+      v.literal("plantilla_whatsapp"),
     ),
     asambleaId: v.optional(v.id("asambleas")),
     /** Solo en `mensaje_residentes`. */
@@ -1609,6 +1611,9 @@ export default defineSchema({
     mensaje: v.optional(v.string()),
     /** A quién va: rol operativo, o "todos". */
     audiencia: v.optional(v.string()),
+    /** Solo en `plantilla_whatsapp`: nombre de la plantilla y sus variables. */
+    plantilla: v.optional(v.string()),
+    parametros: v.optional(v.array(v.string())),
     canal: v.union(
       v.literal("correo"),
       v.literal("whatsapp"),

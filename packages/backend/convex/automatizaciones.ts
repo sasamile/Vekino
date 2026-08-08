@@ -17,7 +17,11 @@ import {
   htmlMensajeLibre,
   textoApoderado,
 } from "./lib/emailApoderado";
-import { enviarMensaje, msgPlantillaConBoton } from "./lib/ycloud";
+import {
+  enviarMensaje,
+  msgPlantillaConBoton,
+  ycloudRequest,
+} from "./lib/ycloud";
 import { esCelularWhatsApp } from "./lib/telefono";
 
 /**
@@ -56,7 +60,25 @@ function horaLegible(hhmm: string): string {
 const tipoValidator = v.union(
   v.literal("apoderados_asamblea"),
   v.literal("mensaje_residentes"),
+  v.literal("plantilla_whatsapp"),
 );
+
+/**
+ * Fichas que se pueden usar dentro de una variable de plantilla y se
+ * reemplazan por destinatario. Es lo que hace que una misma plantilla sirva
+ * para todo el condominio y no solo para un envío fijo.
+ */
+export const FICHAS = ["{nombre}", "{condominio}", "{unidad}"] as const;
+
+function rellenarFichas(
+  texto: string,
+  d: { nombre: string; condominio: string; unidad: string },
+): string {
+  return texto
+    .replaceAll("{nombre}", d.nombre)
+    .replaceAll("{condominio}", d.condominio)
+    .replaceAll("{unidad}", d.unidad);
+}
 
 const canalValidator = v.union(
   v.literal("correo"),
@@ -97,6 +119,8 @@ export const listar = query({
           asunto: e.asunto ?? null,
           mensaje: e.mensaje ?? null,
           audiencia: e.audiencia ?? null,
+          plantilla: e.plantilla ?? null,
+          parametros: e.parametros ?? null,
           canal: e.canal,
           programadoPara: e.programadoPara,
           estado: e.estado,
@@ -183,6 +207,66 @@ export const condominiosConAsambleas = query({
   },
 });
 
+/**
+ * Plantillas APROBADAS en YCloud, con el texto del cuerpo y cuántas variables
+ * tiene cada una. Es un action porque consulta la API de YCloud en vivo: la
+ * fuente de verdad del estado de aprobación es Meta, no nuestra base.
+ */
+export const plantillasDisponibles = action({
+  args: {},
+  handler: async (
+    ctx,
+  ): Promise<
+    Array<{
+      nombre: string;
+      idioma: string;
+      categoria: string;
+      cuerpo: string;
+      variables: number;
+      botonUrlDinamica: boolean;
+    }>
+  > => {
+    await ctx.runQuery(internal.automatizaciones.soloStaff, {});
+    const { status, json } = await ycloudRequest(
+      `/whatsapp/templates?filter.wabaId=${encodeURIComponent(
+        process.env.YCLOUD_WABA_ID ?? "",
+      )}&limit=100`,
+    );
+    if (status >= 300) throw new Error("No pude consultar las plantillas en YCloud.");
+
+    return (json?.items ?? [])
+      .filter((t: any) => t.status === "APPROVED")
+      .map((t: any) => {
+        const body = (t.components ?? []).find((c: any) => c.type === "BODY");
+        const cuerpo: string = body?.text ?? "";
+        const botones = (t.components ?? []).find((c: any) => c.type === "BUTTONS");
+        return {
+          nombre: t.name as string,
+          idioma: t.language as string,
+          categoria: t.category as string,
+          cuerpo,
+          // Se cuenta {{1}}, {{2}}… quedándose con el índice más alto.
+          variables: [...cuerpo.matchAll(/\{\{(\d+)\}\}/g)].reduce(
+            (max, m) => Math.max(max, Number(m[1])),
+            0,
+          ),
+          botonUrlDinamica: !!(botones?.buttons ?? []).some(
+            (b: any) => b.type === "URL" && String(b.url ?? "").includes("{{"),
+          ),
+        };
+      })
+      .sort((a: any, b: any) => a.nombre.localeCompare(b.nombre));
+  },
+});
+
+export const soloStaff = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    await requirePlatformStaff(ctx);
+    return null;
+  },
+});
+
 export const detalle = query({
   args: { id: v.id("enviosProgramados") },
   handler: async (ctx, args) => {
@@ -218,6 +302,9 @@ export const programar = mutation({
     asunto: v.optional(v.string()),
     mensaje: v.optional(v.string()),
     audiencia: v.optional(v.string()),
+    /** Solo para `plantilla_whatsapp`. */
+    plantilla: v.optional(v.string()),
+    parametros: v.optional(v.array(v.string())),
     canal: canalValidator,
     programadoPara: v.number(),
   },
@@ -230,6 +317,10 @@ export const programar = mutation({
       if (!asamblea || asamblea.condominioId !== args.condominioId) {
         throw new Error("La asamblea no pertenece a ese condominio.");
       }
+    } else if (args.tipo === "plantilla_whatsapp") {
+      if (!args.plantilla?.trim()) throw new Error("Elige la plantilla.");
+      const condo = await ctx.db.get(args.condominioId);
+      if (!condo) throw new Error("Condominio no encontrado.");
     } else {
       if (!args.mensaje?.trim()) throw new Error("Escribe el mensaje.");
       const condo = await ctx.db.get(args.condominioId);
@@ -250,6 +341,8 @@ export const programar = mutation({
       asunto: args.asunto?.trim() || undefined,
       mensaje: args.mensaje?.trim() || undefined,
       audiencia: args.audiencia ?? "todos",
+      plantilla: args.plantilla?.trim() || undefined,
+      parametros: args.parametros,
       canal: args.canal,
       programadoPara: cuando,
       estado: "programado",
@@ -358,6 +451,8 @@ export const reintentarPendientes = mutation({
       asunto: original.asunto,
       mensaje: original.mensaje,
       audiencia: original.audiencia,
+      plantilla: original.plantilla,
+      parametros: original.parametros,
       canal: args.canal ?? original.canal,
       programadoPara: cuando,
       reintentoDe: args.id,
@@ -442,6 +537,9 @@ export const enviarPrueba = action({
     /** Solo para el mensaje libre. */
     mensaje: v.optional(v.string()),
     asunto: v.optional(v.string()),
+    /** Solo para `plantilla_whatsapp`. */
+    plantilla: v.optional(v.string()),
+    parametros: v.optional(v.array(v.string())),
     canal: canalValidator,
     email: v.optional(v.string()),
     telefono: v.optional(v.string()),
@@ -459,6 +557,38 @@ export const enviarPrueba = action({
       throw new Error("Escribe un correo o un celular para la prueba.");
     }
     const nombrePrueba = args.nombre?.trim() || "Nombre de prueba";
+
+    // ── Prueba de una plantilla elegida ──
+    if (args.tipo === "plantilla_whatsapp") {
+      if (!args.plantilla?.trim()) throw new Error("Elige la plantilla.");
+      if (!telefono0) throw new Error("Escribe un celular: esta prueba es por WhatsApp.");
+      const condo: { condominioNombre: string } | null = await ctx.runQuery(
+        internal.automatizaciones.nombreCondominio,
+        { condominioId: args.condominioId },
+      );
+      const e164 = telefono0.startsWith("+")
+        ? telefono0
+        : `+${telefono0.replace(/\D/g, "")}`;
+      const ctxFichas = {
+        nombre: nombrePrueba.split(" ")[0] ?? nombrePrueba,
+        condominio: condo?.condominioNombre ?? "tu conjunto",
+        unidad: "101",
+      };
+      const params = (args.parametros ?? []).map((t) =>
+        rellenarFichas(t, ctxFichas),
+      );
+      try {
+        await enviarMensaje(
+          msgPlantillaConBoton(e164, args.plantilla, "es", params),
+        );
+        return { correo: null, whatsapp: `Enviado a ${e164}` };
+      } catch (e) {
+        return {
+          correo: null,
+          whatsapp: `Falló: ${e instanceof Error ? e.message : String(e)}`,
+        };
+      }
+    }
 
     // ── Prueba de mensaje libre ──
     if (args.tipo === "mensaje_residentes") {
@@ -613,7 +743,7 @@ export const datosEnvio = internalQuery({
     if (!condominio) return null;
 
     // ── Mensaje libre a los residentes ──
-    if (envio.tipo === "mensaje_residentes") {
+    if (envio.tipo === "mensaje_residentes" || envio.tipo === "plantilla_whatsapp") {
       const audiencia = envio.audiencia ?? "todos";
       const memberships = await ctx.db
         .query("memberships")
@@ -628,6 +758,13 @@ export const datosEnvio = internalQuery({
         const u = await ctx.db.get(m.userId);
         if (!u || !u.active) continue;
         vistos.add(m.userId);
+        // Unidad principal, para la ficha {unidad} de las plantillas.
+        const vinculo = await ctx.db
+          .query("usuarioUnidad")
+          .withIndex("by_membership", (q) => q.eq("membershipId", m._id))
+          .first();
+        const unidad = vinculo ? await ctx.db.get(vinculo.unidadId) : null;
+
         destinatarios.push({
           clave: `user:${m.userId}`,
           nombre: u.name,
@@ -635,7 +772,7 @@ export const datosEnvio = internalQuery({
           codigo: "",
           email: u.email,
           telefono: u.telefonoE164 ?? undefined,
-          unidades: [] as string[],
+          unidades: unidad ? [unidad.numero] : ([] as string[]),
           esApoderado: true,
         });
       }
@@ -654,7 +791,9 @@ export const datosEnvio = internalQuery({
       }
 
       return {
-        tipo: "mensaje_residentes" as const,
+        tipo: envio.tipo as "mensaje_residentes" | "plantilla_whatsapp",
+        plantilla: envio.plantilla ?? null,
+        parametros: envio.parametros ?? [],
         condominioId: envio.condominioId,
         condominioNombre: condominio.name,
         moduloWhatsapp: condominio.activeModules.includes("whatsapp"),
@@ -745,6 +884,8 @@ export const datosEnvio = internalQuery({
 
     return {
       tipo: "apoderados_asamblea" as const,
+      plantilla: null as string | null,
+      parametros: [] as string[],
       condominioId: envio.condominioId,
       condominioNombre: condominio.name,
       moduloWhatsapp: condominio.activeModules.includes("whatsapp"),
@@ -853,6 +994,7 @@ export const ejecutar = internalAction({
     const quiereCorreo = datos.canal !== "whatsapp";
 
     const esMensajeLibre = datos.tipo === "mensaje_residentes";
+    const esPlantilla = datos.tipo === "plantilla_whatsapp";
     const plantillaGenerica = process.env.YCLOUD_TEMPLATE_GENERICO;
 
     for (const d of datos.destinatarios) {
@@ -860,7 +1002,9 @@ export const ejecutar = internalAction({
       let algoSalio = false;
       const motivos: string[] = [];
 
-      if (quiereCorreo && d.email && esMensajeLibre) {
+      if (esPlantilla) {
+        // Este tipo es exclusivo de WhatsApp: no hay correo equivalente.
+      } else if (quiereCorreo && d.email && esMensajeLibre) {
         try {
           await sendBrevoEmail({
             to: [{ email: d.email, name: d.nombre }],
@@ -908,16 +1052,25 @@ export const ejecutar = internalAction({
       if (quiereWa && esCelularWhatsApp(d.telefono)) {
         // Al apoderado se le habla en primera persona; al propietario se le
         // pide que reenvíe. Son plantillas distintas aprobadas por separado.
-        const plantillaUsada = esMensajeLibre
-          ? plantillaGenerica
-          : plantillaWa;
+        const plantillaUsada = esPlantilla
+          ? datos.plantilla
+          : esMensajeLibre
+            ? plantillaGenerica
+            : plantillaWa;
         // {{1}} propietario, {{2}} apoderado, {{3}} condominio, {{4}} fecha,
         // {{5}} hora. El código va solo en el botón: nombrarlo en el cuerpo
         // hace que Meta rechace la plantilla por tratarlo como credencial.
         const cuando = `${fechaLegible(datos.fecha)}, ${horaLegible(datos.hora)}`;
-        const paramsWa = esMensajeLibre
-          ? [d.nombre, datos.mensaje]
-          : [d.nombre, d.apoderadoNombre, datos.condominioNombre, cuando];
+        const contexto = {
+          nombre: d.nombre.split(" ")[0] ?? d.nombre,
+          condominio: datos.condominioNombre,
+          unidad: d.unidades[0] ?? "",
+        };
+        const paramsWa = esPlantilla
+          ? datos.parametros.map((t) => rellenarFichas(t, contexto))
+          : esMensajeLibre
+            ? [d.nombre, datos.mensaje]
+            : [d.nombre, d.apoderadoNombre, datos.condominioNombre, cuando];
 
         if (!plantillaUsada) {
           motivos.push("WhatsApp: falta la plantilla configurada");
