@@ -273,6 +273,8 @@ export const actualizarEstadoMensaje = internalMutation({
     destino: v.optional(v.string()),
     tipo: v.optional(v.string()),
     contenido: v.optional(v.string()),
+    /** Quién lo escribió, si se sabe: "Desde WhatsApp", "Enviado por fuera"… */
+    etiqueta: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const mensaje = await ctx.db
@@ -314,7 +316,7 @@ export const actualizarEstadoMensaje = internalMutation({
       estado: args.estado,
       error: args.error,
       // Se marca como externo para distinguirlo del bot y del panel propio.
-      agenteNombre: "Enviado por fuera",
+      agenteNombre: args.etiqueta ?? "Enviado por fuera",
       createdAt: now,
     });
     await ctx.db.patch(conversacion._id, {

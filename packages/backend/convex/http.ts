@@ -320,6 +320,63 @@ http.route({
       return Response.json({ ok: true });
     }
 
+    /* Eco de la app de WhatsApp Business.
+     *
+     * Cuando alguien del equipo contesta desde el TELÉFONO, ese mensaje no
+     * pasa por nuestra API y `message.updated` tampoco lo trae: Meta lo manda
+     * por este evento aparte. Sin manejarlo, la bandeja mostraba la
+     * conversación a medias —la pregunta del residente sin la respuesta— y
+     * parecía que nadie había contestado.
+     *
+     * La forma del cuerpo no está documentada de manera estable, así que se
+     * leen varias rutas posibles y, si no se reconoce ninguna, se guarda el
+     * tipo crudo en vez de descartar el mensaje. */
+    if (tipoEvento === "whatsapp.smb.message.echoes") {
+      const msg =
+        payload.whatsappMessage ??
+        payload.message ??
+        payload.data?.object ??
+        payload.echo ??
+        null;
+
+      if (msg) {
+        const tipoMsg = typeof msg.type === "string" ? msg.type : "text";
+        const cuerpo =
+          typeof msg.text?.body === "string"
+            ? msg.text.body
+            : typeof msg.body === "string"
+              ? msg.body
+              : typeof msg.caption === "string"
+                ? msg.caption
+                : typeof msg.template?.name === "string"
+                  ? `📋 Plantilla «${msg.template.name}»`
+                  : `[${tipoMsg}]`;
+
+        const destino =
+          typeof msg.to === "string"
+            ? msg.to
+            : typeof msg.recipient === "string"
+              ? msg.recipient
+              : typeof msg.customerProfile?.waId === "string"
+                ? msg.customerProfile.waId
+                : undefined;
+
+        if (destino) {
+          await ctx.runMutation(internal.whatsapp.actualizarEstadoMensaje, {
+            ycloudMessageId: String(msg.id ?? `echo-${Date.now()}`),
+            estado: typeof msg.status === "string" ? msg.status : "sent",
+            destino,
+            tipo: tipoMsg,
+            contenido: cuerpo,
+            /* Lo escribió una persona con el celular en la mano, no el
+             * sistema: se etiqueta así para que en el hilo se distinga. */
+            etiqueta: "Desde WhatsApp",
+          });
+        }
+      }
+      return Response.json({ ok: true });
+    }
+
     // Otros eventos (revisión de plantillas, etc.): 200 y a otra cosa.
     return Response.json({ ok: true });
   }),
