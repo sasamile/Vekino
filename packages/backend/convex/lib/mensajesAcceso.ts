@@ -24,7 +24,7 @@ export function textoAccesoWhatsApp(d: {
     "👉 Entre con un toque, sin copiar nada:",
     d.enlace,
     "",
-    `_Ese enlace sirve una sola vez y vence en ${HORAS_VIGENCIA_ENLACE} horas._`,
+    `_Ese enlace le sirve durante las próximas ${HORAS_VIGENCIA_ENLACE} horas: guárdelo._`,
     "",
     "O si prefiere escribirlos:",
     `Usuario: ${d.email}`,

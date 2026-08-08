@@ -1096,16 +1096,30 @@ export const canjearAcceso = mutation({
       .withIndex("by_token", (q) => q.eq("token", args.token))
       .first();
     if (!fila) return { ok: false as const, motivo: "Este enlace no es válido." };
-    if (fila.usadoAt || Date.now() > fila.expiraAt) {
+    if (Date.now() > fila.expiraAt) {
       await ctx.db.delete(fila._id);
       return {
         ok: false as const,
-        motivo: "Este enlace ya se usó o venció. Pide uno nuevo por WhatsApp.",
+        motivo: "Este enlace venció. Pide uno nuevo por WhatsApp.",
       };
     }
 
-    // Un solo uso: se entrega y se borra.
-    await ctx.db.delete(fila._id);
+    /* Sirve TODAS las veces que haga falta durante su vigencia.
+     *
+     * Era de un solo uso y se borraba al entrar. Para la gente ese mensaje de
+     * WhatsApp *es* su acceso: vuelven a tocarlo al rato, ya no funciona, y
+     * como la contraseña no la guardaron piden otra — que invalida la
+     * anterior. Una residente lo describió exacto: "cada vez que quiero
+     * ingresar debo cambiar la contraseña".
+     *
+     * Y el un-solo-uso no protegía nada: la contraseña viaja EN EL MISMO
+     * mensaje, así que quien tenga el enlace ya tiene la clave. Lo único que
+     * lograba era dejar por fuera a quien sí era el dueño.
+     *
+     * `usadoAt` se conserva para saber si llegó a entrar. */
+    if (!fila.usadoAt) {
+      await ctx.db.patch(fila._id, { usadoAt: Date.now() });
+    }
     return { ok: true as const, email: fila.email, password: fila.password };
   },
 });
