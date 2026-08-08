@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation, useAction } from "convex/react";
 import {
   AlertTriangle,
@@ -12,6 +12,7 @@ import {
   Mail,
   Megaphone,
   MessageCircle,
+  MessageSquareText,
   Plus,
   Send,
   Users,
@@ -38,8 +39,14 @@ import { cn } from "@/lib/utils";
 /* -------------------------------------------------------------------------- */
 
 type Canal = "correo" | "whatsapp" | "ambos";
-/** Qué se manda: un mensaje libre, o el enlace de ingreso a una asamblea. */
-type TipoEnvio = "mensaje_residentes" | "apoderados_asamblea";
+/**
+ * Qué se manda: un mensaje libre, el enlace de ingreso a una asamblea, o una
+ * plantilla de WhatsApp ya aprobada por Meta.
+ */
+type TipoEnvio =
+  | "mensaje_residentes"
+  | "apoderados_asamblea"
+  | "plantilla_whatsapp";
 type EstadoEnvio =
   | "programado"
   | "enviando"
@@ -58,6 +65,8 @@ type AutomatizacionRow = {
   asunto: string | null;
   mensaje: string | null;
   audiencia: string | null;
+  plantilla: string | null;
+  parametros: string[] | null;
   canal: Canal;
   programadoPara: number;
   estado: EstadoEnvio;
@@ -83,6 +92,16 @@ type CondoConAsambleas = {
   condominioId: Id<"condominios">;
   condominioNombre: string;
   asambleas: AsambleaOpcion[];
+};
+
+/** Una plantilla aprobada en Meta, tal como la devuelve el action. */
+type PlantillaOpcion = {
+  nombre: string;
+  idioma: string;
+  categoria: string;
+  cuerpo: string;
+  variables: number;
+  botonUrlDinamica: boolean;
 };
 
 type DetalleRow = {
@@ -128,13 +147,29 @@ const TIPO_META: Record<
     descripcion:
       "El enlace de ingreso, al propietario, para que se lo comparta a su apoderado.",
   },
+  plantilla_whatsapp: {
+    label: "Plantilla de WhatsApp",
+    icon: MessageSquareText,
+    descripcion:
+      "Elige una plantilla aprobada por Meta y envíala a los residentes.",
+  },
 };
 
 /** Orden de las tarjetas del selector: primero el caso más común. */
-const TIPO_OPCIONES: TipoEnvio[] = ["mensaje_residentes", "apoderados_asamblea"];
+const TIPO_OPCIONES: TipoEnvio[] = [
+  "mensaje_residentes",
+  "apoderados_asamblea",
+  "plantilla_whatsapp",
+];
 
 /** Tope de caracteres del mensaje libre. */
 const MENSAJE_MAX = 1000;
+
+/**
+ * Fichas que se pueden escribir dentro de una variable de plantilla; el
+ * backend las reemplaza por los datos de cada destinatario.
+ */
+const FICHAS = ["{nombre}", "{condominio}", "{unidad}"] as const;
 
 /** Valores que acepta `audiencia` en el backend (roles de membresía). */
 const AUDIENCIA_OPCIONES: { value: string; label: string }[] = [
@@ -436,6 +471,7 @@ function EnvioCard({
   const tipo = TIPO_META[envio.tipo];
   const TipoIcon = tipo.icon;
   const esMensaje = envio.tipo === "mensaje_residentes";
+  const esPlantilla = envio.tipo === "plantilla_whatsapp";
 
   const procesados = envio.enviados + envio.fallidos + envio.sinContacto;
   const yaCorrio =
@@ -489,6 +525,16 @@ function EnvioCard({
                 <span className="font-medium">{envio.asunto} · </span>
               ) : null}
               {resumenMensaje(envio.mensaje)}
+              <span className="text-muted-foreground">
+                {" "}
+                · Para {audienciaLabel(envio.audiencia).toLowerCase()}
+              </span>
+            </p>
+          ) : esPlantilla ? (
+            <p className="text-sm text-foreground/90">
+              <span className="font-medium">
+                {envio.plantilla ?? "Plantilla sin nombre"}
+              </span>
               <span className="text-muted-foreground">
                 {" "}
                 · Para {audienciaLabel(envio.audiencia).toLowerCase()}
@@ -599,6 +645,7 @@ function ProgramarDialog({ onClose }: { onClose: () => void }) {
     | undefined;
   const programar = useMutation(api.automatizaciones.programar);
   const enviarPrueba = useAction(api.automatizaciones.enviarPrueba);
+  const listarPlantillas = useAction(api.automatizaciones.plantillasDisponibles);
 
   // Los `<select>` manejan strings; el API exige ids tipados de Convex, así
   // que el estado se declara ya con la marca y arranca vacío.
@@ -626,7 +673,83 @@ function ProgramarDialog({ onClose }: { onClose: () => void }) {
     null,
   );
 
+  // Plantillas de WhatsApp: se piden una sola vez, al abrir el diálogo.
+  const [plantillas, setPlantillas] = useState<PlantillaOpcion[] | null>(null);
+  const [cargandoPlantillas, setCargandoPlantillas] = useState(true);
+  const [errorPlantillas, setErrorPlantillas] = useState<string | null>(null);
+  const [plantillaNombre, setPlantillaNombre] = useState("");
+  const [parametros, setParametros] = useState<string[]>([]);
+  // Último input de variable enfocado, para saber dónde insertar una ficha.
+  const [focoParam, setFocoParam] = useState(0);
+  const paramRefs = useRef<(HTMLInputElement | null)[]>([]);
+
   const esMensaje = tipo === "mensaje_residentes";
+  const esAsamblea = tipo === "apoderados_asamblea";
+  const esPlantilla = tipo === "plantilla_whatsapp";
+
+  useEffect(() => {
+    let vivo = true;
+    setCargandoPlantillas(true);
+    setErrorPlantillas(null);
+    listarPlantillas({})
+      .then((res) => {
+        if (!vivo) return;
+        setPlantillas(res as PlantillaOpcion[]);
+      })
+      .catch((e: unknown) => {
+        if (!vivo) return;
+        setErrorPlantillas(
+          e instanceof Error
+            ? e.message
+            : "No se pudieron cargar las plantillas de WhatsApp.",
+        );
+      })
+      .finally(() => {
+        if (vivo) setCargandoPlantillas(false);
+      });
+    return () => {
+      vivo = false;
+    };
+    // Se carga una sola vez, al montar el diálogo.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const plantilla =
+    plantillas?.find((p) => p.nombre === plantillaNombre) ?? null;
+  const totalVariables = plantilla?.variables ?? 0;
+  const variablesCompletas =
+    plantilla != null &&
+    Array.from({ length: totalVariables }).every(
+      (_, i) => (parametros[i] ?? "").trim().length > 0,
+    );
+
+  function setParametro(i: number, valor: string) {
+    setParametros((prev) => {
+      const copia = [...prev];
+      while (copia.length <= i) copia.push("");
+      copia[i] = valor;
+      return copia;
+    });
+    setError(null);
+    setPruebaError(null);
+  }
+
+  /** Inserta `{nombre}` y compañía donde estaba el cursor del último input. */
+  function insertarFicha(ficha: string) {
+    const i = Math.min(focoParam, Math.max(totalVariables - 1, 0));
+    const actual = parametros[i] ?? "";
+    const el = paramRefs.current[i];
+    const pos =
+      el && el.selectionStart != null ? el.selectionStart : actual.length;
+    setParametro(i, `${actual.slice(0, pos)}${ficha}${actual.slice(pos)}`);
+    requestAnimationFrame(() => {
+      const nodo = paramRefs.current[i];
+      if (!nodo) return;
+      nodo.focus();
+      const cursor = pos + ficha.length;
+      nodo.setSelectionRange(cursor, cursor);
+    });
+  }
 
   const condo = condos?.find((c) => c.condominioId === condominioId) ?? null;
   const asamblea =
@@ -639,7 +762,11 @@ function ProgramarDialog({ onClose }: { onClose: () => void }) {
   const sinCondominios = condos != null && condos.length === 0;
   const listo =
     Boolean(condominioId) &&
-    (esMensaje ? mensaje.trim().length > 0 : Boolean(asambleaId)) &&
+    (esMensaje
+      ? mensaje.trim().length > 0
+      : esPlantilla
+        ? Boolean(plantillaNombre) && variablesCompletas
+        : Boolean(asambleaId)) &&
     !busy;
 
   async function enviar(programadoPara: number) {
@@ -651,9 +778,19 @@ function ProgramarDialog({ onClose }: { onClose: () => void }) {
       setError("Escribe el mensaje que quieres enviar.");
       return;
     }
-    if (!esMensaje && !asambleaId) {
+    if (esAsamblea && !asambleaId) {
       setError("Selecciona una asamblea.");
       return;
+    }
+    if (esPlantilla) {
+      if (!plantillaNombre) {
+        setError("Elige la plantilla que quieres enviar.");
+        return;
+      }
+      if (!variablesCompletas) {
+        setError("Llena todas las variables de la plantilla.");
+        return;
+      }
     }
     setBusy(true);
     setError(null);
@@ -661,11 +798,15 @@ function ProgramarDialog({ onClose }: { onClose: () => void }) {
       await programar({
         condominioId,
         tipo,
-        asambleaId: esMensaje ? undefined : (asambleaId as Id<"asambleas">),
+        asambleaId: esAsamblea ? (asambleaId as Id<"asambleas">) : undefined,
         asunto: esMensaje ? asunto.trim() || undefined : undefined,
         mensaje: esMensaje ? mensaje.trim() : undefined,
-        audiencia: esMensaje ? audiencia : undefined,
-        canal,
+        audiencia: esMensaje || esPlantilla ? audiencia : undefined,
+        plantilla: esPlantilla ? plantillaNombre : undefined,
+        parametros: esPlantilla
+          ? Array.from({ length: totalVariables }, (_, i) => parametros[i] ?? "")
+          : undefined,
+        canal: esPlantilla ? "whatsapp" : canal,
         programadoPara,
       });
       onClose();
@@ -693,12 +834,59 @@ function ProgramarDialog({ onClose }: { onClose: () => void }) {
   }
 
   async function onEnviarPrueba() {
-    if (!condominioId || !asambleaId) {
-      setPruebaError("Selecciona un condominio y una asamblea.");
+    if (!condominioId) {
+      setPruebaError("Selecciona un condominio.");
       return;
     }
     const email = pruebaEmail.trim();
     const telefono = pruebaTelefono.trim();
+
+    // La prueba de una plantilla siempre sale por WhatsApp: no hay versión
+    // por correo de una plantilla aprobada en Meta.
+    if (esPlantilla) {
+      if (!plantillaNombre) {
+        setPruebaError("Elige la plantilla que quieres probar.");
+        return;
+      }
+      if (!variablesCompletas) {
+        setPruebaError("Llena todas las variables antes de probar.");
+        return;
+      }
+      if (!telefono) {
+        setPruebaError("Escribe un celular: esta prueba sale por WhatsApp.");
+        return;
+      }
+      setPruebaBusy(true);
+      setPruebaError(null);
+      setPruebaResultado(null);
+      try {
+        const res = (await enviarPrueba({
+          condominioId,
+          tipo,
+          plantilla: plantillaNombre,
+          parametros: Array.from(
+            { length: totalVariables },
+            (_, i) => parametros[i] ?? "",
+          ),
+          canal: "whatsapp",
+          telefono,
+          nombre: pruebaNombre.trim() || undefined,
+        })) as PruebaResultado;
+        setPruebaResultado(res);
+      } catch (e) {
+        setPruebaError(
+          e instanceof Error ? e.message : "No se pudo mandar la prueba.",
+        );
+      } finally {
+        setPruebaBusy(false);
+      }
+      return;
+    }
+
+    if (!asambleaId) {
+      setPruebaError("Selecciona una asamblea.");
+      return;
+    }
     if (!email && !telefono) {
       setPruebaError("Escribe un correo o un celular para la prueba.");
       return;
@@ -726,8 +914,11 @@ function ProgramarDialog({ onClose }: { onClose: () => void }) {
     }
   }
 
-  const pruebaLista =
-    !esMensaje && Boolean(condominioId && asambleaId) && !pruebaBusy;
+  const pruebaLista = esPlantilla
+    ? Boolean(condominioId && plantillaNombre && pruebaTelefono.trim()) &&
+      variablesCompletas &&
+      !pruebaBusy
+    : esAsamblea && Boolean(condominioId && asambleaId) && !pruebaBusy;
 
   return (
     <Modal
@@ -737,7 +928,9 @@ function ProgramarDialog({ onClose }: { onClose: () => void }) {
       description={
         esMensaje
           ? "Manda un mensaje de la administración a los residentes del condominio."
-          : "Manda el enlace de la asamblea a los apoderados registrados."
+          : esPlantilla
+            ? "Manda una plantilla aprobada de WhatsApp a los residentes del condominio."
+            : "Manda el enlace de la asamblea a los apoderados registrados."
       }
       className="max-w-lg"
       footer={
@@ -803,8 +996,13 @@ function ProgramarDialog({ onClose }: { onClose: () => void }) {
                       disabled={busy}
                       onChange={() => {
                         setTipo(valor);
+                        // Una plantilla solo existe en WhatsApp.
+                        if (valor === "plantilla_whatsapp") {
+                          setCanal("whatsapp");
+                        }
                         setError(null);
                         setPruebaError(null);
+                        setPruebaResultado(null);
                       }}
                       className="mt-0.5 h-4 w-4 shrink-0 border-border accent-[var(--color-brand)]"
                     />
@@ -853,35 +1051,61 @@ function ProgramarDialog({ onClose }: { onClose: () => void }) {
             </Select>
           </div>
 
+          {(esMensaje || esPlantilla) && (
+            <div className="space-y-1.5">
+              <label
+                htmlFor="auto-audiencia"
+                className="block text-xs font-medium text-foreground"
+              >
+                Audiencia
+              </label>
+              <Select
+                id="auto-audiencia"
+                value={audiencia}
+                disabled={busy}
+                onChange={(e) => {
+                  setAudiencia(e.target.value);
+                  setError(null);
+                }}
+              >
+                {AUDIENCIA_OPCIONES.map((a) => (
+                  <option key={a.value} value={a.value}>
+                    {a.label}
+                  </option>
+                ))}
+              </Select>
+              <p className="text-[11px] text-muted-foreground">
+                Se manda a las personas activas del condominio con ese rol.
+              </p>
+            </div>
+          )}
+
+          {esPlantilla && (
+            <PlantillaCampos
+              plantillas={plantillas}
+              cargando={cargandoPlantillas}
+              errorCarga={errorPlantillas}
+              seleccionada={plantilla}
+              plantillaNombre={plantillaNombre}
+              parametros={parametros}
+              disabled={busy}
+              paramRefs={paramRefs}
+              onSeleccionar={(nombre) => {
+                setPlantillaNombre(nombre);
+                setParametros([]);
+                setFocoParam(0);
+                setError(null);
+                setPruebaError(null);
+                setPruebaResultado(null);
+              }}
+              onCambiarParametro={setParametro}
+              onFocoParametro={setFocoParam}
+              onInsertarFicha={insertarFicha}
+            />
+          )}
+
           {esMensaje && (
             <>
-              <div className="space-y-1.5">
-                <label
-                  htmlFor="auto-audiencia"
-                  className="block text-xs font-medium text-foreground"
-                >
-                  Audiencia
-                </label>
-                <Select
-                  id="auto-audiencia"
-                  value={audiencia}
-                  disabled={busy}
-                  onChange={(e) => {
-                    setAudiencia(e.target.value);
-                    setError(null);
-                  }}
-                >
-                  {AUDIENCIA_OPCIONES.map((a) => (
-                    <option key={a.value} value={a.value}>
-                      {a.label}
-                    </option>
-                  ))}
-                </Select>
-                <p className="text-[11px] text-muted-foreground">
-                  Se manda a las personas activas del condominio con ese rol.
-                </p>
-              </div>
-
               <div className="space-y-1.5">
                 <label
                   htmlFor="auto-asunto"
@@ -931,7 +1155,7 @@ function ProgramarDialog({ onClose }: { onClose: () => void }) {
             </>
           )}
 
-          {!esMensaje && (
+          {esAsamblea && (
             <div className="space-y-1.5">
               <label
                 htmlFor="auto-asamblea"
@@ -969,7 +1193,7 @@ function ProgramarDialog({ onClose }: { onClose: () => void }) {
             </div>
           )}
 
-          {!esMensaje && asamblea && (
+          {esAsamblea && asamblea && (
             <div className="rounded-xl border border-border bg-muted/40 px-3.5 py-3">
               <p className="text-sm font-medium text-foreground">
                 {asamblea.titulo}
@@ -996,7 +1220,7 @@ function ProgramarDialog({ onClose }: { onClose: () => void }) {
             </div>
           )}
 
-          {!esMensaje && asamblea && sinContacto > 0 && (
+          {esAsamblea && asamblea && sinContacto > 0 && (
             <div className="flex gap-2.5 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3.5 py-3">
               <AlertTriangle
                 className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400"
@@ -1015,23 +1239,31 @@ function ProgramarDialog({ onClose }: { onClose: () => void }) {
             <div className="space-y-2">
               {CANAL_OPCIONES.map((opt) => {
                 const Icon = opt.icon;
-                const checked = canal === opt.value;
+                // Una plantilla solo se puede mandar por WhatsApp, así que los
+                // otros canales quedan bloqueados para ese tipo.
+                const bloqueado = esPlantilla && opt.value !== "whatsapp";
+                const checked = esPlantilla
+                  ? opt.value === "whatsapp"
+                  : canal === opt.value;
                 return (
                   <label
                     key={opt.value}
                     className={cn(
-                      "flex cursor-pointer items-start gap-3 rounded-xl border px-3.5 py-2.5 transition-colors",
+                      "flex items-start gap-3 rounded-xl border px-3.5 py-2.5 transition-colors",
+                      bloqueado ? "cursor-not-allowed" : "cursor-pointer",
                       checked
                         ? "border-brand bg-brand/5"
-                        : "border-border hover:bg-accent",
-                      busy && "cursor-not-allowed opacity-60",
+                        : bloqueado
+                          ? "border-border"
+                          : "border-border hover:bg-accent",
+                      (busy || bloqueado) && "opacity-60",
                     )}
                   >
                     <input
                       type="radio"
                       name="canal-automatizacion"
                       checked={checked}
-                      disabled={busy}
+                      disabled={busy || bloqueado}
                       onChange={() => setCanal(opt.value)}
                       className="mt-0.5 h-4 w-4 shrink-0 border-border accent-[var(--color-brand)]"
                     />
@@ -1053,6 +1285,11 @@ function ProgramarDialog({ onClose }: { onClose: () => void }) {
                 );
               })}
             </div>
+            {esPlantilla && (
+              <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
+                Las plantillas son de WhatsApp; no hay versión por correo.
+              </p>
+            )}
           </div>
 
           <div className="space-y-1.5">
@@ -1094,9 +1331,9 @@ function ProgramarDialog({ onClose }: { onClose: () => void }) {
                 Probar antes de enviar
               </p>
               <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
-                Se manda una sola copia con los datos reales de la asamblea
-                seleccionada, por el canal elegido arriba. No le llega a nadie
-                del condominio ni cuenta como envío real.
+                {esPlantilla
+                  ? "Se manda una sola copia de la plantilla, por WhatsApp, al celular que escribas aquí. Las fichas se llenan con datos de ejemplo. No le llega a nadie del condominio ni cuenta como envío real."
+                  : "Se manda una sola copia con los datos reales de la asamblea seleccionada, por el canal elegido arriba. No le llega a nadie del condominio ni cuenta como envío real."}
               </p>
             </div>
 
@@ -1116,26 +1353,30 @@ function ProgramarDialog({ onClose }: { onClose: () => void }) {
               </p>
             )}
 
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="space-y-1.5">
-                <label
-                  htmlFor="auto-prueba-email"
-                  className="block text-xs font-medium text-foreground"
-                >
-                  Correo de prueba
-                </label>
-                <Input
-                  id="auto-prueba-email"
-                  type="email"
-                  value={pruebaEmail}
-                  placeholder="tucorreo@ejemplo.com"
-                  disabled={busy || pruebaBusy}
-                  onChange={(e) => {
-                    setPruebaEmail(e.target.value);
-                    setPruebaError(null);
-                  }}
-                />
-              </div>
+            <div className={cn("grid gap-3", !esPlantilla && "sm:grid-cols-2")}>
+              {/* Una plantilla no tiene versión por correo, así que ese campo
+                  se esconde y la prueba va siempre al celular. */}
+              {!esPlantilla && (
+                <div className="space-y-1.5">
+                  <label
+                    htmlFor="auto-prueba-email"
+                    className="block text-xs font-medium text-foreground"
+                  >
+                    Correo de prueba
+                  </label>
+                  <Input
+                    id="auto-prueba-email"
+                    type="email"
+                    value={pruebaEmail}
+                    placeholder="tucorreo@ejemplo.com"
+                    disabled={busy || pruebaBusy}
+                    onChange={(e) => {
+                      setPruebaEmail(e.target.value);
+                      setPruebaError(null);
+                    }}
+                  />
+                </div>
+              )}
 
               <div className="space-y-1.5">
                 <label
@@ -1159,8 +1400,9 @@ function ProgramarDialog({ onClose }: { onClose: () => void }) {
             </div>
 
             <p className="text-[11px] text-muted-foreground">
-              Basta con uno de los dos; si escribes ambos y el canal es «Ambos»,
-              la prueba sale por correo y por WhatsApp.
+              {esPlantilla
+                ? "La prueba de una plantilla sale por WhatsApp, así que el celular es obligatorio."
+                : "Basta con uno de los dos; si escribes ambos y el canal es «Ambos», la prueba sale por correo y por WhatsApp."}
             </p>
 
             <div className="space-y-1.5">
@@ -1184,8 +1426,9 @@ function ProgramarDialog({ onClose }: { onClose: () => void }) {
             </div>
 
             {/* La versión apoderado/propietario solo aplica al enlace de
-                asamblea; el mensaje libre no tiene variantes. */}
-            {!esMensaje && (
+                asamblea; el mensaje libre y las plantillas no tienen
+                variantes. */}
+            {esAsamblea && (
               <div>
                 <p className="mb-1.5 text-xs font-medium text-foreground">
                   Versión del mensaje
@@ -1265,6 +1508,196 @@ function ProgramarDialog({ onClose }: { onClose: () => void }) {
         </div>
       )}
     </Modal>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Campos de «Plantilla de WhatsApp»                                           */
+/* -------------------------------------------------------------------------- */
+
+function PlantillaCampos({
+  plantillas,
+  cargando,
+  errorCarga,
+  seleccionada,
+  plantillaNombre,
+  parametros,
+  disabled,
+  paramRefs,
+  onSeleccionar,
+  onCambiarParametro,
+  onFocoParametro,
+  onInsertarFicha,
+}: {
+  plantillas: PlantillaOpcion[] | null;
+  cargando: boolean;
+  errorCarga: string | null;
+  seleccionada: PlantillaOpcion | null;
+  plantillaNombre: string;
+  parametros: string[];
+  disabled: boolean;
+  paramRefs: { current: (HTMLInputElement | null)[] };
+  onSeleccionar: (nombre: string) => void;
+  onCambiarParametro: (i: number, valor: string) => void;
+  onFocoParametro: (i: number) => void;
+  onInsertarFicha: (ficha: string) => void;
+}) {
+  if (cargando) {
+    return (
+      <div className="space-y-2">
+        <Skeleton className="h-9 w-full rounded-lg" />
+        <Skeleton className="h-20 w-full rounded-xl" />
+      </div>
+    );
+  }
+
+  if (errorCarga) {
+    return (
+      <div className="flex gap-2.5 rounded-xl border border-red-500/30 bg-red-500/10 px-3.5 py-3">
+        <AlertTriangle
+          className="mt-0.5 h-4 w-4 shrink-0 text-red-600 dark:text-red-400"
+          aria-hidden
+        />
+        <p className="text-xs leading-relaxed text-red-600 dark:text-red-400">
+          {errorCarga} Cierra y vuelve a abrir esta ventana para reintentar.
+        </p>
+      </div>
+    );
+  }
+
+  if (!plantillas || plantillas.length === 0) {
+    return (
+      <p className="rounded-lg bg-muted/30 p-3 text-xs leading-relaxed text-muted-foreground">
+        No hay plantillas aprobadas por Meta todavía. Cuando aprueben una,
+        aparecerá aquí sola.
+      </p>
+    );
+  }
+
+  const total = seleccionada?.variables ?? 0;
+
+  return (
+    <div className="space-y-3">
+      <div className="space-y-1.5">
+        <label
+          htmlFor="auto-plantilla"
+          className="block text-xs font-medium text-foreground"
+        >
+          Plantilla
+        </label>
+        <Select
+          id="auto-plantilla"
+          value={plantillaNombre}
+          disabled={disabled}
+          onChange={(e) => onSeleccionar(e.target.value)}
+        >
+          <option value="">Selecciona una plantilla…</option>
+          {plantillas.map((p) => (
+            <option key={`${p.nombre}-${p.idioma}`} value={p.nombre}>
+              {p.nombre} · {p.categoria}
+            </option>
+          ))}
+        </Select>
+      </div>
+
+      {seleccionada && (
+        <>
+          <div className="space-y-1.5">
+            <p className="text-xs font-medium text-foreground">Vista previa</p>
+            {/* Burbuja estilo WhatsApp con las variables ya reemplazadas. */}
+            <div className="rounded-xl rounded-tl-sm border border-emerald-600/20 bg-emerald-500/10 px-3.5 py-3">
+              <p className="whitespace-pre-wrap text-xs leading-relaxed text-foreground/90">
+                {seleccionada.cuerpo.split(/(\{\{\d+\}\})/g).map((parte, i) => {
+                  const marca = /^\{\{(\d+)\}\}$/.exec(parte);
+                  if (!marca) return <span key={i}>{parte}</span>;
+                  const valor = parametros[Number(marca[1]) - 1] ?? "";
+                  return valor.trim() ? (
+                    <span key={i} className="font-medium">
+                      {valor}
+                    </span>
+                  ) : (
+                    <span key={i} className="text-muted-foreground/70">
+                      {parte}
+                    </span>
+                  );
+                })}
+              </p>
+            </div>
+          </div>
+
+          {seleccionada.botonUrlDinamica && (
+            <div className="flex gap-2.5 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3.5 py-3">
+              <AlertTriangle
+                className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400"
+                aria-hidden
+              />
+              <p className="text-xs leading-relaxed text-amber-700 dark:text-amber-400">
+                Esta plantilla tiene un enlace dinámico en el botón que este
+                envío no puede llenar. Úsala solo si el enlace no cambia por
+                persona.
+              </p>
+            </div>
+          )}
+
+          {total > 0 ? (
+            <div className="space-y-2">
+              {Array.from({ length: total }, (_, i) => (
+                <div key={i} className="space-y-1.5">
+                  <label
+                    htmlFor={`auto-plantilla-var-${i}`}
+                    className="block text-xs font-medium text-foreground"
+                  >
+                    Variable {`{{${i + 1}}}`}
+                  </label>
+                  <Input
+                    id={`auto-plantilla-var-${i}`}
+                    ref={(nodo) => {
+                      paramRefs.current[i] = nodo;
+                    }}
+                    type="text"
+                    value={parametros[i] ?? ""}
+                    placeholder={`Valor de {{${i + 1}}}`}
+                    disabled={disabled}
+                    onFocus={() => onFocoParametro(i)}
+                    onChange={(e) => onCambiarParametro(i, e.target.value)}
+                  />
+                </div>
+              ))}
+
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-[11px] leading-relaxed text-muted-foreground">
+                  Puedes usar
+                </span>
+                {FICHAS.map((ficha) => (
+                  <button
+                    key={ficha}
+                    type="button"
+                    disabled={disabled}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => onInsertarFicha(ficha)}
+                    className={cn(
+                      "rounded-full border border-border bg-card px-2 py-0.5 font-mono text-[11px] text-foreground transition-colors",
+                      disabled
+                        ? "cursor-not-allowed opacity-60"
+                        : "hover:border-brand hover:bg-brand/5",
+                    )}
+                  >
+                    {ficha}
+                  </button>
+                ))}
+                <span className="text-[11px] leading-relaxed text-muted-foreground">
+                  ; se reemplazan por los datos de cada persona.
+                </span>
+              </div>
+            </div>
+          ) : (
+            <p className="text-[11px] leading-relaxed text-muted-foreground">
+              Esta plantilla no tiene variables: sale tal cual está arriba.
+            </p>
+          )}
+        </>
+      )}
+    </div>
   );
 }
 
@@ -1387,7 +1820,9 @@ function DetalleModal({
         envio.condominioNombre,
         envio.tipo === "mensaje_residentes"
           ? (envio.asunto ?? resumenMensaje(envio.mensaje))
-          : envio.asambleaTitulo,
+          : envio.tipo === "plantilla_whatsapp"
+            ? envio.plantilla
+            : envio.asambleaTitulo,
         fmtProgramado(envio.programadoPara),
       ]
         .filter(Boolean)

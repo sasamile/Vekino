@@ -142,7 +142,11 @@ export const listar = query({
   },
 });
 
-/** Condominios con asambleas a las que tenga sentido programarles un envío. */
+/**
+ * TODOS los condominios activos, cada uno con sus asambleas abiertas (puede
+ * venir vacío). Los tipos de envío que no dependen de una asamblea —mensaje
+ * libre y plantilla— necesitan poder elegir cualquier condominio.
+ */
 export const condominiosConAsambleas = query({
   args: {},
   handler: async (ctx) => {
@@ -195,13 +199,11 @@ export const condominiosConAsambleas = query({
         });
       }
 
-      if (filas.length > 0) {
-        salida.push({
-          condominioId: c._id,
-          condominioNombre: c.name,
-          asambleas: filas,
-        });
-      }
+      salida.push({
+        condominioId: c._id,
+        condominioNombre: c.name,
+        asambleas: filas,
+      });
     }
     return salida;
   },
