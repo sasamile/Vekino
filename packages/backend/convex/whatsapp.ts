@@ -36,6 +36,16 @@ import {
 const VENTANA_24H = 24 * 60 * 60 * 1000;
 
 /**
+ * Espera antes de contestar un mensaje de texto.
+ *
+ * La gente escribe por ráfagas: "Hola", "Buenas tardes", y después lo que
+ * quiere. Contestar cada uno hace que el bot responda tres veces lo mismo.
+ * Con esta pausa solo responde el último de la ráfaga, viendo todos los
+ * anteriores. Los toques de botón no esperan: ahí la intención es inequívoca.
+ */
+const ESPERA_RAFAGA_MS = 7000;
+
+/**
  * Número del bot para el botón flotante de la web/app.
  *
  * Solo lo devuelve si el condominio tiene el módulo "whatsapp" encendido: un
@@ -131,6 +141,7 @@ export const registrarEntrante = internalMutation({
         telefono: args.telefono ?? conversacion.telefono,
         username: args.username ?? conversacion.username,
         ultimoMensajeAt: now,
+        ultimoEntranteAt: now,
         ventanaExpiraAt: now + VENTANA_24H,
         nombrePerfil: args.nombrePerfil ?? conversacion.nombrePerfil,
         updatedAt: now,
@@ -144,6 +155,7 @@ export const registrarEntrante = internalMutation({
         nombrePerfil: args.nombrePerfil,
         paso: "nueva",
         ultimoMensajeAt: now,
+        ultimoEntranteAt: now,
         ventanaExpiraAt: now + VENTANA_24H,
         createdAt: now,
         updatedAt: now,
@@ -196,12 +208,17 @@ export const registrarEntrante = internalMutation({
       createdAt: now,
     });
 
-    await ctx.scheduler.runAfter(0, internal.whatsapp.procesarEntrante, {
+    const esperar =
+      args.tipo === "text" && !args.interactiveId && !args.media
+        ? ESPERA_RAFAGA_MS
+        : 0;
+    await ctx.scheduler.runAfter(esperar, internal.whatsapp.procesarEntrante, {
       conversacionId,
       tipo: args.tipo,
       texto: args.texto,
       interactiveId: args.interactiveId,
       media: args.media,
+      marcaAt: now,
     });
 
     return { conversacionId, duplicado: false as const };
@@ -508,12 +525,23 @@ export const procesarEntrante = internalAction({
         caption: v.optional(v.string()),
       }),
     ),
+    /** Momento del mensaje que disparó esta ejecución. */
+    marcaAt: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const datos = await ctx.runQuery(internal.whatsapp.contextoConversacion, {
       conversacionId: args.conversacionId,
     });
     if (!datos) return null;
+
+    /* Llegó algo más nuevo mientras esperábamos: este mensaje era parte de una
+     * ráfaga. Se calla y deja que responda el último, que ya ve todo. */
+    if (
+      args.marcaAt != null &&
+      (datos.conversacion.ultimoEntranteAt ?? 0) > args.marcaAt
+    ) {
+      return null;
+    }
 
     const enviar = async (payload: Record<string, unknown> & { to: string }) => {
       const tipo = (payload as { type?: string }).type ?? "text";

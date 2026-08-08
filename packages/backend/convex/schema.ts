@@ -1771,6 +1771,12 @@ export default defineSchema({
 
     /** Fin de la ventana de 24 h (último entrante + 24 h). Fuera de ella solo plantillas. */
     ventanaExpiraAt: v.optional(v.number()),
+    /**
+     * Marca del último mensaje ENTRANTE. Sirve para agrupar ráfagas: si al
+     * ejecutarse el agente resulta que llegó algo más nuevo, se calla y deja
+     * responder al último, que ya ve toda la conversación.
+     */
+    ultimoEntranteAt: v.optional(v.number()),
     ultimoMensajeAt: v.number(),
     createdAt: v.number(),
     updatedAt: v.number(),

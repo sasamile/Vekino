@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
-import { query, mutation } from "./_generated/server";
+import { query, mutation, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { requireCondominioRole } from "./model/authz";
 import { resolveMediaUrl } from "./model/files";
@@ -292,5 +292,36 @@ export const remove = mutation({
       ),
     );
     await ctx.db.delete(args.id);
+  },
+});
+
+/**
+ * Comunicados de un condominio con sus adjuntos, para enviarlos por WhatsApp.
+ * La plantilla de texto no lleva la imagen; dentro de la ventana de 24 h sí se
+ * puede mandar el archivo real, que es lo que la gente espera ver.
+ */
+export const paraWhatsapp = internalQuery({
+  args: { condominioId: v.id("condominios"), limite: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const filas = await ctx.db
+      .query("comunicados")
+      .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
+      .order("desc")
+      .take(Math.min(args.limite ?? 10, 30));
+
+    return filas.map((c) => ({
+      id: c._id,
+      titulo: c.titulo,
+      cuerpo: c.cuerpo,
+      prioridad: c.prioridad,
+      createdAt: c.createdAt,
+      archivos: (c.archivos ?? [])
+        .filter((a) => !!a.url)
+        .map((a) => ({
+          url: a.url as string,
+          mimeType: a.mimeType,
+          nombre: a.nombre,
+        })),
+    }));
   },
 });

@@ -50,6 +50,9 @@ export function textoCredenciales(a: CredencialesEmailArgs): string {
     "Importante: esta contraseña es personal y fue generada solo para ti.",
     "No la compartas con nadie y cámbiala apenas ingreses.",
     "",
+    "Si ya habías logrado entrar por tu cuenta, ignora este mensaje:",
+    "tu contraseña anterior sigue funcionando.",
+    "",
     "Si tienes inconvenientes para ingresar o el correo indicado no corresponde",
     "al que utilizas actualmente, comunícate con la Administración.",
     "",
@@ -228,6 +231,9 @@ export function htmlCredenciales(a: CredencialesEmailArgs): string {
                       <strong style="color:#7a5d00;">Importante:</strong>
                       Esta contraseña es personal y fue generada únicamente para tu cuenta.
                       No la compartas con nadie y cámbiala apenas ingreses.
+                      <br><br>
+                      Si ya habías logrado entrar por tu cuenta, ignora este mensaje:
+                      tu contraseña anterior sigue funcionando.
                     </p>
                   </td>
                 </tr>
