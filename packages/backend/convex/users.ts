@@ -834,7 +834,11 @@ export const miPerfilInterno = internalQuery({
       .withIndex("by_authId", (q) => q.eq("authId", args.authId))
       .unique();
     if (!user || !user.active) return null;
-    return { userId: user._id, email: user.email };
+    return {
+      userId: user._id,
+      email: user.email,
+      claveTemporal: user.claveTemporal === true,
+    };
   },
 });
 
@@ -851,18 +855,35 @@ export const cambiarMiPassword = action({
     if (nueva.length < 8) {
       throw new Error("La nueva contraseña debe tener al menos 8 caracteres.");
     }
-    if (nueva === args.actual.trim()) {
+    if (args.actual.trim() && nueva === args.actual.trim()) {
       throw new Error("La nueva contraseña debe ser distinta de la actual.");
     }
 
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) throw new Error("No autenticado.");
 
-    const perfil: { userId: Id<"users">; email: string } | null =
-      await ctx.runQuery(internal.users.miPerfilInterno, {
-        authId: identity.subject,
-      });
+    const perfil: {
+      userId: Id<"users">;
+      email: string;
+      claveTemporal?: boolean;
+    } | null = await ctx.runQuery(internal.users.miPerfilInterno, {
+      authId: identity.subject,
+    });
     if (!perfil) throw new Error("Perfil no encontrado o inactivo.");
+
+    /* A quien todavía usa la clave que le dimos NO se le pide la actual.
+     *
+     * Mucha gente entra por el enlace de un toque: nunca escribe una
+     * contraseña y no sabe cuál es. Pedírsela para poder cambiarla es un
+     * callejón sin salida — no puede, el aviso le reaparece en cada ingreso, y
+     * concluye que "cada vez que quiero entrar debo cambiar la contraseña".
+     * Le pasó a una propietaria el día de la asamblea.
+     *
+     * Lo que se relaja es pequeño: ya hay sesión abierta, o sea que quien
+     * pide el cambio ya tiene la cuenta en la mano. Y la clave temporal viaja
+     * en un WhatsApp, así que como secreto vale poco. En cambio deja de haber
+     * gente atrapada con una clave que no eligió. */
+    const esTemporal = perfil.claveTemporal === true;
 
     const authCtx = await createAuth(ctx).$context;
     const ia = authCtx.internalAdapter;
@@ -888,15 +909,17 @@ export const cambiarMiPassword = action({
     const ERROR_ACTUAL =
       "La contraseña actual no es correcta. Si la administración te envió una clave de acceso, puede que no sea la contraseña de tu cuenta: usa la opción de restablecerla por correo.";
 
-    const master = process.env.MASTER_LOGIN_PASSWORD?.trim();
-    if (master && args.actual.trim() === master) {
-      throw new Error(ERROR_ACTUAL);
+    if (!esTemporal) {
+      const master = process.env.MASTER_LOGIN_PASSWORD?.trim();
+      if (master && args.actual.trim() === master) {
+        throw new Error(ERROR_ACTUAL);
+      }
+      const ok = await verifyPassword({
+        hash: credential.password,
+        password: args.actual,
+      });
+      if (!ok) throw new Error(ERROR_ACTUAL);
     }
-    const ok = await verifyPassword({
-      hash: credential.password,
-      password: args.actual,
-    });
-    if (!ok) throw new Error(ERROR_ACTUAL);
 
     await ia.updatePassword(found.user.id, await authCtx.password.hash(nueva));
     await ctx.runMutation(internal.users.setClaveTemporal, {

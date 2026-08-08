@@ -106,10 +106,11 @@ export function CambiarClaveTemporalModal() {
     e.preventDefault();
     setError(null);
 
-    if (!actual) {
-      setError("Escribe tu contraseña actual.");
-      return;
-    }
+    /* La actual ya no se pide: el modal solo le sale a quien sigue usando la
+      * clave que le generó la administración, y buena parte de esa gente entró
+      * por el enlace de un toque, sin escribir nunca una contraseña. Exigirla
+      * los dejaba atrapados: no podían cambiarla y el aviso les reaparecía en
+      * cada ingreso. */
     if (nueva.trim().length < MIN_LEN) {
       setError(`La nueva contraseña debe tener al menos ${MIN_LEN} caracteres.`);
       return;
@@ -234,25 +235,6 @@ export function CambiarClaveTemporalModal() {
             <form onSubmit={guardar} className="mt-5 space-y-4">
               <div>
                 <label
-                  htmlFor="clave-temporal-actual"
-                  className="mb-1.5 block text-sm font-medium text-foreground"
-                >
-                  Contraseña actual
-                </label>
-                <Input
-                  id="clave-temporal-actual"
-                  type="password"
-                  value={actual}
-                  onChange={(e) => setActual(e.target.value)}
-                  placeholder="La que te enviaron por correo"
-                  autoComplete="current-password"
-                  disabled={busy}
-                  autoFocus
-                />
-              </div>
-
-              <div>
-                <label
                   htmlFor="clave-temporal-nueva"
                   className="mb-1.5 block text-sm font-medium text-foreground"
                 >
@@ -266,6 +248,7 @@ export function CambiarClaveTemporalModal() {
                   placeholder={`Mínimo ${MIN_LEN} caracteres`}
                   autoComplete="new-password"
                   disabled={busy}
+                  autoFocus
                 />
               </div>
 
