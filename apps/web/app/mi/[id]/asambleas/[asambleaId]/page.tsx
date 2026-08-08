@@ -11,6 +11,7 @@ import {
   UserPlus, X, Trash2, Copy, ChevronDown, ThumbsUp, TrendingUp, QrCode, Search,
   KeyRound, XCircle, Camera, FileUp, MessageCircle,
 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { PageContainer } from "@/components/layout/page-container";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -284,6 +285,10 @@ function VotarTab({
               ? " Puedes revocar el poder en la pestaña Poderes."
               : " Si necesitas un cambio, contacta a la administración."}
           </p>
+          {/* Sin esto, el propietario delegaba y se quedaba sin forma de
+              hacerle llegar el acceso a su apoderado: el enlace solo salía en
+              la pantalla de crear el poder, y quien la cerraba lo perdía. */}
+          <EnlaceApoderado poderes={otorgados ?? []} />
         </Card>
       )}
       {!delegoTodo && presente && abiertas.length > 0 && abiertas.map((vt) => (
@@ -1165,5 +1170,95 @@ function CodigoAsistenciaCard({
 
       {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
     </Card>
+  );
+}
+
+
+/**
+ * El enlace personal del apoderado externo, para que el propietario se lo
+ * pase. Solo aplica a quien NO tiene cuenta en la plataforma: un apoderado
+ * que es propietario del conjunto entra con la suya y no necesita código.
+ */
+function EnlaceApoderado({
+  poderes,
+}: {
+  poderes: Array<{
+    _id: string;
+    codigoAcceso?: string;
+    representanteUserId?: string | null;
+    representanteNombre?: string;
+  }>;
+}) {
+  const [copiado, setCopiado] = useState<string | null>(null);
+
+  const externos = poderes.filter((p) => !p.representanteUserId && p.codigoAcceso);
+  if (externos.length === 0) return null;
+
+  const base =
+    typeof window !== "undefined" ? window.location.origin : "https://www.vekino.com";
+
+  async function copiar(texto: string, cual: string) {
+    try {
+      await navigator.clipboard.writeText(texto);
+      setCopiado(cual);
+      setTimeout(() => setCopiado(null), 2000);
+    } catch {
+      /* Sin permiso de portapapeles el enlace igual se ve y se puede copiar. */
+    }
+  }
+
+  return (
+    <div className="mt-5 space-y-3 border-t border-border pt-5 text-left">
+      <p className="text-center text-sm font-medium text-foreground">
+        Compártele este enlace a tu apoderado
+      </p>
+      <p className="text-center text-xs leading-relaxed text-muted-foreground">
+        Es su acceso personal para entrar y votar por tu unidad. No lo publiques
+        en grupos: quien lo tenga puede votar.
+      </p>
+
+      {externos.map((p) => {
+        const enlace = `${base}/apoderado?codigo=${encodeURIComponent(p.codigoAcceso!)}`;
+        const mensaje = `Hola ${p.representanteNombre ?? ""}, te registré como mi apoderado para la asamblea del conjunto. Entra con este enlace el día de la reunión: ${enlace}`;
+        return (
+          <div
+            key={p._id}
+            className="space-y-2 rounded-xl border border-border bg-muted/30 p-3"
+          >
+            <p className="text-xs font-medium text-foreground">
+              {p.representanteNombre}
+            </p>
+            <p className="break-all rounded-lg bg-background px-2.5 py-2 font-mono text-[11px] leading-relaxed text-muted-foreground">
+              {enlace}
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => void copiar(enlace, `enlace-${p._id}`)}
+              >
+                {copiado === `enlace-${p._id}` ? "¡Copiado!" : "Copiar enlace"}
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => void copiar(p.codigoAcceso!, `codigo-${p._id}`)}
+              >
+                {copiado === `codigo-${p._id}` ? "¡Copiado!" : `Código: ${p.codigoAcceso}`}
+              </Button>
+              <Button size="sm" asChild>
+                <a
+                  href={`https://wa.me/?text=${encodeURIComponent(mensaje)}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Enviar por WhatsApp
+                </a>
+              </Button>
+            </div>
+          </div>
+        );
+      })}
+    </div>
   );
 }
