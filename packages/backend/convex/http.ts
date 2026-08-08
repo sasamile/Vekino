@@ -291,11 +291,30 @@ http.route({
     if (tipoEvento === "whatsapp.message.updated") {
       const msg = payload.whatsappMessage ?? payload.data?.object;
       if (msg?.id && msg?.status) {
+        // Se manda también el contenido: si el mensaje salió por fuera (panel
+        // de YCloud u otra herramienta) este evento es la única forma de
+        // enterarnos, y sin estos datos quedaría una burbuja vacía.
+        const tipoMsg = typeof msg.type === "string" ? msg.type : "text";
+        const cuerpo =
+          typeof msg.text?.body === "string"
+            ? msg.text.body
+            : typeof msg.template?.name === "string"
+              ? `📋 Plantilla «${msg.template.name}»`
+              : `[${tipoMsg}]`;
+
         await ctx.runMutation(internal.whatsapp.actualizarEstadoMensaje, {
           ycloudMessageId: String(msg.id),
           estado: String(msg.status),
           error:
             typeof msg.errorMessage === "string" ? msg.errorMessage : undefined,
+          destino:
+            typeof msg.to === "string"
+              ? msg.to
+              : typeof msg.recipient === "string"
+                ? msg.recipient
+                : undefined,
+          tipo: tipoMsg,
+          contenido: cuerpo,
         });
       }
       return Response.json({ ok: true });

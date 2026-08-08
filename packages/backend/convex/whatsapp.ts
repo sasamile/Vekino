@@ -15,6 +15,7 @@ import {
   msgTexto,
   describirMensaje,
 } from "./lib/ycloud";
+import { normalizarTelefonoE164 } from "./lib/telefono";
 import {
   parseFechaFlexible,
   parseRangoHorasFlexible,
@@ -263,6 +264,14 @@ export const actualizarEstadoMensaje = internalMutation({
     ycloudMessageId: v.string(),
     estado: v.string(),
     error: v.optional(v.string()),
+    /* Datos del mensaje, por si NO lo conocemos: los salientes enviados desde
+     * el panel de YCloud (o cualquier otra herramienta sobre el mismo número)
+     * no pasan por nuestra API, así que la única noticia que tenemos de ellos
+     * es este evento. Sin esto, la bandeja del equipo muestra la conversación
+     * a medias y parece que nadie contestó. */
+    destino: v.optional(v.string()),
+    tipo: v.optional(v.string()),
+    contenido: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const mensaje = await ctx.db
@@ -271,9 +280,48 @@ export const actualizarEstadoMensaje = internalMutation({
         q.eq("ycloudMessageId", args.ycloudMessageId),
       )
       .first();
+
     if (mensaje) {
       await ctx.db.patch(mensaje._id, { estado: args.estado, error: args.error });
+      return null;
     }
+
+    // Saliente desconocido: se adopta en la conversación que corresponda.
+    if (!args.destino) return null;
+    const telefono = normalizarTelefonoE164(args.destino);
+    const conversacion =
+      (telefono
+        ? await ctx.db
+            .query("waConversations")
+            .withIndex("by_telefono", (q) => q.eq("telefono", telefono))
+            .first()
+        : null) ??
+      (await ctx.db
+        .query("waConversations")
+        .withIndex("by_bsuid", (q) => q.eq("bsuid", args.destino))
+        .first());
+    if (!conversacion) return null;
+
+    const now = Date.now();
+    await ctx.db.insert("waMessages", {
+      conversacionId: conversacion._id,
+      telefono: conversacion.telefono,
+      direccion: "saliente",
+      tipo: args.tipo ?? "text",
+      contenido: (args.contenido ?? "").slice(0, 4000),
+      ycloudMessageId: args.ycloudMessageId,
+      estado: args.estado,
+      error: args.error,
+      // Se marca como externo para distinguirlo del bot y del panel propio.
+      agenteNombre: "Enviado por fuera",
+      createdAt: now,
+    });
+    await ctx.db.patch(conversacion._id, {
+      ultimoMensajeAt: now,
+      // Alguien contestó por otra vía: el agente no debe responder encima.
+      agentePausadoHasta: now + 2 * 60 * 60 * 1000,
+      updatedAt: now,
+    });
     return null;
   },
 });
