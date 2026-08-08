@@ -334,6 +334,10 @@ export const tomarLote = internalMutation({
         nombre: user.name,
         email: user.email,
         emailValido: esEmailReal(user.email),
+        /* Viaja hasta el envío para el freno de `nunca_ingreso`: si la
+         * persona tiene contraseña y NO es la temporal que le dimos, se la
+         * puso ella, o sea que entró. Rotársela la dejaría por fuera. */
+        claveTemporal: user.claveTemporal === true,
       });
     }
 
@@ -526,6 +530,23 @@ export const procesarLote = internalAction({
             email: d.email,
             estado: "omitido",
             motivo: "Ya tiene contraseña propia",
+          });
+          continue;
+        }
+
+        /* Último freno de `nunca_ingreso`. El filtro de la cola se arma con lo
+         * que hay en `users`, y ahí la evidencia es floja: `ultimoIngresoAt`
+         * empezó a registrarse hace poco. Aquí sí sabemos si tiene credencial
+         * de verdad, así que si la tiene y ya no está marcada como temporal,
+         * es suya y entró. Rotársela cinco horas antes de una asamblea la
+         * dejaría sin poder votar. */
+        if (datos.modo === "nunca_ingreso" && credencial && !d.claveTemporal) {
+          resultados.push({
+            userId: d.userId,
+            nombre: d.nombre,
+            email: d.email,
+            estado: "omitido",
+            motivo: "Ya se puso su propia contraseña",
           });
           continue;
         }
