@@ -594,3 +594,31 @@ export const resolverEscalacion = mutation({
     return null;
   },
 });
+
+/**
+ * Le manda sus datos de acceso a la persona de esta conversación.
+ *
+ * Es el atajo del caso de soporte más repetido —"no puedo entrar"— para que
+ * el equipo lo resuelva de un toque en vez de buscar a la persona, generarle
+ * una clave y redactar el mensaje a mano, que es donde se cuelan los errores.
+ *
+ * Sirve tanto para quien comparte su número como para quien usa @usuario de
+ * Meta: el destino lo decide el motor mirando la conversación.
+ */
+export const enviarAccesos = action({
+  args: {
+    conversacionId: v.id("waConversations"),
+    /** true rota la clave aunque la persona ya tuviera una propia. */
+    forzar: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args): Promise<{ ok: boolean; motivo?: string }> => {
+    const staff = await ctx.runQuery(internal.whatsappInbox.staffActual, {});
+    if (!staff) throw new Error("Requiere rol de plataforma.");
+
+    const r: { ok: boolean; motivo?: string } = await ctx.runAction(
+      internal.credenciales.enviarAccesoPorWhatsapp,
+      { conversacionId: args.conversacionId, forzar: args.forzar !== false },
+    );
+    return r.ok ? { ok: true } : { ok: false, motivo: r.motivo };
+  },
+});

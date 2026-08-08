@@ -1,12 +1,14 @@
 "use client";
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
 import {
   AlertTriangle,
   ArrowLeft,
   Check,
   Copy,
+  KeyRound,
+  Loader2,
   MessagesSquare,
   PhoneOff,
 } from "lucide-react";
@@ -212,6 +214,41 @@ function CabeceraHilo({
   onVolver: () => void;
 }) {
   const pausarAgente = useMutation(api.whatsappInbox.pausarAgente);
+  const enviarAccesos = useAction(api.whatsappInbox.enviarAccesos);
+  const [enviandoAccesos, setEnviandoAccesos] = useState(false);
+  const [avisoAccesos, setAvisoAccesos] = useState<
+    { ok: boolean; texto: string } | null
+  >(null);
+
+  /* El caso de soporte más repetido: "no puedo entrar". Genera la clave y le
+   * manda el mensaje con su enlace de un solo uso, sin salir del hilo. */
+  async function onEnviarAccesos() {
+    if (enviandoAccesos) return;
+    if (
+      !window.confirm(
+        `Se le va a generar una contraseña NUEVA a ${c?.nombre ?? "esta persona"} y se le manda por aquí.\n\nSi ya tenía una propia, dejará de servirle.`,
+      )
+    ) {
+      return;
+    }
+    setEnviandoAccesos(true);
+    setAvisoAccesos(null);
+    try {
+      const r = await enviarAccesos({ conversacionId });
+      setAvisoAccesos(
+        r.ok
+          ? { ok: true, texto: "Accesos enviados." }
+          : { ok: false, texto: r.motivo ?? "No se pudo enviar." },
+      );
+    } catch (e) {
+      setAvisoAccesos({
+        ok: false,
+        texto: e instanceof Error ? e.message : "No se pudo enviar.",
+      });
+    } finally {
+      setEnviandoAccesos(false);
+    }
+  }
   const resolverEscalacion = useMutation(api.whatsappInbox.resolverEscalacion);
   const [busy, setBusy] = useState(false);
   const [resolviendo, setResolviendo] = useState(false);
@@ -296,6 +333,27 @@ function CabeceraHilo({
               Sin identificar
             </Badge>
           )}
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={enviandoAccesos || !c.puedeResponder || !c.identificado}
+            onClick={() => void onEnviarAccesos()}
+            title={
+              !c.identificado
+                ? "Sin identificar: no se le pueden mandar credenciales"
+                : !c.puedeResponder
+                  ? "No hay a dónde escribirle"
+                  : "Generar y enviarle sus datos de acceso"
+            }
+            className="shrink-0"
+          >
+            {enviandoAccesos ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+            ) : (
+              <KeyRound className="h-3.5 w-3.5" aria-hidden />
+            )}
+            <span className="hidden sm:inline">Enviar accesos</span>
+          </Button>
           <InterruptorAgente
             activo={agenteActivo}
             disabled={busy}

@@ -1211,11 +1211,14 @@ export const enviarAccesoPorWhatsapp = internalAction({
       forzar: args.forzar === true,
     });
     if (!r.ok) {
+      // La unión no se estrecha sola: cada rama del error trae campos distintos.
+      const yaTiene = "yaTieneClavePropia" in r && r.yaTieneClavePropia;
+      const motivo = "motivo" in r ? r.motivo : null;
       return {
         ok: false as const,
-        motivo: r.yaTieneClavePropia
+        motivo: yaTiene
           ? "Ya tiene contraseña propia; usa forzar si de verdad quieres cambiársela."
-          : (r.motivo ?? "No se pudo generar la clave."),
+          : (motivo ?? "No se pudo generar la clave."),
       };
     }
     if (!r.email || !r.password || !r.enlace) {
