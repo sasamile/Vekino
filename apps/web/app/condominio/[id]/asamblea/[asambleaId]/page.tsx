@@ -11,7 +11,7 @@ import {
   XCircle, Vote, ListOrdered, Scale, Save, Plus, Trash2, ChevronUp, ChevronDown,
   Lock, LayoutDashboard, Table2, TrendingUp, UserPlus,
   UserSquare, QrCode, Mail, Search, Download, Wifi, KeyRound, ClipboardList, X,
-  FileText, FileArchive, MonitorPlay, Radio, Camera, FileUp, NotebookPen, Sparkles,
+  FileText, FileArchive, MonitorPlay, Radio, NotebookPen, Sparkles,
   Copy,
 } from "lucide-react";
 import { BitacoraTab } from "@/components/asamblea/bitacora-tab";
@@ -31,6 +31,7 @@ import {
   descargarPoderesZIP,
 } from "@/lib/asamblea-auditoria";
 import { ensurePoderPdf } from "@/lib/poder-documento";
+import { PoderDocumentoInput } from "@/components/asamblea/poder-documento-input";
 import { etiquetaUnidad } from "@/components/portal/portal-ui";
 import { VotacionEnVivoTab, DetalleVotosTab } from "./votacion-en-vivo";
 import { useUploadToS3 } from "@/hooks/use-upload-s3";
@@ -899,8 +900,6 @@ function PoderesTab({ asambleaId }: { asambleaId: Id<"asambleas"> }) {
   const [okMsg, setOkMsg] = useState<string | null>(null);
   const [ultimoCodigo, setUltimoCodigo] = useState<string | null>(null);
   const [copiadoId, setCopiadoId] = useState<string | null>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
-  const cameraRef = useRef<HTMLInputElement>(null);
 
   async function copiarTexto(texto: string, id: string) {
     try {
@@ -1153,60 +1152,11 @@ function PoderesTab({ asambleaId }: { asambleaId: Id<"asambleas"> }) {
               </>
             )}
           </div>
-          <div className="space-y-1.5">
-            <span className="text-xs text-muted-foreground">
-              Documento del poder (PDF o foto) — recomendado
-            </span>
-            <input
-              ref={fileRef}
-              type="file"
-              accept="application/pdf,image/*"
-              className="hidden"
-              onChange={(e) => {
-                void onPoderFile(e.target.files?.[0] ?? null);
-                e.target.value = "";
-              }}
-            />
-            <input
-              ref={cameraRef}
-              type="file"
-              accept="image/*"
-              capture="environment"
-              className="hidden"
-              onChange={(e) => {
-                void onPoderFile(e.target.files?.[0] ?? null);
-                e.target.value = "";
-              }}
-            />
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={() => fileRef.current?.click()}
-                className="inline-flex h-10 items-center gap-2 rounded-lg border border-border bg-card px-3 text-sm font-medium text-foreground hover:bg-accent"
-              >
-                <FileUp className="h-4 w-4" />
-                Seleccionar archivo
-              </button>
-              <button
-                type="button"
-                onClick={() => cameraRef.current?.click()}
-                className="inline-flex h-10 items-center gap-2 rounded-lg border border-border bg-card px-3 text-sm font-medium text-foreground hover:bg-accent"
-              >
-                <Camera className="h-4 w-4" />
-                Tomar foto
-              </button>
-            </div>
-            {file ? (
-              <p className="text-xs text-emerald-600">
-                ✓ {file.name}
-                {file.type === "application/pdf" ? " (PDF listo para subir)" : ""}
-              </p>
-            ) : (
-              <p className="text-xs text-muted-foreground">
-                Desde el celular puedes tomar una foto: se convierte a PDF automáticamente.
-              </p>
-            )}
-          </div>
+          <PoderDocumentoInput
+            file={file}
+            onFile={onPoderFile}
+            label="Documento del poder (PDF o foto) — recomendado"
+          />
           {error ? <p className="text-sm text-red-600">{error}</p> : null}
           {okMsg ? (
             <div className="space-y-2 rounded-lg bg-emerald-50 px-3 py-2">

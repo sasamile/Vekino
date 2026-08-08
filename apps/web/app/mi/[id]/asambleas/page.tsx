@@ -96,13 +96,19 @@ export default function Asambleas() {
                     <div className="mt-4 flex flex-wrap items-center gap-3">
                       {(a.estado === "programada" || a.estado === "en_curso") && (
                         <Link
-                          href={`/mi/${condominioId}/asambleas/${a._id}`}
+                          href={
+                            a.estado === "en_curso" && a.modalidad !== "presencial"
+                              ? `/sala/${condominioId}/${a._id}`
+                              : `/mi/${condominioId}/asambleas/${a._id}`
+                          }
                           className="inline-flex h-10 items-center gap-2 rounded-lg bg-brand px-5 text-sm font-semibold text-brand-foreground shadow-sm transition-colors hover:bg-brand/90"
                         >
                           {a.estado === "en_curso" ? (
                             <>
                               <Radio className="h-4 w-4 animate-pulse" />
-                              Entrar a la asamblea
+                              {a.modalidad !== "presencial"
+                                ? "Entrar a la sala"
+                                : "Entrar a la asamblea"}
                             </>
                           ) : (
                             <>

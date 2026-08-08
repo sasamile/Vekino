@@ -9,7 +9,7 @@ import type { Id } from "@vekino/backend/dataModel";
 import {
   ArrowLeft, Users, Loader2, CheckCircle2, Vote, ListOrdered, Radio, Check,
   UserPlus, X, Trash2, Copy, ChevronDown, ThumbsUp, TrendingUp, QrCode, Search,
-  KeyRound, XCircle, Camera, FileUp, MessageCircle,
+  KeyRound, XCircle, MessageCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PageContainer } from "@/components/layout/page-container";
@@ -22,6 +22,7 @@ import { useUploadToS3 } from "@/hooks/use-upload-s3";
 import { AsambleaTabsTour } from "@/components/portal/asamblea-tabs-tour";
 import { IndicadorSala } from "@/components/asamblea/indicador-sala";
 import { ensurePoderPdf } from "@/lib/poder-documento";
+import { PoderDocumentoInput } from "@/components/asamblea/poder-documento-input";
 
 function qrUrl(data: string) {
   return `https://api.qrserver.com/v1/create-qr-code/?size=220x220&margin=10&data=${encodeURIComponent(data)}`;
@@ -630,17 +631,43 @@ function PoderesSection({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [nuevo, setNuevo] = useState<{ codigo: string; nombre: string; esPropietario: boolean; unidades: number } | null>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
-  const cameraRef = useRef<HTMLInputElement>(null);
 
   const delegadasIds = new Set((otorgados ?? []).map((p) => String(p.unidadId)));
   const disponibles = unidades.filter((u) => !delegadasIds.has(String(u._id)));
+  const disponiblesKey = disponibles.map((u) => String(u._id)).join(",");
+
+  /* Una sola unidad: ya queda elegida. Con varias, hay que tocar cuál delegar. */
+  useEffect(() => {
+    if (disponibles.length === 1) {
+      const only = String(disponibles[0]!._id);
+      setUnidadIds((prev) => (prev.length === 1 && prev[0] === only ? prev : [only]));
+      return;
+    }
+    setUnidadIds((prev) =>
+      prev.filter((id) => disponibles.some((u) => String(u._id) === id)),
+    );
+    // disponibles se recalcula cada render; la key estable evita loops.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- disponiblesKey
+  }, [disponiblesKey]);
 
   const puedeOtorgar =
     !busy &&
     !!file &&
     unidadIds.length > 0 &&
     (modo === "propietario" ? !!rep : nombre.trim().length > 0);
+
+  const faltaParaOtorgar =
+    unidadIds.length === 0
+      ? disponibles.length === 1
+        ? "Toca la unidad para seleccionarla."
+        : "Toca la unidad (o unidades) que vas a delegar."
+      : modo === "propietario" && !rep
+        ? "Busca y selecciona al propietario apoderado."
+        : modo === "externo" && !nombre.trim()
+          ? "Escribe el nombre del apoderado."
+          : !file
+            ? "Adjunta el poder firmado (PDF o foto)."
+            : null;
 
   async function onPoderFile(raw: File | null) {
     if (!raw) {
@@ -864,17 +891,42 @@ function PoderesSection({
             <button onClick={() => setModo("propietario")} className={cn("flex-1 rounded-lg border py-2 text-sm font-medium", modo === "propietario" ? "border-brand bg-brand/10 text-brand" : "border-border text-muted-foreground")}>Propietario del conjunto</button>
             <button onClick={() => setModo("externo")} className={cn("flex-1 rounded-lg border py-2 text-sm font-medium", modo === "externo" ? "border-brand bg-brand/10 text-brand" : "border-border text-muted-foreground")}>Otra persona</button>
           </div>
-          <div className="space-y-2">
+          <div
+            className={cn(
+              "space-y-2 rounded-xl border p-3 transition-colors",
+              unidadIds.length === 0
+                ? "border-amber-300 bg-amber-50/70"
+                : "border-border bg-muted/20",
+            )}
+          >
             <div className="flex items-center justify-between gap-2">
-              <span className="text-xs font-medium text-muted-foreground">
-                Unidades a delegar
-                {unidadIds.length > 0 ? ` (${unidadIds.length})` : ""}
-              </span>
+              <div>
+                <p className="text-xs font-semibold text-foreground">
+                  Unidades a delegar
+                  {unidadIds.length > 0 ? ` (${unidadIds.length})` : ""}
+                </p>
+                <p
+                  className={cn(
+                    "mt-0.5 text-xs",
+                    unidadIds.length === 0
+                      ? "font-medium text-amber-800"
+                      : "text-muted-foreground",
+                  )}
+                >
+                  {unidadIds.length === 0
+                    ? disponibles.length === 1
+                      ? "Toca tu unidad para seleccionarla"
+                      : "Toca cada unidad que quieres delegar"
+                    : unidadIds.length === 1
+                      ? "Unidad seleccionada"
+                      : `${unidadIds.length} unidades seleccionadas`}
+                </p>
+              </div>
               {disponibles.length > 1 ? (
                 <button
                   type="button"
                   onClick={toggleTodas}
-                  className="text-xs font-medium text-brand hover:underline"
+                  className="shrink-0 text-xs font-medium text-brand hover:underline"
                 >
                   {unidadIds.length === disponibles.length
                     ? "Quitar todas"
@@ -892,14 +944,24 @@ function PoderesSection({
                     type="button"
                     onClick={() => toggleUnidad(id)}
                     className={cn(
-                      "inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm font-medium transition-colors",
+                      "inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition-colors",
                       active
-                        ? "border-brand/40 bg-brand/10 text-foreground"
-                        : "border-border bg-card text-muted-foreground hover:bg-accent/50",
+                        ? "border-brand bg-brand/10 text-foreground ring-1 ring-brand/30"
+                        : "border-dashed border-amber-400/80 bg-white text-foreground hover:border-brand hover:bg-brand/5",
                     )}
                     aria-pressed={active}
                   >
-                    {active ? <Check className="h-3.5 w-3.5 text-brand" /> : null}
+                    <span
+                      className={cn(
+                        "flex h-4 w-4 shrink-0 items-center justify-center rounded border",
+                        active
+                          ? "border-brand bg-brand text-brand-foreground"
+                          : "border-muted-foreground/40 bg-background",
+                      )}
+                      aria-hidden
+                    >
+                      {active ? <Check className="h-3 w-3" /> : null}
+                    </span>
                     {etiquetaUnidad(u)}
                   </button>
                 );
@@ -923,60 +985,11 @@ function PoderesSection({
               <label className="block space-y-1.5"><span className="text-xs font-medium text-muted-foreground">Documento (opcional)</span><input value={documento} onChange={(e) => setDocumento(e.target.value)} placeholder="Cédula" className={inputCls} /></label>
             </div>
           )}
-          <label className="block space-y-1.5">
-            <span className="text-xs font-medium text-muted-foreground">
-              Documento del poder (obligatorio) — PDF o foto
-            </span>
-            <input
-              ref={fileRef}
-              type="file"
-              accept="application/pdf,image/*"
-              className="hidden"
-              onChange={(e) => {
-                void onPoderFile(e.target.files?.[0] ?? null);
-                e.target.value = "";
-              }}
-            />
-            <input
-              ref={cameraRef}
-              type="file"
-              accept="image/*"
-              capture="environment"
-              className="hidden"
-              onChange={(e) => {
-                void onPoderFile(e.target.files?.[0] ?? null);
-                e.target.value = "";
-              }}
-            />
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={() => fileRef.current?.click()}
-                className="inline-flex h-10 items-center gap-2 rounded-lg border border-border bg-card px-3 text-sm font-medium text-foreground hover:bg-accent"
-              >
-                <FileUp className="h-4 w-4" />
-                Seleccionar archivo
-              </button>
-              <button
-                type="button"
-                onClick={() => cameraRef.current?.click()}
-                className="inline-flex h-10 items-center gap-2 rounded-lg border border-border bg-card px-3 text-sm font-medium text-foreground hover:bg-accent"
-              >
-                <Camera className="h-4 w-4" />
-                Tomar foto
-              </button>
-            </div>
-            {file ? (
-              <p className="text-xs text-emerald-600">
-                ✓ {file.name}
-                {file.type === "application/pdf" ? " (PDF listo para subir)" : ""}
-              </p>
-            ) : (
-              <p className="text-xs text-muted-foreground">
-                Desde el celular puedes tomar una foto: se convierte a PDF automáticamente.
-              </p>
-            )}
-          </label>
+          <PoderDocumentoInput
+            file={file}
+            onFile={onPoderFile}
+            label="Documento del poder (obligatorio) — PDF o foto"
+          />
           {error && <p className="text-sm text-red-600">{error}</p>}
           <button
             type="button"
@@ -989,9 +1002,9 @@ function PoderesSection({
               ? `Otorgar poder (${unidadIds.length} unidades)`
               : "Otorgar poder"}
           </button>
-          {!file ? (
-            <p className="text-xs text-muted-foreground">
-              Adjunta el poder firmado para habilitar el botón.
+          {!puedeOtorgar && faltaParaOtorgar ? (
+            <p className="text-xs font-medium text-amber-800">
+              Para habilitar el botón: {faltaParaOtorgar}
             </p>
           ) : null}
         </Card>

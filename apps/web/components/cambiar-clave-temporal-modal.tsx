@@ -10,12 +10,12 @@ import { Spinner } from "@/components/ui/spinner";
 import { authClient } from "@/lib/auth-client";
 
 /**
- * Marca de "ya lo cerré" por usuario y por sesión del navegador: al navegar
- * entre páginas no reaparece, pero en el próximo login sí (sessionStorage se
- * limpia al cerrar la pestaña). La clave incluye el usuario para que otra
- * persona que entre en la misma pestaña sí vea el aviso.
+ * Marca de "ya lo cerré" por usuario en localStorage: no molesta en cada
+ * ingreso. Tras SNOOZE_MS vuelve a recordarlo hasta que cambien la clave.
  */
 const STORAGE_PREFIX = "vekino:clave-temporal-omitida:";
+/** 14 días: suficiente para no agobiar en asambleas / uso diario. */
+const SNOOZE_MS = 14 * 24 * 60 * 60 * 1000;
 
 const MIN_LEN = 8;
 
@@ -32,7 +32,13 @@ function mensajeLimpio(err: unknown): string {
 
 function leerOmitido(userId: string): boolean {
   try {
-    return window.sessionStorage.getItem(STORAGE_PREFIX + userId) === "1";
+    const raw = window.localStorage.getItem(STORAGE_PREFIX + userId);
+    if (!raw) return false;
+    // Compat: valor viejo "1" de sessionStorage / primeras versiones.
+    if (raw === "1") return true;
+    const until = Number(raw);
+    if (!Number.isFinite(until)) return false;
+    return Date.now() < until;
   } catch {
     return false;
   }
@@ -40,7 +46,10 @@ function leerOmitido(userId: string): boolean {
 
 function guardarOmitido(userId: string) {
   try {
-    window.sessionStorage.setItem(STORAGE_PREFIX + userId, "1");
+    window.localStorage.setItem(
+      STORAGE_PREFIX + userId,
+      String(Date.now() + SNOOZE_MS),
+    );
   } catch {
     // Modo privado / storage bloqueado: se vuelve a mostrar, no pasa nada.
   }
@@ -49,8 +58,7 @@ function guardarOmitido(userId: string) {
 /**
  * Aviso NO bloqueante para quien sigue usando la contraseña que le envió la
  * administración. Se puede cerrar (X, "Ahora no" o Escape) y seguir usando la
- * plataforma con esa misma clave; vuelve a aparecer en la próxima sesión hasta
- * que la cambie.
+ * plataforma; no vuelve a salir por 14 días (o hasta que cambie la clave).
  */
 export function CambiarClaveTemporalModal() {
   const me = useQuery(api.users.me);
@@ -59,9 +67,8 @@ export function CambiarClaveTemporalModal() {
   const userId = me?.id ?? null;
   const debeMostrar = me?.claveTemporal === true;
 
-  // Arranca oculto: evita el parpadeo antes de leer sessionStorage.
+  // Arranca oculto: evita el parpadeo antes de leer localStorage.
   const [cerrado, setCerrado] = useState(true);
-  const [actual, setActual] = useState("");
   const [nueva, setNueva] = useState("");
   const [confirmar, setConfirmar] = useState("");
   const [busy, setBusy] = useState(false);
@@ -82,7 +89,7 @@ export function CambiarClaveTemporalModal() {
     };
   }, []);
 
-  /** Cierre manual: recuerda la omisión para el resto de esta sesión. */
+  /** Cierre manual: recuerda la omisión durante SNOOZE_MS. */
   const posponer = useCallback(() => {
     if (busy) return;
     if (userId) guardarOmitido(userId);
@@ -106,11 +113,9 @@ export function CambiarClaveTemporalModal() {
     e.preventDefault();
     setError(null);
 
-    /* La actual ya no se pide: el modal solo le sale a quien sigue usando la
-      * clave que le generó la administración, y buena parte de esa gente entró
-      * por el enlace de un toque, sin escribir nunca una contraseña. Exigirla
-      * los dejaba atrapados: no podían cambiarla y el aviso les reaparecía en
-      * cada ingreso. */
+    /* No pedimos la contraseña actual: el modal solo sale a quien sigue con la
+     * clave que generó la administración, y mucha gente entró por enlace de un
+     * toque sin haberla escrito nunca. */
     if (nueva.trim().length < MIN_LEN) {
       setError(`La nueva contraseña debe tener al menos ${MIN_LEN} caracteres.`);
       return;
@@ -122,9 +127,8 @@ export function CambiarClaveTemporalModal() {
 
     setBusy(true);
     try {
-      await cambiarPassword({ actual, nueva });
+      await cambiarPassword({ actual: "", nueva });
       setExito(true);
-      setActual("");
       setNueva("");
       setConfirmar("");
       // Breve confirmación; luego se cierra (y `me.claveTemporal` ya es false).
@@ -227,8 +231,8 @@ export function CambiarClaveTemporalModal() {
               />
               <p className="text-xs leading-relaxed text-muted-foreground">
                 No es obligatorio ahora: puedes cerrar esta ventana y seguir
-                usando la plataforma con la misma contraseña. Te lo volveremos a
-                recordar más adelante.
+                usando la plataforma. No te lo volveremos a pedir durante un
+                tiempo.
               </p>
             </div>
 
@@ -274,9 +278,8 @@ export function CambiarClaveTemporalModal() {
                 <div className="space-y-1.5" role="alert">
                   <p className="text-sm text-red-600">{error}</p>
                   <p className="text-xs leading-relaxed text-muted-foreground">
-                    ¿La clave que te enviaron no funciona aquí? Puede que sea
-                    una clave de acceso temporal y no la contraseña de tu
-                    cuenta. Crea una nueva desde tu correo:
+                    ¿No puedes cambiarla desde aquí? Crea una nueva desde tu
+                    correo:
                   </p>
                   <button
                     type="button"
@@ -311,7 +314,11 @@ export function CambiarClaveTemporalModal() {
                   type="submit"
                   variant="brand"
                   className="flex-1"
-                  disabled={busy || !actual || !nueva || !confirmar}
+                  disabled={
+                    busy ||
+                    nueva.trim().length < MIN_LEN ||
+                    confirmar.trim().length < MIN_LEN
+                  }
                 >
                   {busy ? (
                     <Spinner className="h-4 w-4 text-brand-foreground" />

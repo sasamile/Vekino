@@ -31,6 +31,7 @@ import {
   periodoHumano,
   VINCULO_LABEL,
 } from "@/components/portal/portal-ui";
+import { AsambleaEnVivoCard } from "@/components/portal/asamblea-en-vivo-card";
 
 const FECHA_MIN = 946684800000;
 
@@ -170,6 +171,8 @@ export default function PortalInicio() {
           ) : null}
         </p>
       </header>
+
+      <AsambleaEnVivoCard condominioId={condominioId} />
 
       {avisoDestacado ? (
         <AvisoFijado
