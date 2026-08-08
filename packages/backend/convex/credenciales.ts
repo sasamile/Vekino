@@ -5,6 +5,7 @@ import {
   internalAction,
   internalMutation,
   internalQuery,
+  type MutationCtx,
 } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
@@ -146,6 +147,99 @@ export const historial = query({
 // Arranque y control
 // ─────────────────────────────────────────────────────────────
 
+/**
+ * Arranca un envío masivo de credenciales.
+ *
+ * Vive suelto (no como mutation) porque hay dos formas de llegar aquí y solo
+ * una tiene sesión: el botón de superadmin, que autentica antes; y un envío
+ * programado, que se dispara solo a la hora fijada y corre sin nadie delante.
+ * Lo que sigue —el guard de concurrencia, la cola, el rollback— tiene que ser
+ * idéntico en ambos casos, así que está escrito una sola vez.
+ */
+export async function crearJobCredenciales(
+  ctx: MutationCtx,
+  args: {
+    condominioId: Id<"condominios">;
+    modo: "solo_sin_clave" | "todos";
+    iniciadoPorUserId: Id<"users">;
+    iniciadoPorNombre: string;
+    envioProgramadoId?: Id<"enviosProgramados">;
+  },
+): Promise<Id<"envioCredencialesJobs">> {
+  const condominio = await ctx.db.get(args.condominioId);
+  if (!condominio) throw new Error("Condominio no encontrado.");
+
+  // Sin correo configurado no se toca ni una contraseña: rotarlas y no poder
+  // avisar a nadie deja al conjunto entero sin acceso.
+  if (!process.env.BREVO_API_KEY?.trim()) {
+    throw new Error(
+      "El envío de correos no está configurado (BREVO_API_KEY). No se generó ninguna credencial.",
+    );
+  }
+
+  const enCurso = await ctx.db
+    .query("envioCredencialesJobs")
+    .withIndex("by_condominio_estado", (q) =>
+      q.eq("condominioId", args.condominioId).eq("estado", "en_curso"),
+    )
+    .first();
+  if (enCurso) {
+    // `updatedAt` avanza en cada lote y un lote sano tarda segundos. Si lleva
+    // quince minutos quieto, la cadena murió (deploy a mitad, action caída):
+    // se da por muerto en vez de dejar el condominio bloqueado para siempre.
+    const SIN_AVANCE_MS = 15 * 60 * 1000;
+    if (Date.now() - enCurso.updatedAt < SIN_AVANCE_MS) {
+      throw new Error("Ya hay un envío en curso para este condominio.");
+    }
+    await ctx.db.patch(enCurso._id, {
+      estado: "cancelado",
+      pendientes: [],
+      updatedAt: Date.now(),
+    });
+  }
+
+  const memberships = await ctx.db
+    .query("memberships")
+    .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
+    .collect();
+
+  const pendientes: Id<"users">[] = [];
+  const vistos = new Set<string>();
+  for (const m of memberships) {
+    if (!m.isActive) continue;
+    if (vistos.has(m.userId)) continue;
+    const user = await ctx.db.get(m.userId);
+    if (!user || !user.active) continue;
+    vistos.add(m.userId);
+    pendientes.push(m.userId);
+  }
+
+  if (pendientes.length === 0) {
+    throw new Error("Este condominio no tiene miembros activos.");
+  }
+
+  const now = Date.now();
+  const jobId = await ctx.db.insert("envioCredencialesJobs", {
+    condominioId: args.condominioId,
+    modo: args.modo,
+    estado: "en_curso",
+    pendientes,
+    total: pendientes.length,
+    procesados: 0,
+    enviados: 0,
+    fallidos: 0,
+    omitidos: 0,
+    iniciadoPorUserId: args.iniciadoPorUserId,
+    iniciadoPorNombre: args.iniciadoPorNombre,
+    envioProgramadoId: args.envioProgramadoId,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  await ctx.scheduler.runAfter(0, internal.credenciales.procesarLote, { jobId });
+  return jobId;
+}
+
 export const iniciarEnvio = mutation({
   args: {
     condominioId: v.id("condominios"),
@@ -153,80 +247,15 @@ export const iniciarEnvio = mutation({
   },
   handler: async (ctx, args) => {
     const staff = await requirePlatformStaff(ctx);
-
-    const condominio = await ctx.db.get(args.condominioId);
-    if (!condominio) throw new Error("Condominio no encontrado.");
-
-    // Sin correo configurado no se toca ni una contraseña: rotarlas y no poder
-    // avisar a nadie deja al conjunto entero sin acceso.
-    if (!process.env.BREVO_API_KEY?.trim()) {
-      throw new Error(
-        "El envío de correos no está configurado (BREVO_API_KEY). No se generó ninguna credencial.",
-      );
-    }
-
-    const enCurso = await ctx.db
-      .query("envioCredencialesJobs")
-      .withIndex("by_condominio_estado", (q) =>
-        q.eq("condominioId", args.condominioId).eq("estado", "en_curso"),
-      )
-      .first();
-    if (enCurso) {
-      // `updatedAt` avanza en cada lote y un lote sano tarda segundos. Si lleva
-      // quince minutos quieto, la cadena murió (deploy a mitad, action caída):
-      // se da por muerto en vez de dejar el condominio bloqueado para siempre.
-      const SIN_AVANCE_MS = 15 * 60 * 1000;
-      if (Date.now() - enCurso.updatedAt < SIN_AVANCE_MS) {
-        throw new Error("Ya hay un envío en curso para este condominio.");
-      }
-      await ctx.db.patch(enCurso._id, {
-        estado: "cancelado",
-        pendientes: [],
-        updatedAt: Date.now(),
-      });
-    }
-
-    const memberships = await ctx.db
-      .query("memberships")
-      .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
-      .collect();
-
-    const pendientes: Id<"users">[] = [];
-    const vistos = new Set<string>();
-    for (const m of memberships) {
-      if (!m.isActive) continue;
-      if (vistos.has(m.userId)) continue;
-      const user = await ctx.db.get(m.userId);
-      if (!user || !user.active) continue;
-      vistos.add(m.userId);
-      pendientes.push(m.userId);
-    }
-
-    if (pendientes.length === 0) {
-      throw new Error("Este condominio no tiene miembros activos.");
-    }
-
-    const now = Date.now();
-    const jobId = await ctx.db.insert("envioCredencialesJobs", {
+    return await crearJobCredenciales(ctx, {
       condominioId: args.condominioId,
       modo: args.modo,
-      estado: "en_curso",
-      pendientes,
-      total: pendientes.length,
-      procesados: 0,
-      enviados: 0,
-      fallidos: 0,
-      omitidos: 0,
       iniciadoPorUserId: staff._id,
       iniciadoPorNombre: staff.name,
-      createdAt: now,
-      updatedAt: now,
     });
-
-    await ctx.scheduler.runAfter(0, internal.credenciales.procesarLote, { jobId });
-    return jobId;
   },
 });
+
 
 export const cancelarJob = mutation({
   args: { jobId: v.id("envioCredencialesJobs") },
@@ -329,15 +358,36 @@ export const registrarResultados = internalMutation({
       else omitidos++;
     }
 
+    const estadoFinal =
+      // Un job cancelado a mitad no se marca como completado.
+      args.terminar && job.estado === "en_curso" ? "completado" : job.estado;
+
     await ctx.db.patch(args.jobId, {
       procesados: job.procesados + args.resultados.length,
       enviados: job.enviados + enviados,
       fallidos: job.fallidos + fallidos,
       omitidos: job.omitidos + omitidos,
-      // Un job cancelado a mitad no se marca como completado.
-      estado: args.terminar && job.estado === "en_curso" ? "completado" : job.estado,
+      estado: estadoFinal,
       updatedAt: now,
     });
+
+    /* Si nació de un envío programado, se le copian los totales en cada tanda
+     * para que la barra de Automatizaciones avance en vivo y no salte de 0 al
+     * final. `omitidos` (los que ya tenían clave propia) van a "sin contacto":
+     * no son un fallo, pero tampoco recibieron nada. */
+    if (job.envioProgramadoId) {
+      const espejo = await ctx.db.get(job.envioProgramadoId);
+      if (espejo && espejo.estado !== "cancelado") {
+        await ctx.db.patch(job.envioProgramadoId, {
+          total: job.total,
+          enviados: job.enviados + enviados,
+          fallidos: job.fallidos + fallidos,
+          sinContacto: job.omitidos + omitidos,
+          estado: estadoFinal === "completado" ? "completado" : espejo.estado,
+          updatedAt: now,
+        });
+      }
+    }
     return null;
   },
 });

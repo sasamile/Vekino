@@ -36,6 +36,7 @@ import type * as lib_emailCredenciales from "../lib/emailCredenciales.js";
 import type * as lib_fechaTexto from "../lib/fechaTexto.js";
 import type * as lib_guiasVekino from "../lib/guiasVekino.js";
 import type * as lib_livekitJwt from "../lib/livekitJwt.js";
+import type * as lib_mensajesAcceso from "../lib/mensajesAcceso.js";
 import type * as lib_permanencia from "../lib/permanencia.js";
 import type * as lib_redactor from "../lib/redactor.js";
 import type * as lib_telefono from "../lib/telefono.js";
@@ -114,6 +115,7 @@ declare const fullApi: ApiFromModules<{
   "lib/fechaTexto": typeof lib_fechaTexto;
   "lib/guiasVekino": typeof lib_guiasVekino;
   "lib/livekitJwt": typeof lib_livekitJwt;
+  "lib/mensajesAcceso": typeof lib_mensajesAcceso;
   "lib/permanencia": typeof lib_permanencia;
   "lib/redactor": typeof lib_redactor;
   "lib/telefono": typeof lib_telefono;

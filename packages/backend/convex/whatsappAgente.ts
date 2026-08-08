@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
+import { textoAccesoWhatsApp } from "./lib/mensajesAcceso";
 import type { Id } from "./_generated/dataModel";
 import { GUIAS_VEKINO } from "./lib/guiasVekino";
 
@@ -185,6 +186,11 @@ export const responder = internalAction({
       "- Un emoji de vez en cuando está bien; no en cada frase.",
       "",
       "Cómo trabajas:",
+      "- Si una herramienta devuelve `textoExacto`, ese ES tu respuesta: cópialo",
+      "  TAL CUAL, palabra por palabra, sin reescribirlo, resumirlo ni añadirle nada.",
+      "  Lleva datos que solo el sistema conoce; si lo redactas tú te los inventas.",
+      "- Nunca digas cuánto dura un enlace, cuánto vale algo ni cuándo vence si no",
+      "  te lo dio una herramienta. Si no lo tienes, no lo menciones.",
       "- Cuando te pidan algo, HAZLO con tus herramientas. No expliques pasos ni mandes a ningún menú.",
       "- Si te falta un dato, pregúntalo como lo preguntaría una persona: una cosa a la vez.",
       "- Si alguien dice 'cuánto debo', consulta y dile el número. No preguntes de qué unidad si solo tiene una.",
@@ -340,12 +346,15 @@ async function ejecutar(
           };
         }
         if (!r.ok) return { error: r.motivo };
+        /* Se devuelve el texto YA REDACTADO, no los datos sueltos. Cuando el
+         * agente lo escribia el, se inventaba los detalles: a un residente le
+         * dijo que el enlace vencia en 30 minutos cuando dura 24 horas. */
         return {
-          usuario: r.email,
-          contrasena: r.password,
-          enlaceDirecto: r.enlace,
-          nota:
-            "Dale prioridad al enlace directo: entra de un toque sin copiar nada, sirve una sola vez y vence en 24 horas. Menciona la contraseña solo como alternativa. Es temporal: que la cambie al entrar.",
+          textoExacto: textoAccesoWhatsApp({
+            email: r.email,
+            password: r.password,
+            enlace: r.enlace,
+          }),
         };
       }
 

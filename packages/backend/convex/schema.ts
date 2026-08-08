@@ -1622,8 +1622,21 @@ export default defineSchema({
       v.literal("mensaje_residentes"),
       /** Una plantilla aprobada de WhatsApp, elegida y con sus variables. */
       v.literal("plantilla_whatsapp"),
+      /**
+       * Los datos de acceso, por correo, a quienes nunca han entrado. No envía
+       * de a un mensaje como los demás tipos: arranca el motor de lotes de
+       * `credenciales.ts` (que rota contraseñas y sabe hacer rollback) y esta
+       * fila queda como el espejo programable de ese trabajo.
+       */
+      v.literal("credenciales_acceso"),
     ),
     asambleaId: v.optional(v.id("asambleas")),
+    /** Solo en `credenciales_acceso`. Por defecto no toca a quien ya entró. */
+    modoCredenciales: v.optional(
+      v.union(v.literal("solo_sin_clave"), v.literal("todos")),
+    ),
+    /** Solo en `credenciales_acceso`: el job real que hace el trabajo. */
+    credencialesJobId: v.optional(v.id("envioCredencialesJobs")),
     /** Solo en `mensaje_residentes`. */
     asunto: v.optional(v.string()),
     mensaje: v.optional(v.string()),
@@ -1709,6 +1722,12 @@ export default defineSchema({
     omitidos: v.number(),
     iniciadoPorUserId: v.id("users"),
     iniciadoPorNombre: v.string(),
+    /**
+     * Si el job nació de un envío programado, aquí queda el vínculo de vuelta:
+     * al terminar le copia los totales para que Automatizaciones muestre a
+     * quién le llegó y a quién no, sin tener que mirar en dos sitios.
+     */
+    envioProgramadoId: v.optional(v.id("enviosProgramados")),
     createdAt: v.number(),
     updatedAt: v.number(),
   })

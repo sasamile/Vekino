@@ -12,6 +12,7 @@ import {
   Mail,
   Megaphone,
   MessageCircle,
+  KeyRound,
   MessageSquareText,
   Plus,
   Send,
@@ -56,7 +57,8 @@ type Canal = "correo" | "whatsapp" | "ambos";
 type TipoEnvio =
   | "mensaje_residentes"
   | "apoderados_asamblea"
-  | "plantilla_whatsapp";
+  | "plantilla_whatsapp"
+  | "credenciales_acceso";
 type EstadoEnvio =
   | "programado"
   | "enviando"
@@ -150,6 +152,12 @@ const TIPO_META: Record<
     descripcion:
       "Elige una plantilla aprobada por Meta y envíala a los residentes.",
   },
+  credenciales_acceso: {
+    label: "Accesos a la plataforma",
+    icon: KeyRound,
+    descripcion:
+      "Genera y envía por correo los datos de ingreso a quienes nunca han entrado.",
+  },
 };
 
 /** Orden de las tarjetas del selector: primero el caso más común. */
@@ -157,6 +165,7 @@ const TIPO_OPCIONES: TipoEnvio[] = [
   "mensaje_residentes",
   "apoderados_asamblea",
   "plantilla_whatsapp",
+  "credenciales_acceso",
 ];
 
 /** Tope de caracteres del mensaje libre. */
@@ -709,6 +718,9 @@ function ProgramarDialog({
   );
   const [asambleaId, setAsambleaId] = useState<Id<"asambleas"> | "">("");
   const [audiencia, setAudiencia] = useState("todos");
+  const [modoCredenciales, setModoCredenciales] = useState<
+    "solo_sin_clave" | "todos"
+  >("solo_sin_clave");
   const [asunto, setAsunto] = useState("");
   const [mensaje, setMensaje] = useState("");
   const [canal, setCanal] = useState<Canal>(
@@ -741,6 +753,7 @@ function ProgramarDialog({
   const esMensaje = tipo === "mensaje_residentes";
   const esAsamblea = tipo === "apoderados_asamblea";
   const esPlantilla = tipo === "plantilla_whatsapp";
+  const esCredenciales = tipo === "credenciales_acceso";
 
   const plantilla =
     plantillas?.find((p) => p.nombre === plantillaNombre) ?? null;
@@ -794,7 +807,9 @@ function ProgramarDialog({
       ? mensaje.trim().length > 0
       : esPlantilla
         ? Boolean(plantillaNombre) && variablesCompletas
-        : Boolean(asambleaId)) &&
+        : esCredenciales
+          ? true // solo hace falta el condominio: el resto lo decide el motor
+          : Boolean(asambleaId)) &&
     !busy;
 
   async function enviar(programadoPara: number) {
@@ -806,7 +821,7 @@ function ProgramarDialog({
       setError("Escribe el mensaje que quieres enviar.");
       return;
     }
-    if (esAsamblea && !asambleaId) {
+    if (esAsamblea && !esCredenciales && !asambleaId) {
       setError("Selecciona una asamblea.");
       return;
     }
@@ -834,7 +849,10 @@ function ProgramarDialog({
         parametros: esPlantilla
           ? Array.from({ length: totalVariables }, (_, i) => parametros[i] ?? "")
           : undefined,
-        canal: esPlantilla ? "whatsapp" : canal,
+        modoCredenciales: esCredenciales ? modoCredenciales : undefined,
+        // Las credenciales solo salen por correo: Meta rechaza toda plantilla
+        // de WhatsApp que mencione contraseñas.
+        canal: esCredenciales ? "correo" : esPlantilla ? "whatsapp" : canal,
         programadoPara,
       });
       onClose();
@@ -1183,6 +1201,53 @@ function ProgramarDialog({
             </>
           )}
 
+          {esCredenciales && (
+            <div className="space-y-3 rounded-xl border border-border bg-muted/30 p-3.5">
+              <div className="space-y-1.5">
+                <label
+                  htmlFor="auto-modo-cred"
+                  className="block text-xs font-medium text-foreground"
+                >
+                  ¿A quién se le genera clave?
+                </label>
+                <Select
+                  id="auto-modo-cred"
+                  value={modoCredenciales}
+                  disabled={busy}
+                  onChange={(e) => {
+                    setModoCredenciales(
+                      e.target.value as "solo_sin_clave" | "todos",
+                    );
+                    setError(null);
+                  }}
+                >
+                  <option value="solo_sin_clave">
+                    Solo a quienes nunca han entrado
+                  </option>
+                  <option value="todos">
+                    A todos (le cambia la clave a quien ya tenía la suya)
+                  </option>
+                </Select>
+              </div>
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                Va <strong>por correo</strong>: Meta rechaza toda plantilla de
+                WhatsApp que mencione contraseñas. A cada persona se le genera
+                una clave propia y un enlace de un solo uso que vence en 24
+                horas. Si el correo falla, esa contraseña se revierte para no
+                dejar a nadie por fuera.
+              </p>
+              {modoCredenciales === "todos" && (
+                <p className="flex items-start gap-1.5 text-xs leading-relaxed text-amber-700 dark:text-amber-400">
+                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+                  <span>
+                    Ojo: a quien ya se puso su propia contraseña se la vas a
+                    invalidar. Normalmente quieres la primera opción.
+                  </span>
+                </p>
+              )}
+            </div>
+          )}
+
           {esAsamblea && (
             <div className="space-y-1.5">
               <label
@@ -1262,7 +1327,8 @@ function ProgramarDialog({
             </div>
           )}
 
-          <div>
+          {/* Las credenciales solo salen por correo; no hay nada que elegir. */}
+          <div className={esCredenciales ? "hidden" : undefined}>
             <p className="mb-2 text-xs font-medium text-foreground">Canal</p>
             <div className="space-y-2">
               {CANAL_OPCIONES.map((opt) => {

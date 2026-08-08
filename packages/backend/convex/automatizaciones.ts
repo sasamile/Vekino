@@ -8,6 +8,7 @@ import {
   internalQuery,
 } from "./_generated/server";
 import { internal } from "./_generated/api";
+import { crearJobCredenciales } from "./credenciales";
 import type { Id } from "./_generated/dataModel";
 import { requirePlatformStaff } from "./model/authz";
 import { sendBrevoEmail } from "./lib/brevo";
@@ -61,6 +62,7 @@ const tipoValidator = v.union(
   v.literal("apoderados_asamblea"),
   v.literal("mensaje_residentes"),
   v.literal("plantilla_whatsapp"),
+  v.literal("credenciales_acceso"),
 );
 
 /**
@@ -327,13 +329,28 @@ export const programar = mutation({
     /** Solo para `plantilla_whatsapp`. */
     plantilla: v.optional(v.string()),
     parametros: v.optional(v.array(v.string())),
+    /** Solo para `credenciales_acceso`. */
+    modoCredenciales: v.optional(
+      v.union(v.literal("solo_sin_clave"), v.literal("todos")),
+    ),
     canal: canalValidator,
     programadoPara: v.number(),
   },
   handler: async (ctx, args) => {
     const staff = await requirePlatformStaff(ctx);
 
-    if (args.tipo === "apoderados_asamblea") {
+    if (args.tipo === "credenciales_acceso") {
+      const condo = await ctx.db.get(args.condominioId);
+      if (!condo) throw new Error("Condominio no encontrado.");
+      /* Se comprueba AQUÍ y no al ejecutar: si falta la llave, el motor de
+       * credenciales aborta sin rotar nada, pero el aviso llegaría a las 8 de
+       * la mañana con nadie mirando. Mejor que no deje ni programarlo. */
+      if (!process.env.BREVO_API_KEY?.trim()) {
+        throw new Error(
+          "El envío de correos no está configurado (BREVO_API_KEY). Sin eso no se pueden entregar accesos.",
+        );
+      }
+    } else if (args.tipo === "apoderados_asamblea") {
       if (!args.asambleaId) throw new Error("Elige la asamblea.");
       const asamblea = await ctx.db.get(args.asambleaId);
       if (!asamblea || asamblea.condominioId !== args.condominioId) {
@@ -348,7 +365,11 @@ export const programar = mutation({
       const condo = await ctx.db.get(args.condominioId);
       if (!condo) throw new Error("Condominio no encontrado.");
     }
-    if (args.canal !== "correo" && !process.env.YCLOUD_API_KEY?.trim()) {
+    if (
+      args.tipo !== "credenciales_acceso" &&
+      args.canal !== "correo" &&
+      !process.env.YCLOUD_API_KEY?.trim()
+    ) {
       throw new Error("WhatsApp no está configurado (falta YCLOUD_API_KEY).");
     }
 
@@ -365,7 +386,14 @@ export const programar = mutation({
       audiencia: args.audiencia ?? "todos",
       plantilla: args.plantilla?.trim() || undefined,
       parametros: args.parametros,
-      canal: args.canal,
+      modoCredenciales:
+        args.tipo === "credenciales_acceso"
+          ? (args.modoCredenciales ?? "solo_sin_clave")
+          : undefined,
+      /* El motor de credenciales entrega SOLO por correo: Meta rechaza toda
+       * plantilla de WhatsApp que mencione contraseñas. Se fuerza aquí para
+       * que la ficha no prometa un canal que no va a usar. */
+      canal: args.tipo === "credenciales_acceso" ? "correo" : args.canal,
       programadoPara: cuando,
       estado: "programado",
       total: 0,
@@ -1007,9 +1035,68 @@ export const cerrarEnvio = internalMutation({
   },
 });
 
+/**
+ * Arranca el motor de credenciales para un envío programado de ese tipo.
+ *
+ * Devuelve `manejado: false` para cualquier otro tipo, y así `ejecutar` sigue
+ * por su camino normal. Es una mutation (no parte de la action) para que el
+ * reclamo del envío y la creación del job caigan en la misma transacción: si
+ * el scheduler dispara dos veces, solo una crea job y no se rotan las
+ * contraseñas del conjunto dos veces.
+ */
+export const arrancarCredenciales = internalMutation({
+  args: { envioId: v.id("enviosProgramados") },
+  handler: async (ctx, args) => {
+    const envio = await ctx.db.get(args.envioId);
+    if (!envio) return { manejado: false };
+    if (envio.tipo !== "credenciales_acceso") return { manejado: false };
+    // Reclamo atómico: un envío ya tomado no se vuelve a arrancar.
+    if (envio.estado !== "programado") return { manejado: true };
+
+    await ctx.db.patch(args.envioId, {
+      estado: "enviando",
+      updatedAt: Date.now(),
+    });
+
+    try {
+      // Llamada directa, no runMutation: una mutation de Convex no puede
+      // invocar otra, y ademas asi todo cae en la misma transaccion.
+      const jobId = await crearJobCredenciales(ctx, {
+        condominioId: envio.condominioId,
+        modo: envio.modoCredenciales ?? "solo_sin_clave",
+        envioProgramadoId: args.envioId,
+        iniciadoPorUserId: envio.creadoPorUserId,
+        iniciadoPorNombre: envio.creadoPorNombre,
+      });
+      await ctx.db.patch(args.envioId, {
+        credencialesJobId: jobId,
+        updatedAt: Date.now(),
+      });
+    } catch (e) {
+      // Ni una contraseña se tocó: el motor aborta antes de escribir nada.
+      await ctx.db.patch(args.envioId, {
+        estado: "fallido",
+        error: e instanceof Error ? e.message : String(e),
+        updatedAt: Date.now(),
+      });
+    }
+    return { manejado: true };
+  },
+});
+
 export const ejecutar = internalAction({
   args: { envioId: v.id("enviosProgramados") },
   handler: async (ctx, args) => {
+    /* Las credenciales no se mandan de a un mensaje como los demás tipos:
+     * rotan contraseñas, necesitan rollback si el correo falla y corren por
+     * lotes encadenados. Ese motor ya existe, así que este envío solo lo
+     * arranca y se queda de espejo mientras él reporta el avance. */
+    const cred = await ctx.runMutation(
+      internal.automatizaciones.arrancarCredenciales,
+      { envioId: args.envioId },
+    );
+    if (cred?.manejado) return null;
+
     const datos = await ctx.runQuery(internal.automatizaciones.datosEnvio, {
       envioId: args.envioId,
     });

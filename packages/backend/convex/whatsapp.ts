@@ -6,6 +6,7 @@ import {
   query,
 } from "./_generated/server";
 import { internal } from "./_generated/api";
+import { textoAccesoWhatsApp } from "./lib/mensajesAcceso";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
   enviarMensaje,
@@ -1400,10 +1401,27 @@ export const procesarEntrante = internalAction({
           return;
         }
 
+        /* Si faltara cualquiera de los tres, el mensaje saldría con un hueco
+         * ("Contraseña: undefined") y la persona intentaría entrar con eso.
+         * Mejor decir que no se pudo. */
+        if (!res.email || !res.password || !res.enlace) {
+          await enviar(
+            msgTexto(
+              to,
+              "😕 No pude armar sus datos de acceso. Por favor escríbale a su administración para que revise su registro.",
+            ),
+          );
+          return;
+        }
+
         await enviar(
           msgTexto(
             to,
-            `🔑 *Sus datos de acceso a Vekino*\n\n👉 Entre con un toque, sin copiar nada:\n${res.enlace}\n\n_Ese enlace sirve una sola vez y vence en 24 horas._\n\nO si prefiere escribirlos:\nUsuario: ${res.email}\nContraseña: ${res.password}\n\nEs una clave temporal y personal: cámbiela apenas entre y no la comparta con nadie. 🙌\n\n_Si usted ya había logrado entrar por su cuenta, haga caso omiso de este mensaje: su contraseña anterior sigue funcionando._`,
+            textoAccesoWhatsApp({
+              email: res.email,
+              password: res.password,
+              enlace: res.enlace,
+            }),
           ),
         );
         await setConv({ paso: "menu", contexto });
