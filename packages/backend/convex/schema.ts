@@ -1837,6 +1837,8 @@ export default defineSchema({
      * responder al último, que ya ve toda la conversación.
      */
     ultimoEntranteAt: v.optional(v.number()),
+    /** Última vez que se le mandaron accesos por pedir ayuda para entrar. */
+    ultimoRescateAccesoAt: v.optional(v.number()),
     ultimoMensajeAt: v.number(),
     createdAt: v.number(),
     updatedAt: v.number(),

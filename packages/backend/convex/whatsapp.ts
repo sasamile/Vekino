@@ -599,7 +599,14 @@ export const procesarEntrante = internalAction({
      * salen igual.
      *
      * Se apaga y se prende con `bunx convex env set WHATSAPP_BOT_APAGADO`. */
-    if (process.env.WHATSAPP_BOT_APAGADO === "1") return null;
+    if (process.env.WHATSAPP_BOT_APAGADO === "1") {
+      /* Una excepción, y solo una: quien escribe que no puede entrar. Ese
+       * caso no aguanta a que alguien del equipo lo vea —el día de una
+       * asamblea, media hora de espera es quedarse sin votar—, y la respuesta
+       * es siempre la misma. Todo lo demás sigue callado. */
+      await rescatarAccesoSiAplica(ctx, args.conversacionId, args.texto);
+      return null;
+    }
 
     /* Hay alguien del equipo atendiendo esta conversación: el agente se
      * calla para no responder encima. Los entrantes se siguen registrando y
@@ -1660,3 +1667,77 @@ async function responderConIA(
     return null;
   }
 }
+
+/**
+ * Le manda sus datos de acceso a quien escribe que no puede entrar.
+ *
+ * Deliberadamente estrecho. No es "el bot vuelve por la puerta de atrás": son
+ * frases muy concretas sobre INGRESAR A LA PLATAFORMA, y aun así solo actúa
+ * si la persona ya está identificada, porque a un desconocido no se le manda
+ * una contraseña.
+ *
+ * Se descartan a propósito las quejas sobre la SALA de la asamblea ("no puedo
+ * entrar a la sala"), que el día de la reunión son la mayoría y no se
+ * arreglan con una clave nueva.
+ *
+ * Una vez por hora y por persona: si alguien insiste, se le rotaría la clave
+ * en cada mensaje y quedaría peor que al principio.
+ */
+const PIDE_ACCESO = [
+  "no puedo entrar", "no me deja entrar", "no puedo ingresar",
+  "no me deja ingresar", "no puedo acceder", "no logro entrar",
+  "como entro", "cómo entro", "como ingreso", "cómo ingreso",
+  "como hago para entrar", "cómo hago para entrar",
+  "no se como entrar", "no sé cómo entrar", "no se como ingresar",
+  "no tengo la clave", "no tengo contraseña", "no tengo contrasena",
+  "olvide mi contraseña", "olvidé mi contraseña", "no sirve la contraseña",
+  "no sirve la clave", "esa contraseña no", "la clave no funciona",
+  "no me funciona la clave", "no me llego la clave", "no me llegó la clave",
+];
+
+/** Lo que NO es un problema de credenciales aunque suene parecido. */
+const NO_ES_ACCESO = ["a la sala", "en la sala", "a la reunion", "a la reunión", "a la asamblea"];
+
+const RESCATE_MS = 60 * 60 * 1000;
+
+async function rescatarAccesoSiAplica(
+  ctx: any,
+  conversacionId: Id<"waConversations">,
+  texto: string | undefined,
+): Promise<void> {
+  const t = (texto ?? "").toLowerCase().trim();
+  if (t.length < 4 || t.length > 300) return;
+  if (!PIDE_ACCESO.some((f) => t.includes(f))) return;
+  if (NO_ES_ACCESO.some((f) => t.includes(f))) return;
+
+  const puede = await ctx.runMutation(internal.whatsapp.marcarRescateAcceso, {
+    conversacionId,
+  });
+  if (!puede) return;
+
+  await ctx.runAction(internal.credenciales.enviarAccesoPorWhatsapp, {
+    conversacionId,
+    forzar: true,
+  });
+}
+
+/**
+ * Reclama el turno de rescate: devuelve false si a esta persona ya se le
+ * mandó hace menos de una hora. Es mutation para que dos mensajes seguidos
+ * no pasen los dos.
+ */
+export const marcarRescateAcceso = internalMutation({
+  args: { conversacionId: v.id("waConversations") },
+  handler: async (ctx, args) => {
+    const c = await ctx.db.get(args.conversacionId);
+    if (!c) return false;
+    // Sin usuario vinculado no se manda ninguna credencial.
+    if (!c.userId) return false;
+    const now = Date.now();
+    if (c.ultimoRescateAccesoAt && now - c.ultimoRescateAccesoAt < RESCATE_MS) {
+      return false;
+    }
+    await ctx.db.patch(args.conversacionId, { ultimoRescateAccesoAt: now });
+    return true;
+  },
+});

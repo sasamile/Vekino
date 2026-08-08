@@ -1165,7 +1165,10 @@ function esEmailReal(email: string): boolean {
  */
 export const enviarAccesoPorWhatsapp = internalAction({
   args: {
-    telefono: v.string(),
+    /** Uno de los dos. `conversacionId` cubre a quien usa @usuario de Meta y
+     *  no comparte número: ahí no hay teléfono al que apuntar. */
+    telefono: v.optional(v.string()),
+    conversacionId: v.optional(v.id("waConversations")),
     /** true rota la contraseña aunque la persona ya tuviera una propia. */
     forzar: v.optional(v.boolean()),
   },
@@ -1176,16 +1179,31 @@ export const enviarAccesoPorWhatsapp = internalAction({
     | { ok: false; motivo: string }
     | { ok: true; nombre: string; email: string; telefono: string }
   > => {
-    const telefono = normalizarTelefonoE164(args.telefono);
-    if (!telefono) return { ok: false as const, motivo: "Teléfono no válido." };
+    const telefono = args.telefono
+      ? normalizarTelefonoE164(args.telefono)
+      : null;
+    if (args.telefono && !telefono) {
+      return { ok: false as const, motivo: "Teléfono no válido." };
+    }
+    if (!telefono && !args.conversacionId) {
+      return { ok: false as const, motivo: "Falta el teléfono o la conversación." };
+    }
 
     const destino: {
       userId: Id<"users">;
       nombre: string;
       conversacionId: Id<"waConversations"> | null;
-    } | null = await ctx.runQuery(internal.credenciales.porTelefono, { telefono });
+      /** A dónde escribirle: teléfono E.164 o BSUID de Meta. */
+      para: string;
+    } | null = await ctx.runQuery(internal.credenciales.destinoDeAcceso, {
+      telefono: telefono ?? undefined,
+      conversacionId: args.conversacionId,
+    });
     if (!destino) {
-      return { ok: false as const, motivo: "Ese teléfono no está en la plataforma." };
+      return {
+        ok: false as const,
+        motivo: "No encontré a esa persona, o su cuenta no está activa.",
+      };
     }
 
     const r = await ctx.runAction(internal.credenciales.generarClaveParaEntrega, {
@@ -1211,7 +1229,7 @@ export const enviarAccesoPorWhatsapp = internalAction({
     });
 
     try {
-      const res = await enviarMensaje(msgTexto(telefono, texto));
+      const res = await enviarMensaje(msgTexto(destino.para, texto));
       // Queda en la bandeja: si no, el equipo no sabe qué se le mandó.
       if (destino.conversacionId) {
         await ctx.runMutation(internal.whatsappInbox.registrarSalienteDeAgente, {
@@ -1226,7 +1244,7 @@ export const enviarAccesoPorWhatsapp = internalAction({
         ok: true as const,
         nombre: destino.nombre,
         email: r.email,
-        telefono,
+        telefono: destino.para,
       };
     } catch (e) {
       const motivo = e instanceof Error ? e.message : String(e);
@@ -1244,24 +1262,44 @@ export const enviarAccesoPorWhatsapp = internalAction({
   },
 });
 
-export const porTelefono = internalQuery({
-  args: { telefono: v.string() },
+export const destinoDeAcceso = internalQuery({
+  args: {
+    telefono: v.optional(v.string()),
+    conversacionId: v.optional(v.id("waConversations")),
+  },
   handler: async (ctx, args) => {
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_telefono", (q) => q.eq("telefonoE164", args.telefono))
-      .first();
+    const conv = args.conversacionId
+      ? await ctx.db.get(args.conversacionId)
+      : args.telefono
+        ? await ctx.db
+            .query("waConversations")
+            .withIndex("by_telefono", (q) => q.eq("telefono", args.telefono!))
+            .first()
+        : null;
+
+    const user = conv?.userId
+      ? await ctx.db.get(conv.userId)
+      : args.telefono
+        ? await ctx.db
+            .query("users")
+            .withIndex("by_telefono", (q) => q.eq("telefonoE164", args.telefono!))
+            .first()
+        : null;
     if (!user || !user.active) return null;
 
-    const conv = await ctx.db
-      .query("waConversations")
-      .withIndex("by_telefono", (q) => q.eq("telefono", args.telefono))
-      .first();
+    /* A quién apuntarle. Si la persona adoptó su @usuario de Meta, el BSUID es
+     * su identidad canónica y el teléfono puede haber dejado de entregar; al
+     * revés, para el resto el teléfono es lo fiable. */
+    const para = conv?.username
+      ? (conv.bsuid ?? conv.telefono ?? args.telefono)
+      : (conv?.telefono ?? args.telefono ?? conv?.bsuid);
+    if (!para) return null;
 
     return {
       userId: user._id,
       nombre: user.name,
       conversacionId: conv?._id ?? null,
+      para,
     };
   },
 });
