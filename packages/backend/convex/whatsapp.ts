@@ -588,6 +588,19 @@ export const procesarEntrante = internalAction({
     });
     if (!datos) return null;
 
+    /* Interruptor general: con WHATSAPP_BOT_APAGADO=1 no se responde NADA de
+     * forma automática, en ningún condominio. Es para los días en que el
+     * equipo quiere atender a mano —una asamblea, un envío masivo— y un bot
+     * contestando encima estorba más de lo que ayuda.
+     *
+     * Corta solo la RESPUESTA: el mensaje entrante ya quedó registrado antes
+     * de llegar aquí, así que sigue apareciendo en la bandeja y nadie se
+     * queda sin ser atendido. Los envíos programados no pasan por acá y
+     * salen igual.
+     *
+     * Se apaga y se prende con `bunx convex env set WHATSAPP_BOT_APAGADO`. */
+    if (process.env.WHATSAPP_BOT_APAGADO === "1") return null;
+
     /* Hay alguien del equipo atendiendo esta conversación: el agente se
      * calla para no responder encima. Los entrantes se siguen registrando y
      * se ven en el inbox. */
