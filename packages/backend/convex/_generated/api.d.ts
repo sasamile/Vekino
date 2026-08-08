@@ -70,6 +70,7 @@ import type * as soporte from "../soporte.js";
 import type * as soportesPago from "../soportesPago.js";
 import type * as unidades from "../unidades.js";
 import type * as users from "../users.js";
+import type * as uso from "../uso.js";
 import type * as vehiculos from "../vehiculos.js";
 import type * as visitantes from "../visitantes.js";
 import type * as whatsapp from "../whatsapp.js";
@@ -149,6 +150,7 @@ declare const fullApi: ApiFromModules<{
   soportesPago: typeof soportesPago;
   unidades: typeof unidades;
   users: typeof users;
+  uso: typeof uso;
   vehiculos: typeof vehiculos;
   visitantes: typeof visitantes;
   whatsapp: typeof whatsapp;

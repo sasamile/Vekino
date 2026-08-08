@@ -88,7 +88,18 @@ export const ensureProfile = mutation({
       .query("users")
       .withIndex("by_authId", (q) => q.eq("authId", identity.subject))
       .unique();
-    if (existing) return existing._id;
+    if (existing) {
+      /* Único punto del backend que prueba que alguien ENTRÓ: aquí ya hay
+       * sesión resuelta. `authId` no sirve de señal porque se estampa al
+       * crear al residente, sin login. Se escribe como mucho una vez al día
+       * para no patchear el documento en cada carga de pantalla. */
+      const hoy = Date.now();
+      const UN_DIA = 24 * 60 * 60 * 1000;
+      if (!existing.ultimoIngresoAt || hoy - existing.ultimoIngresoAt > UN_DIA) {
+        await ctx.db.patch(existing._id, { ultimoIngresoAt: hoy });
+      }
+      return existing._id;
+    }
 
     const authUser = await authComponent.getAuthUser(ctx);
     const email = authUser?.email ?? identity.email ?? "";

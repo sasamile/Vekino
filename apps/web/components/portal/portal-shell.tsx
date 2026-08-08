@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, type CSSProperties } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, usePathname, useRouter } from "next/navigation";
 import {
   Authenticated,
   Unauthenticated,
@@ -15,6 +15,7 @@ import { PortalMobileNav } from "@/components/portal/portal-mobile-nav";
 import { Spinner } from "@/components/ui/spinner";
 import { CambiarClaveTemporalModal } from "@/components/cambiar-clave-temporal-modal";
 import { WhatsappFab } from "@/components/whatsapp-fab";
+import { useRegistrarUso } from "@/hooks/use-registrar-uso";
 import { hexToHslChannels, hexToBrandForeground } from "@/lib/utils";
 import { BrandThemeProvider } from "@/lib/brand-theme";
 
@@ -56,10 +57,37 @@ function Redirect({ to }: { to: string }) {
   );
 }
 
+/**
+ * De qué módulo es cada sección del portal, para medir uso. Se deduce de la
+ * ruta en vez de instrumentar página por página: así una pantalla nueva queda
+ * medida sola, aunque sea como "app", en lugar de quedar invisible.
+ */
+const MODULO_POR_SECCION: Record<string, string> = {
+  "": "app",
+  asambleas: "asamblea",
+  reservas: "reservas",
+  avisos: "comunicados",
+  consejo: "comunicados",
+  documentos: "comunicados",
+  pqrs: "soporte",
+  soporte: "soporte",
+  unidad: "facturas",
+  pago: "pagos",
+  cuenta: "pagos",
+  vehiculos: "app",
+  visitantes: "app",
+  perfil: "app",
+};
+
 function Guard({ children }: { children: React.ReactNode }) {
   const params = useParams<{ id: string }>();
   const condominioId = params.id as Id<"condominios">;
   const home = useQuery(api.portal.home, { condominioId });
+
+  // "/mi/<id>/reservas" → "reservas"
+  const seccion = usePathname().split("/")[3] ?? "";
+  useRegistrarUso("app", condominioId);
+  useRegistrarUso(MODULO_POR_SECCION[seccion] ?? "app", condominioId);
 
   if (home === undefined) {
     return (

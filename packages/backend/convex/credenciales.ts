@@ -160,7 +160,7 @@ export async function crearJobCredenciales(
   ctx: MutationCtx,
   args: {
     condominioId: Id<"condominios">;
-    modo: "solo_sin_clave" | "todos";
+    modo: "solo_sin_clave" | "nunca_ingreso" | "todos";
     iniciadoPorUserId: Id<"users">;
     iniciadoPorNombre: string;
     envioProgramadoId?: Id<"enviosProgramados">;
@@ -203,6 +203,21 @@ export async function crearJobCredenciales(
     .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
     .collect();
 
+  /* Quiénes ya recibieron credenciales alguna vez. Se usa para el modo
+   * `nunca_ingreso`: si nunca se le mandó nada, obviamente no ha entrado. */
+  const yaRecibieron = new Set<string>();
+  if (args.modo === "nunca_ingreso") {
+    const previos = await ctx.db
+      .query("envioCredenciales")
+      .withIndex("by_condominio", (q) =>
+        q.eq("condominioId", args.condominioId),
+      )
+      .collect();
+    for (const p of previos) {
+      if (p.estado === "enviado") yaRecibieron.add(p.userId);
+    }
+  }
+
   const pendientes: Id<"users">[] = [];
   const vistos = new Set<string>();
   for (const m of memberships) {
@@ -211,6 +226,20 @@ export async function crearJobCredenciales(
     const user = await ctx.db.get(m.userId);
     if (!user || !user.active) continue;
     vistos.add(m.userId);
+
+    /* "No ha entrado" no se puede leer de `authId`: se estampa al crear al
+     * residente, sin login de por medio. Lo que sí es evidencia:
+     *  - `ultimoIngresoAt`, que solo escribe una sesión resuelta. Es el dato
+     *    bueno, pero empezó a registrarse tarde, así que aún no basta solo.
+     *  - `claveTemporal`, que ponemos al entregar una clave y se borra cuando
+     *    la persona la cambia — y cambiarla exige haber entrado.
+     * Así que se descarta solo a quien recibió su clave y ya no la tiene
+     * marcada como temporal: esa persona entró y se puso la suya. */
+    if (args.modo === "nunca_ingreso") {
+      if (user.ultimoIngresoAt) continue;
+      if (yaRecibieron.has(m.userId) && user.claveTemporal !== true) continue;
+    }
+
     pendientes.push(m.userId);
   }
 
@@ -243,7 +272,11 @@ export async function crearJobCredenciales(
 export const iniciarEnvio = mutation({
   args: {
     condominioId: v.id("condominios"),
-    modo: v.union(v.literal("solo_sin_clave"), v.literal("todos")),
+    modo: v.union(
+      v.literal("solo_sin_clave"),
+      v.literal("nunca_ingreso"),
+      v.literal("todos"),
+    ),
   },
   handler: async (ctx, args) => {
     const staff = await requirePlatformStaff(ctx);

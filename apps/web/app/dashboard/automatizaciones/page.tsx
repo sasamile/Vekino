@@ -719,8 +719,8 @@ function ProgramarDialog({
   const [asambleaId, setAsambleaId] = useState<Id<"asambleas"> | "">("");
   const [audiencia, setAudiencia] = useState("todos");
   const [modoCredenciales, setModoCredenciales] = useState<
-    "solo_sin_clave" | "todos"
-  >("solo_sin_clave");
+    "solo_sin_clave" | "nunca_ingreso" | "todos"
+  >("nunca_ingreso");
   const [asunto, setAsunto] = useState("");
   const [mensaje, setMensaje] = useState("");
   const [canal, setCanal] = useState<Canal>(
@@ -1216,13 +1216,19 @@ function ProgramarDialog({
                   disabled={busy}
                   onChange={(e) => {
                     setModoCredenciales(
-                      e.target.value as "solo_sin_clave" | "todos",
+                      e.target.value as
+                        | "solo_sin_clave"
+                        | "nunca_ingreso"
+                        | "todos",
                     );
                     setError(null);
                   }}
                 >
+                  <option value="nunca_ingreso">
+                    A quienes no han entrado nunca
+                  </option>
                   <option value="solo_sin_clave">
-                    Solo a quienes nunca han entrado
+                    A quienes no tienen contraseña propia
                   </option>
                   <option value="todos">
                     A todos (le cambia la clave a quien ya tenía la suya)
@@ -1236,6 +1242,16 @@ function ProgramarDialog({
                 horas. Si el correo falla, esa contraseña se revierte para no
                 dejar a nadie por fuera.
               </p>
+              {modoCredenciales === "nunca_ingreso" && (
+                <p className="text-xs leading-relaxed text-muted-foreground">
+                  «No han entrado nunca» se calcula con dos señales: que no se
+                  les haya registrado un ingreso, y que sigan con la clave
+                  temporal que les mandamos sin haberla cambiado. El registro de
+                  ingresos empezó ahora, así que los primeros días puede incluir
+                  a alguien que sí entró hace meses. A esa persona no se le
+                  rompe nada: recibe una clave nueva que también le sirve.
+                </p>
+              )}
               {modoCredenciales === "todos" && (
                 <p className="flex items-start gap-1.5 text-xs leading-relaxed text-amber-700 dark:text-amber-400">
                   <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />

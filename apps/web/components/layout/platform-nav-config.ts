@@ -5,6 +5,7 @@ import {
   CalendarClock,
   LifeBuoy,
   MessagesSquare,
+  ChartNoAxesColumn,
   type LucideIcon,
 } from "lucide-react";
 
@@ -54,6 +55,22 @@ export const PLATFORM_NAV: PlatformNavItem[] = [
       "whatsapp",
       "recordatorios",
       "agendar",
+    ],
+  },
+  {
+    label: "Uso",
+    href: "/dashboard/uso",
+    segment: "uso",
+    icon: ChartNoAxesColumn,
+    keywords: [
+      "metricas",
+      "estadisticas",
+      "analitica",
+      "actividad",
+      "activos",
+      "adopcion",
+      "usuarios",
+      "modulos",
     ],
   },
   {

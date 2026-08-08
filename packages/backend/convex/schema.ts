@@ -101,6 +101,14 @@ export default defineSchema({
      * recordárselo al entrar; NO bloquea el acceso.
      */
     claveTemporal: v.optional(v.boolean()),
+    /**
+     * Cuándo entró de verdad por última vez. `authId` NO sirve para esto: se
+     * estampa al CREAR al residente (users.createCondoMember), así que hay
+     * gente marcada como si tuviera cuenta activa sin haber abierto nunca la
+     * plataforma. Esto lo escribe `ensureProfile`, que solo corre con una
+     * sesión resuelta.
+     */
+    ultimoIngresoAt: v.optional(v.number()),
 
     active: v.boolean(),
 
@@ -1633,7 +1641,11 @@ export default defineSchema({
     asambleaId: v.optional(v.id("asambleas")),
     /** Solo en `credenciales_acceso`. Por defecto no toca a quien ya entró. */
     modoCredenciales: v.optional(
-      v.union(v.literal("solo_sin_clave"), v.literal("todos")),
+      v.union(
+        v.literal("solo_sin_clave"),
+        v.literal("nunca_ingreso"),
+        v.literal("todos"),
+      ),
     ),
     /** Solo en `credenciales_acceso`: el job real que hace el trabajo. */
     credencialesJobId: v.optional(v.id("envioCredencialesJobs")),
@@ -1707,8 +1719,16 @@ export default defineSchema({
    */
   envioCredencialesJobs: defineTable({
     condominioId: v.id("condominios"),
-    /** solo_sin_clave = no toca a quien ya tiene contraseña propia. */
-    modo: v.union(v.literal("solo_sin_clave"), v.literal("todos")),
+    /**
+     * - solo_sin_clave: no toca a quien ya tiene contraseña propia en Better Auth.
+     * - nunca_ingreso:  a quien no hay evidencia de que haya entrado.
+     * - todos:          a todos, rotando la clave incluso a quien ya usa la suya.
+     */
+    modo: v.union(
+      v.literal("solo_sin_clave"),
+      v.literal("nunca_ingreso"),
+      v.literal("todos"),
+    ),
     estado: v.union(
       v.literal("en_curso"),
       v.literal("completado"),
@@ -1867,6 +1887,33 @@ export default defineSchema({
    * Comprobante de pago subido por el propietario (foto/PDF por WhatsApp o web).
    * La administración lo revisa: aprobar marca la factura vinculada como pagada.
    */
+  /**
+   * Uso real de la plataforma, para saber qué módulos le importan a la gente.
+   *
+   * Hasta ahora lo único que sabíamos de un usuario era `authId`: si había
+   * entrado ALGUNA VEZ. Ni cuándo, ni cada cuánto, ni a qué. Con eso no se
+   * puede decidir qué construir después.
+   *
+   * Va agregada por (usuario, día, módulo) en vez de un evento por acción:
+   * lo que interesa es "cuánta gente distinta usó reservas en agosto", no la
+   * hora exacta de cada clic. Así la tabla crece con los usuarios activos y
+   * no con su actividad, y el panel se puede consultar por índice.
+   */
+  actividadUso: defineTable({
+    userId: v.id("users"),
+    condominioId: v.optional(v.id("condominios")),
+    /** "2026-08-07" en la zona del condominio, no UTC: si no, la actividad
+     *  de la noche colombiana cae en el día siguiente y el mapa miente. */
+    dia: v.string(),
+    /** "app", "pagos", "asamblea", "reservas", "soporte"… */
+    modulo: v.string(),
+    veces: v.number(),
+    ultimoAt: v.number(),
+  })
+    .index("by_dia", ["dia"])
+    .index("by_user_dia_modulo", ["userId", "dia", "modulo"])
+    .index("by_condominio_dia", ["condominioId", "dia"]),
+
   soportesPago: defineTable({
     condominioId: v.id("condominios"),
     unidadId: v.optional(v.id("unidades")),

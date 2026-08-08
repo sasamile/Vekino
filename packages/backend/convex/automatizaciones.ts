@@ -331,7 +331,11 @@ export const programar = mutation({
     parametros: v.optional(v.array(v.string())),
     /** Solo para `credenciales_acceso`. */
     modoCredenciales: v.optional(
-      v.union(v.literal("solo_sin_clave"), v.literal("todos")),
+      v.union(
+        v.literal("solo_sin_clave"),
+        v.literal("nunca_ingreso"),
+        v.literal("todos"),
+      ),
     ),
     canal: canalValidator,
     programadoPara: v.number(),
@@ -388,7 +392,7 @@ export const programar = mutation({
       parametros: args.parametros,
       modoCredenciales:
         args.tipo === "credenciales_acceso"
-          ? (args.modoCredenciales ?? "solo_sin_clave")
+          ? (args.modoCredenciales ?? "nunca_ingreso")
           : undefined,
       /* El motor de credenciales entrega SOLO por correo: Meta rechaza toda
        * plantilla de WhatsApp que mencione contraseñas. Se fuerza aquí para
@@ -1063,7 +1067,7 @@ export const arrancarCredenciales = internalMutation({
       // invocar otra, y ademas asi todo cae en la misma transaccion.
       const jobId = await crearJobCredenciales(ctx, {
         condominioId: envio.condominioId,
-        modo: envio.modoCredenciales ?? "solo_sin_clave",
+        modo: envio.modoCredenciales ?? "nunca_ingreso",
         envioProgramadoId: args.envioId,
         iniciadoPorUserId: envio.creadoPorUserId,
         iniciadoPorNombre: envio.creadoPorNombre,
