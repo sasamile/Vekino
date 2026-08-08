@@ -387,6 +387,15 @@ export const reintentarPendientes = mutation({
 // Envío de prueba
 // ─────────────────────────────────────────────────────────────
 
+export const nombreCondominio = internalQuery({
+  args: { condominioId: v.id("condominios") },
+  handler: async (ctx, args) => {
+    await requirePlatformStaff(ctx);
+    const c = await ctx.db.get(args.condominioId);
+    return c ? { condominioNombre: c.name } : null;
+  },
+});
+
 /** Datos reales de la asamblea + un poder de muestra, para la prueba. */
 export const datosPrueba = internalQuery({
   args: {
@@ -427,7 +436,12 @@ export const datosPrueba = internalQuery({
 export const enviarPrueba = action({
   args: {
     condominioId: v.id("condominios"),
-    asambleaId: v.id("asambleas"),
+    tipo: v.optional(tipoValidator),
+    /** Solo para el enlace de asamblea. */
+    asambleaId: v.optional(v.id("asambleas")),
+    /** Solo para el mensaje libre. */
+    mensaje: v.optional(v.string()),
+    asunto: v.optional(v.string()),
     canal: canalValidator,
     email: v.optional(v.string()),
     telefono: v.optional(v.string()),
@@ -439,6 +453,67 @@ export const enviarPrueba = action({
     ctx,
     args,
   ): Promise<{ correo: string | null; whatsapp: string | null }> => {
+    const email0 = args.email?.trim();
+    const telefono0 = args.telefono?.trim();
+    if (!email0 && !telefono0) {
+      throw new Error("Escribe un correo o un celular para la prueba.");
+    }
+    const nombrePrueba = args.nombre?.trim() || "Nombre de prueba";
+
+    // ── Prueba de mensaje libre ──
+    if (args.tipo === "mensaje_residentes") {
+      const texto = args.mensaje?.trim();
+      if (!texto) throw new Error("Escribe el mensaje para poder probarlo.");
+      const condo: { condominioNombre: string } | null = await ctx.runQuery(
+        internal.automatizaciones.nombreCondominio,
+        { condominioId: args.condominioId },
+      );
+      if (!condo) throw new Error("No encontré el condominio.");
+
+      let correoOut: string | null = null;
+      let waOut: string | null = null;
+
+      if (args.canal !== "whatsapp" && email0) {
+        try {
+          await sendBrevoEmail({
+            to: [{ email: email0, name: nombrePrueba }],
+            subject: `[PRUEBA] ${args.asunto?.trim() || `Mensaje de ${condo.condominioNombre}`}`,
+            htmlContent: htmlMensajeLibre({
+              nombre: nombrePrueba,
+              condominioNombre: condo.condominioNombre,
+              mensaje: texto,
+            }),
+            textContent: `Hola ${nombrePrueba}:\n\n${texto}`,
+          });
+          correoOut = `Enviado a ${email0}`;
+        } catch (e) {
+          correoOut = `Falló: ${e instanceof Error ? e.message : String(e)}`;
+        }
+      }
+
+      if (args.canal !== "correo" && telefono0) {
+        const e164 = telefono0.startsWith("+")
+          ? telefono0
+          : `+${telefono0.replace(/\D/g, "")}`;
+        const plantilla = process.env.YCLOUD_TEMPLATE_GENERICO;
+        if (!plantilla) {
+          waOut = "Falta configurar la plantilla genérica de WhatsApp.";
+        } else {
+          try {
+            await enviarMensaje(
+              msgPlantillaConBoton(e164, plantilla, "es", [nombrePrueba, texto]),
+            );
+            waOut = `Enviado a ${e164}`;
+          } catch (e) {
+            waOut = `Falló: ${e instanceof Error ? e.message : String(e)}`;
+          }
+        }
+      }
+      return { correo: correoOut, whatsapp: waOut };
+    }
+
+    if (!args.asambleaId) throw new Error("Elige la asamblea para probar.");
+
     const datos: {
       condominioNombre: string;
       moduloWhatsapp: boolean;
@@ -455,11 +530,8 @@ export const enviarPrueba = action({
     });
     if (!datos) throw new Error("No encontré la asamblea.");
 
-    const email = args.email?.trim();
-    const telefono = args.telefono?.trim();
-    if (!email && !telefono) {
-      throw new Error("Escribe un correo o un celular para la prueba.");
-    }
+    const email = email0;
+    const telefono = telefono0;
 
     const base = (process.env.WEB_APP_URL ?? "https://www.vekino.com").replace(
       /\/+$/,
@@ -468,7 +540,7 @@ export const enviarPrueba = action({
     const enlace = `${base}/apoderado?codigo=${encodeURIComponent(datos.codigo)}`;
     // Solo existe la versión del propietario: es a quien se le escribe.
     const esApoderado = false;
-    const nombre = args.nombre?.trim() || "Nombre de prueba";
+    const nombre = nombrePrueba;
 
     let correoRes: string | null = null;
     let waRes: string | null = null;

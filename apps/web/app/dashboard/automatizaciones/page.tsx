@@ -133,6 +133,9 @@ const TIPO_META: Record<
 /** Orden de las tarjetas del selector: primero el caso más común. */
 const TIPO_OPCIONES: TipoEnvio[] = ["mensaje_residentes", "apoderados_asamblea"];
 
+/** Tope de caracteres del mensaje libre. */
+const MENSAJE_MAX = 1000;
+
 /** Valores que acepta `audiencia` en el backend (roles de membresía). */
 const AUDIENCIA_OPCIONES: { value: string; label: string }[] = [
   { value: "todos", label: "Todos" },
@@ -768,7 +771,8 @@ function ProgramarDialog({ onClose }: { onClose: () => void }) {
         </div>
       ) : sinCondominios ? (
         <p className="rounded-lg bg-muted/30 p-3 text-sm text-muted-foreground">
-          Ningún condominio tiene asambleas con apoderados registrados todavía.
+          Ningún condominio tiene asambleas abiertas todavía, así que aún no hay
+          a quién programarle un envío desde aquí.
         </p>
       ) : (
         <div className="space-y-4">
@@ -992,7 +996,7 @@ function ProgramarDialog({ onClose }: { onClose: () => void }) {
             </div>
           )}
 
-          {asamblea && sinContacto > 0 && (
+          {!esMensaje && asamblea && sinContacto > 0 && (
             <div className="flex gap-2.5 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3.5 py-3">
               <AlertTriangle
                 className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400"
@@ -1096,6 +1100,22 @@ function ProgramarDialog({ onClose }: { onClose: () => void }) {
               </p>
             </div>
 
+            {/* TODO: `enviarPrueba` todavía exige una asamblea; cuando el
+                backend acepte texto libre se habilita también para
+                «Mensaje a residentes». */}
+            {esMensaje && (
+              <p className="flex gap-1.5 text-[11px] leading-relaxed text-amber-700 dark:text-amber-400">
+                <AlertTriangle
+                  className="mt-0.5 h-3.5 w-3.5 shrink-0"
+                  aria-hidden
+                />
+                <span>
+                  La prueba por ahora solo está disponible para el enlace de
+                  asamblea.
+                </span>
+              </p>
+            )}
+
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="space-y-1.5">
                 <label
@@ -1163,41 +1183,46 @@ function ProgramarDialog({ onClose }: { onClose: () => void }) {
               />
             </div>
 
-            <div>
-              <p className="mb-1.5 text-xs font-medium text-foreground">
-                Versión del mensaje
-              </p>
-              <div className="inline-flex flex-wrap items-center gap-1 rounded-full border border-border bg-card p-1">
-                {PRUEBA_VERSIONES.map((v) => {
-                  const activo = pruebaComoPropietario === v.comoPropietario;
-                  return (
-                    <button
-                      key={v.label}
-                      type="button"
-                      disabled={busy || pruebaBusy}
-                      onClick={() => {
-                        setPruebaComoPropietario(v.comoPropietario);
-                        setPruebaError(null);
-                      }}
-                      className={cn(
-                        "rounded-full px-3.5 py-1.5 text-[12.5px] font-medium transition-colors",
-                        activo
-                          ? "bg-brand/10 text-foreground"
-                          : "text-muted-foreground hover:text-foreground",
-                        (busy || pruebaBusy) && "cursor-not-allowed opacity-60",
-                      )}
-                    >
-                      {v.label}
-                    </button>
-                  );
-                })}
+            {/* La versión apoderado/propietario solo aplica al enlace de
+                asamblea; el mensaje libre no tiene variantes. */}
+            {!esMensaje && (
+              <div>
+                <p className="mb-1.5 text-xs font-medium text-foreground">
+                  Versión del mensaje
+                </p>
+                <div className="inline-flex flex-wrap items-center gap-1 rounded-full border border-border bg-card p-1">
+                  {PRUEBA_VERSIONES.map((v) => {
+                    const activo = pruebaComoPropietario === v.comoPropietario;
+                    return (
+                      <button
+                        key={v.label}
+                        type="button"
+                        disabled={busy || pruebaBusy}
+                        onClick={() => {
+                          setPruebaComoPropietario(v.comoPropietario);
+                          setPruebaError(null);
+                        }}
+                        className={cn(
+                          "rounded-full px-3.5 py-1.5 text-[12.5px] font-medium transition-colors",
+                          activo
+                            ? "bg-brand/10 text-foreground"
+                            : "text-muted-foreground hover:text-foreground",
+                          (busy || pruebaBusy) &&
+                            "cursor-not-allowed opacity-60",
+                        )}
+                      >
+                        {v.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
+                  {pruebaComoPropietario
+                    ? "El propietario recibe el texto de «compártele el enlace a tu apoderado»."
+                    : "El apoderado recibe el enlace para entrar directo a la asamblea. La versión de propietario dice «compártele el enlace a tu apoderado»."}
+                </p>
               </div>
-              <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
-                {pruebaComoPropietario
-                  ? "El propietario recibe el texto de «compártele el enlace a tu apoderado»."
-                  : "El apoderado recibe el enlace para entrar directo a la asamblea. La versión de propietario dice «compártele el enlace a tu apoderado»."}
-              </p>
-            </div>
+            )}
 
             <Button
               variant="secondary"
@@ -1360,7 +1385,9 @@ function DetalleModal({
       title="Detalle del envío"
       description={[
         envio.condominioNombre,
-        envio.asambleaTitulo,
+        envio.tipo === "mensaje_residentes"
+          ? (envio.asunto ?? resumenMensaje(envio.mensaje))
+          : envio.asambleaTitulo,
         fmtProgramado(envio.programadoPara),
       ]
         .filter(Boolean)

@@ -1412,7 +1412,7 @@ export const procesarEntrante = internalAction({
       return null;
     }
     if (
-      /clave|contrasena|password|no puedo entrar|no me deja entrar|acceso|usuario|olvide/.test(
+      /clave|credencial|contrasena|password|no puedo entrar|no me deja entrar|acceso|ingresar|usuario|olvide/.test(
         comando,
       )
     ) {
@@ -1420,8 +1420,25 @@ export const procesarEntrante = internalAction({
       return null;
     }
 
-    // IA para el resto (si hay API key); si no, menú.
-    const respuestaIA = await responderConIA(ctx, args.conversacionId, datos, texto);
+    /* Texto libre → agente con herramientas reales (whatsappAgente.ts).
+     * Puede consultar la factura, generar el link de pago, entregar
+     * credenciales, revisar disponibilidad y crear reservas o PQRS, así que
+     * resuelve en la conversación en vez de mandar al menú. */
+    const unidadActiva = datos.unidades[0]?.unidad;
+    const respuestaIA: string | null = await ctx.runAction(
+      internal.whatsappAgente.responder,
+      {
+        conversacionId: args.conversacionId,
+        userId: datos.user._id,
+        condominioId: condominio._id,
+        condominioNombre: condominio.name,
+        nombre,
+        unidadId: unidadActiva?._id,
+        unidadNumero: unidadActiva?.numero,
+        timezone,
+        pregunta: texto,
+      },
+    );
     if (respuestaIA) {
       await enviar(msgTexto(to, respuestaIA));
       await setConv({ paso: "consulta", contexto });
@@ -1460,9 +1477,22 @@ async function responderConIA(
   const system = [
     `Eres el asistente de WhatsApp de Vekino, la plataforma de administración del conjunto residencial "${condominio?.name ?? "—"}" en Colombia.`,
     `Hablas con ${datos.user?.name ?? "un residente"}. Responde en español, cálido y BREVE (máximo 3 frases, es WhatsApp).`,
-    "Puedes orientar sobre: facturas de administración y pagos (opción 'Estado de cuenta' del menú), reservas de zonas comunes, envío de comprobantes de pago, y reportes de problemas (PQRS).",
-    "Si piden datos exactos (montos, fechas, disponibilidad) diles que usen la opción del menú correspondiente escribiendo *menú*.",
-    "Nunca inventes montos, fechas ni normas del conjunto. Si no sabes, dilo y sugiere contactar a la administración.",
+    "",
+    "CRÍTICO: esta persona YA está identificada y verificada por su número de WhatsApp.",
+    "NUNCA le pidas cédula, documento ni número de apartamento para 'verificar' quién es.",
+    "NUNCA le digas que escriba 'vincular': ese flujo es solo para números desconocidos.",
+    "NUNCA inventes requisitos, pasos ni opciones que no estén listados aquí abajo.",
+    "",
+    "Esto es TODO lo que el bot sabe hacer:",
+    "- Consultar su factura y pagar en línea",
+    "- Reservar una zona común",
+    "- Registrar el comprobante de un pago (basta con que mande la foto)",
+    "- Reportar un problema, queja o petición",
+    "- Entregarle sus datos de acceso a la plataforma",
+    "",
+    "Si pide algo de esa lista, respóndele con naturalidad y dile que se lo estás abriendo; el sistema lo lleva al paso siguiente.",
+    "Si pide datos exactos (montos, fechas, disponibilidad) no los inventes: no los tienes a la vista.",
+    "Nunca inventes normas del conjunto. Si no sabes algo, dilo y sugiere escribir a la administración.",
   ].join("\n");
 
   const mensajes = historial

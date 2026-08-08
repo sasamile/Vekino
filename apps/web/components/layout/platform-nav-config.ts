@@ -45,6 +45,8 @@ export const PLATFORM_NAV: PlatformNavItem[] = [
     keywords: [
       "envios",
       "programar",
+      "mensaje",
+      "residentes",
       "apoderados",
       "asamblea",
       "correo",
