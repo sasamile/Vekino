@@ -4,6 +4,43 @@ import { internal } from "./_generated/api";
 import { authComponent, createAuth } from "./auth";
 import { normalizarTelefonoE164 } from "./lib/telefono";
 
+
+/**
+ * Texto legible del cuerpo de un mensaje de WhatsApp.
+ *
+ * Se usa para los ecos y los estados, donde solo interesa qué se dijo. Sin
+ * esto, una reacción se guardaba como "[reaction]" y en la bandeja no había
+ * forma de saber qué emoji se había mandado.
+ *
+ * Las rutas se prueban en orden porque la forma del cuerpo cambia según de
+ * dónde venga el evento y no está documentada de manera estable.
+ */
+function describirCuerpoWa(msg: any, tipoMsg: string): string {
+  if (typeof msg?.reaction?.emoji === "string" && msg.reaction.emoji) {
+    return `Reaccionó ${msg.reaction.emoji}`;
+  }
+  // Quitar la reacción llega igual, pero con el emoji vacío.
+  if (tipoMsg === "reaction") return "Quitó su reacción";
+
+  if (typeof msg?.text?.body === "string") return msg.text.body;
+  if (typeof msg?.body === "string") return msg.body;
+  if (typeof msg?.caption === "string") return msg.caption;
+  if (typeof msg?.image?.caption === "string") return msg.image.caption;
+  if (typeof msg?.template?.name === "string") {
+    return `📋 Plantilla «${msg.template.name}»`;
+  }
+  if (tipoMsg === "image") return "📷 Imagen";
+  if (tipoMsg === "audio") return "🎤 Nota de voz";
+  if (tipoMsg === "video") return "🎥 Video";
+  if (tipoMsg === "sticker") return "Sticker";
+  if (tipoMsg === "document") {
+    const nombre = msg?.document?.filename;
+    return typeof nombre === "string" ? `📄 ${nombre}` : "📄 Documento";
+  }
+  if (tipoMsg === "location") return "📍 Ubicación";
+  return `[${tipoMsg}]`;
+}
+
 const http = httpRouter();
 
 /* `cors: true` es obligatorio desde que la web llama a estas rutas DIRECTO
@@ -250,9 +287,13 @@ http.route({
         };
       }
 
+      /* Mismo criterio que en los ecos: una reacción tiene que decir QUÉ
+       * emoji fue. "[reaction]" en la bandeja no le sirve a nadie. */
       const contenido =
         texto ??
-        (media?.caption ? `[${tipoMsg}] ${media.caption}` : `[${tipoMsg}]`);
+        (media?.caption
+          ? `[${tipoMsg}] ${media.caption}`
+          : describirCuerpoWa(msg, tipoMsg));
 
       // Registro + scheduling del router son UNA transacción dentro de la
       // mutation: o queda todo, o YCloud reintenta.
@@ -295,12 +336,7 @@ http.route({
         // de YCloud u otra herramienta) este evento es la única forma de
         // enterarnos, y sin estos datos quedaría una burbuja vacía.
         const tipoMsg = typeof msg.type === "string" ? msg.type : "text";
-        const cuerpo =
-          typeof msg.text?.body === "string"
-            ? msg.text.body
-            : typeof msg.template?.name === "string"
-              ? `📋 Plantilla «${msg.template.name}»`
-              : `[${tipoMsg}]`;
+        const cuerpo = describirCuerpoWa(msg, tipoMsg);
 
         await ctx.runMutation(internal.whatsapp.actualizarEstadoMensaje, {
           ycloudMessageId: String(msg.id),
@@ -341,16 +377,7 @@ http.route({
 
       if (msg) {
         const tipoMsg = typeof msg.type === "string" ? msg.type : "text";
-        const cuerpo =
-          typeof msg.text?.body === "string"
-            ? msg.text.body
-            : typeof msg.body === "string"
-              ? msg.body
-              : typeof msg.caption === "string"
-                ? msg.caption
-                : typeof msg.template?.name === "string"
-                  ? `📋 Plantilla «${msg.template.name}»`
-                  : `[${tipoMsg}]`;
+        const cuerpo = describirCuerpoWa(msg, tipoMsg);
 
         const destino =
           typeof msg.to === "string"
