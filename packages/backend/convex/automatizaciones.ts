@@ -6,6 +6,7 @@ import {
   internalAction,
   internalMutation,
   internalQuery,
+  type MutationCtx,
 } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { crearJobCredenciales } from "./credenciales";
@@ -345,34 +346,32 @@ export const detalle = query({
 // Programación y control
 // ─────────────────────────────────────────────────────────────
 
-export const programar = mutation({
+/**
+ * El cuerpo de `programar`, sin la comprobación de sesión.
+ *
+ * Lo comparten la mutation pública (que autentica antes) y `programarComoStaff`,
+ * que es interna y solo alcanzable con acceso al despliegue. Existe porque una
+ * madrugada hubo que dejar tres envíos agendados y el único camino era la
+ * consola; duplicar cuarenta líneas de validación habría sido peor.
+ */
+async function crearEnvioProgramado(
+  ctx: MutationCtx,
   args: {
-    condominioId: v.id("condominios"),
-    tipo: tipoValidator,
-    /** Obligatorio para `apoderados_asamblea`. */
-    asambleaId: v.optional(v.id("asambleas")),
-    /** Obligatorios para `mensaje_residentes`. */
-    asunto: v.optional(v.string()),
-    mensaje: v.optional(v.string()),
-    audiencia: v.optional(v.string()),
-    /** Solo para `plantilla_whatsapp`. */
-    plantilla: v.optional(v.string()),
-    parametros: v.optional(v.array(v.string())),
-    /** Solo para `comunicado_difusion`. */
-    comunicadoId: v.optional(v.id("comunicados")),
-    /** Solo para `credenciales_acceso`. */
-    modoCredenciales: v.optional(
-      v.union(
-        v.literal("solo_sin_clave"),
-        v.literal("nunca_ingreso"),
-        v.literal("todos"),
-      ),
-    ),
-    canal: canalValidator,
-    programadoPara: v.number(),
+    condominioId: Id<"condominios">;
+    tipo: "apoderados_asamblea" | "mensaje_residentes" | "plantilla_whatsapp" | "credenciales_acceso" | "comunicado_difusion";
+    asambleaId?: Id<"asambleas">;
+    asunto?: string;
+    mensaje?: string;
+    audiencia?: string;
+    plantilla?: string;
+    parametros?: string[];
+    comunicadoId?: Id<"comunicados">;
+    modoCredenciales?: "solo_sin_clave" | "nunca_ingreso" | "todos";
+    canal: "correo" | "whatsapp" | "ambos";
+    programadoPara: number;
   },
-  handler: async (ctx, args) => {
-    const staff = await requirePlatformStaff(ctx);
+  staff: { _id: Id<"users">; name: string },
+): Promise<Id<"enviosProgramados">> {
 
     if (args.tipo === "credenciales_acceso") {
       const condo = await ctx.db.get(args.condominioId);
@@ -455,6 +454,75 @@ export const programar = mutation({
     );
     await ctx.db.patch(envioId, { scheduledFunctionId: jobId });
     return envioId;
+}
+
+export const programar = mutation({
+  args: {
+    condominioId: v.id("condominios"),
+    tipo: tipoValidator,
+    /** Obligatorio para `apoderados_asamblea`. */
+    asambleaId: v.optional(v.id("asambleas")),
+    /** Obligatorios para `mensaje_residentes`. */
+    asunto: v.optional(v.string()),
+    mensaje: v.optional(v.string()),
+    audiencia: v.optional(v.string()),
+    /** Solo para `plantilla_whatsapp`. */
+    plantilla: v.optional(v.string()),
+    parametros: v.optional(v.array(v.string())),
+    /** Solo para `comunicado_difusion`. */
+    comunicadoId: v.optional(v.id("comunicados")),
+    /** Solo para `credenciales_acceso`. */
+    modoCredenciales: v.optional(
+      v.union(
+        v.literal("solo_sin_clave"),
+        v.literal("nunca_ingreso"),
+        v.literal("todos"),
+      ),
+    ),
+    canal: canalValidator,
+    programadoPara: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const staff = await requirePlatformStaff(ctx);
+    return await crearEnvioProgramado(ctx, args, staff);
+  },
+});
+
+/**
+ * Agendar sin sesión. `internalMutation`, así que no la alcanza ningún
+ * cliente: solo el scheduler o quien tenga las llaves del despliegue.
+ */
+export const programarComoStaff = internalMutation({
+  args: {
+    condominioId: v.id("condominios"),
+    tipo: tipoValidator,
+    /** Obligatorio para `apoderados_asamblea`. */
+    asambleaId: v.optional(v.id("asambleas")),
+    /** Obligatorios para `mensaje_residentes`. */
+    asunto: v.optional(v.string()),
+    mensaje: v.optional(v.string()),
+    audiencia: v.optional(v.string()),
+    /** Solo para `plantilla_whatsapp`. */
+    plantilla: v.optional(v.string()),
+    parametros: v.optional(v.array(v.string())),
+    /** Solo para `comunicado_difusion`. */
+    comunicadoId: v.optional(v.id("comunicados")),
+    /** Solo para `credenciales_acceso`. */
+    modoCredenciales: v.optional(
+      v.union(
+        v.literal("solo_sin_clave"),
+        v.literal("nunca_ingreso"),
+        v.literal("todos"),
+      ),
+    ),
+    canal: canalValidator,
+    programadoPara: v.number(),
+    creadoPorUserId: v.id("users"),
+  },
+  handler: async (ctx, args) => {
+    const staff = await ctx.db.get(args.creadoPorUserId);
+    if (!staff) throw new Error("Usuario no encontrado.");
+    return await crearEnvioProgramado(ctx, args, staff);
   },
 });
 
