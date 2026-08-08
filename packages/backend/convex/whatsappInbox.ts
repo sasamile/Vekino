@@ -142,7 +142,19 @@ export const hilo = query({
       .order("desc")
       .take(200);
 
-    const user = c.userId ? await ctx.db.get(c.userId) : null;
+    /* El vínculo con el usuario solo se rehace cuando ENTRA un mensaje. Si la
+     * administración acaba de corregirle el teléfono a alguien, la
+     * conversación sigue diciendo "sin identificar" hasta que esa persona
+     * vuelva a escribir — y mientras tanto el equipo no puede ni mandarle sus
+     * accesos. Aquí se resuelve también por teléfono, en vivo. */
+    let user = c.userId ? await ctx.db.get(c.userId) : null;
+    if (!user && c.telefono) {
+      const candidatos = await ctx.db
+        .query("users")
+        .withIndex("by_telefono", (q) => q.eq("telefonoE164", c.telefono!))
+        .collect();
+      user = candidatos.find((u) => u.active) ?? null;
+    }
     const condominio = c.condominioId ? await ctx.db.get(c.condominioId) : null;
 
     return {

@@ -1280,14 +1280,18 @@ export const destinoDeAcceso = internalQuery({
             .first()
         : null;
 
-    const user = conv?.userId
-      ? await ctx.db.get(conv.userId)
-      : args.telefono
-        ? await ctx.db
-            .query("users")
-            .withIndex("by_telefono", (q) => q.eq("telefonoE164", args.telefono!))
-            .first()
-        : null;
+    /* Se busca por teléfono aunque la conversación ya tenga `userId`: ese
+     * vínculo solo se rehace con cada entrante, así que tras corregirle el
+     * teléfono a alguien queda desactualizado hasta que vuelva a escribir. */
+    const tel = conv?.telefono ?? args.telefono;
+    let user = conv?.userId ? await ctx.db.get(conv.userId) : null;
+    if ((!user || !user.active) && tel) {
+      const candidatos = await ctx.db
+        .query("users")
+        .withIndex("by_telefono", (q) => q.eq("telefonoE164", tel))
+        .collect();
+      user = candidatos.find((u) => u.active) ?? null;
+    }
     if (!user || !user.active) return null;
 
     /* A quién apuntarle. Si la persona adoptó su @usuario de Meta, el BSUID es
