@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import { useUploadToS3 } from "@/hooks/use-upload-s3";
 import { formatBytes } from "@/lib/compress-image";
 import { cn } from "@/lib/utils";
+import { PlantillaDialog } from "./plantilla-dialog";
 import {
   AVISO_SIN_TELEFONO,
   AVISO_VENTANA_CERRADA,
@@ -76,6 +77,7 @@ function extensionAudio(mime: string) {
  */
 export function Composer({
   conversacionId,
+  nombreContacto,
   puedeResponder,
   ventanaAbierta,
   ventanaExpiraAt,
@@ -83,6 +85,8 @@ export function Composer({
   onQuitarCita,
 }: {
   conversacionId: Id<"waConversations">;
+  /** Para proponerlo como primer dato de la plantilla. */
+  nombreContacto: string;
   /** False cuando la conversación no tiene teléfono al que escribirle. */
   puedeResponder: boolean;
   ventanaAbierta: boolean;
@@ -104,6 +108,8 @@ export function Composer({
   const [error, setError] = useState<string | null>(null);
 
   // Grabación de voz
+  const [plantillaAbierta, setPlantillaAbierta] = useState(false);
+
   const [grabando, setGrabando] = useState(false);
   const [segundos, setSegundos] = useState(0);
   const recorderRef = useRef<MediaRecorder | null>(null);
@@ -303,7 +309,35 @@ export function Composer({
   // Sin teléfono no hay a dónde escribir: manda sobre el aviso de las 24 h.
   if (!puedeResponder) return <AvisoBloqueo texto={AVISO_SIN_TELEFONO} />;
 
-  if (!ventanaAbierta) return <AvisoBloqueo texto={AVISO_VENTANA_CERRADA} />;
+  /* Pasadas las 24 h no se puede conversar, pero una plantilla SÍ entra. Es
+   * justo cuando más falta hace, así que aquí el botón no se esconde: es la
+   * única salida que queda. */
+  if (!ventanaAbierta) {
+    return (
+      <>
+        <AvisoBloqueo
+          texto={AVISO_VENTANA_CERRADA}
+          accion={
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setPlantillaAbierta(true)}
+              className="shrink-0 bg-card"
+            >
+              <FileText className="h-3.5 w-3.5" aria-hidden />
+              Enviar plantilla
+            </Button>
+          }
+        />
+        <PlantillaDialog
+          conversacionId={conversacionId}
+          nombreContacto={nombreContacto}
+          abierto={plantillaAbierta}
+          onAbierto={setPlantillaAbierta}
+        />
+      </>
+    );
+  }
 
   const restante = restanteVentana(ventanaExpiraAt);
   const ocupado = enviando || subiendo != null;
@@ -383,6 +417,18 @@ export function Composer({
           <Paperclip className="h-4.5 w-4.5" aria-hidden />
         </Button>
 
+        <Button
+          size="icon"
+          variant="ghost"
+          aria-label="Enviar una plantilla"
+          title="Enviar una plantilla"
+          disabled={ocupado}
+          onClick={() => setPlantillaAbierta(true)}
+          className={BOTON_COMPOSER}
+        >
+          <FileText className="h-4.5 w-4.5" aria-hidden />
+        </Button>
+
         <textarea
           ref={taRef}
           rows={1}
@@ -451,22 +497,37 @@ export function Composer({
           <span className="min-w-0 flex-1">{error}</span>
         </p>
       )}
+
+      <PlantillaDialog
+        conversacionId={conversacionId}
+        nombreContacto={nombreContacto}
+        abierto={plantillaAbierta}
+        onAbierto={setPlantillaAbierta}
+      />
     </div>
   );
 }
 
 /** Franja ámbar que reemplaza la caja cuando no se puede escribir. */
-function AvisoBloqueo({ texto }: { texto: string }) {
+function AvisoBloqueo({
+  texto,
+  accion,
+}: {
+  texto: string;
+  /** Salida que sí queda disponible, si la hay (mandar una plantilla). */
+  accion?: React.ReactNode;
+}) {
   return (
     <div className={BARRA_COMPOSER}>
-      <div className="flex gap-2.5 rounded-2xl border border-amber-500/30 bg-amber-500/10 px-3.5 py-3">
+      <div className="flex items-center gap-2.5 rounded-2xl border border-amber-500/30 bg-amber-500/10 px-3.5 py-3">
         <AlertTriangle
-          className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400"
+          className="h-4 w-4 shrink-0 self-start text-amber-600 dark:text-amber-400"
           aria-hidden
         />
-        <p className="text-xs leading-relaxed text-amber-700 dark:text-amber-400">
+        <p className="flex-1 text-xs leading-relaxed text-amber-700 dark:text-amber-400">
           {texto}
         </p>
+        {accion}
       </div>
     </div>
   );

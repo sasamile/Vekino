@@ -56,14 +56,9 @@ export function PlatformSidebar({
 }) {
   const pathname = usePathname();
   const pendientesSoporte = useQuery(api.soporte.countPendientes);
-  // Badge de la bandeja: suma de los no leídos de WhatsApp.
-  const chatsSinLeer = useQuery(api.whatsappInbox.conversaciones, {
-    soloNoLeidos: true,
-  });
-  const noLeidosInbox = (chatsSinLeer ?? []).reduce(
-    (total, c) => total + c.noLeidos,
-    0,
-  );
+  /** Chats con no leídos o escalados (necesitan ayuda humana). */
+  const inboxAtencion = useQuery(api.whatsappInbox.countAtencion);
+  const badgeInbox = inboxAtencion?.atencion ?? 0;
 
   return (
     <div className="relative flex h-full min-h-0 flex-col bg-card">
@@ -101,8 +96,8 @@ export function PlatformSidebar({
             const badge =
               item.segment === "soporte" && (pendientesSoporte ?? 0) > 0
                 ? (pendientesSoporte ?? null)
-                : esInbox && noLeidosInbox > 0
-                  ? noLeidosInbox
+                : esInbox && badgeInbox > 0
+                  ? badgeInbox
                   : null;
             return (
               <Link
@@ -137,7 +132,7 @@ export function PlatformSidebar({
                     )}
                     aria-label={
                       esInbox
-                        ? `${badge} mensajes sin leer`
+                        ? `${badge} chats nuevos o que necesitan ayuda`
                         : `${badge} tickets pendientes`
                     }
                   >

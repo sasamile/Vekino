@@ -8,7 +8,7 @@ import {
   useQuery,
   useAction,
 } from "convex/react";
-import { Pencil, Trash2, Users, Loader2, Check } from "lucide-react";
+import { Download, Pencil, Trash2, Users, Loader2, Check } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
 import { PageContainer } from "@/components/layout/page-container";
@@ -31,6 +31,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn, mensajeErrorUsuario } from "@/lib/utils";
 import { UserAvatar } from "@/components/ui/user-avatar";
+import { descargarXlsx } from "@/lib/excel-simple";
 
 const ASSIGNABLE_ROLES = [
   "propietario",
@@ -102,6 +103,21 @@ function formatUnidad(u: {
     u.numero,
   ].filter(Boolean);
   return parts.join(" · ");
+}
+
+/** Orden estable para ubicarse: torre → bloque → número → nombre. */
+function claveUnidad(u: {
+  numero: string;
+  torre: string | null;
+  bloque: string | null;
+}) {
+  const num = Number.parseInt(u.numero.replace(/\D/g, ""), 10);
+  return [
+    (u.torre ?? "").toLowerCase(),
+    (u.bloque ?? "").toLowerCase(),
+    Number.isFinite(num) ? num.toString().padStart(6, "0") : u.numero,
+    u.numero.toLowerCase(),
+  ].join("|");
 }
 
 function RolePicker({
@@ -263,6 +279,7 @@ export default function ResidentesPage() {
   } | null>(null);
   const [removingBusy, setRemovingBusy] = useState(false);
   const [removeError, setRemoveError] = useState<string | null>(null);
+  const [exportando, setExportando] = useState(false);
 
   useNuevoQuery(() => setCreating(true));
 
@@ -275,6 +292,58 @@ export default function ResidentesPage() {
     },
     { initialNumItems: PAGE_SIZE },
   );
+
+  /** Carga completa solo al pedir el Excel. */
+  const paraExcel = useQuery(
+    api.memberships.listByCondominio,
+    exportando ? { condominioId } : "skip",
+  );
+
+  useEffect(() => {
+    if (!exportando || paraExcel === undefined) return;
+    let cancelado = false;
+    void (async () => {
+      try {
+        const ordenadas = [...paraExcel]
+          .filter((m) => !roleFilter || m.roles.includes(roleFilter))
+          .flatMap((m) => {
+            const nombre = (m.name ?? "").trim() || "Sin nombre";
+            const correo = (m.email ?? "").trim();
+            const telefono = (m.telefono ?? "").trim();
+            if (m.unidades.length === 0) {
+              return [
+                {
+                  sort: `|${nombre.toLowerCase()}`,
+                  row: ["", nombre, correo, telefono] as (string | number)[],
+                },
+              ];
+            }
+            return m.unidades.map((u) => ({
+              sort: `${claveUnidad(u)}|${nombre.toLowerCase()}`,
+              row: [formatUnidad(u), nombre, correo, telefono] as (
+                | string
+                | number
+              )[],
+            }));
+          })
+          .sort((a, b) => a.sort.localeCompare(b.sort, "es"))
+          .map((x) => x.row);
+
+        if (cancelado) return;
+        await descargarXlsx({
+          nombreArchivo: `residentes-${new Date().toISOString().slice(0, 10)}`,
+          hoja: "Residentes",
+          encabezados: ["Unidad", "Nombre", "Correo", "Teléfono"],
+          filas: ordenadas,
+        });
+      } finally {
+        if (!cancelado) setExportando(false);
+      }
+    })();
+    return () => {
+      cancelado = true;
+    };
+  }, [exportando, paraExcel, roleFilter]);
 
   const hasFilters = Boolean(deferredQ.trim() || roleFilter);
   const loading = status === "LoadingFirstPage";
@@ -325,6 +394,20 @@ export default function ResidentesPage() {
               placeholder="Nombre, correo, teléfono o casa"
               className="sm:w-72"
             />
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={exportando}
+              onClick={() => setExportando(true)}
+              title="Descargar Excel ordenado por unidad"
+            >
+              {exportando ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Download className="h-4 w-4" />
+              )}
+              Excel
+            </Button>
           </div>
         </div>
 

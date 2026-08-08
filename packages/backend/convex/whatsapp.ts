@@ -657,7 +657,7 @@ export const procesarEntrante = internalAction({
         await enviar(
           msgTexto(
             to,
-            "🔗 Para reconocerte, escríbeme tu *número de documento* (el mismo que tiene registrado la administración).",
+            "🔗 Para reconocerlo, por favor escríbame su *número de documento* (el mismo que tiene registrado la administración).",
           ),
         );
         return null;
@@ -690,7 +690,7 @@ export const procesarEntrante = internalAction({
             },
           });
           await enviar(
-            msgTexto(to, "El código no coincide 🤔. Revísalo en tu correo y escríbelo de nuevo."),
+            msgTexto(to, "El código no coincide 🤔. Revíselo en su correo y escríbalo de nuevo, por favor."),
           );
           return null;
         }
@@ -711,7 +711,7 @@ export const procesarEntrante = internalAction({
         const doc = (args.texto ?? "").replace(/\D/g, "");
         if (doc.length < 5) {
           await enviar(
-            msgTexto(to, "Escríbeme solo tu número de documento, sin puntos ni espacios."),
+            msgTexto(to, "Escríbame solo su número de documento, sin puntos ni espacios."),
           );
           return null;
         }
@@ -728,7 +728,7 @@ export const procesarEntrante = internalAction({
         await enviar(
           msgTexto(
             to,
-            `Perfecto, ${res.nombre?.split(" ")[0] ?? ""} 👍\n\nTe envié un código de 6 dígitos a *${res.emailOculto}*.\n\nEscríbelo aquí para confirmar que eres tú.`,
+            `Perfecto, ${res.nombre?.split(" ")[0] ?? ""} 👍\n\nTe envié un código de 6 dígitos a *${res.emailOculto}*.\n\nEscríbalo aquí para confirmar que es usted.`,
           ),
         );
         return null;
@@ -739,7 +739,7 @@ export const procesarEntrante = internalAction({
         await enviar(
           msgBotones(
             to,
-            "👋 Hola. Este es el canal de *Vekino*.\n\nComo tienes activado tu usuario de WhatsApp, no puedo ver tu número para reconocerte. Puedo vincular tu cuenta en un minuto: verifico tu documento y te envío un código a tu correo.",
+            "👋 Hola. Este es el canal de *Vekino*.\n\nComo tiene activado su usuario de WhatsApp, no puedo ver su número para reconocerlo. Puedo vincular su cuenta en un minuto: verifico su documento y le envío un código a su correo.",
             [
               { id: "vincular:iniciar", title: "🔗 Vincular mi cuenta" },
             ],
@@ -752,7 +752,7 @@ export const procesarEntrante = internalAction({
       await enviar(
         msgTexto(
           to,
-          "👋 Hola. Este es el canal de *Vekino*.\n\nNo encontramos tu número en la plataforma. Pídele a la administración de tu conjunto que registre o actualice tu teléfono, y con gusto te atiendo por aquí.\n\nSi prefieres, escribe *vincular* y lo hacemos con tu documento.",
+          "👋 Hola. Este es el canal de *Vekino*.\n\nNo encontramos su número en la plataforma. Por favor pídale a la administración de su conjunto que registre o actualice su teléfono, y con mucho gusto lo atiendo por aquí.\n\nSi prefiere, escriba *vincular* y lo hacemos con su documento.",
         ),
       );
       return null;
@@ -763,7 +763,7 @@ export const procesarEntrante = internalAction({
       await enviar(
         msgTexto(
           to,
-          "Tu cuenta no tiene un conjunto activo asociado. Comunícate con tu administración.",
+          "Su cuenta no tiene un conjunto activo asociado. Por favor comuníquese con su administración.",
         ),
       );
       return null;
@@ -779,7 +779,7 @@ export const procesarEntrante = internalAction({
       await enviar(
         msgTexto(
           to,
-          "Este canal de WhatsApp aún no está habilitado para tu conjunto. 🙏\n\nPor ahora usa la app de Vekino o escríbele directamente a tu administración.",
+          "Este canal de WhatsApp aún no está habilitado para su conjunto. 🙏\n\nPor ahora puede usar la app de Vekino o escribirle directamente a su administración.",
         ),
       );
       return null;
@@ -824,7 +824,7 @@ export const procesarEntrante = internalAction({
       await enviar(
         msgLista(
           to,
-          `Hola ${nombre} 👋 ¿Sobre cuál conjunto quieres hablar?`,
+          `Hola ${nombre} 👋 ¿Sobre cuál conjunto desea hablar?`,
           "Elegir conjunto",
           habilitadas.map((m) => ({
             id: `condo:${m.membership._id}`,
@@ -851,7 +851,7 @@ export const procesarEntrante = internalAction({
           [
             { id: "menu:factura", title: "💰 Estado de cuenta", description: "Tu factura de administración" },
             { id: "menu:reserva", title: "🏝 Reservar zona común", description: "Salón social, BBQ y más" },
-            { id: "menu:comprobante", title: "🧾 Enviar comprobante", description: "Reporta tu pago con una foto" },
+            { id: "menu:comprobante", title: "🧾 Enviar comprobante", description: "Reporte su pago con una foto" },
             { id: "menu:problema", title: "🛠 Reportar un problema", description: "Queja, petición o daño" },
             { id: "menu:acceso", title: "🔑 Datos de acceso", description: "Tu usuario y clave de la app" },
             { id: "menu:consulta", title: "💬 Otra consulta", description: "Pregúntame lo que necesites" },
@@ -956,7 +956,7 @@ export const procesarEntrante = internalAction({
         await enviar(
           msgTexto(
             to,
-            "No encontré unidades vinculadas a tu cuenta en este conjunto. Escríbele a tu administración para que lo corrija.",
+            "No encontré unidades vinculadas a su cuenta en este conjunto. Por favor escríbale a su administración para que lo corrija.",
           ),
         );
         return null;
@@ -1042,7 +1042,7 @@ export const procesarEntrante = internalAction({
         await enviar(
           msgTexto(
             to,
-            "😕 No pude guardar el comprobante. Inténtalo de nuevo en unos minutos o envíalo a tu administración.",
+            "😕 No pude guardar el comprobante. Inténtelo de nuevo en unos minutos o envíelo a su administración.",
           ),
         );
       }
@@ -1111,7 +1111,7 @@ export const procesarEntrante = internalAction({
           );
         }
         await enviar(
-          msgBotones(to, "¿Qué quieres hacer?", [
+          msgBotones(to, "¿Qué desea hacer?", [
             { id: `pagar:${factura._id}`, title: "💳 Pagar en línea" },
             { id: "menu:comprobante", title: "🧾 Ya pagué" },
             { id: "menu:inicio", title: "Volver al menú" },
@@ -1152,7 +1152,7 @@ export const procesarEntrante = internalAction({
         await enviar(
           msgTexto(
             to,
-            "🧾 Envíame la *foto o PDF* del comprobante de tu pago y lo dejo registrado para revisión de la administración.",
+            "🧾 Envíeme la *foto o PDF* del comprobante de su pago y lo dejo registrado para revisión de la administración.",
           ),
         );
         await setConv({ paso: "esperando_comprobante", contexto });
@@ -1173,7 +1173,7 @@ export const procesarEntrante = internalAction({
         await enviar(
           msgLista(
             to,
-            "🏝 ¿Qué zona quieres reservar?",
+            "🏝 ¿Qué zona desea reservar?",
             "Ver zonas",
             zonas.map((z) => ({
               id: `zona:${z._id}`,
@@ -1292,7 +1292,7 @@ export const procesarEntrante = internalAction({
         await enviar(
           msgTexto(
             to,
-            "🛠 Cuéntame qué pasa: escribe tu petición, queja o el problema que quieres reportar.",
+            "🛠 Cuénteme qué pasa: escriba su petición, queja o el problema que desea reportar.",
           ),
         );
         await setConv({ paso: "problema:descripcion", contexto });
@@ -1343,7 +1343,7 @@ export const procesarEntrante = internalAction({
           }
         } catch {
           await enviar(
-            msgTexto(to, "😕 No pude registrar tu reporte. Inténtalo de nuevo más tarde."),
+            msgTexto(to, "😕 No pude registrar su reporte. Inténtelo de nuevo más tarde."),
           );
         }
         await setConv({ paso: "menu", contexto: {} });
@@ -1384,7 +1384,7 @@ export const procesarEntrante = internalAction({
           await enviar(
             msgTexto(
               to,
-              `Ya has entrado antes, así que tu contraseña actual sigue sirviendo y no te la cambio 🙂\n\nEntra con *${res.email}* en https://www.vekino.com/login\n\n¿No la recuerdas? Usa *¿La olvidaste?* en esa pantalla, o dime *quiero una clave nueva* y te la genero.`,
+              `Usted ya ha entrado antes, así que su contraseña actual sigue sirviendo y no se la cambio 🙂\n\nEntre con *${res.email}* en https://www.vekino.com/login\n\n¿No la recuerda? Use *¿La olvidaste?* en esa pantalla, o dígame *quiero una clave nueva* y se la genero.`,
             ),
           );
           return;
@@ -1394,7 +1394,7 @@ export const procesarEntrante = internalAction({
           await enviar(
             msgTexto(
               to,
-              `😕 No pude generar tu clave${res.motivo ? `: ${res.motivo}` : ""}.\n\nEscríbele a tu administración para que revise tus datos.`,
+              `😕 No pude generar su clave${res.motivo ? `: ${res.motivo}` : ""}.\n\nPor favor escríbale a su administración para que revise sus datos.`,
             ),
           );
           return;
@@ -1403,7 +1403,7 @@ export const procesarEntrante = internalAction({
         await enviar(
           msgTexto(
             to,
-            `🔑 *Tus datos de acceso a Vekino*\n\n👉 Entra con un toque, sin copiar nada:\n${res.enlace}\n\n_Ese enlace sirve una sola vez y vence en 24 horas._\n\nO si prefieres escribirlos:\nUsuario: ${res.email}\nContraseña: ${res.password}\n\nEs una clave temporal y personal: cámbiala apenas entres y no la compartas con nadie. 🙌\n\n_Si ya habías logrado entrar por tu cuenta, ignora este mensaje: tu contraseña anterior sigue funcionando._`,
+            `🔑 *Sus datos de acceso a Vekino*\n\n👉 Entre con un toque, sin copiar nada:\n${res.enlace}\n\n_Ese enlace sirve una sola vez y vence en 24 horas._\n\nO si prefiere escribirlos:\nUsuario: ${res.email}\nContraseña: ${res.password}\n\nEs una clave temporal y personal: cámbiela apenas entre y no la comparta con nadie. 🙌\n\n_Si usted ya había logrado entrar por su cuenta, haga caso omiso de este mensaje: su contraseña anterior sigue funcionando._`,
           ),
         );
         await setConv({ paso: "menu", contexto });
@@ -1411,7 +1411,7 @@ export const procesarEntrante = internalAction({
       }
 
       if (id === "menu:consulta") {
-        await enviar(msgTexto(to, "💬 Claro, escríbeme tu pregunta."));
+        await enviar(msgTexto(to, "💬 Claro que sí, escríbame su pregunta."));
         await setConv({ paso: "consulta", contexto });
         return;
       }
@@ -1483,7 +1483,7 @@ export const procesarEntrante = internalAction({
         contexto: { ...contexto, problema: texto.trim().slice(0, 2000) },
       });
       await enviar(
-        msgBotones(to, "¿Con quién va tu reporte?", [
+        msgBotones(to, "¿Con quién va su reporte?", [
           { id: "problema:condominio", title: "🏢 Mi conjunto" },
           { id: "problema:app", title: "📱 La app Vekino" },
         ]),

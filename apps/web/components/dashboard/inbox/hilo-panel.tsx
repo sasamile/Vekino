@@ -155,6 +155,7 @@ export function HiloPanel({
 
       <Composer
         conversacionId={conversacionId}
+        nombreContacto={c.nombre ?? ""}
         puedeResponder={c.puedeResponder}
         ventanaAbierta={c.ventanaAbierta}
         ventanaExpiraAt={c.ventanaExpiraAt}
@@ -261,7 +262,7 @@ function CabeceraHilo({
 
         <UserAvatar
           name={c.nombre}
-          className="hidden h-10 w-10 shrink-0 bg-muted text-xs text-muted-foreground sm:flex"
+          className="hidden h-10 w-10 shrink-0 text-xs sm:flex"
         />
 
         <div className="min-w-0 flex-1">

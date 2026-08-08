@@ -172,10 +172,7 @@ function FilaConversacion({
         />
       )}
 
-      <UserAvatar
-        name={c.nombre}
-        className="h-11 w-11 bg-muted text-xs text-muted-foreground"
-      />
+      <UserAvatar name={c.nombre} className="h-11 w-11 text-xs" />
 
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-2">

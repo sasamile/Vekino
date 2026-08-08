@@ -14,6 +14,7 @@ import {
 import { LayoutDashboard, LogOut } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import { authClient } from "@/lib/auth-client";
+import { cn } from "@/lib/utils";
 import { homeHrefForRoles } from "@/lib/role-routing";
 import {
   PlatformSidebar,
@@ -114,6 +115,8 @@ function Shell({ children }: { children: React.ReactNode }) {
     return <UserMultiCondoShell me={me}>{children}</UserMultiCondoShell>;
   }
 
+  const esInbox = pathname.startsWith("/dashboard/inbox");
+
   return (
     <div
       className="font-admin flex h-dvh flex-col overflow-hidden bg-background lg:p-3.5"
@@ -146,8 +149,15 @@ function Shell({ children }: { children: React.ReactNode }) {
             platformRole={me.platformRole}
           />
           <AdminTopbarProvider>
-            <AdminTopbar base="/dashboard" variant="platform" />
-            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+            {/* La bandeja ya trae su propio buscador y cabecera de chat: el
+             * topbar solo le robaba alto a la conversación. */}
+            {!esInbox && <AdminTopbar base="/dashboard" variant="platform" />}
+            <div
+              className={cn(
+                "min-h-0 flex-1 overscroll-contain",
+                esInbox ? "overflow-hidden" : "overflow-y-auto",
+              )}
+            >
               <Suspense fallback={null}>{children}</Suspense>
             </div>
           </AdminTopbarProvider>

@@ -3,7 +3,30 @@
 import { useState } from "react";
 import { cn, initials } from "@/lib/utils";
 
-/** Avatar circular: foto si hay `image`, si no iniciales. */
+/** Gradientes suaves y distintos; el índice sale del nombre para que sea estable. */
+const GRADIENTES = [
+  "from-emerald-400 to-teal-500",
+  "from-sky-400 to-blue-500",
+  "from-rose-400 to-orange-400",
+  "from-amber-400 to-orange-500",
+  "from-cyan-400 to-emerald-500",
+  "from-fuchsia-400 to-rose-500",
+  "from-lime-400 to-emerald-500",
+  "from-indigo-400 to-sky-500",
+  "from-orange-400 to-amber-300",
+  "from-teal-400 to-cyan-500",
+] as const;
+
+function gradienteDeNombre(name: string) {
+  const key = name.trim().toLowerCase() || "?";
+  let h = 0;
+  for (let i = 0; i < key.length; i++) {
+    h = (h * 31 + key.charCodeAt(i)) >>> 0;
+  }
+  return GRADIENTES[h % GRADIENTES.length]!;
+}
+
+/** Avatar circular: foto si hay `image`, si no iniciales sobre gradiente. */
 export function UserAvatar({
   name,
   image,
@@ -32,9 +55,11 @@ export function UserAvatar({
     <div
       className={cn(
         dim,
-        "flex shrink-0 items-center justify-center rounded-full bg-muted font-medium text-muted-foreground",
+        "flex shrink-0 items-center justify-center rounded-full bg-gradient-to-br font-semibold text-white shadow-sm",
+        gradienteDeNombre(name),
         className,
       )}
+      aria-hidden
     >
       {initials(name)}
     </div>

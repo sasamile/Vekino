@@ -36,6 +36,29 @@ const VENTANA_24H = 24 * 60 * 60 * 1000;
 // Lecturas
 // ─────────────────────────────────────────────────────────────
 
+/**
+ * Contador del menú Bandeja: chats con mensajes nuevos o escalados
+ * (el bot pidió ayuda humana).
+ */
+export const countAtencion = query({
+  args: {},
+  handler: async (ctx) => {
+    await requirePlatformStaff(ctx);
+    const filas = await ctx.db.query("waConversations").take(500);
+    let noLeidos = 0;
+    let escaladas = 0;
+    let atencion = 0;
+    for (const c of filas) {
+      const sinLeer = (c.noLeidos ?? 0) > 0;
+      const escalada = !!c.escaladaAt;
+      if (sinLeer) noLeidos += c.noLeidos ?? 0;
+      if (escalada) escaladas++;
+      if (sinLeer || escalada) atencion++;
+    }
+    return { noLeidos, escaladas, atencion };
+  },
+});
+
 export const conversaciones = query({
   args: {
     soloNoLeidos: v.optional(v.boolean()),
