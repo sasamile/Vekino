@@ -12,6 +12,9 @@ import type { Id } from "./_generated/dataModel";
 import { requirePlatformStaff } from "./model/authz";
 import { createAuth } from "./auth";
 import { sendBrevoEmail } from "./lib/brevo";
+import { normalizarTelefonoE164 } from "./lib/telefono";
+import { textoAccesoWhatsApp } from "./lib/mensajesAcceso";
+import { enviarMensaje, msgTexto } from "./lib/ycloud";
 import {
   asuntoCredenciales,
   generarPasswordTemporal,
@@ -1146,3 +1149,119 @@ function esEmailReal(email: string): boolean {
   if (e.includes("sincorreo") || e.includes("noemail")) return false;
   return true;
 }
+
+/**
+ * Manda por WhatsApp los datos de acceso a UNA persona, buscándola por su
+ * teléfono.
+ *
+ * Existe porque el caso más común de soporte es "no puedo entrar" escrito por
+ * WhatsApp, y hasta ahora la única salida manual era el correo — que es justo
+ * el canal que esa persona no está mirando.
+ *
+ * Va como texto libre, no como plantilla: Meta rechaza toda plantilla que
+ * mencione contraseñas, pero dentro de las 24 h posteriores al último mensaje
+ * de la persona sí se puede escribir libremente. Si esa ventana está cerrada,
+ * WhatsApp lo rechaza y aquí se devuelve el motivo en vez de fingir que salió.
+ */
+export const enviarAccesoPorWhatsapp = internalAction({
+  args: {
+    telefono: v.string(),
+    /** true rota la contraseña aunque la persona ya tuviera una propia. */
+    forzar: v.optional(v.boolean()),
+  },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<
+    | { ok: false; motivo: string }
+    | { ok: true; nombre: string; email: string; telefono: string }
+  > => {
+    const telefono = normalizarTelefonoE164(args.telefono);
+    if (!telefono) return { ok: false as const, motivo: "Teléfono no válido." };
+
+    const destino: {
+      userId: Id<"users">;
+      nombre: string;
+      conversacionId: Id<"waConversations"> | null;
+    } | null = await ctx.runQuery(internal.credenciales.porTelefono, { telefono });
+    if (!destino) {
+      return { ok: false as const, motivo: "Ese teléfono no está en la plataforma." };
+    }
+
+    const r = await ctx.runAction(internal.credenciales.generarClaveParaEntrega, {
+      userId: destino.userId,
+      forzar: args.forzar === true,
+    });
+    if (!r.ok) {
+      return {
+        ok: false as const,
+        motivo: r.yaTieneClavePropia
+          ? "Ya tiene contraseña propia; usa forzar si de verdad quieres cambiársela."
+          : (r.motivo ?? "No se pudo generar la clave."),
+      };
+    }
+    if (!r.email || !r.password || !r.enlace) {
+      return { ok: false as const, motivo: "Faltaron datos para armar el mensaje." };
+    }
+
+    const texto = textoAccesoWhatsApp({
+      email: r.email,
+      password: r.password,
+      enlace: r.enlace,
+    });
+
+    try {
+      const res = await enviarMensaje(msgTexto(telefono, texto));
+      // Queda en la bandeja: si no, el equipo no sabe qué se le mandó.
+      if (destino.conversacionId) {
+        await ctx.runMutation(internal.whatsappInbox.registrarSalienteDeAgente, {
+          conversacionId: destino.conversacionId,
+          tipo: "text",
+          contenido: texto,
+          ycloudMessageId: res.id,
+          agenteNombre: "Soporte",
+        });
+      }
+      return {
+        ok: true as const,
+        nombre: destino.nombre,
+        email: r.email,
+        telefono,
+      };
+    } catch (e) {
+      const motivo = e instanceof Error ? e.message : String(e);
+      if (destino.conversacionId) {
+        await ctx.runMutation(internal.whatsappInbox.registrarSalienteDeAgente, {
+          conversacionId: destino.conversacionId,
+          tipo: "text",
+          contenido: texto,
+          error: motivo,
+          agenteNombre: "Soporte",
+        });
+      }
+      return { ok: false as const, motivo };
+    }
+  },
+});
+
+export const porTelefono = internalQuery({
+  args: { telefono: v.string() },
+  handler: async (ctx, args) => {
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_telefono", (q) => q.eq("telefonoE164", args.telefono))
+      .first();
+    if (!user || !user.active) return null;
+
+    const conv = await ctx.db
+      .query("waConversations")
+      .withIndex("by_telefono", (q) => q.eq("telefono", args.telefono))
+      .first();
+
+    return {
+      userId: user._id,
+      nombre: user.name,
+      conversacionId: conv?._id ?? null,
+    };
+  },
+});

@@ -1410,3 +1410,39 @@ export const ejecutar = internalAction({
     return null;
   },
 });
+
+/**
+ * Cancelar sin sesión, desde el despliegue. Mismo motivo que
+ * `programarComoStaff`: hubo que frenar en seco una tanda de envíos y la
+ * mutation pública exige sesión de superadmin.
+ *
+ * Deja el envío fuera de "programado", que es lo que de verdad lo detiene:
+ * tanto `datosEnvio` como `arrancarCredenciales` se niegan a trabajar sobre
+ * un envío que ya no está en ese estado, así que aunque el scheduler llegue
+ * a dispararlo no manda nada.
+ */
+export const cancelarTodoPendiente = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    /* Escaneo completo a proposito: el indice by_estado devolvio vacio en el
+     * momento en que hubo que frenar de verdad, y con envios reales en vuelo
+     * no es sitio para depurar un indice. La tabla es pequena. */
+    const todos = await ctx.db.query("enviosProgramados").collect();
+    const vivos = todos.filter(
+      (e) => e.estado === "programado" || e.estado === "enviando",
+    );
+
+    const cancelados: string[] = [];
+    for (const e of vivos) {
+      if (e.scheduledFunctionId) {
+        await ctx.scheduler.cancel(e.scheduledFunctionId);
+      }
+      await ctx.db.patch(e._id, {
+        estado: "cancelado",
+        updatedAt: Date.now(),
+      });
+      cancelados.push(`${e.tipo} @ ${new Date(e.programadoPara).toISOString()}`);
+    }
+    return { cancelados };
+  },
+});
