@@ -1169,6 +1169,14 @@ export const enviarAccesoPorWhatsapp = internalAction({
      *  no comparte número: ahí no hay teléfono al que apuntar. */
     telefono: v.optional(v.string()),
     conversacionId: v.optional(v.id("waConversations")),
+    /**
+     * De QUIÉN son las credenciales. Sin esto se usan las de quien tenga
+     * vinculada la conversación, que con los @usuario de Meta muchas veces no
+     * es nadie: no comparten teléfono, así que no hay a quién reconocer. El
+     * equipo sí sabe de quién se trata —lo dice el propio mensaje— y aquí lo
+     * indica a mano.
+     */
+    userId: v.optional(v.id("users")),
     /** true rota la contraseña aunque la persona ya tuviera una propia. */
     forzar: v.optional(v.boolean()),
   },
@@ -1190,7 +1198,7 @@ export const enviarAccesoPorWhatsapp = internalAction({
     }
 
     const destino: {
-      userId: Id<"users">;
+      userId: Id<"users"> | null;
       nombre: string;
       conversacionId: Id<"waConversations"> | null;
       /** A dónde escribirle: teléfono E.164 o BSUID de Meta. */
@@ -1199,11 +1207,22 @@ export const enviarAccesoPorWhatsapp = internalAction({
     } | null = await ctx.runQuery(internal.credenciales.destinoDeAcceso, {
       telefono: telefono ?? undefined,
       conversacionId: args.conversacionId,
+      /* Con `userId` explícito basta con saber A DÓNDE escribir; no hace falta
+       * que la conversación esté vinculada a nadie. */
+      exigeUsuario: !args.userId,
     });
     if (!destino) {
       return {
         ok: false as const,
-        motivo: "No encontré a esa persona, o su cuenta no está activa.",
+        motivo: "No encontré a dónde escribirle, o la cuenta no está activa.",
+      };
+    }
+
+    const userCredenciales = args.userId ?? destino.userId;
+    if (!userCredenciales) {
+      return {
+        ok: false as const,
+        motivo: "Elige de quién son las credenciales: esta conversación no está vinculada a nadie.",
       };
     }
 
@@ -1222,7 +1241,7 @@ export const enviarAccesoPorWhatsapp = internalAction({
     }
 
     const r = await ctx.runAction(internal.credenciales.generarClaveParaEntrega, {
-      userId: destino.userId,
+      userId: userCredenciales,
       forzar: args.forzar === true,
     });
     if (!r.ok) {
@@ -1284,6 +1303,8 @@ export const destinoDeAcceso = internalQuery({
   args: {
     telefono: v.optional(v.string()),
     conversacionId: v.optional(v.id("waConversations")),
+    /** false = basta con saber a dónde escribir, sin usuario vinculado. */
+    exigeUsuario: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const conv = args.conversacionId
@@ -1307,7 +1328,7 @@ export const destinoDeAcceso = internalQuery({
         .collect();
       user = candidatos.find((u) => u.active) ?? null;
     }
-    if (!user || !user.active) return null;
+    if ((!user || !user.active) && args.exigeUsuario !== false) return null;
 
     /* A quién apuntarle. Si la persona adoptó su @usuario de Meta, el BSUID es
      * su identidad canónica y el teléfono puede haber dejado de entregar; al
@@ -1318,8 +1339,10 @@ export const destinoDeAcceso = internalQuery({
     if (!para) return null;
 
     return {
-      userId: user._id,
-      nombre: user.name,
+      /* Puede ir sin usuario: con `exigeUsuario:false` basta con saber a
+       * dónde escribir, y de quién son las credenciales lo dice quien envía. */
+      userId: user?.active ? user._id : null,
+      nombre: user?.name ?? conv?.nombrePerfil ?? "esta persona",
       conversacionId: conv?._id ?? null,
       para,
       /* Sin conversación no hay ventana que valga: nunca nos ha escrito. */

@@ -22,6 +22,7 @@ import { UserAvatar } from "@/components/ui/user-avatar";
 import { cn } from "@/lib/utils";
 import { BurbujaMensaje } from "./burbuja-mensaje";
 import { VincularDialog } from "./vincular-dialog";
+import { AccesosDialog } from "./accesos-dialog";
 import { Composer } from "./composer";
 import {
   ETIQUETA_SIN_RESPUESTA,
@@ -215,42 +216,13 @@ function CabeceraHilo({
   onVolver: () => void;
 }) {
   const pausarAgente = useMutation(api.whatsappInbox.pausarAgente);
-  const enviarAccesos = useAction(api.whatsappInbox.enviarAccesos);
-  const [enviandoAccesos, setEnviandoAccesos] = useState(false);
+  const [accesosAbierto, setAccesosAbierto] = useState(false);
   const [vincularAbierto, setVincularAbierto] = useState(false);
   const [avisoAccesos, setAvisoAccesos] = useState<
     { ok: boolean; texto: string } | null
   >(null);
 
-  /* El caso de soporte más repetido: "no puedo entrar". Genera la clave y le
-   * manda el mensaje con su enlace de un solo uso, sin salir del hilo. */
-  async function onEnviarAccesos() {
-    if (enviandoAccesos) return;
-    if (
-      !window.confirm(
-        `Se le va a generar una contraseña NUEVA a ${c?.nombre ?? "esta persona"} y se le manda por aquí.\n\nSi ya tenía una propia, dejará de servirle.`,
-      )
-    ) {
-      return;
-    }
-    setEnviandoAccesos(true);
-    setAvisoAccesos(null);
-    try {
-      const r = await enviarAccesos({ conversacionId });
-      setAvisoAccesos(
-        r.ok
-          ? { ok: true, texto: "Accesos enviados." }
-          : { ok: false, texto: r.motivo ?? "No se pudo enviar." },
-      );
-    } catch (e) {
-      setAvisoAccesos({
-        ok: false,
-        texto: e instanceof Error ? e.message : "No se pudo enviar.",
-      });
-    } finally {
-      setEnviandoAccesos(false);
-    }
-  }
+
   const resolverEscalacion = useMutation(api.whatsappInbox.resolverEscalacion);
   const [busy, setBusy] = useState(false);
   const [resolviendo, setResolviendo] = useState(false);
@@ -343,27 +315,31 @@ function CabeceraHilo({
               Sin identificar
             </button>
           )}
+          {/* Ya no exige que la conversación esté identificada: con los
+              @usuario de Meta casi nunca lo está, y quien atiende sí sabe de
+              quién se trata. Se elige adentro. */}
           <Button
             size="sm"
             variant="outline"
-            disabled={enviandoAccesos || !c.puedeResponder || !c.identificado}
-            onClick={() => void onEnviarAccesos()}
+            disabled={!c.puedeResponder}
+            onClick={() => setAccesosAbierto(true)}
             title={
-              !c.identificado
-                ? "Sin identificar: no se le pueden mandar credenciales"
-                : !c.puedeResponder
-                  ? "No hay a dónde escribirle"
-                  : "Generar y enviarle sus datos de acceso"
+              c.puedeResponder
+                ? "Mandar los datos de acceso de un residente a este chat"
+                : "No hay a dónde escribirle"
             }
             className="shrink-0"
           >
-            {enviandoAccesos ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
-            ) : (
-              <KeyRound className="h-3.5 w-3.5" aria-hidden />
-            )}
+            <KeyRound className="h-3.5 w-3.5" aria-hidden />
             <span className="hidden sm:inline">Enviar accesos</span>
           </Button>
+          <AccesosDialog
+            conversacionId={conversacionId}
+            nombreConversacion={c.nombre ?? "esta persona"}
+            identificado={c.identificado}
+            abierto={accesosAbierto}
+            onAbierto={setAccesosAbierto}
+          />
           <VincularDialog
             conversacionId={conversacionId}
             nombrePerfil={c.nombre ?? ""}

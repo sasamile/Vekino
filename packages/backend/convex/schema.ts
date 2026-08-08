@@ -102,6 +102,14 @@ export default defineSchema({
      */
     claveTemporal: v.optional(v.boolean()),
     /**
+     * Identidad de WhatsApp de Meta, cuando la persona activó su @usuario y
+     * dejó de compartir su número. Es lo único con lo que se le puede
+     * reconocer: sin esto, cada vez que escribe hay que volver a preguntarle
+     * quién es. Se guarda al vincularla a mano una primera vez.
+     */
+    waBsuid: v.optional(v.string()),
+    waUsername: v.optional(v.string()),
+    /**
      * Cuándo entró de verdad por última vez. `authId` NO sirve para esto: se
      * estampa al CREAR al residente (users.createCondoMember), así que hay
      * gente marcada como si tuviera cuenta activa sin haber abierto nunca la
@@ -127,7 +135,8 @@ export default defineSchema({
     .index("by_numeroDocumento", ["numeroDocumento"])
     .index("by_platformRole", ["platformRole"])
     .index("by_legacyId", ["legacyId"])
-    .index("by_telefono", ["telefonoE164"]),
+    .index("by_telefono", ["telefonoE164"])
+    .index("by_wa_bsuid", ["waBsuid"]),
 
   // ─────────────────────────────────────────────────────────────
   // Membresías (usuario ↔ condominio) — Capa 2 de roles

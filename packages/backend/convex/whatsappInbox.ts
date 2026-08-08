@@ -620,6 +620,8 @@ export const resolverEscalacion = mutation({
 export const enviarAccesos = action({
   args: {
     conversacionId: v.id("waConversations"),
+    /** De quién son las credenciales; por defecto, quien tenga vinculada. */
+    userId: v.optional(v.id("users")),
     /** true rota la clave aunque la persona ya tuviera una propia. */
     forzar: v.optional(v.boolean()),
   },
@@ -629,7 +631,11 @@ export const enviarAccesos = action({
 
     const r: { ok: boolean; motivo?: string } = await ctx.runAction(
       internal.credenciales.enviarAccesoPorWhatsapp,
-      { conversacionId: args.conversacionId, forzar: args.forzar !== false },
+      {
+        conversacionId: args.conversacionId,
+        userId: args.userId,
+        forzar: args.forzar !== false,
+      },
     );
     return r.ok ? { ok: true } : { ok: false, motivo: r.motivo };
   },
@@ -793,6 +799,19 @@ export const vincularAResidente = mutation({
       ultimoAgenteNombre: staff.name,
       updatedAt: Date.now(),
     });
+
+    /* Se guarda su @usuario en la ficha para no tener que volver a
+     * preguntarle quién es. Es la única identidad que Meta entrega de quien
+     * dejó de compartir su número, así que sin esto cada mensaje suyo
+     * empezaría de cero. */
+    if (conv.bsuid && conv.bsuid !== user.waBsuid) {
+      await ctx.db.patch(args.userId, {
+        waBsuid: conv.bsuid,
+        waUsername: conv.username ?? user.waUsername,
+        updatedAt: Date.now(),
+      });
+    }
+
     return { ok: true as const, nombre: user.name };
   },
 });

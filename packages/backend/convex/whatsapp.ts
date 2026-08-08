@@ -172,6 +172,23 @@ export const registrarEntrante = internalMutation({
     // (parejas comparten número): tomamos el primer usuario ACTIVO.
     // Sin teléfono no hay nada que revalidar: la identidad la sostiene el
     // BSUID y el vínculo que se haya confirmado antes (flujo de vinculación).
+    /* Si a esta persona ya la identificamos a mano alguna vez, su @usuario
+     * quedó guardado en su ficha: se reconoce sola y no hay que volver a
+     * preguntarle quién es. */
+    if (conversacion && !conversacion.userId && args.bsuid) {
+      const porBsuid = await ctx.db
+        .query("users")
+        .withIndex("by_wa_bsuid", (q) => q.eq("waBsuid", args.bsuid))
+        .first();
+      if (porBsuid?.active) {
+        await ctx.db.patch(conversacionId, {
+          userId: porBsuid._id,
+          updatedAt: now,
+        });
+        conversacion = await ctx.db.get(conversacionId);
+      }
+    }
+
     if (conversacion && args.telefono) {
       const telefono = args.telefono;
       const vigente = conversacion.userId

@@ -12,6 +12,7 @@ import {
   Lock, LayoutDashboard, Table2, TrendingUp, UserPlus,
   UserSquare, QrCode, Mail, Search, Download, Wifi, KeyRound, ClipboardList, X,
   FileText, FileArchive, MonitorPlay, Radio, Camera, FileUp, NotebookPen, Sparkles,
+  Copy,
 } from "lucide-react";
 import { BitacoraTab } from "@/components/asamblea/bitacora-tab";
 import { MostrarCodigoAsistencia } from "@/components/asamblea/mostrar-codigo-asistencia";
@@ -867,6 +868,12 @@ function veredictoBadge(
 const poderInputCls =
   "h-9 w-full rounded-lg border border-border bg-background px-2 text-sm text-foreground outline-none focus:border-brand focus:ring-2 focus:ring-brand/20";
 
+function apoderadoLink(codigo: string) {
+  const origin =
+    typeof window !== "undefined" ? window.location.origin : "https://vekino.com";
+  return `${origin}/apoderado?codigo=${encodeURIComponent(codigo)}`;
+}
+
 function PoderesTab({ asambleaId }: { asambleaId: Id<"asambleas"> }) {
   const a = useQuery(api.asambleas.get, { id: asambleaId });
   const poderes = useQuery(api.asambleas.listPoderes, { asambleaId });
@@ -890,8 +897,20 @@ function PoderesTab({ asambleaId }: { asambleaId: Id<"asambleas"> }) {
   const [exportError, setExportError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [okMsg, setOkMsg] = useState<string | null>(null);
+  const [ultimoCodigo, setUltimoCodigo] = useState<string | null>(null);
+  const [copiadoId, setCopiadoId] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const cameraRef = useRef<HTMLInputElement>(null);
+
+  async function copiarTexto(texto: string, id: string) {
+    try {
+      await navigator.clipboard.writeText(texto);
+      setCopiadoId(id);
+      window.setTimeout(() => setCopiadoId(null), 2000);
+    } catch {
+      /* Sin permiso de portapapeles: el usuario puede copiar a mano. */
+    }
+  }
 
   async function onPoderFile(raw: File | null) {
     if (!raw) {
@@ -982,6 +1001,7 @@ function PoderesTab({ asambleaId }: { asambleaId: Id<"asambleas"> }) {
               apoderadoDocumento: documento.trim(),
             }),
       });
+      setUltimoCodigo(r.codigo);
       setOkMsg(
         `Poder registrado para ${r.nombre}. Código: ${r.codigo}${
           r.esPropietario ? " (propietario del conjunto)" : " (externo)"
@@ -1189,9 +1209,38 @@ function PoderesTab({ asambleaId }: { asambleaId: Id<"asambleas"> }) {
           </div>
           {error ? <p className="text-sm text-red-600">{error}</p> : null}
           {okMsg ? (
-            <p className="rounded-lg bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800">
-              {okMsg}
-            </p>
+            <div className="space-y-2 rounded-lg bg-emerald-50 px-3 py-2">
+              <p className="text-sm font-medium text-emerald-800">{okMsg}</p>
+              {ultimoCodigo ? (
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="border-emerald-200 bg-white"
+                    onClick={() =>
+                      void copiarTexto(
+                        apoderadoLink(ultimoCodigo),
+                        "ok-enlace",
+                      )
+                    }
+                  >
+                    <Copy className="h-3.5 w-3.5" />
+                    {copiadoId === "ok-enlace" ? "¡Copiado!" : "Copiar enlace"}
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="border-emerald-200 bg-white"
+                    onClick={() => void copiarTexto(ultimoCodigo, "ok-codigo")}
+                  >
+                    <Copy className="h-3.5 w-3.5" />
+                    {copiadoId === "ok-codigo" ? "¡Copiado!" : "Copiar código"}
+                  </Button>
+                </div>
+              ) : null}
+            </div>
           ) : null}
           <Button size="sm" onClick={registrarManual} disabled={busy}>
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
@@ -1246,6 +1295,41 @@ function PoderesTab({ asambleaId }: { asambleaId: Id<"asambleas"> }) {
               </p>
             </div>
             <div className="flex items-center gap-2">
+                {p.codigoAcceso ? (
+                  <>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      title="Copiar enlace para enviar al apoderado"
+                      onClick={() =>
+                        void copiarTexto(
+                          apoderadoLink(p.codigoAcceso!),
+                          `enlace-${p._id}`,
+                        )
+                      }
+                    >
+                      <Copy className="h-3.5 w-3.5" />
+                      {copiadoId === `enlace-${p._id}`
+                        ? "¡Copiado!"
+                        : "Copiar enlace"}
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      title="Copiar código del apoderado"
+                      onClick={() =>
+                        void copiarTexto(p.codigoAcceso!, `codigo-${p._id}`)
+                      }
+                    >
+                      <Copy className="h-3.5 w-3.5" />
+                      {copiadoId === `codigo-${p._id}`
+                        ? "¡Copiado!"
+                        : "Código"}
+                    </Button>
+                  </>
+                ) : null}
                 {p.documentoUrl ? (
                   <a
                     href={p.documentoUrl}
