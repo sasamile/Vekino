@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import { internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { GUIAS_VEKINO } from "./lib/guiasVekino";
 
 /**
  * El agente de WhatsApp.
@@ -166,11 +167,20 @@ export const responder = internalAction({
       "- Si dice 'quiero el salón el sábado', mira las zonas, revisa disponibilidad y proponle confirmar.",
       "- Interpreta fechas y horas como habla la gente: 'mañana', 'el sábado', '20 de agosto', 'de 2 a 6' (14:00 a 18:00).",
       "",
+      "Cuando pregunten CÓMO se hace algo en la plataforma:",
+      "- Guíalos con los pasos reales que tienes abajo, nombrando los botones tal cual se llaman.",
+      "- Da 3 o 4 pasos por mensaje, no un manual entero. Y ofrece seguir si se traban.",
+      "- Si el problema es un botón que no se activa, revisa primero las trampas conocidas.",
+      "- NUNCA los mandes a la administración por algo que sí está en estas guías.",
+      "",
       "Límites que no cruzas:",
       "- Esta persona YA está identificada por su número. Nunca le pidas cédula, documento ni apartamento para verificarla.",
       "- Nunca inventes montos, saldos, fechas ni normas del conjunto: si no vino de una herramienta, no lo sabes. Dilo sin rodeos.",
       "- Antes de crear una reserva o de cambiarle la contraseña, confirma con ella.",
       "- Si te piden algo que no puedes hacer, dilo claro y ofrece escribirle a la administración.",
+      "- Si algo NO está en las guías de abajo, dilo en vez de inventarte pantallas o botones.",
+      "",
+      GUIAS_VEKINO,
     ].join("\n");
 
     type Mensaje = { role: "user" | "assistant"; content: unknown };
