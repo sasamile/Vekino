@@ -690,3 +690,109 @@ export const limpiarBotAjeno = internalMutation({
     return { encontrados: objetivo.length, borrados: objetivo.length, muestra: [] };
   },
 });
+
+/**
+ * Busca residentes para vincularlos a mano a una conversación.
+ *
+ * Hace falta porque hay gente a la que el sistema NO puede identificar solo:
+ * quien activó su @usuario de Meta no comparte teléfono, así que no hay nada
+ * con qué cruzarlo. El equipo sí sabe quién es —lo dice en el mensaje: torre,
+ * apartamento, nombre— y necesita poder decírselo al sistema.
+ *
+ * Busca por nombre, correo y número de unidad a la vez, porque de esas tres
+ * cosas la gente escribe la que se le ocurre.
+ */
+export const buscarResidentes = query({
+  args: { texto: v.string(), condominioId: v.optional(v.id("condominios")) },
+  handler: async (ctx, args) => {
+    await requirePlatformStaff(ctx);
+    const q = args.texto.trim().toLowerCase();
+    if (q.length < 2) return [];
+
+    const memberships = args.condominioId
+      ? await ctx.db
+          .query("memberships")
+          .withIndex("by_condominio", (x) =>
+            x.eq("condominioId", args.condominioId!),
+          )
+          .collect()
+      : await ctx.db.query("memberships").collect();
+
+    const salida: Array<{
+      userId: Id<"users">;
+      nombre: string;
+      email: string;
+      telefono: string | null;
+      condominio: string;
+      unidades: string[];
+    }> = [];
+    const vistos = new Set<string>();
+
+    for (const m of memberships) {
+      if (!m.isActive || vistos.has(m.userId)) continue;
+      const u = await ctx.db.get(m.userId);
+      if (!u || !u.active) continue;
+
+      // Las unidades entran en la búsqueda: "404" o "torre 3" es lo que la
+      // gente escribe cuando pide ayuda, no su correo.
+      const vinculos = await ctx.db
+        .query("usuarioUnidad")
+        .withIndex("by_membership", (x) => x.eq("membershipId", m._id))
+        .collect();
+      const unidades: string[] = [];
+      for (const v of vinculos) {
+        const un = await ctx.db.get(v.unidadId);
+        if (un) unidades.push([un.torre, un.numero].filter(Boolean).join(" "));
+      }
+
+      const heno = [u.name, u.email, ...unidades].join(" ").toLowerCase();
+      if (!q.split(/\s+/).every((t) => heno.includes(t))) continue;
+
+      vistos.add(m.userId);
+      const condo = await ctx.db.get(m.condominioId);
+      salida.push({
+        userId: u._id,
+        nombre: u.name,
+        email: u.email,
+        telefono: u.telefonoE164 ?? null,
+        condominio: condo?.name ?? "—",
+        unidades,
+      });
+      if (salida.length >= 25) break;
+    }
+    return salida;
+  },
+});
+
+/**
+ * Vincula a mano una conversación con un residente.
+ *
+ * Es una decisión deliberada de una persona del equipo, no una deducción del
+ * sistema: a partir de aquí esa conversación ve los datos de esa cuenta, así
+ * que se registra quién lo hizo.
+ */
+export const vincularAResidente = mutation({
+  args: {
+    conversacionId: v.id("waConversations"),
+    userId: v.id("users"),
+  },
+  handler: async (ctx, args) => {
+    const staff = await requirePlatformStaff(ctx);
+    const user = await ctx.db.get(args.userId);
+    if (!user || !user.active) throw new Error("Ese residente no está activo.");
+    const conv = await ctx.db.get(args.conversacionId);
+    if (!conv) throw new Error("Conversación no encontrada.");
+
+    await ctx.db.patch(args.conversacionId, {
+      userId: args.userId,
+      // El contexto anterior era de otra identidad: no puede heredarse.
+      membershipId: undefined,
+      condominioId: undefined,
+      paso: "menu",
+      contexto: null,
+      ultimoAgenteNombre: staff.name,
+      updatedAt: Date.now(),
+    });
+    return { ok: true as const, nombre: user.name };
+  },
+});

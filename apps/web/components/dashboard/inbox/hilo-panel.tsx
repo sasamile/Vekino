@@ -21,6 +21,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { UserAvatar } from "@/components/ui/user-avatar";
 import { cn } from "@/lib/utils";
 import { BurbujaMensaje } from "./burbuja-mensaje";
+import { VincularDialog } from "./vincular-dialog";
 import { Composer } from "./composer";
 import {
   ETIQUETA_SIN_RESPUESTA,
@@ -216,6 +217,7 @@ function CabeceraHilo({
   const pausarAgente = useMutation(api.whatsappInbox.pausarAgente);
   const enviarAccesos = useAction(api.whatsappInbox.enviarAccesos);
   const [enviandoAccesos, setEnviandoAccesos] = useState(false);
+  const [vincularAbierto, setVincularAbierto] = useState(false);
   const [avisoAccesos, setAvisoAccesos] = useState<
     { ok: boolean; texto: string } | null
   >(null);
@@ -328,10 +330,18 @@ function CabeceraHilo({
             </Badge>
           )}
           {!c.identificado && (
-            <Badge tone="warning" className="hidden sm:inline-flex">
+            /* Antes era solo un aviso; ahora es la salida. A quien usa
+             * @usuario de Meta el sistema no lo puede identificar solo
+             * —no comparte teléfono—, así que se vincula a mano. */
+            <button
+              type="button"
+              onClick={() => setVincularAbierto(true)}
+              title="Vincular esta conversación con un residente"
+              className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-xs font-medium text-amber-700 transition-colors hover:bg-amber-500/20 dark:text-amber-400"
+            >
               <AlertTriangle className="h-3 w-3" aria-hidden />
               Sin identificar
-            </Badge>
+            </button>
           )}
           <Button
             size="sm"
@@ -354,6 +364,12 @@ function CabeceraHilo({
             )}
             <span className="hidden sm:inline">Enviar accesos</span>
           </Button>
+          <VincularDialog
+            conversacionId={conversacionId}
+            nombrePerfil={c.nombre ?? ""}
+            abierto={vincularAbierto}
+            onAbierto={setVincularAbierto}
+          />
           <InterruptorAgente
             activo={agenteActivo}
             disabled={busy}
