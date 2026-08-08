@@ -1326,7 +1326,10 @@ export const procesarEntrante = internalAction({
 
     // ── Texto libre ──
 
-    if (["hola", "menu", "inicio", "buenas", "volver", "hi"].includes(comando) || paso === "nueva") {
+    // Solo el menú PEDIDO explícitamente abre el menú. Un "hola" lo contesta
+    // el agente: soltarle una lista de opciones a alguien que saluda es
+    // justo lo que hace que esto se sienta un bot y no una persona.
+    if (["menu", "menú", "opciones", "inicio", "volver"].includes(comando)) {
       await enviarMenu();
       return null;
     }
@@ -1394,32 +1397,6 @@ export const procesarEntrante = internalAction({
       return null;
     }
 
-    // Texto libre sin paso específico: intentos de intención por palabra clave.
-    if (/factur|deuda|cuanto debo|estado de cuenta|pagar|pago/.test(comando)) {
-      await manejarAccion("menu:factura");
-      return null;
-    }
-    if (/reserv|salon|bbq|piscina|cancha|gimnasio/.test(comando)) {
-      await manejarAccion("menu:reserva");
-      return null;
-    }
-    if (/comprobante|soporte de pago|transferencia|consign/.test(comando)) {
-      await manejarAccion("menu:comprobante");
-      return null;
-    }
-    if (/problema|queja|reclamo|dano|daño|reportar/.test(comando)) {
-      await manejarAccion("menu:problema");
-      return null;
-    }
-    if (
-      /clave|credencial|contrasena|password|no puedo entrar|no me deja entrar|acceso|ingresar|usuario|olvide/.test(
-        comando,
-      )
-    ) {
-      await manejarAccion("menu:acceso");
-      return null;
-    }
-
     /* Texto libre → agente con herramientas reales (whatsappAgente.ts).
      * Puede consultar la factura, generar el link de pago, entregar
      * credenciales, revisar disponibilidad y crear reservas o PQRS, así que
@@ -1443,10 +1420,26 @@ export const procesarEntrante = internalAction({
       await enviar(msgTexto(to, respuestaIA));
       await setConv({ paso: "consulta", contexto });
     } else {
-      await enviar(
-        msgTexto(to, "No estoy seguro de haberte entendido. 🤔 Aquí va el menú:"),
-      );
-      await enviarMenu();
+      /* Red de seguridad: el agente no pudo responder (sin API key, error de
+       * red o se quedó sin pasos). Se cae a la intención por palabra clave y,
+       * en último caso, al menú. */
+      if (/factur|deuda|cuanto debo|estado de cuenta|pagar|pago/.test(comando)) {
+        await manejarAccion("menu:factura");
+      } else if (/reserv|salon|bbq|piscina|cancha|gimnasio/.test(comando)) {
+        await manejarAccion("menu:reserva");
+      } else if (/comprobante|soporte de pago|transferencia|consign/.test(comando)) {
+        await manejarAccion("menu:comprobante");
+      } else if (/problema|queja|reclamo|dano|daño|reportar/.test(comando)) {
+        await manejarAccion("menu:problema");
+      } else if (
+        /clave|credencial|contrasena|password|no puedo entrar|acceso|ingresar|olvide/.test(
+          comando,
+        )
+      ) {
+        await manejarAccion("menu:acceso");
+      } else {
+        await enviarMenu();
+      }
     }
     return null;
   },

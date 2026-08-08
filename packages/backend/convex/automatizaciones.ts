@@ -261,6 +261,26 @@ export const plantillasDisponibles = action({
   },
 });
 
+/** Cuántas variables ({{n}}) tiene el cuerpo de una plantilla aprobada. */
+export const variablesDePlantilla = internalAction({
+  args: { nombre: v.string() },
+  handler: async (_ctx, args): Promise<number> => {
+    const { status, json } = await ycloudRequest(
+      `/whatsapp/templates?filter.wabaId=${encodeURIComponent(
+        process.env.YCLOUD_WABA_ID ?? "",
+      )}&limit=100`,
+    );
+    if (status >= 300) return 0;
+    const t = (json?.items ?? []).find((x: any) => x.name === args.nombre);
+    const cuerpo: string =
+      (t?.components ?? []).find((c: any) => c.type === "BODY")?.text ?? "";
+    return [...cuerpo.matchAll(/\{\{(\d+)\}\}/g)].reduce(
+      (max, m) => Math.max(max, Number(m[1])),
+      0,
+    );
+  },
+});
+
 export const soloStaff = internalQuery({
   args: {},
   handler: async (ctx) => {
@@ -576,9 +596,30 @@ export const enviarPrueba = action({
         condominio: condo?.condominioNombre ?? "tu conjunto",
         unidad: "101",
       };
-      const params = (args.parametros ?? []).map((t) =>
+      /* Para una prueba de un clic basta con el nombre: si no se pasaron
+       * valores, se rellenan solos con datos de muestra para que el mensaje
+       * salga completo y se pueda ver cómo llega. */
+      let params = (args.parametros ?? []).map((t) =>
         rellenarFichas(t, ctxFichas),
       );
+      if (params.length === 0 || params.some((p) => !p.trim())) {
+        const cuantas: number = await ctx.runAction(
+          internal.automatizaciones.variablesDePlantilla,
+          { nombre: args.plantilla },
+        );
+        const muestra = [
+          ctxFichas.nombre,
+          ctxFichas.condominio,
+          "8 de agosto de 2026",
+          "6:00 p. m.",
+          "ejemplo",
+          "ejemplo",
+        ];
+        params = Array.from({ length: cuantas }, (_, i) => {
+          const dado = params[i]?.trim();
+          return dado || muestra[i] || "ejemplo";
+        });
+      }
       try {
         await enviarMensaje(
           msgPlantillaConBoton(e164, args.plantilla, "es", params),
