@@ -307,7 +307,9 @@ export function Composer({
 
   const restante = restanteVentana(ventanaExpiraAt);
   const ocupado = enviando || subiendo != null;
-  const puedeEnviar = (texto.trim().length > 0 || adjunto != null) && !ocupado;
+  /** Hay algo que mandar: enciende el botón aunque el envío esté en curso. */
+  const hayQueMandar = texto.trim().length > 0 || adjunto != null;
+  const puedeEnviar = hayQueMandar && !ocupado;
 
   if (grabando) {
     return (
@@ -420,7 +422,7 @@ export function Composer({
             discreto en vez de un botón apagado. */}
         <Button
           size="icon"
-          variant={puedeEnviar ? "primary" : "ghost"}
+          variant={hayQueMandar ? "primary" : "ghost"}
           aria-label="Enviar mensaje"
           disabled={!puedeEnviar}
           onClick={() => void onEnviar()}
