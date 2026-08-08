@@ -41,6 +41,36 @@ function describirCuerpoWa(msg: any, tipoMsg: string): string {
   return `[${tipoMsg}]`;
 }
 
+
+/**
+ * Enlace del adjunto de un mensaje de WhatsApp, si lo tiene.
+ *
+ * Cada tipo lo cuelga de su propia clave (`image.link`, `audio.link`…), así
+ * que se prueban todas en vez de asumir una.
+ */
+function mediaDeMensajeWa(
+  msg: any,
+  tipoMsg: string,
+): { link: string; mimeType?: string; filename?: string } | null {
+  for (const k of ["image", "audio", "video", "document", "sticker", "voice"]) {
+    const nodo = msg?.[k];
+    const link = typeof nodo?.link === "string" ? nodo.link : nodo?.url;
+    if (typeof link === "string" && link) {
+      return {
+        link,
+        mimeType: nodo.mime_type ?? nodo.mimeType,
+        filename: nodo.filename,
+      };
+    }
+  }
+  // Algunos eventos traen el adjunto suelto en la raíz.
+  const suelto = typeof msg?.link === "string" ? msg.link : null;
+  if (suelto && tipoMsg !== "text") {
+    return { link: suelto, mimeType: msg.mime_type ?? msg.mimeType };
+  }
+  return null;
+}
+
 const http = httpRouter();
 
 /* `cors: true` es obligatorio desde que la web llama a estas rutas DIRECTO
@@ -389,8 +419,10 @@ http.route({
                 : undefined;
 
         if (destino) {
+          const idMsg = String(msg.id ?? `echo-${Date.now()}`);
+
           await ctx.runMutation(internal.whatsapp.actualizarEstadoMensaje, {
-            ycloudMessageId: String(msg.id ?? `echo-${Date.now()}`),
+            ycloudMessageId: idMsg,
             estado: typeof msg.status === "string" ? msg.status : "sent",
             destino,
             tipo: tipoMsg,
@@ -399,6 +431,20 @@ http.route({
              * sistema: se etiqueta así para que en el hilo se distinga. */
             etiqueta: "Desde WhatsApp",
           });
+
+          /* La foto o el audio que el equipo mandó desde el teléfono hay que
+           * copiarlos igual que los entrantes: los enlaces de YCloud exigen
+           * la API key y caducan, así que sin esto la burbuja queda diciendo
+           * "📷 Imagen" y no se ve nada. */
+          const adj = mediaDeMensajeWa(msg, tipoMsg);
+          if (adj) {
+            await ctx.scheduler.runAfter(0, internal.whatsappInbox.rescatarMedia, {
+              ycloudMessageId: idMsg,
+              link: adj.link,
+              mimeType: adj.mimeType,
+              filename: adj.filename,
+            });
+          }
         }
       }
       return Response.json({ ok: true });

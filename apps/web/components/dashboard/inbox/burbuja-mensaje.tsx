@@ -169,9 +169,12 @@ export function BurbujaMensaje({
   const esSaliente = m.direccion === "saliente";
   const estado = estadoLegible(m.estado);
   const { texto, opciones } = formatearContenido(m.contenido?.trim() ?? "");
-  /** Con media, un contenido tipo `[image]` es relleno, no un texto real. */
+  /* Con media, un contenido tipo `[image]` o «📷 Imagen» es relleno: lo puso
+   * el backend porque el mensaje no traía texto. Enseñarlo encima de la foto
+   * es ruido; una descripción de verdad (un pie de foto) sí se muestra. */
+  const RELLENO = /^(\[[a-z]+\]|📷 Imagen|🎤 Nota de voz|🎥 Video|Sticker|📍 Ubicación|📄 .+)$/i;
   const textoVisible =
-    texto && !(m.mediaUrl && /^\[[a-z]+\]$/i.test(texto)) ? texto : null;
+    texto && !(m.mediaUrl && RELLENO.test(texto)) ? texto : null;
   const sinNada = !textoVisible && !m.mediaUrl && opciones.length === 0;
 
   const [copiado, setCopiado] = useState(false);
