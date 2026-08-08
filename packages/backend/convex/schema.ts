@@ -1586,6 +1586,24 @@ export default defineSchema({
     .index("by_condominio", ["condominioId"])
     .index("by_estado", ["estado"]),
 
+  /**
+   * Enlace de un solo uso para entrar sin teclear la clave.
+   *
+   * Guarda la contraseña temporal en claro a propósito: es la MISMA que ya va
+   * viajando por WhatsApp, dura 30 minutos, se usa una vez y se borra al
+   * usarse. A cambio, el residente entra tocando un botón en vez de copiar
+   * "Vekino-RPMKGT-3687" a mano en el teléfono.
+   */
+  accesosRapidos: defineTable({
+    token: v.string(),
+    userId: v.id("users"),
+    email: v.string(),
+    password: v.string(),
+    expiraAt: v.number(),
+    usadoAt: v.optional(v.number()),
+    createdAt: v.number(),
+  }).index("by_token", ["token"]),
+
   // ─────────────────────────────────────────────────────────────
   // Automatizaciones: envíos programados (fecha y hora)
   // ─────────────────────────────────────────────────────────────

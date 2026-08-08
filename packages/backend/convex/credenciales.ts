@@ -849,17 +849,47 @@ export const enviarAUnUsuario = internalAction({
  * Es la vía que no depende del correo ni de la verificación de la WABA.
  */
 export const generarClaveParaEntrega = internalAction({
-  args: { userId: v.id("users") },
+  args: {
+    userId: v.id("users"),
+    /**
+     * Rotar la contraseña de quien YA tiene la suya lo deja fuera sin
+     * necesidad. Sin `forzar`, a esa gente no se le toca nada: se le avisa y
+     * se le ofrece el restablecimiento por correo.
+     */
+    forzar: v.optional(v.boolean()),
+  },
   handler: async (
     ctx,
     args,
-  ): Promise<{ ok: false; motivo: string } | { ok: true; email: string; password: string }> => {
-    const perfil: { email: string; nombre: string; activo: boolean } | null =
-      await ctx.runQuery(internal.credenciales.perfilParaClave, {
-        userId: args.userId,
-      });
+  ): Promise<
+    | { ok: false; motivo: string }
+    | { ok: false; yaTieneClavePropia: true; email: string }
+    | { ok: true; email: string; password: string; enlace: string }
+  > => {
+    const perfil: {
+      email: string;
+      nombre: string;
+      activo: boolean;
+      yaIngreso: boolean;
+      claveTemporal: boolean;
+    } | null = await ctx.runQuery(internal.credenciales.perfilParaClave, {
+      userId: args.userId,
+    });
     if (!perfil) return { ok: false as const, motivo: "Usuario no encontrado." };
     if (!perfil.activo) return { ok: false as const, motivo: "Usuario inactivo." };
+
+    /* Si YA logró entrar alguna vez, no se le toca la contraseña: la que
+     * tiene le funciona. Rotársela "por si acaso" es justo lo que lo dejaría
+     * fuera. Solo se rota a quien nunca ha podido entrar, o a quien lo pide
+     * expresamente (forzar). Esto es lo que hace que el aviso de "si ya
+     * entraste, ignora este mensaje" sea cierto y no una trampa. */
+    if (perfil.yaIngreso && !args.forzar) {
+      return {
+        ok: false as const,
+        yaTieneClavePropia: true as const,
+        email: perfil.email,
+      };
+    }
 
     const authCtx = await createAuth(ctx).$context;
     const ia: any = authCtx.internalAdapter;
@@ -900,7 +930,76 @@ export const generarClaveParaEntrega = internalAction({
       valor: true,
     });
 
-    return { ok: true as const, email: perfil.email, password };
+    const token: string = await ctx.runMutation(
+      internal.credenciales.crearAccesoRapido,
+      { userId: args.userId, email: perfil.email, password },
+    );
+    const base = (process.env.WEB_APP_URL ?? "https://www.vekino.com").replace(
+      /\/+$/,
+      "",
+    );
+
+    return {
+      ok: true as const,
+      email: perfil.email,
+      password,
+      enlace: `${base}/entrar?t=${token}`,
+    };
+  },
+});
+
+/** Crea el enlace de un solo uso y devuelve su token. */
+export const crearAccesoRapido = internalMutation({
+  args: {
+    userId: v.id("users"),
+    email: v.string(),
+    password: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const bytes = new Uint8Array(24);
+    crypto.getRandomValues(bytes);
+    const token = [...bytes]
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+
+    const now = Date.now();
+    await ctx.db.insert("accesosRapidos", {
+      token,
+      userId: args.userId,
+      email: args.email,
+      password: args.password,
+      // 24 h: la gente no revisa WhatsApp al instante, y un enlace vencido
+      // obliga a repetir todo el trámite. Sigue siendo de un solo uso.
+      expiraAt: now + 24 * 60 * 60 * 1000,
+      createdAt: now,
+    });
+    return token;
+  },
+});
+
+/**
+ * Canjea el enlace: devuelve las credenciales UNA vez y borra el registro.
+ * Lo llama la pantalla /entrar para dejar los campos ya llenos.
+ */
+export const canjearAcceso = mutation({
+  args: { token: v.string() },
+  handler: async (ctx, args) => {
+    const fila = await ctx.db
+      .query("accesosRapidos")
+      .withIndex("by_token", (q) => q.eq("token", args.token))
+      .first();
+    if (!fila) return { ok: false as const, motivo: "Este enlace no es válido." };
+    if (fila.usadoAt || Date.now() > fila.expiraAt) {
+      await ctx.db.delete(fila._id);
+      return {
+        ok: false as const,
+        motivo: "Este enlace ya se usó o venció. Pide uno nuevo por WhatsApp.",
+      };
+    }
+
+    // Un solo uso: se entrega y se borra.
+    await ctx.db.delete(fila._id);
+    return { ok: true as const, email: fila.email, password: fila.password };
   },
 });
 
@@ -910,7 +1009,15 @@ export const perfilParaClave = internalQuery({
     const user = await ctx.db.get(args.userId);
     if (!user) return null;
     if (!esEmailReal(user.email)) return null;
-    return { email: user.email, nombre: user.name, activo: user.active };
+    return {
+      email: user.email,
+      nombre: user.name,
+      activo: user.active,
+      /** Ya inició sesión alguna vez (Better Auth le enlazó el authId). */
+      yaIngreso: !!user.authId,
+      /** Sigue usando la clave que le generó la administración. */
+      claveTemporal: user.claveTemporal === true,
+    };
   },
 });
 

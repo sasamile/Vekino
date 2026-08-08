@@ -1284,10 +1284,27 @@ export const procesarEntrante = internalAction({
       if (id === "acceso:confirmar") {
         // WhatsApp garantiza el remitente y el número está registrado en la
         // plataforma: equivale al "te mandamos un enlace a tu correo".
-        const res: { ok: boolean; email?: string; password?: string; motivo?: string } =
-          await ctx.runAction(internal.credenciales.generarClaveParaEntrega, {
-            userId: datos!.user!._id,
-          });
+        const res: {
+          ok: boolean;
+          email?: string;
+          password?: string;
+          motivo?: string;
+          enlace?: string;
+          yaTieneClavePropia?: boolean;
+        } = await ctx.runAction(internal.credenciales.generarClaveParaEntrega, {
+          userId: datos!.user!._id,
+        });
+
+        // Ya entró y tiene su propia contraseña: no se le toca nada.
+        if (!res.ok && res.yaTieneClavePropia) {
+          await enviar(
+            msgTexto(
+              to,
+              `Ya has entrado antes, así que tu contraseña actual sigue sirviendo y no te la cambio 🙂\n\nEntra con *${res.email}* en https://www.vekino.com/login\n\n¿No la recuerdas? Usa *¿La olvidaste?* en esa pantalla, o dime *quiero una clave nueva* y te la genero.`,
+            ),
+          );
+          return;
+        }
 
         if (!res.ok || !res.password) {
           await enviar(
@@ -1302,7 +1319,7 @@ export const procesarEntrante = internalAction({
         await enviar(
           msgTexto(
             to,
-            `🔑 *Tus datos de acceso a Vekino*\n\nUsuario: ${res.email}\nContraseña: ${res.password}\n\nIngresa en https://www.vekino.com/login\n\nEs una clave temporal y personal: cámbiala apenas entres y no la compartas con nadie.`,
+            `🔑 *Tus datos de acceso a Vekino*\n\n👉 Entra con un toque, sin copiar nada:\n${res.enlace}\n\n_Ese enlace sirve una sola vez y vence en 24 horas._\n\nO si prefieres escribirlos:\nUsuario: ${res.email}\nContraseña: ${res.password}\n\nEs una clave temporal y personal: cámbiala apenas entres y no la compartas con nadie. 🙌\n\n_Si ya habías logrado entrar por tu cuenta, ignora este mensaje: tu contraseña anterior sigue funcionando._`,
           ),
         );
         await setConv({ paso: "menu", contexto });

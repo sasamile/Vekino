@@ -47,8 +47,18 @@ const HERRAMIENTAS: Herramienta[] = [
   {
     name: "enviar_mis_credenciales",
     description:
-      "Genera una contraseña nueva para que el residente entre a la plataforma web y devuelve su usuario y esa contraseña. La contraseña anterior deja de funcionar. Úsala cuando diga que no puede entrar, que olvidó su clave o que necesita sus datos de acceso. Confirma con él antes de usarla.",
-    input_schema: { type: "object", properties: {}, required: [] },
+      "Entrega los datos de acceso a la plataforma web. Si la persona nunca ha entrado, o sigue usando la clave que le dio la administración, genera una nueva y la devuelve. Si ya se puso una contraseña propia, NO la cambia: devuelve yaTieneClavePropia para que le digas que entre con la suya o use '¿La olvidaste?'. Solo pasa forzar=true si insiste explícitamente en que le cambies la contraseña actual.",
+    input_schema: {
+      type: "object",
+      properties: {
+        forzar: {
+          type: "boolean",
+          description:
+            "true solo si la persona pide expresamente cambiar su contraseña actual sabiendo que dejará de funcionar",
+        },
+      },
+      required: [],
+    },
   },
   {
     name: "ver_zonas_comunes",
@@ -282,13 +292,24 @@ async function ejecutar(
       case "enviar_mis_credenciales": {
         const r = await ctx.runAction(internal.credenciales.generarClaveParaEntrega, {
           userId: args.userId,
+          forzar: input.forzar === true,
         });
+        if (!r.ok && r.yaTieneClavePropia) {
+          return {
+            yaTieneClavePropia: true,
+            usuario: r.email,
+            donde: "https://www.vekino.com/login",
+            queDecir:
+              "Ya tiene contraseña propia; no se la cambiamos. Si no la recuerda, que use '¿La olvidaste?' en la pantalla de ingreso.",
+          };
+        }
         if (!r.ok) return { error: r.motivo };
         return {
           usuario: r.email,
           contrasena: r.password,
-          donde: "https://www.vekino.com/login",
-          nota: "Es temporal y personal; la anterior dejó de funcionar.",
+          enlaceDirecto: r.enlace,
+          nota:
+            "Dale prioridad al enlace directo: entra de un toque sin copiar nada, sirve una sola vez y vence en 24 horas. Menciona la contraseña solo como alternativa. Es temporal: que la cambie al entrar.",
         };
       }
 
