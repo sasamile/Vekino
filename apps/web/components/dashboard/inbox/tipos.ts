@@ -26,6 +26,20 @@ export const FILTROS_INBOX: { value: FiltroInbox; label: string }[] = [
 ];
 
 /* -------------------------------------------------------------------------- */
+/* Lienzo del hilo                                                             */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Trama casi imperceptible del lienzo de conversación: puntitos del color del
+ * borde sobre `bg-background`. Es lo que despega las burbujas —que van en
+ * `bg-card`— del blanco del panel.
+ */
+export const TRAMA_HILO = {
+  backgroundImage: "radial-gradient(hsl(var(--border)) 1px, transparent 1px)",
+  backgroundSize: "22px 22px",
+};
+
+/* -------------------------------------------------------------------------- */
 /* Adjuntos del composer                                                       */
 /* -------------------------------------------------------------------------- */
 

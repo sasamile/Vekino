@@ -5,11 +5,13 @@ import { useQuery } from "convex/react";
 import { MessagesSquare } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
-import { EmptyState } from "@/components/ui/empty-state";
 import { Spinner } from "@/components/ui/spinner";
 import { HiloPanel } from "@/components/dashboard/inbox/hilo-panel";
 import { ListaConversaciones } from "@/components/dashboard/inbox/lista-conversaciones";
-import type { FiltroInbox } from "@/components/dashboard/inbox/tipos";
+import {
+  TRAMA_HILO,
+  type FiltroInbox,
+} from "@/components/dashboard/inbox/tipos";
 import { cn } from "@/lib/utils";
 
 /** Espera a que la persona deje de escribir antes de pegarle a la query. */
@@ -97,13 +99,25 @@ export default function InboxPage() {
             onVolver={() => setAbiertaId(null)}
           />
         ) : (
-          <div className="flex min-h-0 flex-1 items-center justify-center p-6">
-            <EmptyState
-              icon={MessagesSquare}
-              title="Elige una conversación"
-              description="Abre un chat de la izquierda para leerlo y responderle al residente."
-              className="border-0"
-            />
+          <div
+            className="flex min-h-0 flex-1 items-center justify-center bg-background p-6"
+            style={TRAMA_HILO}
+          >
+            <div className="max-w-sm text-center">
+              <div className="mx-auto grid h-20 w-20 place-items-center rounded-full border border-border bg-card shadow-soft">
+                <MessagesSquare
+                  className="h-9 w-9 text-muted-foreground/60"
+                  aria-hidden
+                />
+              </div>
+              <h2 className="mt-5 text-base font-semibold tracking-tight text-foreground">
+                Elige una conversación
+              </h2>
+              <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
+                Abre un chat de la izquierda para leerlo y responderle al
+                residente.
+              </p>
+            </div>
           </div>
         )}
       </section>

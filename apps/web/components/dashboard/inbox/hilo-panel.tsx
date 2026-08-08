@@ -22,12 +22,17 @@ import { BurbujaMensaje } from "./burbuja-mensaje";
 import { Composer } from "./composer";
 import {
   ETIQUETA_SIN_RESPUESTA,
+  TRAMA_HILO,
   claveDia,
   fmtSeparadorDia,
   fmtTelefono,
   type ConversacionDetalle,
   type MensajeRow,
 } from "./tipos";
+
+/** Se explica en el tooltip del interruptor para no gastar una línea fija. */
+const NOTA_PAUSA =
+  "Cuando respondes desde aquí, el agente se pausa 2 horas para no contestar encima.";
 
 /**
  * Panel derecho: el hilo de una conversación, con su cabecera de control y la
@@ -76,10 +81,19 @@ export function HiloPanel({
   if (hilo === undefined) {
     return (
       <div className="flex min-h-0 flex-1 flex-col">
-        <div className="shrink-0 border-b border-border px-4 py-3">
-          <Skeleton className="h-10 w-64 rounded-xl" />
+        <div className="shrink-0 border-b border-border bg-card px-4 py-3">
+          <div className="flex items-center gap-3">
+            <Skeleton className="h-10 w-10 rounded-full" />
+            <div className="space-y-1.5">
+              <Skeleton className="h-3.5 w-40 rounded-full" />
+              <Skeleton className="h-2.5 w-56 rounded-full" />
+            </div>
+          </div>
         </div>
-        <div className="min-h-0 flex-1 space-y-3 p-4">
+        <div
+          className="min-h-0 flex-1 space-y-3 bg-background p-4"
+          style={TRAMA_HILO}
+        >
           {[...Array(5)].map((_, i) => (
             <Skeleton
               key={i}
@@ -122,12 +136,15 @@ export function HiloPanel({
 
       <div
         ref={scrollRef}
-        className="min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain bg-muted/25 px-3 py-4 sm:px-5"
+        className="min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain bg-background px-3 py-4 sm:px-6"
+        style={TRAMA_HILO}
       >
         {hilo.mensajes.length === 0 ? (
-          <p className="py-10 text-center text-sm text-muted-foreground">
-            Todavía no hay mensajes en esta conversación.
-          </p>
+          <div className="flex h-full items-center justify-center">
+            <p className="max-w-xs text-center text-sm text-muted-foreground">
+              Todavía no hay mensajes en esta conversación.
+            </p>
+          </div>
         ) : (
           <MensajesConSeparadores
             mensajes={hilo.mensajes}
@@ -148,7 +165,7 @@ export function HiloPanel({
   );
 }
 
-/** Burbujas agrupadas por día, con un separador entre bloques. */
+/** Burbujas agrupadas por día, con un separador pegajoso entre bloques. */
 function MensajesConSeparadores({
   mensajes,
   onResponder,
@@ -166,8 +183,8 @@ function MensajesConSeparadores({
         return (
           <Fragment key={m._id}>
             {nuevoDia && (
-              <div className="flex justify-center py-2">
-                <span className="rounded-full border border-border bg-card px-3 py-1 text-[11px] font-medium text-muted-foreground">
+              <div className="sticky top-0 z-10 flex justify-center py-1.5">
+                <span className="rounded-full border border-border/70 bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground shadow-soft">
                   {fmtSeparadorDia(m.createdAt)}
                 </span>
               </div>
@@ -200,7 +217,7 @@ function CabeceraHilo({
 
   const agenteActivo = !c.agentePausado;
   const telefono = fmtTelefono(c.telefono);
-  /** Segunda línea: lo que sobra después del nombre y el teléfono. */
+  /** Segunda línea: lo que sobra después del teléfono. */
   const contacto =
     [c.username ? `@${c.username}` : null, c.condominioNombre]
       .filter(Boolean)
@@ -230,8 +247,8 @@ function CabeceraHilo({
   }
 
   return (
-    <div className="shrink-0 border-b border-border">
-      <div className="flex items-start gap-3 px-3 py-3 sm:px-4">
+    <div className="shrink-0 border-b border-border bg-card">
+      <div className="flex items-center gap-3 px-2.5 py-2.5 sm:px-4 sm:py-3">
         <Button
           size="icon"
           variant="ghost"
@@ -244,38 +261,40 @@ function CabeceraHilo({
 
         <UserAvatar
           name={c.nombre}
-          className="mt-0.5 hidden h-9 w-9 shrink-0 bg-muted text-[11px] text-muted-foreground sm:flex"
+          className="hidden h-10 w-10 shrink-0 bg-muted text-xs text-muted-foreground sm:flex"
         />
 
         <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <p className="truncate text-sm font-semibold text-foreground">
-              {c.nombre}
-            </p>
+          <p className="truncate text-[15px] font-semibold leading-tight tracking-tight text-foreground">
+            {c.nombre}
+          </p>
+          {/* Una sola línea gris: teléfono · @usuario · condominio. */}
+          <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
             {telefono && (
               <BotonTelefono telefono={c.telefono ?? ""} etiqueta={telefono} />
             )}
-            {!c.puedeResponder && (
-              <Badge tone="destructive">
-                <PhoneOff className="h-3 w-3" aria-hidden />
-                {ETIQUETA_SIN_RESPUESTA}
-              </Badge>
+            {telefono && contacto && (
+              <span aria-hidden className="shrink-0 opacity-60">
+                ·
+              </span>
             )}
-            {!c.identificado && (
-              <Badge tone="warning">
-                <AlertTriangle className="h-3 w-3" aria-hidden />
-                Sin identificar
-              </Badge>
-            )}
+            {contacto && <span className="truncate">{contacto}</span>}
           </div>
-          {contacto && (
-            <p className="mt-0.5 truncate text-xs text-muted-foreground">
-              {contacto}
-            </p>
-          )}
         </div>
 
-        <div className="shrink-0">
+        <div className="flex shrink-0 items-center gap-1.5">
+          {!c.puedeResponder && (
+            <Badge tone="destructive" className="hidden sm:inline-flex">
+              <PhoneOff className="h-3 w-3" aria-hidden />
+              {ETIQUETA_SIN_RESPUESTA}
+            </Badge>
+          )}
+          {!c.identificado && (
+            <Badge tone="warning" className="hidden sm:inline-flex">
+              <AlertTriangle className="h-3 w-3" aria-hidden />
+              Sin identificar
+            </Badge>
+          )}
           <InterruptorAgente
             activo={agenteActivo}
             disabled={busy}
@@ -284,13 +303,26 @@ function CabeceraHilo({
         </div>
       </div>
 
-      <p className="px-3 pb-2.5 text-[11px] leading-relaxed text-muted-foreground sm:px-4">
-        Cuando respondes desde aquí, el agente se pausa 2 horas para no contestar
-        encima.
-      </p>
+      {/* En móvil los chips no caben junto al interruptor: van debajo. */}
+      {(!c.puedeResponder || !c.identificado) && (
+        <div className="flex flex-wrap items-center gap-1.5 px-3 pb-2.5 sm:hidden">
+          {!c.puedeResponder && (
+            <Badge tone="destructive">
+              <PhoneOff className="h-3 w-3" aria-hidden />
+              {ETIQUETA_SIN_RESPUESTA}
+            </Badge>
+          )}
+          {!c.identificado && (
+            <Badge tone="warning">
+              <AlertTriangle className="h-3 w-3" aria-hidden />
+              Sin identificar
+            </Badge>
+          )}
+        </div>
+      )}
 
       {c.escalada && (
-        <div className="mx-3 mb-3 flex flex-col gap-2.5 rounded-xl border border-red-500/30 bg-red-500/10 px-3.5 py-3 sm:mx-4 sm:flex-row sm:items-center">
+        <div className="mx-3 mb-3 flex flex-col gap-2.5 rounded-xl border border-red-500/25 bg-red-500/8 px-3.5 py-2.5 sm:mx-4 sm:flex-row sm:items-center">
           <AlertTriangle
             className="mt-0.5 h-4 w-4 shrink-0 text-red-600 dark:text-red-400"
             aria-hidden
@@ -316,8 +348,9 @@ function CabeceraHilo({
 }
 
 /**
- * El teléfono de la cabecera. Un clic lo copia al portapapeles (en crudo, sin
- * los espacios de la versión legible) y avisa «Copiado ✓» por 2 s.
+ * El teléfono de la cabecera. Va como parte de la línea gris de contacto, pero
+ * sigue siendo un botón: un clic lo copia al portapapeles (en crudo, sin los
+ * espacios de la versión legible) y avisa «Copiado ✓» por 2 s.
  */
 function BotonTelefono({
   telefono,
@@ -350,11 +383,11 @@ function BotonTelefono({
       title="Copiar teléfono"
       aria-label={`Copiar el teléfono ${etiqueta}`}
       className={cn(
-        "inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-[11.5px] tracking-tight transition-colors",
+        "inline-flex shrink-0 items-center gap-1 rounded-md font-mono text-[11.5px] tracking-tight transition-colors",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
         copiado
-          ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-          : "border-border text-muted-foreground hover:bg-accent hover:text-foreground",
+          ? "text-emerald-600 dark:text-emerald-400"
+          : "text-muted-foreground hover:text-foreground",
       )}
     >
       {copiado ? (
@@ -364,8 +397,8 @@ function BotonTelefono({
         </>
       ) : (
         <>
-          <Copy className="h-3 w-3 opacity-60" aria-hidden />
           {etiqueta}
+          <Copy className="h-3 w-3 opacity-40" aria-hidden />
         </>
       )}
     </button>
@@ -389,6 +422,7 @@ function InterruptorAgente({
       aria-checked={activo}
       disabled={disabled}
       onClick={onToggle}
+      title={NOTA_PAUSA}
       className={cn(
         "flex items-center gap-2 rounded-full border border-border px-2 py-1 transition-colors",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",

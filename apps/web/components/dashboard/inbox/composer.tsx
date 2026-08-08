@@ -32,6 +32,16 @@ import {
   type AdjuntoListo,
 } from "./tipos";
 
+/**
+ * Barra flotante del composer: superficie de tarjeta y borde superior, para
+ * que se despegue del fondo del hilo (que va en `bg-background` con trama).
+ */
+const BARRA_COMPOSER =
+  "shrink-0 border-t border-border bg-card px-3 py-3 sm:px-4";
+
+/** Los tres botones de la píldora miden lo mismo y quedan alineados. */
+const BOTON_COMPOSER = "h-9 w-9 shrink-0 rounded-full";
+
 /** Formatos de grabación que WhatsApp digiere, por orden de preferencia. */
 const MIMES_AUDIO = [
   "audio/ogg;codecs=opus",
@@ -301,8 +311,8 @@ export function Composer({
 
   if (grabando) {
     return (
-      <div className="shrink-0 border-t border-border p-3">
-        <div className="flex items-center gap-3 rounded-2xl border border-border bg-muted/40 px-3.5 py-2.5">
+      <div className={BARRA_COMPOSER}>
+        <div className="flex items-center gap-3 rounded-2xl border border-input bg-background px-3.5 py-2.5">
           <span
             className="h-2.5 w-2.5 shrink-0 animate-pulse rounded-full bg-red-500"
             aria-hidden
@@ -332,7 +342,7 @@ export function Composer({
   }
 
   return (
-    <div className="shrink-0 border-t border-border p-3">
+    <div className={BARRA_COMPOSER}>
       <input
         ref={fileRef}
         type="file"
@@ -352,7 +362,13 @@ export function Composer({
 
       {adjunto && <ChipAdjunto adjunto={adjunto} onQuitar={() => setAdjunto(null)} />}
 
-      <div className="flex items-end gap-2">
+      {/* Todo va dentro de una misma píldora: adjuntar, escribir y enviar. */}
+      <div
+        className={cn(
+          "flex items-end gap-1 rounded-2xl border border-input bg-background p-1.5",
+          "transition-colors duration-150 focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/25",
+        )}
+      >
         <Button
           size="icon"
           variant="ghost"
@@ -360,7 +376,7 @@ export function Composer({
           title="Adjuntar archivo (máx. 15 MB)"
           disabled={ocupado}
           onClick={() => fileRef.current?.click()}
-          className="shrink-0"
+          className={BOTON_COMPOSER}
         >
           <Paperclip className="h-4.5 w-4.5" aria-hidden />
         </Button>
@@ -382,9 +398,8 @@ export function Composer({
             }
           }}
           className={cn(
-            "max-h-40 min-h-9 flex-1 resize-none rounded-2xl border border-input bg-card px-3.5 py-2 text-sm text-foreground",
-            "placeholder:text-muted-foreground/70",
-            "transition-colors duration-150 focus-visible:border-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
+            "max-h-40 min-h-9 flex-1 resize-none border-0 bg-transparent px-1.5 py-2 text-sm text-foreground",
+            "placeholder:text-muted-foreground/70 focus:outline-none focus-visible:outline-none",
             "disabled:cursor-not-allowed disabled:opacity-50",
           )}
         />
@@ -396,17 +411,20 @@ export function Composer({
           title="Grabar nota de voz"
           disabled={ocupado}
           onClick={() => void iniciarGrabacion()}
-          className="shrink-0"
+          className={BOTON_COMPOSER}
         >
           <Mic className="h-4.5 w-4.5" aria-hidden />
         </Button>
 
+        {/* Con algo que mandar se enciende en color de marca; vacío queda
+            discreto en vez de un botón apagado. */}
         <Button
           size="icon"
+          variant={puedeEnviar ? "primary" : "ghost"}
           aria-label="Enviar mensaje"
           disabled={!puedeEnviar}
           onClick={() => void onEnviar()}
-          className="shrink-0"
+          className={BOTON_COMPOSER}
         >
           {enviando ? (
             <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
@@ -416,16 +434,21 @@ export function Composer({
         </Button>
       </div>
 
-      <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2 px-1">
-        <p className="text-[11px] text-muted-foreground">
+      <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2 px-1.5">
+        <p className="text-[10.5px] text-muted-foreground/80">
           Enter envía · Shift + Enter salta de línea
         </p>
         {restante && (
-          <p className="text-[11px] text-muted-foreground">{restante}</p>
+          <p className="text-[10.5px] text-muted-foreground/80">{restante}</p>
         )}
       </div>
 
-      {error && <p className="mt-1.5 px-1 text-xs text-destructive">{error}</p>}
+      {error && (
+        <p className="mt-1.5 flex items-start gap-1.5 px-1.5 text-xs text-destructive">
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+          <span className="min-w-0 flex-1">{error}</span>
+        </p>
+      )}
     </div>
   );
 }
@@ -433,8 +456,8 @@ export function Composer({
 /** Franja ámbar que reemplaza la caja cuando no se puede escribir. */
 function AvisoBloqueo({ texto }: { texto: string }) {
   return (
-    <div className="shrink-0 border-t border-border p-3">
-      <div className="flex gap-2.5 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3.5 py-3">
+    <div className={BARRA_COMPOSER}>
+      <div className="flex gap-2.5 rounded-2xl border border-amber-500/30 bg-amber-500/10 px-3.5 py-3">
         <AlertTriangle
           className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400"
           aria-hidden
@@ -459,7 +482,7 @@ function BarraCita({
   onQuitar: () => void;
 }) {
   return (
-    <div className="mb-2 flex items-start gap-2.5 rounded-xl border border-border bg-muted/50 px-2.5 py-2">
+    <div className="mb-2 flex items-start gap-2.5 rounded-xl border border-border bg-background px-2.5 py-2">
       <span
         className="w-1 shrink-0 self-stretch rounded-full bg-brand"
         aria-hidden
@@ -512,7 +535,7 @@ function ChipAdjunto({
           </button>
         </div>
       ) : (
-        <div className="flex max-w-[18rem] items-center gap-2 rounded-xl border border-border bg-card px-2.5 py-2">
+        <div className="flex max-w-[18rem] items-center gap-2 rounded-xl border border-border bg-background px-2.5 py-2">
           <FileText className="h-4 w-4 shrink-0 text-brand" aria-hidden />
           <span className="min-w-0 flex-1 truncate text-xs text-foreground">
             {adjunto.nombre}

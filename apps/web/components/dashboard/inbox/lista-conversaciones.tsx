@@ -8,6 +8,7 @@ import { SearchInput } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { UserAvatar } from "@/components/ui/user-avatar";
 import { cn } from "@/lib/utils";
+import { formatearContenido } from "./burbuja-mensaje";
 import {
   ETIQUETA_SIN_RESPUESTA,
   FILTROS_INBOX,
@@ -40,7 +41,7 @@ export function ListaConversaciones({
   onFiltro: (valor: FiltroInbox) => void;
 }) {
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="flex min-h-0 flex-1 flex-col bg-card">
       <div className="shrink-0 space-y-3 border-b border-border px-4 py-4">
         <div className="space-y-0.5">
           <h1 className="text-lg font-semibold tracking-tight text-foreground">
@@ -79,9 +80,15 @@ export function ListaConversaciones({
 
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
         {conversaciones === undefined ? (
-          <div className="space-y-2 p-3">
+          <div className="space-y-3 p-4">
             {[...Array(6)].map((_, i) => (
-              <Skeleton key={i} className="h-16 rounded-xl" />
+              <div key={i} className="flex items-start gap-3">
+                <Skeleton className="h-11 w-11 shrink-0 rounded-full" />
+                <div className="flex-1 space-y-2">
+                  <Skeleton className="h-3.5 w-2/3 rounded-full" />
+                  <Skeleton className="h-3 w-full rounded-full" />
+                </div>
+              </div>
             ))}
           </div>
         ) : conversaciones.length === 0 ? (
@@ -108,7 +115,7 @@ export function ListaConversaciones({
             />
           </div>
         ) : (
-          <ul className="p-1.5">
+          <ul className="divide-y divide-border/60">
             {conversaciones.map((c) => (
               <li key={c._id}>
                 <FilaConversacion
@@ -135,10 +142,17 @@ function FilaConversacion({
   onClick: () => void;
 }) {
   const sinLeer = c.noLeidos > 0;
-  const preview = c.ultimoTexto.trim();
+  /**
+   * El preview de los mensajes viejos llega como el JSON del payload de
+   * WhatsApp (y encima recortado por el backend): `formatearContenido` saca de
+   * ahí el texto legible. Ver `burbuja-mensaje.tsx`.
+   */
+  const preview = formatearContenido(c.ultimoTexto.trim()).texto.trim();
   const telefono = fmtTelefono(c.telefono);
   /** Sin número, lo único que identifica a la persona es su @usuario. */
   const subtitulo = telefono ?? (c.username ? `@${c.username}` : null);
+  const hayPie =
+    Boolean(subtitulo) || Boolean(c.condominioNombre) || c.escalada || !c.puedeResponder;
 
   return (
     <button
@@ -146,30 +160,28 @@ function FilaConversacion({
       onClick={onClick}
       aria-current={activa ? "true" : undefined}
       className={cn(
-        "relative flex w-full items-start gap-2.5 rounded-xl py-2.5 pl-3.5 pr-2.5 text-left transition-colors",
-        activa
-          ? "bg-brand/10 ring-1 ring-inset ring-brand/25"
-          : "hover:bg-accent",
+        "relative flex w-full items-start gap-3 px-4 py-3.5 text-left transition-colors",
+        activa ? "bg-brand/8" : "hover:bg-accent/60",
       )}
     >
       {/* Barra de marca: sin ella el resaltado de la fila abierta no se ve. */}
       {activa && (
         <span
-          className="absolute inset-y-2 left-1 w-1 rounded-full bg-brand"
+          className="absolute inset-y-0 left-0 w-[3px] bg-brand"
           aria-hidden
         />
       )}
 
       <UserAvatar
         name={c.nombre}
-        className="mt-0.5 h-9 w-9 bg-muted text-[11px] text-muted-foreground"
+        className="h-11 w-11 bg-muted text-xs text-muted-foreground"
       />
 
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-2">
           <p
             className={cn(
-              "min-w-0 flex-1 truncate text-[13.5px] text-foreground",
+              "min-w-0 flex-1 truncate text-sm text-foreground",
               sinLeer ? "font-semibold" : "font-medium",
             )}
           >
@@ -187,22 +199,11 @@ function FilaConversacion({
           </span>
         </div>
 
-        {subtitulo && (
+        <div className="mt-1 flex items-center gap-2">
           <p
             className={cn(
-              "mt-0.5 truncate text-[11px] text-muted-foreground",
-              telefono && "font-mono tracking-tight",
-            )}
-          >
-            {subtitulo}
-          </p>
-        )}
-
-        <div className="mt-0.5 flex items-center gap-2">
-          <p
-            className={cn(
-              "min-w-0 flex-1 truncate text-[12.5px]",
-              sinLeer ? "font-semibold text-foreground" : "text-muted-foreground",
+              "min-w-0 flex-1 truncate text-[12.5px] leading-snug",
+              sinLeer ? "font-medium text-foreground" : "text-muted-foreground",
             )}
           >
             {preview ? (
@@ -220,7 +221,7 @@ function FilaConversacion({
           </p>
           {sinLeer && (
             <span
-              className="grid h-5.5 min-w-5.5 shrink-0 place-items-center rounded-full bg-emerald-500 px-1.5 text-[11px] font-bold tabular-nums leading-none text-white shadow-sm"
+              className="grid h-5 min-w-5 shrink-0 place-items-center rounded-full bg-emerald-500 px-1.5 text-[10.5px] font-bold tabular-nums leading-none text-white"
               aria-label={`${c.noLeidos} mensajes sin leer`}
             >
               {c.noLeidos > 99 ? "99+" : c.noLeidos}
@@ -228,8 +229,18 @@ function FilaConversacion({
           )}
         </div>
 
-        {(c.condominioNombre || c.escalada || !c.puedeResponder) && (
-          <div className="mt-1.5 flex flex-wrap items-center gap-1">
+        {hayPie && (
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
+            {subtitulo && (
+              <span
+                className={cn(
+                  "min-w-0 truncate text-[11px] text-muted-foreground",
+                  telefono && "font-mono tracking-tight",
+                )}
+              >
+                {subtitulo}
+              </span>
+            )}
             {c.condominioNombre && (
               <Badge tone="neutral" className="max-w-full">
                 <span className="truncate">{c.condominioNombre}</span>
