@@ -1764,6 +1764,19 @@ export default defineSchema({
     condominioId: v.optional(v.id("condominios")),
     membershipId: v.optional(v.id("memberships")),
 
+    /** Mensajes entrantes sin leer en el inbox del equipo. */
+    noLeidos: v.optional(v.number()),
+    /**
+     * Mientras esté en el futuro, el agente NO responde: hay una persona del
+     * equipo atendiendo. Se fija sola cuando alguien escribe desde el panel.
+     */
+    agentePausadoHasta: v.optional(v.number()),
+    /** Quién del equipo respondió por última vez (para mostrarlo en el hilo). */
+    ultimoAgenteNombre: v.optional(v.string()),
+    /** El agente pidió ayuda humana: queda marcada en el inbox. */
+    escaladaAt: v.optional(v.number()),
+    escaladaMotivo: v.optional(v.string()),
+
     /** Paso de la máquina de estados del bot ("menu", "reserva:fecha", ...). */
     paso: v.string(),
     /** Datos del paso en curso (borrador de reserva, factura elegida, etc.). */
@@ -1793,6 +1806,10 @@ export default defineSchema({
     contenido: v.string(),
     /** Media re-alojada en nuestro S3 (los links de YCloud caducan). */
     mediaUrl: v.optional(v.string()),
+    mediaMime: v.optional(v.string()),
+    mediaNombre: v.optional(v.string()),
+    /** Nombre de quien respondió desde el panel (null = lo mandó el bot). */
+    agenteNombre: v.optional(v.string()),
     /** Id del mensaje en YCloud: idempotencia de entrantes y correlación de estados. */
     ycloudMessageId: v.optional(v.string()),
     estado: v.optional(v.string()), // sent | delivered | read | failed

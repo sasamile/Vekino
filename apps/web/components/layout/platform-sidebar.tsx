@@ -56,6 +56,14 @@ export function PlatformSidebar({
 }) {
   const pathname = usePathname();
   const pendientesSoporte = useQuery(api.soporte.countPendientes);
+  // Badge de la bandeja: suma de los no leídos de WhatsApp.
+  const chatsSinLeer = useQuery(api.whatsappInbox.conversaciones, {
+    soloNoLeidos: true,
+  });
+  const noLeidosInbox = (chatsSinLeer ?? []).reduce(
+    (total, c) => total + c.noLeidos,
+    0,
+  );
 
   return (
     <div className="relative flex h-full min-h-0 flex-col bg-card">
@@ -89,10 +97,13 @@ export function PlatformSidebar({
                 ? pathname === "/dashboard"
                 : pathname === item.href || pathname.startsWith(`${item.href}/`);
             const Icon = item.icon;
+            const esInbox = item.segment === "inbox";
             const badge =
               item.segment === "soporte" && (pendientesSoporte ?? 0) > 0
-                ? pendientesSoporte
-                : null;
+                ? (pendientesSoporte ?? null)
+                : esInbox && noLeidosInbox > 0
+                  ? noLeidosInbox
+                  : null;
             return (
               <Link
                 key={item.href}
@@ -118,8 +129,17 @@ export function PlatformSidebar({
                 <span className="min-w-0 flex-1 truncate">{item.label}</span>
                 {badge != null ? (
                   <span
-                    className="shrink-0 rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold tabular-nums leading-none text-black"
-                    aria-label={`${badge} tickets pendientes`}
+                    className={cn(
+                      "shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-bold tabular-nums leading-none",
+                      esInbox
+                        ? "bg-emerald-500 text-white"
+                        : "bg-amber-500 text-black",
+                    )}
+                    aria-label={
+                      esInbox
+                        ? `${badge} mensajes sin leer`
+                        : `${badge} tickets pendientes`
+                    }
                   >
                     {badge > 99 ? "99+" : badge}
                   </span>

@@ -13,6 +13,7 @@ import {
   msgDocumento,
   msgLista,
   msgTexto,
+  describirMensaje,
 } from "./lib/ycloud";
 import {
   parseFechaFlexible,
@@ -212,6 +213,10 @@ export const registrarEntrante = internalMutation({
       args.tipo === "text" && !args.interactiveId && !args.media
         ? ESPERA_RAFAGA_MS
         : 0;
+    await ctx.scheduler.runAfter(0, internal.whatsappInbox.sumarNoLeido, {
+      conversacionId,
+    });
+
     await ctx.scheduler.runAfter(esperar, internal.whatsapp.procesarEntrante, {
       conversacionId,
       tipo: args.tipo,
@@ -534,6 +539,13 @@ export const procesarEntrante = internalAction({
     });
     if (!datos) return null;
 
+    /* Hay alguien del equipo atendiendo esta conversación: el agente se
+     * calla para no responder encima. Los entrantes se siguen registrando y
+     * se ven en el inbox. */
+    if ((datos.conversacion.agentePausadoHasta ?? 0) > Date.now()) {
+      return null;
+    }
+
     /* Llegó algo más nuevo mientras esperábamos: este mensaje era parte de una
      * ráfaga. Se calla y deja que responda el último, que ya ve todo. */
     if (
@@ -545,12 +557,9 @@ export const procesarEntrante = internalAction({
 
     const enviar = async (payload: Record<string, unknown> & { to: string }) => {
       const tipo = (payload as { type?: string }).type ?? "text";
-      // Texto plano se guarda como texto (el historial alimenta a la IA como
-      // turnos del asistente); los interactivos/documentos, como JSON.
-      const contenido =
-        tipo === "text"
-          ? ((payload as { text?: { body?: string } }).text?.body ?? "")
-          : JSON.stringify((payload as Record<string, unknown>)[tipo] ?? payload);
+      // Se guarda legible: el historial lo lee la IA como turnos del asistente
+      // y el equipo lo ve en el inbox. El JSON crudo no le sirve a ninguno.
+      const contenido = describirMensaje(payload as Record<string, any>);
       try {
         const res = await enviarMensaje(payload);
         await ctx.runMutation(internal.whatsapp.registrarSaliente, {
@@ -569,14 +578,13 @@ export const procesarEntrante = internalAction({
       }
     };
 
-    /* A quién se le responde. Con usernames de WhatsApp puede no haber
-     * teléfono; en ese caso se contesta al BSUID, que Meta acepta como
-     * destinatario. `registrarEntrante` garantiza que al menos uno existe. */
+    /* A quién se le responde: el teléfono si lo hay, o el BSUID de Meta si la
+     * persona activó su @usuario. `enviarMensaje` decide solo si va como `to`
+     * o como `recipient`, que es lo que YCloud exige para cada uno. */
     const destino = datos.conversacion.telefono ?? datos.conversacion.bsuid;
     if (!destino) return null;
-    // `const` + guardia arriba: el invariante lo garantiza `registrarEntrante`,
-    // que nunca crea una conversación sin al menos una de las dos identidades.
     const to: string = destino;
+
     const setConv = (cambios: {
       paso?: string;
       contexto?: unknown;

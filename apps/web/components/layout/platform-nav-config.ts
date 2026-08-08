@@ -4,6 +4,7 @@ import {
   UsersRound,
   CalendarClock,
   LifeBuoy,
+  MessagesSquare,
   type LucideIcon,
 } from "lucide-react";
 
@@ -53,6 +54,23 @@ export const PLATFORM_NAV: PlatformNavItem[] = [
       "whatsapp",
       "recordatorios",
       "agendar",
+    ],
+  },
+  {
+    label: "Bandeja",
+    href: "/dashboard/inbox",
+    segment: "inbox",
+    icon: MessagesSquare,
+    keywords: [
+      "inbox",
+      "whatsapp",
+      "chats",
+      "conversaciones",
+      "mensajes",
+      "bot",
+      "agente",
+      "residentes",
+      "responder",
     ],
   },
   {

@@ -98,6 +98,21 @@ const HERRAMIENTAS: Herramienta[] = [
     },
   },
   {
+    name: "escalar_a_persona",
+    description:
+      "Pide que una persona del equipo de Vekino atienda esta conversación. Úsala cuando no puedas resolver con tus otras herramientas ni con las guías: una duda que no cubren, un caso raro, un reclamo delicado, o cuando la persona pide explícitamente hablar con alguien. Después de usarla no sigas intentando resolverlo tú: avísale que ya llamaste a alguien del equipo.",
+    input_schema: {
+      type: "object",
+      properties: {
+        motivo: {
+          type: "string",
+          description: "Qué necesita esta persona, en una frase, para que quien la atienda entre en contexto",
+        },
+      },
+      required: ["motivo"],
+    },
+  },
+  {
     name: "reportar_problema",
     description:
       "Radica una petición, queja o reclamo ante la administración del conjunto. Devuelve el número de radicado. Úsala cuando reporte un daño, una queja o una solicitud formal.",
@@ -178,6 +193,7 @@ export const responder = internalAction({
       "- Nunca inventes montos, saldos, fechas ni normas del conjunto: si no vino de una herramienta, no lo sabes. Dilo sin rodeos.",
       "- Antes de crear una reserva o de cambiarle la contraseña, confirma con ella.",
       "- Si te piden algo que no puedes hacer, dilo claro y ofrece escribirle a la administración.",
+      "- Antes de rendirte, usa escalar_a_persona: alguien del equipo lo atiende por este mismo chat.",
       "- Si algo NO está en las guías de abajo, dilo en vez de inventarte pantallas o botones.",
       "",
       GUIAS_VEKINO,
@@ -256,6 +272,7 @@ export const responder = internalAction({
 async function ejecutar(
   ctx: any,
   args: {
+    conversacionId: Id<"waConversations">;
     userId: Id<"users">;
     condominioId: Id<"condominios">;
     unidadId?: Id<"unidades">;
@@ -356,6 +373,18 @@ async function ejecutar(
           observaciones: "Creada por WhatsApp",
         });
         return { creada: true, estado: r.estado };
+      }
+
+      case "escalar_a_persona": {
+        await ctx.runMutation(internal.whatsappInbox.escalar, {
+          conversacionId: args.conversacionId,
+          motivo: String(input.motivo ?? "Sin motivo"),
+        });
+        return {
+          escalado: true,
+          queDecir:
+            "Dile que ya avisaste a alguien del equipo y que le escriben por aquí mismo. No prometas tiempos exactos.",
+        };
       }
 
       case "reportar_problema": {

@@ -256,6 +256,17 @@ http.route({
 
       // Registro + scheduling del router son UNA transacción dentro de la
       // mutation: o queda todo, o YCloud reintenta.
+      // Copia de la media a S3 para poder verla en el inbox del equipo: los
+      // enlaces de YCloud exigen la API key y caducan.
+      if (media) {
+        await ctx.scheduler.runAfter(0, internal.whatsappInbox.rescatarMedia, {
+          ycloudMessageId: String(msg.id),
+          link: media.link,
+          mimeType: media.mimeType,
+          filename: media.filename,
+        });
+      }
+
       await ctx.runMutation(internal.whatsapp.registrarEntrante, {
         telefono,
         bsuid,

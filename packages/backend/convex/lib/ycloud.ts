@@ -59,9 +59,21 @@ export async function ycloudRequest(
 export async function enviarMensaje(
   payload: Record<string, unknown> & { to: string },
 ): Promise<YCloudSendResponse> {
+  /* Dos destinatarios posibles y NO son intercambiables:
+   *  - `to`        → teléfono en E.164 ("+573181833248")
+   *  - `recipient` → BSUID de Meta ("CO.1151171038077362"), que es lo único
+   *                  que llega cuando la persona activó su @usuario y ya no
+   *                  comparte el número.
+   * Poner un BSUID en `to` responde "Invalid E.164 phone number" y un
+   * teléfono en `recipient` responde "Invalid BSUID format". Aquí se elige
+   * solo, mirando la forma del destino, para que quien llama no se entere. */
+  const { to, ...resto } = payload;
+  const esBsuid = /^[A-Z]{2}\.(ENT\.)?[A-Za-z0-9]+$/.test(to);
+  const destino = esBsuid ? { recipient: to } : { to };
+
   const { status, json } = await ycloudRequest("/whatsapp/messages/sendDirectly", {
     method: "POST",
-    body: { from: ycloudFrom(), ...payload },
+    body: { from: ycloudFrom(), ...destino, ...resto },
   });
   if (status >= 300) {
     throw new Error(
@@ -203,4 +215,54 @@ export function msgPlantilla(
         : {}),
     },
   };
+}
+
+/**
+ * Texto legible de un mensaje saliente, para guardarlo en el historial.
+ *
+ * Sin esto, en el inbox del equipo aparecía el JSON crudo del payload
+ * ({"type":"list","body":{"text":...}}), que es ilegible y esconde justo lo
+ * que interesa: qué se le dijo a la persona.
+ */
+export function describirMensaje(payload: Record<string, any>): string {
+  const tipo = payload.type ?? "text";
+
+  if (tipo === "text") return payload.text?.body ?? "";
+
+  if (tipo === "interactive") {
+    const i = payload.interactive ?? {};
+    const cuerpo = i.body?.text ?? "";
+    if (i.type === "button") {
+      const botones = (i.action?.buttons ?? [])
+        .map((b: any) => b.reply?.title)
+        .filter(Boolean);
+      return botones.length ? `${cuerpo}\n\n[ ${botones.join(" ] [ ")} ]` : cuerpo;
+    }
+    if (i.type === "list") {
+      const filas = (i.action?.sections ?? [])
+        .flatMap((s: any) => s.rows ?? [])
+        .map((r: any) => `• ${r.title}${r.description ? ` — ${r.description}` : ""}`);
+      return filas.length ? `${cuerpo}\n\n${filas.join("\n")}` : cuerpo;
+    }
+    return cuerpo;
+  }
+
+  if (tipo === "template") {
+    const t = payload.template ?? {};
+    const params = (t.components ?? [])
+      .filter((c: any) => c.type === "body")
+      .flatMap((c: any) => (c.parameters ?? []).map((p: any) => p.text))
+      .filter(Boolean);
+    return `📋 Plantilla «${t.name}»${params.length ? `\n${params.map((p: string, i: number) => `{{${i + 1}}} ${p}`).join("\n")}` : ""}`;
+  }
+
+  if (tipo === "image") return payload.image?.caption || "📷 Imagen";
+  if (tipo === "audio") return "🎤 Nota de voz";
+  if (tipo === "video") return payload.video?.caption || "🎥 Video";
+  if (tipo === "document") {
+    const d = payload.document ?? {};
+    return d.caption || `📄 ${d.filename ?? "Documento"}`;
+  }
+
+  return `[${tipo}]`;
 }

@@ -74,6 +74,7 @@ import type * as visitantes from "../visitantes.js";
 import type * as whatsapp from "../whatsapp.js";
 import type * as whatsappAgente from "../whatsappAgente.js";
 import type * as whatsappBroadcast from "../whatsappBroadcast.js";
+import type * as whatsappInbox from "../whatsappInbox.js";
 import type * as whatsappNotifs from "../whatsappNotifs.js";
 import type * as whatsappTemplates from "../whatsappTemplates.js";
 import type * as whatsappVinculacion from "../whatsappVinculacion.js";
@@ -151,6 +152,7 @@ declare const fullApi: ApiFromModules<{
   whatsapp: typeof whatsapp;
   whatsappAgente: typeof whatsappAgente;
   whatsappBroadcast: typeof whatsappBroadcast;
+  whatsappInbox: typeof whatsappInbox;
   whatsappNotifs: typeof whatsappNotifs;
   whatsappTemplates: typeof whatsappTemplates;
   whatsappVinculacion: typeof whatsappVinculacion;
