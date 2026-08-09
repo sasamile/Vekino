@@ -759,12 +759,29 @@ export const salaEnVivo = query({
       )
       .collect();
 
-    const unidades = await ctx.db
-      .query("unidades")
-      .withIndex("by_condominio", (q) =>
-        q.eq("condominioId", asamblea.condominioId),
-      )
-      .collect();
+    /* El censo de unidades NO se lee aquí.
+     *
+     * Antes se traían las 384 unidades del conjunto enteras para sacar dos
+     * números —coeficiente total y cuántas son— que no cambian durante la
+     * reunión. Como esta consulta la tienen suscrita todos los conectados y se
+     * reejecuta cada vez que alguien entra o sale, eso costaba 140 × 384
+     * lecturas por movimiento. Fue el 41 GB de una sola asamblea.
+     *
+     * Ahora salen de la ficha de la asamblea, donde `cachearTotalesUnidades`
+     * los deja al abrir la sala. Si faltan (asamblea vieja), se calculan como
+     * antes: preferible una consulta cara que un quórum equivocado. */
+    let totalCoef = asamblea.totalCoeficiente;
+    let totalUnidades = asamblea.totalUnidades;
+    if (totalCoef == null || totalUnidades == null) {
+      const unidades = await ctx.db
+        .query("unidades")
+        .withIndex("by_condominio", (q) =>
+          q.eq("condominioId", asamblea.condominioId),
+        )
+        .collect();
+      totalCoef = unidades.reduce((s, u) => s + (u.coeficiente ?? 0), 0);
+      totalUnidades = unidades.length;
+    }
 
     // Una unidad conectada dos veces (dueño + apoderado) cuenta UNA.
     const porUnidad = new Map<string, number>();
@@ -772,13 +789,12 @@ export const salaEnVivo = query({
       porUnidad.set(s.unidadId as string, s.coeficiente ?? 0);
     }
 
-    const totalCoef = unidades.reduce((s, u) => s + (u.coeficiente ?? 0), 0);
     const coefConectado = [...porUnidad.values()].reduce((s, c) => s + c, 0);
     const pct =
       totalCoef > 0
         ? (coefConectado / totalCoef) * 100
-        : unidades.length > 0
-          ? (porUnidad.size / unidades.length) * 100
+        : totalUnidades > 0
+          ? (porUnidad.size / totalUnidades) * 100
           : 0;
 
     /* Sin filtro por frescura: las presencias muertas las borra el cron.
@@ -813,7 +829,7 @@ export const salaEnVivo = query({
           esInvitado: !!p.codigoInvitado,
           imageUrl: p.imageUrl ?? null,
         })),
-      totalUnidades: unidades.length,
+      totalUnidades,
       pctCoeficiente: Math.round(pct * 100) / 100,
       quorumRequerido: asamblea.quorumRequerido ?? 51,
       hayQuorum: pct >= (asamblea.quorumRequerido ?? 51),
@@ -1315,5 +1331,33 @@ export const salirDeSalaConCodigo = mutation({
       });
     }
     return { cerradas };
+  },
+});
+
+/**
+ * Congela el censo de unidades en la ficha de la asamblea.
+ *
+ * Se llama al abrir la sala, y se puede volver a llamar sin daño: solo
+ * recalcula dos números. Existe para que `salaEnVivo` no tenga que leer todas
+ * las unidades del conjunto en cada una de sus miles de ejecuciones.
+ */
+export const cachearTotalesUnidades = internalMutation({
+  args: { asambleaId: v.id("asambleas") },
+  handler: async (ctx, args) => {
+    const asamblea = await ctx.db.get(args.asambleaId);
+    if (!asamblea) return null;
+
+    const unidades = await ctx.db
+      .query("unidades")
+      .withIndex("by_condominio", (q) =>
+        q.eq("condominioId", asamblea.condominioId),
+      )
+      .collect();
+
+    await ctx.db.patch(args.asambleaId, {
+      totalCoeficiente: unidades.reduce((s, u) => s + (u.coeficiente ?? 0), 0),
+      totalUnidades: unidades.length,
+    });
+    return { unidades: unidades.length };
   },
 });

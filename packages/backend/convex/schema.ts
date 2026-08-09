@@ -569,6 +569,15 @@ export default defineSchema({
   // Asambleas (reuniones de propietarios)
   // ─────────────────────────────────────────────────────────────
   asambleas: defineTable({
+    /* Totales del censo de unidades, congelados al abrir la sala.
+     *
+     * `salaEnVivo` los necesitaba para el quórum y los sacaba leyendo TODAS
+     * las unidades del conjunto en cada ejecución: 384 documentos, por cada
+     * uno de los 140 conectados, cada vez que alguien entraba o salía. Son dos
+     * números que no cambian durante la reunión; guardarlos corta el 60% de
+     * las lecturas sin que la pantalla note nada. */
+    totalCoeficiente: v.optional(v.number()),
+    totalUnidades: v.optional(v.number()),
     condominioId: v.id("condominios"),
     titulo: v.string(),
     tipo: v.union(v.literal("ordinaria"), v.literal("extraordinaria")),
