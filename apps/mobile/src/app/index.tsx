@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
-import { View, ActivityIndicator } from "react-native";
+import { View } from "react-native";
 import { useRouter, useRootNavigationState } from "expo-router";
 import { Authenticated, Unauthenticated, AuthLoading } from "convex/react";
 import { StatusBar } from "expo-status-bar";
 import { storageGet } from "@/lib/storage";
 import { ONBOARDING_KEY, SPLASH_ONLY } from "@/lib/auth-ui";
+import { SplashPantalla, SplashMarca } from "@/components/ui/splash-marca";
 
 function Redirect({ to }: { to: string }) {
   const router = useRouter();
@@ -15,11 +16,7 @@ function Redirect({ to }: { to: string }) {
     router.replace(to as never);
   }, [router, to, navState?.key]);
 
-  return (
-    <View style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: "#FCFBFD" }}>
-      <ActivityIndicator color="#0E0E0F" size="large" />
-    </View>
-  );
+  return <SplashPantalla />;
 }
 
 function UnauthGate() {
@@ -35,13 +32,7 @@ function UnauthGate() {
     });
   }, []);
 
-  if (!target) {
-    return (
-      <View style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: "#FCFBFD" }}>
-        <ActivityIndicator color="#0E0E0F" size="large" />
-      </View>
-    );
-  }
+  if (!target) return <SplashPantalla />;
 
   return <Redirect to={target} />;
 }
@@ -52,7 +43,7 @@ export default function Index() {
       <StatusBar style="dark" />
       <AuthLoading>
         <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
-          <ActivityIndicator color="#0E0E0F" size="large" />
+          <SplashMarca />
         </View>
       </AuthLoading>
       <Unauthenticated>

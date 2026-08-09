@@ -81,6 +81,16 @@ export function useSalaCloudflare(
   const [remotas, setRemotas] = useState<PistaRemota[]>([]);
   const [micOn, setMicOn] = useState(false);
   const [compartiendo, setCompartiendo] = useState(false);
+  /* Safari en iPhone/iPad no tiene `getDisplayMedia`: en el móvil no se puede
+   * compartir pantalla, punto. Enseñar el botón allí solo produce un error
+   * incomprensible ("getDisplayMedia is not a function") a quien lo pulsa. */
+  const [puedeCompartirPantalla, setPuedeCompartir] = useState(false);
+  useEffect(() => {
+    setPuedeCompartir(
+      typeof navigator !== "undefined" &&
+        typeof navigator.mediaDevices?.getDisplayMedia === "function",
+    );
+  }, []);
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const sesionRef = useRef<string | null>(null);
@@ -92,6 +102,25 @@ export function useSalaCloudflare(
   /** `mid` → nombre de pista. Lo llena `suscribir`: es la única forma de
    *  saber de quién es un medio, porque el evento `track` solo trae el mid. */
   const midRef = useRef<Map<string, string>>(new Map());
+
+  /**
+   * Cerrojo de negociación.
+   *
+   * Un `RTCPeerConnection` solo aguanta UNA negociación a la vez. Si mientras
+   * se publica el micrófono llega una suscripción —y llega, porque el
+   * catálogo cambia justo cuando alguien empieza a hablar— la segunda se
+   * estrella con "Called in wrong state: stable" y la persona se queda sin
+   * audio hasta salir y volver a entrar.
+   *
+   * Todo lo que toque SDP pasa por aquí, en fila.
+   */
+  const colaRef = useRef<Promise<unknown>>(Promise.resolve());
+  const enFila = useCallback(<T,>(tarea: () => Promise<T>): Promise<T> => {
+    const siguiente = colaRef.current.then(tarea, tarea);
+    // Un fallo no puede romper la fila: la siguiente tarea tiene que correr.
+    colaRef.current = siguiente.catch(() => undefined);
+    return siguiente;
+  }, []);
 
   // ── Conexión ────────────────────────────────────────────────
 
@@ -230,6 +259,10 @@ export function useSalaCloudflare(
       // Se piden todas de una vez: una llamada por pista multiplica el
       // tráfico de señalización justo cuando la mesa abre el micrófono.
       nuevas.forEach((p) => suscritasRef.current.add(p.trackName));
+      /* En la fila: si esto se cruza con una publicación, la segunda
+       * negociación se estrella con "Called in wrong state". Y se cruzan
+       * seguido — el catálogo cambia justo cuando alguien abre el micrófono. */
+      await enFila(async () => {
       const r = await suscribirAccion({
         asambleaId,
         sessionId: sid,
@@ -255,8 +288,9 @@ export function useSalaCloudflare(
       const sdpRespuesta = pc.localDescription?.sdp ?? respuesta.sdp;
       if (!sdpRespuesta) return;
       await responderAccion({ sessionId: sid, sdp: sdpRespuesta });
+      });
     })();
-  }, [catalogo, estado, asambleaId, suscribirAccion, responderAccion]);
+  }, [catalogo, estado, asambleaId, suscribirAccion, responderAccion, enFila]);
 
   /** Le pone nombre a cada pista remota cuando el catálogo lo dice. */
   useEffect(() => {
@@ -279,52 +313,79 @@ export function useSalaCloudflare(
     const sid = sesionRef.current;
     if (!pc || !sid) return;
 
+    /* Si ya se publicó una vez, volver a hablar es SOLO cambiar `enabled`.
+     *
+     * Antes se despublicaba y se volvía a publicar, o sea dos negociaciones
+     * por cada vez que alguien se callaba — y ahí se rompía: la segunda
+     * llegaba en mal estado y la persona se quedaba muda hasta salir y
+     * volver a entrar. Con Opus el silencio no cuesta ancho de banda, así
+     * que mantener la pista publicada no encarece nada. */
+    if (micRef.current) {
+      micRef.current.enabled = true;
+      setMicOn(true);
+      return;
+    }
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const pista = stream.getAudioTracks()[0];
       if (!pista) return;
       micRef.current = pista;
 
-      const trans = pc.addTransceiver(pista, { direction: "sendonly" });
-      const oferta = await pc.createOffer();
-      await pc.setLocalDescription(oferta);
-      await esperarIce(pc);
+      const ok = await enFila(async () => {
+        const trans = pc.addTransceiver(pista, { direction: "sendonly" });
+        const oferta = await pc.createOffer();
+        await pc.setLocalDescription(oferta);
+        await esperarIce(pc);
 
-      const trackName = `mic-${sid.slice(0, 8)}`;
-      const r = await publicarAccion({
-        asambleaId,
-        sessionId: sid,
-        sdp: pc.localDescription!.sdp,
-        pistas: [{ mid: trans.mid ?? "0", trackName, tipo: "audio" as const }],
+        const trackName = `mic-${sid.slice(0, 8)}`;
+        const r = await publicarAccion({
+          asambleaId,
+          sessionId: sid,
+          sdp: pc.localDescription!.sdp,
+          pistas: [{ mid: trans.mid ?? "0", trackName, tipo: "audio" as const }],
+        });
+        if ("error" in r) {
+          setError(r.error);
+          return false;
+        }
+        await pc.setRemoteDescription({ type: "answer", sdp: r.sdp });
+        misPistasRef.current = [...misPistasRef.current, trackName];
+        return true;
       });
-      if ("error" in r) {
+
+      if (!ok) {
         pista.stop();
         micRef.current = null;
-        setError(r.error);
         return;
       }
-      await pc.setRemoteDescription({ type: "answer", sdp: r.sdp });
-      misPistasRef.current = [...misPistasRef.current, trackName];
       setMicOn(true);
     } catch (e) {
+      micRef.current?.stop();
+      micRef.current = null;
       setError(e instanceof Error ? e.message : String(e));
     }
-  }, [asambleaId, publicarAccion]);
+  }, [asambleaId, publicarAccion, enFila]);
 
   /**
    * Comparte la pantalla.
    *
    * Es lo único que puede reventar la factura: el audio de una asamblea son
-   * ~50 GB, pero la misma asamblea con la pantalla en 720p real se va a ~980
-   * GB — el mes entero de capa gratis en una sola reunión. Por eso se pide
-   * expresamente una resolución modesta: el orden del día y los estados
-   * financieros son texto casi estático y a 720p/5fps se leen igual de bien
-   * que a 1080p/30, con una décima parte del tráfico.
+   * ~50 GB, pero la misma asamblea con la pantalla en 720p a 30 fps se va a
+   * ~980 GB — el mes entero de capa gratis en una sola reunión. Por eso se
+   * pide expresamente modesta: un orden del día y unos estados financieros
+   * son texto casi estático y a 5 fps se leen igual.
    */
   const compartirPantalla = useCallback(async () => {
     const pc = pcRef.current;
     const sid = sesionRef.current;
     if (!pc || !sid) return;
+    if (typeof navigator.mediaDevices?.getDisplayMedia !== "function") {
+      setError(
+        "Este dispositivo no puede compartir pantalla. En iPhone y iPad el navegador no lo permite: usa un computador.",
+      );
+      return;
+    }
 
     try {
       const stream = await navigator.mediaDevices.getDisplayMedia({
@@ -335,40 +396,47 @@ export function useSalaCloudflare(
       if (!pista) return;
       pantallaRef.current = pista;
 
-      /* Si la persona corta la compartición desde el aviso del navegador —y
-       * no desde nuestro botón—, hay que enterarse o la pista queda anunciada
-       * en Convex sin que nadie la esté emitiendo. */
+      /* Si se corta la compartición desde el aviso del navegador —y no desde
+       * nuestro botón—, hay que enterarse o la pista queda anunciada en
+       * Convex sin que nadie la emita, y los demás se suscriben al vacío. */
       pista.addEventListener("ended", () => void dejarDeCompartirRef.current());
 
-      const trans = pc.addTransceiver(pista, { direction: "sendonly" });
-      const oferta = await pc.createOffer();
-      await pc.setLocalDescription(oferta);
-      await esperarIce(pc);
+      const ok = await enFila(async () => {
+        const trans = pc.addTransceiver(pista, { direction: "sendonly" });
+        const oferta = await pc.createOffer();
+        await pc.setLocalDescription(oferta);
+        await esperarIce(pc);
 
-      const trackName = `pantalla-${sid.slice(0, 8)}`;
-      const r = await publicarAccion({
-        asambleaId,
-        sessionId: sid,
-        sdp: pc.localDescription!.sdp,
-        pistas: [
-          { mid: trans.mid ?? "0", trackName, tipo: "pantalla" as const },
-        ],
+        const trackName = `pantalla-${sid.slice(0, 8)}`;
+        const r = await publicarAccion({
+          asambleaId,
+          sessionId: sid,
+          sdp: pc.localDescription!.sdp,
+          pistas: [
+            { mid: trans.mid ?? "0", trackName, tipo: "pantalla" as const },
+          ],
+        });
+        if ("error" in r) {
+          setError(r.error);
+          return false;
+        }
+        await pc.setRemoteDescription({ type: "answer", sdp: r.sdp });
+        misPistasRef.current = [...misPistasRef.current, trackName];
+        return true;
       });
-      if ("error" in r) {
+
+      if (!ok) {
         pista.stop();
         pantallaRef.current = null;
-        setError(r.error);
         return;
       }
-      await pc.setRemoteDescription({ type: "answer", sdp: r.sdp });
-      misPistasRef.current = [...misPistasRef.current, trackName];
       setCompartiendo(true);
     } catch (e) {
       /* Cancelar el diálogo del navegador lanza aquí y no es un error. */
       const msg = e instanceof Error ? e.message : String(e);
       if (!/denied|dismissed|Permission/i.test(msg)) setError(msg);
     }
-  }, [asambleaId, publicarAccion]);
+  }, [asambleaId, publicarAccion, enFila]);
 
   const dejarDeCompartir = useCallback(async () => {
     const sid = sesionRef.current;
@@ -386,27 +454,18 @@ export function useSalaCloudflare(
     );
   }, [dejarDePublicarAccion]);
 
-  /* El listener de `ended` se registra una sola vez, cuando aún no existe la
-   * versión final de la función; el ref lo mantiene apuntando a la vigente. */
+  /* El listener de `ended` se registra cuando aún no existe la versión final
+   * de la función; el ref lo mantiene apuntando a la vigente. */
   const dejarDeCompartirRef = useRef(dejarDeCompartir);
   dejarDeCompartirRef.current = dejarDeCompartir;
 
   const apagarMic = useCallback(async () => {
-    const sid = sesionRef.current;
-    const mias = misPistasRef.current;
-    micRef.current?.stop();
-    micRef.current = null;
+    /* Silenciar, no despublicar. La pista se cierra de verdad al salir de la
+     * sala (`desconectar`); aquí solo deja de mandar voz. */
+    if (micRef.current) micRef.current.enabled = false;
     setMicOn(false);
-    if (!sid) return;
-    const nombres = mias.filter((n) => n.startsWith("mic-"));
-    if (nombres.length === 0) return;
-    await dejarDePublicarAccion({ sessionId: sid, trackNames: nombres }).catch(
-      () => {},
-    );
-    misPistasRef.current = misPistasRef.current.filter(
-      (n) => !n.startsWith("mic-"),
-    );
-  }, [dejarDePublicarAccion]);
+  }, []);
+
 
   return {
     /** false mientras no esté configurado el SFU: la sala usa el motor viejo. */
@@ -417,6 +476,7 @@ export function useSalaCloudflare(
     micOn,
     encenderMic,
     apagarMic,
+    puedeCompartirPantalla,
     compartiendo,
     compartirPantalla,
     dejarDeCompartir,

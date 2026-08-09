@@ -119,7 +119,7 @@ export default function SalaPruebaPage() {
             {entrar ? "Salir de la sala" : "Entrar a la sala"}
           </Button>
 
-          {entrar && (
+          {entrar && sala.puedeCompartirPantalla && (
             <Button
               variant={sala.compartiendo ? "primary" : "outline"}
               onClick={() =>
