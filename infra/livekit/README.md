@@ -4,7 +4,26 @@ Reparte el video de la sala: quien habla sube **una** copia y el servidor la
 entrega a todos. Sin él, la sala cae sola a malla punto a punto —que funciona
 bien hasta unas decenas de personas— así que nada se rompe si no está.
 
-## Estado actual (montado el 2 de agosto de 2026)
+> ## ⚠️ Desmontado el 9 de agosto de 2026
+>
+> Las tres llaves (`LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`) **ya
+> no están en Convex**, así que la sala no intenta usar este servidor. Estaban
+> apuntando a una máquina que no responde —ni ping ni 443— que es exactamente
+> el estado roto que avisa la sección "Al terminar una asamblea".
+>
+> **Falta confirmar en el panel de Vultr que la instancia esté destruida.** No
+> pude comprobarlo: entrar al panel pide contraseña. Mientras exista, se cobra
+> aunque esté apagada y aunque no responda.
+>
+> El motor nuevo de las asambleas es el SFU de Cloudflare
+> (`packages/backend/convex/salaCloudflare.ts`), que se enciende por condominio
+> con el módulo `sala_cloudflare`. Con ese módulo apagado y sin estas llaves,
+> la sala usa la malla punto a punto, que sirve para grupos de unas decenas.
+>
+> Las llaves que aparecen abajo ya no valen para nada: el script las genera
+> nuevas cada vez que se monta el servidor.
+
+## Estado histórico (montado el 2 de agosto de 2026)
 
 | | |
 |---|---|
