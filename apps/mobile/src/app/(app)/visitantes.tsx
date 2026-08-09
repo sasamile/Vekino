@@ -152,7 +152,9 @@ function Inner() {
           title={
             data === undefined
               ? "Visitantes"
-              : `${data.length} autorización${data.length === 1 ? "" : "es"}`
+              : data.length === 1
+                ? "1 autorización"
+                : `${data.length} autorizaciones` // en plural pierde la tilde
           }
         >
           {data === undefined ? (
@@ -161,6 +163,10 @@ function Inner() {
             <GlassCard style={styles.emptyCard}>
               <Ionicons name="person-add-outline" size={32} color={SoftUI.textSecondary} />
               <Text style={styles.emptyText}>Sin visitantes autorizados</Text>
+              <Text style={styles.emptyHint}>
+                Cuando autorizas a alguien, portería lo ve en su lista y puede
+                dejarlo entrar sin llamarte.
+              </Text>
               {condominioId ? (
                 <Tap
                   style={[styles.emptyCta, { backgroundColor: theme.accent }]}
@@ -550,10 +556,18 @@ const styles = StyleSheet.create({
     gap: SoftUI.space.md,
   },
   emptyText: {
+    color: SoftUI.text,
+    fontSize: SoftUI.type.caption.size + 2,
+    fontFamily: AuthUI.font.semibold,
+    textAlign: "center",
+  },
+  emptyHint: {
     color: SoftUI.textSecondary,
-    fontSize: SoftUI.type.caption.size + 1,
+    fontSize: SoftUI.type.chip.size,
+    lineHeight: SoftUI.type.chip.size + 6,
     fontFamily: AuthUI.font.regular,
     textAlign: "center",
+    maxWidth: 260,
   },
   emptyCta: {
     marginTop: SoftUI.space.xs,

@@ -24,15 +24,23 @@ export function SoftHomeHeader({
   avatarUrl,
   badgeLabel,
   showNotifDot = false,
+  showBack,
 }: {
   saludo: string;
   displayName: string;
   avatarUrl?: string | null;
   badgeLabel?: string | null;
   showNotifDot?: boolean;
+  /**
+   * Botón de volver. Si no se pasa, se decide solo: los módulos van apilados
+   * sobre las pestañas y ahí la barra inferior no se ve, así que sin este
+   * botón la única salida es el gesto de deslizar desde el borde (invisible).
+   */
+  showBack?: boolean;
 }) {
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const puedeVolver = showBack ?? router.canGoBack();
   const me = useQuery(api.users.me);
   const { theme } = useCondominio();
   const pretty = formatDisplayName(displayName);
@@ -56,14 +64,20 @@ export function SoftHomeHeader({
 
       {/* Contenido por encima del blur */}
       <View style={styles.row}>
-        <View
-          style={styles.avatarHit}
-          onTouchEnd={() => router.push("/(app)/(tabs)/perfil" as never)}
-        >
-          <View style={styles.avatarRing}>
-            <UserAvatar name={nameForAvatar} image={photo} size={AVATAR} />
+        {puedeVolver ? (
+          <View style={styles.backBtn} onTouchEnd={() => router.back()}>
+            <Ionicons name="chevron-back" size={24} color={SoftUI.text} />
           </View>
-        </View>
+        ) : (
+          <View
+            style={styles.avatarHit}
+            onTouchEnd={() => router.push("/(app)/(tabs)/perfil" as never)}
+          >
+            <View style={styles.avatarRing}>
+              <UserAvatar name={nameForAvatar} image={photo} size={AVATAR} />
+            </View>
+          </View>
+        )}
 
         <View style={styles.textCol}>
           <View style={styles.greetRow}>
@@ -138,6 +152,17 @@ const styles = StyleSheet.create({
     width: AVATAR,
     height: AVATAR,
     flexShrink: 0,
+  },
+  backBtn: {
+    width: AVATAR,
+    height: AVATAR,
+    flexShrink: 0,
+    borderRadius: AVATAR / 2,
+    backgroundColor: SoftUI.white,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: SoftUI.divider,
   },
   avatarRing: {
     width: AVATAR,

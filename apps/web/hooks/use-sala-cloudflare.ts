@@ -59,7 +59,12 @@ export function useSalaCloudflare(
   asambleaId: Id<"asambleas">,
   activo: boolean,
 ) {
-  const disponible = useQuery(api.salaCloudflare.disponible, activo ? {} : "skip");
+  /* Se pregunta SIEMPRE, no solo al entrar. Es una comprobación de
+   * configuración —dos líneas de `process.env`— y saltarla mientras la
+   * persona no ha entrado hacía que la pantalla dijera "el SFU no está
+   * configurado" cuando lo único que pasaba es que aún no se había
+   * preguntado. */
+  const disponible = useQuery(api.salaCloudflare.disponible, {});
   const catalogo = useQuery(
     api.salaCloudflare.pistas,
     activo ? { asambleaId } : "skip",
