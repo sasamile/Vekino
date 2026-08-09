@@ -44,6 +44,26 @@ export type AudioRemoto = {
   stream: MediaStream;
 };
 
+/**
+ * Prueba de por dónde viajan los medios de verdad.
+ *
+ * Que la aplicación diga qué motor eligió no demuestra nada: lo dice ella
+ * misma. Esto sale del navegador —la pareja de candidatos ICE en uso y los
+ * bytes que han cruzado por ella— y no se puede fingir desde el código.
+ */
+export type Diagnostico = {
+  sessionId: string | null;
+  estadoConexion: RTCPeerConnectionState;
+  ipRemota: string | null;
+  puertoRemoto: number | null;
+  /** null mientras no se conozca la dirección del otro extremo. */
+  esDeCloudflare: boolean | null;
+  bytesRecibidos: number;
+  bytesEnviados: number;
+  pistasPublicadas: number;
+  pistasSuscritas: number;
+};
+
 /** Lo que `EscenarioVideo` necesita, venga de donde venga el video. */
 export type SalaVideo = {
   locales: { medio: Medio; stream: MediaStream }[];
@@ -64,4 +84,9 @@ export type SalaVideo = {
   toggleCam: () => Promise<void>;
   colgar: () => Promise<void>;
   transmitiendo: boolean;
+  /**
+   * Solo lo entrega el motor de Cloudflare, que es el que hay que poder
+   * comprobar. Los otros dos llevan meses funcionando y nadie duda de ellos.
+   */
+  diagnostico?: () => Promise<Diagnostico | null>;
 };

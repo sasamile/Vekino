@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useAction, useQuery } from "convex/react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
+import type { Diagnostico } from "./sala-tipos";
 
 /**
  * La sala sobre el SFU de Cloudflare.
@@ -46,6 +47,59 @@ export type EstadoSala =
   | "conectada"
   | "reconectando"
   | "error";
+
+/**
+ * Rangos IPv4 públicos de Cloudflare (los que publica en cloudflare.com/ips).
+ *
+ * Se comprueba contra esta lista en vez de preguntarle a un servicio externo
+ * porque la respuesta tiene que servir en mitad de una asamblea, sin depender
+ * de que otra cosa esté en pie. La lista cambia muy de tanto en tanto; si un
+ * día una IP legítima diera "no", sería este array y no el motor.
+ */
+const RANGOS_CLOUDFLARE = [
+  "103.21.244.0/22",
+  "103.22.200.0/22",
+  "103.31.4.0/22",
+  "104.16.0.0/13",
+  "104.24.0.0/14",
+  "108.162.192.0/18",
+  "131.0.72.0/22",
+  "141.101.64.0/18",
+  "162.158.0.0/15",
+  "172.64.0.0/13",
+  "173.245.48.0/20",
+  "188.114.96.0/20",
+  "190.93.240.0/20",
+  "197.234.240.0/22",
+  "198.41.128.0/17",
+];
+
+function ipEsDeCloudflare(ip: string): boolean {
+  const aNumero = (dir: string): number | null => {
+    const partes = dir.split(".");
+    if (partes.length !== 4) return null;
+    let n = 0;
+    for (const parte of partes) {
+      const octeto = Number(parte);
+      if (!Number.isInteger(octeto) || octeto < 0 || octeto > 255) return null;
+      n = n * 256 + octeto;
+    }
+    return n;
+  };
+
+  const valor = aNumero(ip);
+  if (valor === null) return false; // IPv6 o algo raro: no se afirma nada.
+
+  return RANGOS_CLOUDFLARE.some((rango) => {
+    const [base, bits] = rango.split("/");
+    const inicio = aNumero(base!);
+    if (inicio === null) return false;
+    /* `>>> 0` mantiene el resultado sin signo: con /13 el desplazamiento
+     * produce un negativo en JavaScript y la comparación fallaría. */
+    const mascara = (~0 << (32 - Number(bits))) >>> 0;
+    return (valor & mascara) >>> 0 === (inicio & mascara) >>> 0;
+  });
+}
 
 export type PistaRemota = {
   trackName: string;
@@ -586,6 +640,71 @@ export function useSalaCloudflare(
   }, []);
 
   /**
+   * Prueba de por dónde está viajando el audio de verdad.
+   *
+   * Que la aplicación diga "Cloudflare" solo demuestra qué motor eligió, no
+   * que los medios pasen por ahí. Esto lo saca del propio navegador: la
+   * pareja de candidatos ICE en uso trae la dirección del otro extremo y los
+   * bytes que han cruzado. Si esa dirección es de Cloudflare y los bytes
+   * suben, el audio va por Cloudflare. No hay forma de fingirlo.
+   */
+  const diagnostico = useCallback(async (): Promise<Diagnostico | null> => {
+    const pc = pcRef.current;
+    if (!pc) return null;
+
+    const stats = await pc.getStats();
+    let pareja: RTCIceCandidatePairStats | null = null;
+    const candidatos = new Map<string, { ip?: string; puerto?: number }>();
+
+    stats.forEach((s) => {
+      if (s.type === "candidate-pair" && s.state === "succeeded" && s.nominated) {
+        pareja = s as RTCIceCandidatePairStats;
+      }
+      if (s.type === "remote-candidate") {
+        /* `address` es el nombre actual y `ip` el heredado; los navegadores no
+         * coinciden en cuál mandan, así que se aceptan los dos. */
+        const c = s as { address?: string; ip?: string; port?: number };
+        candidatos.set(s.id, { ip: c.address ?? c.ip, puerto: c.port });
+      }
+    });
+
+    /* Algunos navegadores no marcan `nominated`: si no hubo suerte, vale
+     * cualquier pareja que haya llegado a "succeeded". */
+    if (!pareja) {
+      stats.forEach((s) => {
+        if (!pareja && s.type === "candidate-pair" && s.state === "succeeded") {
+          pareja = s as RTCIceCandidatePairStats;
+        }
+      });
+    }
+
+    let bytesRecibidos = 0;
+    let bytesEnviados = 0;
+    stats.forEach((s) => {
+      if (s.type === "inbound-rtp") bytesRecibidos += (s as RTCInboundRtpStreamStats).bytesReceived ?? 0;
+      if (s.type === "outbound-rtp") bytesEnviados += (s as RTCOutboundRtpStreamStats).bytesSent ?? 0;
+    });
+
+    const p = pareja as RTCIceCandidatePairStats | null;
+    const remoto = p?.remoteCandidateId
+      ? candidatos.get(p.remoteCandidateId)
+      : undefined;
+    const ip = remoto?.ip ?? null;
+
+    return {
+      sessionId: sesionRef.current,
+      estadoConexion: pc.connectionState,
+      ipRemota: ip,
+      puertoRemoto: remoto?.puerto ?? null,
+      esDeCloudflare: ip ? ipEsDeCloudflare(ip) : null,
+      bytesRecibidos,
+      bytesEnviados,
+      pistasPublicadas: misPistasRef.current.length,
+      pistasSuscritas: suscritasRef.current.size,
+    };
+  }, []);
+
+  /**
    * Deja sonar el audio.
    *
    * Se llama desde el botón que pinta la sala cuando el navegador bloquea la
@@ -643,5 +762,6 @@ export function useSalaCloudflare(
     compartirPantalla,
     dejarDeCompartir,
     reconectar: conectar,
+    diagnostico,
   };
 }

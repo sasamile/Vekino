@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input, Select } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { useSalaCloudflare } from "@/hooks/use-sala-cloudflare";
+import { IndicadorMotor } from "@/components/asamblea/indicador-motor";
 
 /**
  * Banco de pruebas de la sala sobre Cloudflare.
@@ -151,6 +152,16 @@ export default function SalaPruebaPage() {
             </Button>
           )}
         </div>
+
+        {entrar && (
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-muted-foreground">Motor:</span>
+            <IndicadorMotor
+              motor="cloudflare"
+              diagnostico={sala.diagnostico}
+            />
+          </div>
+        )}
 
         <div className="flex items-center gap-2 text-sm">
           <span className="text-muted-foreground">Estado:</span>

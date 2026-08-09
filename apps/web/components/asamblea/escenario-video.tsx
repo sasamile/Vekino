@@ -23,6 +23,7 @@ import {
   type EmisorRemoto,
 } from "@/hooks/use-video-sala";
 import { useAudioHablando } from "@/hooks/use-audio-hablando";
+import { IndicadorMotor } from "./indicador-motor";
 import { useAvisoMicApagado } from "@/hooks/use-aviso-mic-apagado";
 import {
   formatearElapsed,
@@ -693,6 +694,18 @@ export function EscenarioVideo({
           ) : null}
         </div>
       ) : null}
+
+      {/* ── Qué motor está usando la sala ─────────────────────────────────
+          Se enseña siempre, no solo cuando falla algo: la pregunta «¿de
+          verdad está usando Cloudflare?» tiene que poder contestarse mirando
+          la pantalla, y al abrirlo se ve la dirección del otro extremo y los
+          bytes cruzando — datos del navegador, no de la aplicación. */}
+      <div className="absolute left-4 top-4 z-10">
+        <IndicadorMotor
+          motor={video.motor}
+          diagnostico={video.diagnostico}
+        />
+      </div>
 
       {/* ── Contador de conexiones del emisor ─────────────────────────────
           `tope: 0` es «sin tope»: con un repetidor de medios no hay un número

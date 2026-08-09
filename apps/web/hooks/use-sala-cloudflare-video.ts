@@ -105,5 +105,6 @@ export function useSalaCloudflareVideo(
     toggleCam,
     colgar,
     transmitiendo: sala.micOn || sala.camOn || sala.compartiendo,
+    diagnostico: sala.diagnostico,
   };
 }
