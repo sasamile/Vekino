@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useMutation } from "convex/react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
+import { useUploadToS3 } from "@/hooks/use-upload-s3";
 
 /**
  * Grabación de la reunión completa (como Meet): captura esta pestaña
@@ -28,6 +29,8 @@ export function useGrabacionSala(
 ) {
   const iniciar = useMutation(api.salaBitacora.iniciarGrabacion);
   const detener = useMutation(api.salaBitacora.detenerGrabacion);
+  const anotarParte = useMutation(api.salaBitacora.anotarParteGrabacion);
+  const subirS3 = useUploadToS3();
   const [grabando, setGrabando] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [startedAt, setStartedAt] = useState<number | null>(null);
@@ -43,6 +46,12 @@ export function useGrabacionSala(
   const micTrackRef = useRef(opts.micTrack);
   micTrackRef.current = opts.micTrack;
   const stoppingRef = useRef(false);
+  const subidaRef = useRef<number | null>(null);
+  /* Respaldo a S3: identifica ESTA grabación y por dónde va. */
+  const sesionRef = useRef<string>("");
+  const ordenRef = useRef(0);
+  const pendientesRef = useRef<Blob[]>([]);
+  const subiendoRef = useRef(false);
 
   const huerfana = !!opts.activaEnServidor && !grabando;
 
@@ -62,6 +71,45 @@ export function useGrabacionSala(
     window.addEventListener("beforeunload", avisar);
     return () => window.removeEventListener("beforeunload", avisar);
   }, [grabando]);
+
+  /**
+   * Sube a S3 lo grabado desde la última vez.
+   *
+   * Los trozos van numerados porque un WebM solo se reconstruye
+   * concatenándolos EN ORDEN: el primero lleva la cabecera y los demás no
+   * valen nada sueltos. Si una subida falla, sus pedazos vuelven a la cola y
+   * se reintentan en el siguiente minuto — perder un trozo intermedio parte
+   * la grabación en dos.
+   */
+  const volcarPendientes = useCallback(async () => {
+    if (subiendoRef.current) return;
+    const pedazos = pendientesRef.current;
+    if (pedazos.length === 0) return;
+    pendientesRef.current = [];
+    subiendoRef.current = true;
+
+    const orden = ordenRef.current++;
+    const blob = new Blob(pedazos, { type: "video/webm" });
+    try {
+      const { url } = await subirS3(
+        Object.assign(blob, { name: `parte-${orden}.webm` }),
+        `asambleas/${asambleaId}/grabacion`,
+      );
+      await anotarParte({
+        asambleaId,
+        sesionGrabacion: sesionRef.current,
+        orden,
+        url,
+        bytes: blob.size,
+      });
+    } catch {
+      // Devolver a la cola y reintentar: un hueco parte la grabación.
+      pendientesRef.current = [...pedazos, ...pendientesRef.current];
+      ordenRef.current = orden;
+    } finally {
+      subiendoRef.current = false;
+    }
+  }, [anotarParte, asambleaId, subirS3]);
 
   const stopLocal = useCallback(async () => {
     const rec = recorderRef.current;
@@ -84,6 +132,13 @@ export function useGrabacionSala(
     void audioCtxRef.current?.close().catch(() => {});
     audioCtxRef.current = null;
 
+    if (subidaRef.current) {
+      clearInterval(subidaRef.current);
+      subidaRef.current = null;
+    }
+    // Lo último que quedó sin subir: si no, se pierde justo el final.
+    await volcarPendientes();
+
     const chunks = chunksRef.current;
     chunksRef.current = [];
     if (chunks.length > 0) {
@@ -96,7 +151,7 @@ export function useGrabacionSala(
       a.click();
       URL.revokeObjectURL(url);
     }
-  }, []);
+  }, [volcarPendientes]);
 
   const stop = useCallback(async () => {
     if (stoppingRef.current) return;
@@ -249,10 +304,26 @@ export function useGrabacionSala(
           : { videoBitsPerSecond: 2_500_000, audioBitsPerSecond: 128_000 },
       );
       chunksRef.current = [];
+      pendientesRef.current = [];
+      ordenRef.current = 0;
+      sesionRef.current = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
       rec.ondataavailable = (e) => {
-        if (e.data.size > 0) chunksRef.current.push(e.data);
+        if (e.data.size === 0) return;
+        /* Se guarda en los dos sitios: en memoria para la descarga local del
+         * final, y en la cola para irlo subiendo. Duplicar aquí es barato y
+         * es lo que hace que un portátil que se duerme no borre la asamblea. */
+        chunksRef.current.push(e.data);
+        pendientesRef.current.push(e.data);
       };
       rec.start(2000);
+
+      /* Un trozo por minuto. Con 2 s de `timeslice` son 30 pedazos cada vez:
+       * suficientemente pocas subidas para no molestar y suficientemente
+       * frecuentes para que lo peor que se pierda sea el último minuto. */
+      subidaRef.current = window.setInterval(() => {
+        void volcarPendientes();
+      }, 60_000);
       recorderRef.current = rec;
       setStartedAt(Date.now());
       setElapsed(0);

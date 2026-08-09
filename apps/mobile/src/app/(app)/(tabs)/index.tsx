@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import {
   View,
   Text,
@@ -78,51 +78,9 @@ const ESTADO_ICON: Record<
 const FEATURED_FALLBACK_URI =
   "https://images.unsplash.com/photo-1600596542815-ffad4c1539a9?auto=format&fit=crop&w=800&q=70";
 
-/**
- * Proporción real de una imagen remota.
- *
- * Sirve para anclar la portada al borde SUPERIOR: los avisos son flyers
- * verticales con el encabezado arriba, y `resizeMode="cover"` los recorta por
- * el centro. Con la proporción conocida la dibujamos a ancho completo desde
- * arriba y el contenedor (overflow: hidden) recorta lo que sobra abajo.
- */
-function useAspectRatio(uri: string | undefined): number | null {
-  const [ratio, setRatio] = useState<number | null>(null);
-
-  useEffect(() => {
-    if (!uri) {
-      setRatio(null);
-      return;
-    }
-    let vigente = true;
-    Image.getSize(
-      uri,
-      (w, h) => {
-        if (vigente && h > 0) setRatio(w / h);
-      },
-      () => {
-        // Sin medida usamos el encuadre centrado de siempre.
-        if (vigente) setRatio(null);
-      },
-    );
-    return () => {
-      vigente = false;
-    };
-  }, [uri]);
-
-  return ratio;
-}
-
-/**
- * Imagen de la tarjeta destacada. Si el aviso trae foto propia mandamos esa
- * —antes siempre salía la portada del conjunto aunque la tarjeta dijera
- * "AVISO"—, y solo si no tiene caemos a la portada del condominio.
- */
-function featuredImageSource(
-  avisoImage: string | null | undefined,
-  coverImage: string | null | undefined,
-) {
-  const uri = avisoImage?.trim() || coverImage?.trim();
+/** Fondo de la tarjeta destacada: la portada del condominio. */
+function featuredImageSource(coverImage: string | null | undefined) {
+  const uri = coverImage?.trim();
   if (uri) return { uri };
   return { uri: FEATURED_FALLBACK_URI };
 }
@@ -247,9 +205,6 @@ function ResidentHome({
   const totalAPagar = pendientes.reduce((s, f) => s + f.totalAPagar, 0);
   const linkColor = theme.accent;
   const featuredAviso = (comunicados ?? []).find((c) => c.fijado) ?? comunicados?.[0];
-  const portadaRatio = useAspectRatio(
-    featuredAviso?.imagenUrl ?? coverImage ?? undefined,
-  );
 
   return (
     <View style={{ flex: 1 }}>
@@ -313,34 +268,22 @@ function ResidentHome({
             }
             style={styles.featuredWrap}
           >
+            {/* De fondo va SIEMPRE la foto del conjunto: es horizontal y está
+                hecha para esto. Los avisos son flyers verticales llenos de
+                texto — de fondo se recortan mal y chocan con el título, así
+                que el del aviso va aparte, como miniatura. */}
             <Image
-              source={featuredImageSource(featuredAviso?.imagenUrl, coverImage)}
-              // Con la proporción medida la anclamos arriba; mientras carga
-              // (o si no se pudo medir) cae al encuadre centrado normal.
-              style={
-                portadaRatio
-                  ? {
-                      position: "absolute",
-                      top: 0,
-                      left: 0,
-                      width: "100%",
-                      aspectRatio: portadaRatio,
-                    }
-                  : styles.featuredImage
-              }
+              source={featuredImageSource(coverImage)}
+              style={styles.featuredImage}
               resizeMode="cover"
             />
-            {/* Los avisos suelen ser flyers con mucho texto claro, no fotos:
-                el velo va más fuerte arriba (chip) y abajo (título + fecha)
-                para que se lean sobre cualquier imagen. */}
             <LinearGradient
               colors={[
-                "rgba(8,63,82,0.5)",
-                "rgba(8,63,82,0.08)",
-                "rgba(8,63,82,0.9)",
-                "rgba(8,63,82,0.96)",
+                "rgba(8,63,82,0.35)",
+                "transparent",
+                "rgba(8,63,82,0.85)",
               ]}
-              locations={[0, 0.32, 0.72, 1]}
+              locations={[0, 0.4, 1]}
               style={StyleSheet.absoluteFill}
             />
             <View style={styles.featuredChip}>
@@ -349,21 +292,34 @@ function ResidentHome({
               </Text>
             </View>
             <View style={styles.featuredBottom}>
-              <Text style={styles.featuredTitle} numberOfLines={2}>
-                {featuredAviso?.titulo ?? condominioName ?? "Tu comunidad"}
-              </Text>
-              <View style={styles.featuredMeta}>
-                <Ionicons name="calendar-outline" size={14} color="rgba(255,255,255,0.9)" />
-                <Text style={styles.featuredDate}>
-                  {featuredAviso
-                    ? new Date(featuredAviso.createdAt).toLocaleDateString("es-CO", {
-                        day: "numeric",
-                        month: "short",
-                        year: "numeric",
-                      })
-                    : "Novedades y espacios"}
+              <View style={{ flex: 1, gap: SoftUI.space.sm, minWidth: 0 }}>
+                <Text style={styles.featuredTitle} numberOfLines={2}>
+                  {featuredAviso?.titulo ?? condominioName ?? "Tu comunidad"}
                 </Text>
+                <View style={styles.featuredMeta}>
+                  <Ionicons name="calendar-outline" size={14} color="rgba(255,255,255,0.9)" />
+                  <Text style={styles.featuredDate}>
+                    {featuredAviso
+                      ? new Date(featuredAviso.createdAt).toLocaleDateString("es-CO", {
+                          day: "numeric",
+                          month: "short",
+                          year: "numeric",
+                        })
+                      : "Novedades y espacios"}
+                  </Text>
+                </View>
               </View>
+              {/* Miniatura del flyer: avisa que el aviso trae imagen sin
+                  competir con el título. Se ve entera (contain), no recortada. */}
+              {featuredAviso?.imagenUrl ? (
+                <View style={styles.featuredThumbWrap}>
+                  <Image
+                    source={{ uri: featuredAviso.imagenUrl }}
+                    style={styles.featuredThumb}
+                    resizeMode="contain"
+                  />
+                </View>
+              ) : null}
             </View>
           </Tap>
         )}
@@ -659,7 +615,24 @@ const styles = StyleSheet.create({
     left: SoftUI.space.lg,
     right: SoftUI.space.lg,
     bottom: SoftUI.space.lg,
-    gap: SoftUI.space.sm,
+    flexDirection: "row",
+    alignItems: "flex-end",
+    gap: SoftUI.space.md,
+  },
+  featuredThumbWrap: {
+    width: 54,
+    height: 70,
+    borderRadius: SoftUI.radius.cardSm,
+    overflow: "hidden",
+    backgroundColor: "rgba(255,255,255,0.95)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.6)",
+    padding: 3,
+  },
+  featuredThumb: {
+    width: "100%",
+    height: "100%",
+    borderRadius: 4,
   },
   featuredTitle: {
     color: SoftUI.white,

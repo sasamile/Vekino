@@ -303,11 +303,9 @@ function PerfilContent() {
                       <Text style={styles.condoName} numberOfLines={1}>
                         {m.condominioName}
                       </Text>
-                      {m.condominioSubdomain ? (
-                        <Text style={styles.condoSub} numberOfLines={1}>
-                          {m.condominioSubdomain}.vekino.app
-                        </Text>
-                      ) : null}
+                      {/* Antes salía "{subdomain}.vekino.app": un dominio que
+                          no existe. `subdomain` es un identificador interno
+                          (mapea el convenio de Aval), no un host publicado. */}
                       <View style={styles.badgeRow}>
                         {m.roles.map((r) => (
                           <GlassBadge
@@ -545,11 +543,6 @@ const styles = StyleSheet.create({
     color: SoftUI.text,
     fontSize: SoftUI.type.body.size,
     fontFamily: AuthUI.font.semibold,
-  },
-  condoSub: {
-    color: SoftUI.textSecondary,
-    fontSize: SoftUI.type.chip.size,
-    fontFamily: AuthUI.font.regular,
   },
   badgeRow: {
     flexDirection: "row",

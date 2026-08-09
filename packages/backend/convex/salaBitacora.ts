@@ -254,3 +254,87 @@ export const detenerGrabacion = mutation({
     return { ok: true as const };
   },
 });
+
+/**
+ * Anota un trozo de grabación ya subido a S3.
+ *
+ * El archivo lo sube el navegador directo a S3; aquí solo queda el apunte de
+ * dónde está y en qué orden va. Sin el orden no hay grabación: un WebM se
+ * reconstruye concatenando los trozos en secuencia, y el primero es el único
+ * que lleva la cabecera.
+ */
+export const anotarParteGrabacion = mutation({
+  args: {
+    asambleaId: v.id("asambleas"),
+    sesionGrabacion: v.string(),
+    orden: v.number(),
+    url: v.string(),
+    bytes: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const user = await requireAppUser(ctx);
+    const asamblea = await ctx.db.get(args.asambleaId);
+    if (!asamblea) throw new Error("Asamblea no encontrada.");
+
+    await ctx.db.insert("salaGrabacionPartes", {
+      condominioId: asamblea.condominioId,
+      asambleaId: args.asambleaId,
+      grabadorUserId: user._id,
+      sesionGrabacion: args.sesionGrabacion,
+      orden: args.orden,
+      url: args.url,
+      bytes: args.bytes,
+      createdAt: Date.now(),
+    });
+    return null;
+  },
+});
+
+/**
+ * Las grabaciones que hay de una asamblea, agrupadas por sesión.
+ *
+ * Se agrupan porque puede haber VARIAS a la vez —y conviene que las haya: si
+ * graban el administrador y la secretaria, que se caiga un portátil deja de
+ * ser un problema. Cada grupo se descarga concatenando sus trozos en orden.
+ */
+export const grabacionesDeAsamblea = query({
+  args: { asambleaId: v.id("asambleas") },
+  handler: async (ctx, args) => {
+    const asamblea = await ctx.db.get(args.asambleaId);
+    if (!asamblea) return [];
+    await requireCondominioRole(ctx, asamblea.condominioId, []);
+
+    const partes = await ctx.db
+      .query("salaGrabacionPartes")
+      .withIndex("by_asamblea", (q) => q.eq("asambleaId", args.asambleaId))
+      .collect();
+
+    const porSesion = new Map<
+      string,
+      { grabador: string; partes: { orden: number; url: string }[]; bytes: number }
+    >();
+    for (const p of partes) {
+      const g = porSesion.get(p.sesionGrabacion) ?? {
+        grabador: "",
+        partes: [],
+        bytes: 0,
+      };
+      g.partes.push({ orden: p.orden, url: p.url });
+      g.bytes += p.bytes;
+      porSesion.set(p.sesionGrabacion, g);
+    }
+
+    const salida = [];
+    for (const [sesion, g] of porSesion) {
+      const primera = partes.find((p) => p.sesionGrabacion === sesion);
+      const u = primera ? await ctx.db.get(primera.grabadorUserId) : null;
+      salida.push({
+        sesion,
+        grabador: u?.name ?? "—",
+        bytes: g.bytes,
+        partes: g.partes.sort((a, b) => a.orden - b.orden),
+      });
+    }
+    return salida;
+  },
+});

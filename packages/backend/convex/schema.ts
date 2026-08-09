@@ -937,6 +937,34 @@ export default defineSchema({
     .index("by_sesion", ["sessionId"])
     .index("by_asamblea_track", ["asambleaId", "trackName"]),
 
+  /**
+   * Trozos de la grabación de una asamblea, ya a salvo en S3.
+   *
+   * La grabación se hace en el navegador de quien preside y hasta ahora solo
+   * se descargaba a su disco AL TERMINAR: si ese portátil se dormía, se
+   * quedaba sin batería o se cerraba la pestaña, el acta de una asamblea de
+   * Ley 675 se quedaba sin respaldo, y nadie se enteraba hasta buscarlo.
+   *
+   * Ahora se sube un trozo por minuto. Lo peor que puede pasar es perder el
+   * último minuto en vez de las diez horas. Los trozos van numerados porque
+   * un WebM solo se reconstruye concatenándolos EN ORDEN: el primero lleva
+   * la cabecera y los demás no valen nada sueltos.
+   */
+  salaGrabacionPartes: defineTable({
+    condominioId: v.id("condominios"),
+    asambleaId: v.id("asambleas"),
+    /** Quién graba. Se permite más de una grabación en paralelo a propósito. */
+    grabadorUserId: v.id("users"),
+    /** Distingue dos grabaciones simultáneas del mismo usuario tras un F5. */
+    sesionGrabacion: v.string(),
+    orden: v.number(),
+    url: v.string(),
+    bytes: v.number(),
+    createdAt: v.number(),
+  })
+    .index("by_asamblea", ["asambleaId"])
+    .index("by_sesion_orden", ["sesionGrabacion", "orden"]),
+
   /** Reacciones efímeras tipo Meet (👍👏❤️…): viven unos segundos en pantalla. */
   salaReacciones: defineTable({
     condominioId: v.id("condominios"),
