@@ -13,9 +13,6 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
-// Las remotas van con expo-image (caché en disco + memoria); el `Image` de RN
-// se queda solo para los previews locales del formulario (file:// sin caché).
-import { Image as CachedImage } from "expo-image";
 import { useQuery, useMutation, useAction, Authenticated } from "convex/react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
@@ -238,16 +235,14 @@ function ComunicadosContent() {
                             setLightbox(a.url);
                           }}
                         >
-                          <CachedImage
+                          <Image
                             source={{ uri: a.url }}
                             style={{
                               width: 160,
                               height: 120,
                               borderRadius: SoftUI.radius.cardSm,
                             }}
-                            contentFit="cover"
-                            transition={150}
-                            cachePolicy="memory-disk"
+                            resizeMode="cover"
                           />
                         </Pressable>
                       ))}
