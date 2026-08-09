@@ -1,17 +1,16 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import {
   View,
   Text,
   ScrollView,
   ActivityIndicator,
   Pressable,
+  Image,
   StyleSheet,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
-// Portada del home: expo-image cachea en disco, así no se recarga en cada visita.
-import { Image as CachedImage } from "expo-image";
 import { useQuery, useMutation, Authenticated } from "convex/react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
@@ -78,6 +77,41 @@ const ESTADO_ICON: Record<
 /** Fallback remoto si el condo aún no tiene foto destacada en BD. */
 const FEATURED_FALLBACK_URI =
   "https://images.unsplash.com/photo-1600596542815-ffad4c1539a9?auto=format&fit=crop&w=800&q=70";
+
+/**
+ * Proporción real de una imagen remota.
+ *
+ * Sirve para anclar la portada al borde SUPERIOR: los avisos son flyers
+ * verticales con el encabezado arriba, y `resizeMode="cover"` los recorta por
+ * el centro. Con la proporción conocida la dibujamos a ancho completo desde
+ * arriba y el contenedor (overflow: hidden) recorta lo que sobra abajo.
+ */
+function useAspectRatio(uri: string | undefined): number | null {
+  const [ratio, setRatio] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!uri) {
+      setRatio(null);
+      return;
+    }
+    let vigente = true;
+    Image.getSize(
+      uri,
+      (w, h) => {
+        if (vigente && h > 0) setRatio(w / h);
+      },
+      () => {
+        // Sin medida usamos el encuadre centrado de siempre.
+        if (vigente) setRatio(null);
+      },
+    );
+    return () => {
+      vigente = false;
+    };
+  }, [uri]);
+
+  return ratio;
+}
 
 /**
  * Imagen de la tarjeta destacada. Si el aviso trae foto propia mandamos esa
@@ -213,6 +247,9 @@ function ResidentHome({
   const totalAPagar = pendientes.reduce((s, f) => s + f.totalAPagar, 0);
   const linkColor = theme.accent;
   const featuredAviso = (comunicados ?? []).find((c) => c.fijado) ?? comunicados?.[0];
+  const portadaRatio = useAspectRatio(
+    featuredAviso?.imagenUrl ?? coverImage ?? undefined,
+  );
 
   return (
     <View style={{ flex: 1 }}>
@@ -276,15 +313,22 @@ function ResidentHome({
             }
             style={styles.featuredWrap}
           >
-            <CachedImage
+            <Image
               source={featuredImageSource(featuredAviso?.imagenUrl, coverImage)}
-              style={styles.featuredImage}
-              contentFit="cover"
-              // Anclada arriba: los flyers verticales llevan el encabezado
-              // (logo y titular) en el tope; centrada se recortaba por la mitad.
-              contentPosition="top"
-              transition={200}
-              cachePolicy="memory-disk"
+              // Con la proporción medida la anclamos arriba; mientras carga
+              // (o si no se pudo medir) cae al encuadre centrado normal.
+              style={
+                portadaRatio
+                  ? {
+                      position: "absolute",
+                      top: 0,
+                      left: 0,
+                      width: "100%",
+                      aspectRatio: portadaRatio,
+                    }
+                  : styles.featuredImage
+              }
+              resizeMode="cover"
             />
             {/* Los avisos suelen ser flyers con mucho texto claro, no fotos:
                 el velo va más fuerte arriba (chip) y abajo (título + fecha)

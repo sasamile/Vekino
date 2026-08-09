@@ -50,6 +50,8 @@ export type EstadoSala =
 export type PistaRemota = {
   trackName: string;
   nombre: string;
+  /** Sin esto no se sabe si pintar un `<audio>` o un `<video>`. */
+  tipo: "audio" | "video" | "pantalla";
   stream: MediaStream;
 };
 
@@ -73,10 +75,12 @@ export function useSalaCloudflare(
   const [error, setError] = useState<string | null>(null);
   const [remotas, setRemotas] = useState<PistaRemota[]>([]);
   const [micOn, setMicOn] = useState(false);
+  const [compartiendo, setCompartiendo] = useState(false);
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const sesionRef = useRef<string | null>(null);
   const micRef = useRef<MediaStreamTrack | null>(null);
+  const pantallaRef = useRef<MediaStreamTrack | null>(null);
   const misPistasRef = useRef<string[]>([]);
   /** Pistas remotas ya pedidas, para no volver a suscribirse a lo mismo. */
   const suscritasRef = useRef<Set<string>>(new Set());
@@ -104,7 +108,10 @@ export function useSalaCloudflare(
        * medio. Casarlos se hace en el efecto de abajo, que ya tiene los dos. */
       setRemotas((prev) => {
         if (prev.some((p) => p.stream.id === stream.id)) return prev;
-        return [...prev, { trackName: mid, nombre: "", stream }];
+        /* El tipo se sabe por la pista que llegó; el catálogo lo confirma
+         * después con el nombre de quien la publica. */
+        const tipo = ev.track.kind === "video" ? "pantalla" : "audio";
+        return [...prev, { trackName: mid, nombre: "", tipo, stream }];
       });
     });
 
@@ -151,6 +158,8 @@ export function useSalaCloudflare(
     }
     micRef.current?.stop();
     micRef.current = null;
+    pantallaRef.current?.stop();
+    pantallaRef.current = null;
     pcRef.current?.close();
     pcRef.current = null;
     sesionRef.current = null;
@@ -159,6 +168,7 @@ export function useSalaCloudflare(
     streamsRef.current.clear();
     setRemotas([]);
     setMicOn(false);
+    setCompartiendo(false);
     setEstado("inactiva");
   }, [dejarDePublicarAccion]);
 
@@ -245,8 +255,9 @@ export function useSalaCloudflare(
     setRemotas((prev) =>
       prev.map((r) => {
         const meta = catalogo.find((c) => c.trackName === r.trackName);
-        return meta && meta.nombre !== r.nombre
-          ? { ...r, nombre: meta.nombre }
+        if (!meta) return r;
+        return meta.nombre !== r.nombre || meta.tipo !== r.tipo
+          ? { ...r, nombre: meta.nombre, tipo: meta.tipo }
           : r;
       }),
     );
@@ -291,17 +302,101 @@ export function useSalaCloudflare(
     }
   }, [asambleaId, publicarAccion]);
 
+  /**
+   * Comparte la pantalla.
+   *
+   * Es lo único que puede reventar la factura: el audio de una asamblea son
+   * ~50 GB, pero la misma asamblea con la pantalla en 720p real se va a ~980
+   * GB — el mes entero de capa gratis en una sola reunión. Por eso se pide
+   * expresamente una resolución modesta: el orden del día y los estados
+   * financieros son texto casi estático y a 720p/5fps se leen igual de bien
+   * que a 1080p/30, con una décima parte del tráfico.
+   */
+  const compartirPantalla = useCallback(async () => {
+    const pc = pcRef.current;
+    const sid = sesionRef.current;
+    if (!pc || !sid) return;
+
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { width: { max: 1280 }, height: { max: 720 }, frameRate: { max: 5 } },
+        audio: false,
+      });
+      const pista = stream.getVideoTracks()[0];
+      if (!pista) return;
+      pantallaRef.current = pista;
+
+      /* Si la persona corta la compartición desde el aviso del navegador —y
+       * no desde nuestro botón—, hay que enterarse o la pista queda anunciada
+       * en Convex sin que nadie la esté emitiendo. */
+      pista.addEventListener("ended", () => void dejarDeCompartirRef.current());
+
+      const trans = pc.addTransceiver(pista, { direction: "sendonly" });
+      const oferta = await pc.createOffer();
+      await pc.setLocalDescription(oferta);
+      await esperarIce(pc);
+
+      const trackName = `pantalla-${sid.slice(0, 8)}`;
+      const r = await publicarAccion({
+        asambleaId,
+        sessionId: sid,
+        sdp: pc.localDescription!.sdp,
+        pistas: [
+          { mid: trans.mid ?? "0", trackName, tipo: "pantalla" as const },
+        ],
+      });
+      if ("error" in r) {
+        pista.stop();
+        pantallaRef.current = null;
+        setError(r.error);
+        return;
+      }
+      await pc.setRemoteDescription({ type: "answer", sdp: r.sdp });
+      misPistasRef.current = [...misPistasRef.current, trackName];
+      setCompartiendo(true);
+    } catch (e) {
+      /* Cancelar el diálogo del navegador lanza aquí y no es un error. */
+      const msg = e instanceof Error ? e.message : String(e);
+      if (!/denied|dismissed|Permission/i.test(msg)) setError(msg);
+    }
+  }, [asambleaId, publicarAccion]);
+
+  const dejarDeCompartir = useCallback(async () => {
+    const sid = sesionRef.current;
+    pantallaRef.current?.stop();
+    pantallaRef.current = null;
+    setCompartiendo(false);
+    if (!sid) return;
+    const nombres = misPistasRef.current.filter((n) => n.startsWith("pantalla-"));
+    if (nombres.length === 0) return;
+    await dejarDePublicarAccion({ sessionId: sid, trackNames: nombres }).catch(
+      () => {},
+    );
+    misPistasRef.current = misPistasRef.current.filter(
+      (n) => !n.startsWith("pantalla-"),
+    );
+  }, [dejarDePublicarAccion]);
+
+  /* El listener de `ended` se registra una sola vez, cuando aún no existe la
+   * versión final de la función; el ref lo mantiene apuntando a la vigente. */
+  const dejarDeCompartirRef = useRef(dejarDeCompartir);
+  dejarDeCompartirRef.current = dejarDeCompartir;
+
   const apagarMic = useCallback(async () => {
     const sid = sesionRef.current;
     const mias = misPistasRef.current;
     micRef.current?.stop();
     micRef.current = null;
     setMicOn(false);
-    if (!sid || mias.length === 0) return;
-    await dejarDePublicarAccion({ sessionId: sid, trackNames: mias }).catch(
+    if (!sid) return;
+    const nombres = mias.filter((n) => n.startsWith("mic-"));
+    if (nombres.length === 0) return;
+    await dejarDePublicarAccion({ sessionId: sid, trackNames: nombres }).catch(
       () => {},
     );
-    misPistasRef.current = [];
+    misPistasRef.current = misPistasRef.current.filter(
+      (n) => !n.startsWith("mic-"),
+    );
   }, [dejarDePublicarAccion]);
 
   return {
@@ -313,6 +408,9 @@ export function useSalaCloudflare(
     micOn,
     encenderMic,
     apagarMic,
+    compartiendo,
+    compartirPantalla,
+    dejarDeCompartir,
     reconectar: conectar,
   };
 }

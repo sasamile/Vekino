@@ -709,12 +709,10 @@ function Lightbox({
           showsVerticalScrollIndicator={false}
         >
           {uri ? (
-            <CachedImage
+            <Image
               source={{ uri }}
               style={{ width, height: height * 0.82 }}
-              contentFit="contain"
-              transition={150}
-              cachePolicy="memory-disk"
+              resizeMode="contain"
             />
           ) : null}
         </ScrollView>
@@ -882,16 +880,14 @@ function ComunicadoCard({
           </View>
           {primerImagen ? (
             <Pressable onPress={() => onImagePress(primerImagen.url)}>
-              <CachedImage
+              <Image
                 source={{ uri: primerImagen.url }}
                 style={{
                   width: 68,
                   height: 68,
                   borderRadius: SoftUI.radius.icon,
                 }}
-                contentFit="cover"
-                transition={150}
-                cachePolicy="memory-disk"
+                resizeMode="cover"
               />
             </Pressable>
           ) : null}

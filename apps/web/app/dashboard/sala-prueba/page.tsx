@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useQuery } from "convex/react";
-import { AlertTriangle, Mic, MicOff, Radio } from "lucide-react";
+import { AlertTriangle, Mic, MicOff, MonitorUp, Radio } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
 import { Button } from "@/components/ui/button";
@@ -121,6 +121,21 @@ export default function SalaPruebaPage() {
 
           {entrar && (
             <Button
+              variant={sala.compartiendo ? "primary" : "outline"}
+              onClick={() =>
+                void (sala.compartiendo
+                  ? sala.dejarDeCompartir()
+                  : sala.compartirPantalla())
+              }
+              disabled={sala.estado !== "conectada"}
+            >
+              <MonitorUp className="h-4 w-4" aria-hidden />
+              {sala.compartiendo ? "Dejar de compartir" : "Compartir pantalla"}
+            </Button>
+          )}
+
+          {entrar && (
+            <Button
               variant={sala.micOn ? "primary" : "outline"}
               onClick={() =>
                 void (sala.micOn ? sala.apagarMic() : sala.encenderMic())
@@ -172,27 +187,45 @@ export default function SalaPruebaPage() {
           </p>
         ) : (
           <ul className="mt-3 space-y-2">
-            {sala.remotas.map((r) => (
-              <li
-                key={r.stream.id}
-                className="flex items-center gap-2 rounded-lg border border-border bg-muted/30 px-3 py-2"
-              >
-                <Mic
-                  className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400"
-                  aria-hidden
-                />
-                <span className="text-sm text-foreground">
-                  {r.nombre || r.trackName}
-                </span>
-                <audio
-                  autoPlay
-                  playsInline
-                  ref={(el) => {
-                    if (el && el.srcObject !== r.stream) el.srcObject = r.stream;
-                  }}
-                />
-              </li>
-            ))}
+            {sala.remotas.map((r) =>
+              r.tipo === "audio" ? (
+                <li
+                  key={r.stream.id}
+                  className="flex items-center gap-2 rounded-lg border border-border bg-muted/30 px-3 py-2"
+                >
+                  <Mic
+                    className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400"
+                    aria-hidden
+                  />
+                  <span className="text-sm text-foreground">
+                    {r.nombre || r.trackName}
+                  </span>
+                  <audio
+                    autoPlay
+                    playsInline
+                    ref={(el) => {
+                      if (el && el.srcObject !== r.stream) el.srcObject = r.stream;
+                    }}
+                  />
+                </li>
+              ) : (
+                <li key={r.stream.id} className="space-y-1.5">
+                  <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <MonitorUp className="h-3.5 w-3.5" aria-hidden />
+                    Pantalla de {r.nombre || r.trackName}
+                  </p>
+                  <video
+                    autoPlay
+                    playsInline
+                    muted
+                    className="w-full rounded-lg border border-border bg-black"
+                    ref={(el) => {
+                      if (el && el.srcObject !== r.stream) el.srcObject = r.stream;
+                    }}
+                  />
+                </li>
+              ),
+            )}
           </ul>
         )}
       </div>
