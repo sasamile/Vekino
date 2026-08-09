@@ -11,6 +11,7 @@ import {
   getMembership,
   hasPlatformRole,
 } from "./model/authz";
+import { latirEmisor, olvidarEmisor } from "./model/latidos";
 import { registrarBitacora } from "./salaBitacora";
 import { resolveUserImage } from "./model/userImage";
 
@@ -266,6 +267,7 @@ export const registrarEmisor = mutation({
         e.medio === args.medio &&
         e.clienteId !== args.clienteId
       ) {
+        await olvidarEmisor(ctx, e._id);
         await ctx.db.delete(e._id);
       }
     }
@@ -318,6 +320,7 @@ export const detenerEmisor = mutation({
       .collect();
     for (const e of mios) {
       if (args.medio && e.medio !== args.medio) continue;
+      await olvidarEmisor(ctx, e._id);
       await ctx.db.delete(e._id);
     }
   },
@@ -338,14 +341,18 @@ export const latidoEmisor = mutation({
       args.codigoPoder,
       args.codigoInvitado,
     );
-    const now = Date.now();
     const mios = await ctx.db
       .query("salaEmisores")
       .withIndex("by_asamblea_cliente", (q) =>
         q.eq("asambleaId", args.asambleaId).eq("clienteId", args.clienteId),
       )
       .collect();
-    for (const e of mios) await ctx.db.patch(e._id, { ultimoLatido: now });
+    /* El pulso va a `salaLatidos`, NO dentro de `salaEmisores`.
+     *
+     * Patchear la fila del emisor despertaba la consulta `emisores` para
+     * todos los espectadores en cada pulso: el mismo error que costó 41 GB
+     * en la asamblea de agosto, escondido en el camino P2P. */
+    for (const e of mios) await latirEmisor(ctx, args.asambleaId, e._id);
     return { activos: mios.length };
   },
 });
@@ -368,13 +375,18 @@ export const emisores = query({
       args.codigoInvitado,
     );
 
+    /* Sin filtro por frescura, igual que `salaEnVivo`: filtrar aquí obligaba
+     * a LEER `ultimoLatido`, y con eso la consulta se reejecutaba con cada
+     * pulso de cada emisor. Las filas muertas las borra el cron.
+     *
+     * A cambio, un emisor al que se le cae la conexión sin cerrar la pestaña
+     * se sigue viendo hasta que pase el cron. Quien deja de emitir bien
+     * borra su fila y desaparece al instante. */
     const todos = await ctx.db
       .query("salaEmisores")
       .withIndex("by_asamblea", (q) => q.eq("asambleaId", args.asambleaId))
       .collect();
-    const corte = Date.now() - CORTE_EMISOR_MS;
     return todos
-      .filter((e) => e.ultimoLatido >= corte)
       .map((e) => ({
         clienteId: e.clienteId,
         nombre: e.nombre,
@@ -1048,7 +1060,10 @@ async function apagarEmisionesDeUsuario(
     .withIndex("by_asamblea", (q) => q.eq("asambleaId", asambleaId))
     .collect();
   for (const e of emisiones) {
-    if (e.userId === userId) await ctx.db.delete(e._id);
+    if (e.userId === userId) {
+      await olvidarEmisor(ctx, e._id);
+      await ctx.db.delete(e._id);
+    }
   }
 }
 
@@ -1062,7 +1077,10 @@ async function apagarEmisionesInvitado(
     .withIndex("by_asamblea", (q) => q.eq("asambleaId", asambleaId))
     .collect();
   for (const e of emisiones) {
-    if (e.codigoInvitado === codigoInvitado) await ctx.db.delete(e._id);
+    if (e.codigoInvitado === codigoInvitado) {
+      await olvidarEmisor(ctx, e._id);
+      await ctx.db.delete(e._id);
+    }
   }
 }
 
@@ -1077,7 +1095,10 @@ async function apagarEmisionesPoder(
     .withIndex("by_asamblea", (q) => q.eq("asambleaId", asambleaId))
     .collect();
   for (const e of emisiones) {
-    if (e.codigoPoder === codigo) await ctx.db.delete(e._id);
+    if (e.codigoPoder === codigo) {
+      await olvidarEmisor(ctx, e._id);
+      await ctx.db.delete(e._id);
+    }
   }
 }
 
@@ -1432,11 +1453,16 @@ export const enviarMensaje = mutation({
       );
     }
     const nombre = await nombreEnSala(ctx, args.asambleaId, user, codigo, inv);
+    /* La foto se resuelve UNA vez, aquí, y se guarda con el mensaje. Es el
+     * único momento en que vale la pena pagar ese `resolveUserImage`: al
+     * leer, el chat lo hacía por cada autor y en cada reejecución. */
+    const imageUrl = user ? await resolveUserImage(ctx, user) : null;
     await ctx.db.insert("salaMensajes", {
       condominioId: asamblea.condominioId,
       asambleaId: args.asambleaId,
       texto,
       nombre,
+      imageUrl: imageUrl ?? undefined,
       userId: user?._id,
       codigoPoder: codigo,
       codigoInvitado: inv,
@@ -1689,59 +1715,26 @@ export const mensajesSala = query({
       .take(CHAT_LIMITE);
     const ordenadas = filas.slice().reverse();
 
-    /* Fotos: usuarios con cuenta + presencia (por si el avatar ya está ahí). */
-    const userIds = [
-      ...new Set(
-        ordenadas
-          .map((m) => m.userId)
-          .filter((id): id is Id<"users"> => !!id),
-      ),
-    ];
-    const fotos = new Map<string, string | null>();
-    await Promise.all(
-      userIds.map(async (id) => {
-        const u = await ctx.db.get(id);
-        fotos.set(id as string, u ? await resolveUserImage(ctx, u) : null);
-      }),
-    );
-
-    const presencias = await ctx.db
-      .query("salaPresencias")
-      .withIndex("by_asamblea", (q) => q.eq("asambleaId", args.asambleaId))
-      .collect();
-    const fotoPresencia = new Map<string, string>();
-    for (const p of presencias) {
-      if (!p.imageUrl) continue;
-      if (p.userId) fotoPresencia.set(`u:${p.userId as string}`, p.imageUrl);
-      if (p.codigoInvitado) {
-        fotoPresencia.set(`i:${p.codigoInvitado}`, p.imageUrl);
-      }
-      if (p.codigoPoder) fotoPresencia.set(`p:${p.codigoPoder}`, p.imageUrl);
-    }
-
-    return ordenadas.map((m) => {
-      let imageUrl: string | null = null;
-      if (m.userId) {
-        imageUrl =
-          fotos.get(m.userId as string) ??
-          fotoPresencia.get(`u:${m.userId as string}`) ??
-          null;
-      } else if (m.codigoInvitado) {
-        imageUrl = fotoPresencia.get(`i:${m.codigoInvitado}`) ?? null;
-      } else if (m.codigoPoder) {
-        imageUrl = fotoPresencia.get(`p:${m.codigoPoder}`) ?? null;
-      }
-      return {
-        _id: m._id,
-        texto: m.texto,
-        nombre: m.nombre,
-        createdAt: m.createdAt,
-        userId: m.userId ?? null,
-        codigoPoder: m.codigoPoder ?? null,
-        codigoInvitado: m.codigoInvitado ?? null,
-        imageUrl,
-      };
-    });
+    /* Esta consulta lee SOLO la tabla de mensajes, a propósito.
+     *
+     * Antes resolvía la foto de cada autor con un `ctx.db.get` por usuario y
+     * un barrido completo de `salaPresencias`. Eso la ataba a la tabla de
+     * presencias: cada entrada y cada salida de la sala la reejecutaba para
+     * los 173 conectados. 27 GB en una sola asamblea, 877.000 llamadas.
+     *
+     * La foto ahora se congela en la fila del mensaje al escribirlo, igual
+     * que el nombre. Si alguien cambia su avatar, los mensajes viejos siguen
+     * con la foto de entonces — que además es lo correcto para un registro. */
+    return ordenadas.map((m) => ({
+      _id: m._id,
+      texto: m.texto,
+      nombre: m.nombre,
+      createdAt: m.createdAt,
+      userId: m.userId ?? null,
+      codigoPoder: m.codigoPoder ?? null,
+      codigoInvitado: m.codigoInvitado ?? null,
+      imageUrl: m.imageUrl ?? null,
+    }));
   },
 });
 
@@ -1767,10 +1760,22 @@ export const limpiar = internalMutation({
   handler: async (ctx) => {
     if (!(await hayAsambleaEnCurso(ctx))) return;
     const now = Date.now();
+    /* La frescura se mira en `salaLatidos`, no en la fila del emisor.
+     *
+     * `salaEmisores.ultimoLatido` se escribe al crear y ya no se toca: el
+     * pulso se mudó de tabla para no despertar la consulta `emisores` en cada
+     * latido. Si este cron siguiera leyendo ese campo, daría por muertos a
+     * todos los emisores vivos a los 90 segundos de empezar a emitir. */
     const emisoresViejos = await ctx.db.query("salaEmisores").take(500);
     let borrados = 0;
     for (const e of emisoresViejos) {
-      if (e.ultimoLatido < now - CORTE_EMISOR_MS) {
+      const pulso = await ctx.db
+        .query("salaLatidos")
+        .withIndex("by_emisor", (q) => q.eq("emisorId", e._id))
+        .first();
+      const visto = pulso?.ultimoLatido ?? e.ultimoLatido;
+      if (visto < now - CORTE_EMISOR_MS) {
+        if (pulso) await ctx.db.delete(pulso._id);
         await ctx.db.delete(e._id);
         borrados++;
       }
@@ -1821,5 +1826,42 @@ export const limpiarMensajes = internalMutation({
       }
     }
     if (viejos > 0) console.info(`[salaVideo] ${viejos} mensajes borrados`);
+  },
+});
+
+/**
+ * Solo las marcas de tiempo de los últimos mensajes, para el contador de no
+ * leídos del botón del chat.
+ *
+ * El botón tenía suscrito `mensajesSala` COMPLETO —y sin `skip`, o sea
+ * también con el chat cerrado—: los 173 asistentes descargando 80 mensajes,
+ * 140 presencias y 80 usuarios de forma permanente para pintar un numerito.
+ * Aquí se leen 30 filas y se devuelven 30 números.
+ */
+export const marcasChat = query({
+  args: {
+    asambleaId: v.id("asambleas"),
+    codigoPoder: v.optional(v.string()),
+    codigoInvitado: v.optional(v.string()),
+  },
+  handler: async (ctx, args): Promise<number[]> => {
+    try {
+      await requireAccesoSala(
+        ctx,
+        args.asambleaId,
+        args.codigoPoder,
+        args.codigoInvitado,
+      );
+    } catch {
+      return [];
+    }
+    const filas = await ctx.db
+      .query("salaMensajes")
+      .withIndex("by_asamblea_created", (q) =>
+        q.eq("asambleaId", args.asambleaId),
+      )
+      .order("desc")
+      .take(30);
+    return filas.map((m) => m.createdAt);
   },
 });

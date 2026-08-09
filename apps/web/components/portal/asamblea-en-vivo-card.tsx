@@ -30,8 +30,13 @@ export function AsambleaEnVivoCard({
   );
 
   if (!enCurso) return null;
-  /* Esperamos participación para no mostrar el CTA a quien ya delegó todo. */
-  if (mi === undefined) return null;
+  /* Esperamos participación para no mostrar el CTA a quien ya delegó todo.
+   *
+   * `null` también hay que esperarlo, no solo `undefined`: la consulta lo
+   * devuelve para quien no tiene participación en esa asamblea. Tratarlo como
+   * cargado rompía el build entero de la web — y con el build roto, nada de
+   * lo que se subía llegaba a producción. */
+  if (!mi) return null;
 
   const puedeEntrar = !(mi.delegoTodo && (mi.representa?.length ?? 0) === 0);
   const detalleHref = `/mi/${condominioId}/asambleas/${enCurso._id}`;

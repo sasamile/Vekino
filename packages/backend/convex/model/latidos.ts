@@ -66,6 +66,34 @@ export async function latirPresencia(
     await ctx.db.insert("salaLatidos", { asambleaId, presenciaId, ultimoLatido });
 }
 
+/** Refresca (o crea) el pulso de un emisor del respaldo P2P. */
+export async function latirEmisor(
+  ctx: MutationCtx,
+  asambleaId: Id<"asambleas">,
+  emisorId: Id<"salaEmisores">,
+) {
+  const previo = await ctx.db
+    .query("salaLatidos")
+    .withIndex("by_emisor", (q) => q.eq("emisorId", emisorId))
+    .first();
+
+  const ultimoLatido = Date.now();
+  if (previo) await ctx.db.patch(previo._id, { ultimoLatido });
+  else await ctx.db.insert("salaLatidos", { asambleaId, emisorId, ultimoLatido });
+}
+
+/** Borra el pulso de un emisor que dejó de transmitir. */
+export async function olvidarEmisor(
+  ctx: MutationCtx,
+  emisorId: Id<"salaEmisores">,
+) {
+  const previo = await ctx.db
+    .query("salaLatidos")
+    .withIndex("by_emisor", (q) => q.eq("emisorId", emisorId))
+    .first();
+  if (previo) await ctx.db.delete(previo._id);
+}
+
 /**
  * Borra el pulso de una sesión.
  *

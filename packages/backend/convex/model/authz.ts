@@ -70,6 +70,26 @@ export async function getMembership(
 }
 
 /**
+ * Unidades vinculadas al usuario dentro de un condominio.
+ *
+ * Base de las APIs "mías" (reservas, vehículos, comprobantes de pago): el
+ * propietario solo puede leer y escribir sobre sus propias unidades.
+ */
+export async function misUnidadIds(
+  ctx: Ctx,
+  userId: Id<"users">,
+  condominioId: Id<"condominios">,
+): Promise<Set<Id<"unidades">>> {
+  const membership = await getMembership(ctx, userId, condominioId);
+  if (!membership || !membership.isActive) return new Set();
+  const links = await ctx.db
+    .query("usuarioUnidad")
+    .withIndex("by_membership", (q) => q.eq("membershipId", membership._id))
+    .collect();
+  return new Set(links.map((l) => l.unidadId));
+}
+
+/**
  * Exige que el usuario actual pertenezca al condominio con al menos uno de los
  * roles indicados. Superadmin/admin de plataforma tienen paso libre.
  */

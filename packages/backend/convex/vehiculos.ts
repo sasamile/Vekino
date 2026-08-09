@@ -7,7 +7,7 @@ import {
   requireCondominioRole,
   requireAppUser,
   getCurrentAppUser,
-  getMembership,
+  misUnidadIds,
 } from "./model/authz";
 import { resolveTipoVehiculo } from "./model/placa";
 import { displayNameFromUser } from "./model/displayName";
@@ -262,20 +262,6 @@ export const remove = mutation({
 // ─────────────────────────────────────────────────────────────
 
 /** Unidades vinculadas al usuario en el condominio. */
-async function misUnidadIds(
-  ctx: QueryCtx | MutationCtx,
-  userId: Id<"users">,
-  condominioId: Id<"condominios">,
-): Promise<Set<Id<"unidades">>> {
-  const membership = await getMembership(ctx, userId, condominioId);
-  if (!membership || !membership.isActive) return new Set();
-  const links = await ctx.db
-    .query("usuarioUnidad")
-    .withIndex("by_membership", (q) => q.eq("membershipId", membership._id))
-    .collect();
-  return new Set(links.map((l) => l.unidadId));
-}
-
 /** Vehículos de las unidades del usuario autenticado. */
 export const listMios = query({
   args: { condominioId: v.id("condominios") },
@@ -338,6 +324,44 @@ export const createMio = mutation({
       createdAt: now,
       updatedAt: now,
     });
+  },
+});
+
+/** El propietario edita un vehículo de SUS unidades. */
+export const updateMio = mutation({
+  args: {
+    id: v.id("vehiculos"),
+    placa: v.optional(v.string()),
+    tipo: v.optional(tipoValidator),
+    marca: v.optional(v.string()),
+    color: v.optional(v.string()),
+    observaciones: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const user = await requireAppUser(ctx);
+    const veh = await ctx.db.get(args.id);
+    if (!veh) throw new Error("Vehículo no encontrado.");
+    const unidadIds = await misUnidadIds(ctx, user._id, veh.condominioId);
+    if (!unidadIds.has(veh.unidadId)) throw new Error("No autorizado.");
+
+    const placa = args.placa?.toUpperCase().trim();
+    if (args.placa !== undefined && !placa) {
+      throw new Error("La placa es obligatoria.");
+    }
+
+    // El tipo se reevalúa contra la placa final (misma regla que createMio).
+    const placaFinal = placa ?? veh.placa;
+    await ctx.db.patch(args.id, {
+      ...(placa ? { placa } : {}),
+      tipo: resolveTipoVehiculo(placaFinal, args.tipo ?? veh.tipo),
+      ...(args.marca !== undefined ? { marca: args.marca.trim() } : {}),
+      ...(args.color !== undefined ? { color: args.color.trim() } : {}),
+      ...(args.observaciones !== undefined
+        ? { observaciones: args.observaciones.trim() }
+        : {}),
+      updatedAt: Date.now(),
+    });
+    return args.id;
   },
 });
 

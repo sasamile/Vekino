@@ -4,7 +4,6 @@ import {
   ActivityIndicator,
   ScrollView,
   StyleSheet,
-  Linking,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useQuery, Authenticated } from "convex/react";
@@ -18,6 +17,7 @@ import {
   GlassSection,
 } from "@/components/ui/glass";
 import { Tap } from "@/components/ui/tap";
+import { openDocument } from "@/lib/open-document";
 import { fmtFechaCorta } from "@/lib/utils";
 import { AuthUI } from "@/lib/auth-ui";
 import { SoftUI } from "@/lib/soft-ui";
@@ -93,7 +93,7 @@ function Inner() {
               {data.map((d) => (
                 <Tap
                   key={d._id}
-                  onPress={() => d.url && Linking.openURL(d.url)}
+                  onPress={() => openDocument(d.url, { accent: theme.accent })}
                   haptic={false}
                 >
                   <GlassCard style={styles.card}>

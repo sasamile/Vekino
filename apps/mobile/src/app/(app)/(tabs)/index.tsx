@@ -5,12 +5,13 @@ import {
   ScrollView,
   ActivityIndicator,
   Pressable,
-  Image,
   StyleSheet,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
+// Portada del home: expo-image cachea en disco, así no se recarga en cada visita.
+import { Image as CachedImage } from "expo-image";
 import { useQuery, useMutation, Authenticated } from "convex/react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
@@ -78,8 +79,16 @@ const ESTADO_ICON: Record<
 const FEATURED_FALLBACK_URI =
   "https://images.unsplash.com/photo-1600596542815-ffad4c1539a9?auto=format&fit=crop&w=800&q=70";
 
-function featuredImageSource(coverImage: string | null | undefined) {
-  const uri = coverImage?.trim();
+/**
+ * Imagen de la tarjeta destacada. Si el aviso trae foto propia mandamos esa
+ * —antes siempre salía la portada del conjunto aunque la tarjeta dijera
+ * "AVISO"—, y solo si no tiene caemos a la portada del condominio.
+ */
+function featuredImageSource(
+  avisoImage: string | null | undefined,
+  coverImage: string | null | undefined,
+) {
+  const uri = avisoImage?.trim() || coverImage?.trim();
   if (uri) return { uri };
   return { uri: FEATURED_FALLBACK_URI };
 }
@@ -267,18 +276,27 @@ function ResidentHome({
             }
             style={styles.featuredWrap}
           >
-            <Image
-              source={featuredImageSource(coverImage)}
+            <CachedImage
+              source={featuredImageSource(featuredAviso?.imagenUrl, coverImage)}
               style={styles.featuredImage}
-              resizeMode="cover"
+              contentFit="cover"
+              // Anclada arriba: los flyers verticales llevan el encabezado
+              // (logo y titular) en el tope; centrada se recortaba por la mitad.
+              contentPosition="top"
+              transition={200}
+              cachePolicy="memory-disk"
             />
+            {/* Los avisos suelen ser flyers con mucho texto claro, no fotos:
+                el velo va más fuerte arriba (chip) y abajo (título + fecha)
+                para que se lean sobre cualquier imagen. */}
             <LinearGradient
               colors={[
-                "rgba(8,63,82,0.2)",
-                "transparent",
-                "rgba(8,63,82,0.65)",
+                "rgba(8,63,82,0.5)",
+                "rgba(8,63,82,0.08)",
+                "rgba(8,63,82,0.9)",
+                "rgba(8,63,82,0.96)",
               ]}
-              locations={[0, 0.4, 1]}
+              locations={[0, 0.32, 0.72, 1]}
               style={StyleSheet.absoluteFill}
             />
             <View style={styles.featuredChip}>

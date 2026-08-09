@@ -1,4 +1,4 @@
-import { View, Text, ScrollView, StyleSheet, ActivityIndicator, Linking } from "react-native";
+import { View, Text, ScrollView, StyleSheet, ActivityIndicator } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
@@ -9,6 +9,7 @@ import { ScreenBackground, GlassCard, GlassBadge } from "@/components/ui/glass";
 import { Tap } from "@/components/ui/tap";
 import { AuthUI } from "@/lib/auth-ui";
 import { C } from "@/lib/theme";
+import { openDocument } from "@/lib/open-document";
 
 function fmtFecha(ts: number) {
   return new Date(ts).toLocaleDateString("es-CO", {
@@ -123,7 +124,7 @@ function Inner() {
                       .map((a, i) => (
                         <Tap
                           key={i}
-                          onPress={() => a.url && Linking.openURL(a.url)}
+                          onPress={() => openDocument(a.url)}
                           style={styles.attach}
                         >
                           <Ionicons name="attach" size={14} color={C.brand} />

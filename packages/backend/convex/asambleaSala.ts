@@ -1,4 +1,5 @@
 import { v } from "convex/values";
+import { internal } from "./_generated/api";
 import { query, mutation, internalMutation } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -1359,5 +1360,72 @@ export const cachearTotalesUnidades = internalMutation({
       totalUnidades: unidades.length,
     });
     return { unidades: unidades.length };
+  },
+});
+
+/**
+ * Re-sincroniza con el servidor de medios quién puede hablar.
+ *
+ * El permiso de publicar viaja DENTRO del token, que se firma al entrar a la
+ * sala y dura seis horas. Si a alguien se le da el rol de la mesa cuando ya
+ * estaba adentro, su token sigue diciendo "solo escucha": habla y no sale
+ * nada, y él ve su micrófono encendido.
+ *
+ * Eso paso en la asamblea de Arboleda: uno de la mesa aparecia como mesa en
+ * pantalla y el servidor no le daba permiso. Aqui se corrige sin que la
+ * persona tenga que salir y volver a entrar.
+ *
+ * Se llama al cambiar roles y tambien se puede disparar a mano desde el panel
+ * de la mesa, que es la salida cuando alguien dice "hablo y no me oyen".
+ */
+export const resincronizarPermisos = mutation({
+  args: { asambleaId: v.id("asambleas") },
+  handler: async (ctx, args) => {
+    const asamblea = await ctx.db.get(args.asambleaId);
+    if (!asamblea) throw new Error("Asamblea no encontrada.");
+    await requireCondominioRole(ctx, asamblea.condominioId, [...WRITE_ROLES]);
+    if (asamblea.estado !== "en_curso") {
+      return { sincronizados: 0, motivo: "La asamblea no está en curso." };
+    }
+
+    const presencias = await ctx.db
+      .query("salaPresencias")
+      .withIndex("by_asamblea", (q) => q.eq("asambleaId", args.asambleaId))
+      .collect();
+
+    let sincronizados = 0;
+    for (const p of presencias) {
+      if (!p.userId) continue;
+      const user = await ctx.db.get(p.userId);
+      if (!user || !user.active) continue;
+
+      const membresia = await getMembership(ctx, p.userId, asamblea.condominioId);
+      const esMesa =
+        hasPlatformRole(user, "superadmin", "admin") ||
+        (!!membresia?.isActive &&
+          membresia.roles.some((r) =>
+            (WRITE_ROLES as readonly string[]).includes(r),
+          ));
+      const esPresidente = asamblea.presidenteUserId === p.userId;
+
+      const palabra = await ctx.db
+        .query("salaPalabra")
+        .withIndex("by_asamblea_user", (q) =>
+          q.eq("asambleaId", args.asambleaId).eq("userId", p.userId),
+        )
+        .first();
+
+      const puedePublicar =
+        esMesa || esPresidente || palabra?.estado === "concedida";
+
+      await ctx.scheduler.runAfter(0, internal.salaPermisos.sincronizarPalabra, {
+        asambleaId: args.asambleaId,
+        identidad: p.userId as string,
+        puedePublicar,
+      });
+      sincronizados++;
+    }
+
+    return { sincronizados };
   },
 });

@@ -1,7 +1,12 @@
 import { v } from "convex/values";
 import { query, mutation, internalMutation, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
-import { requireCondominioRole } from "./model/authz";
+import {
+  requireCondominioRole,
+  requireAppUser,
+  getCurrentAppUser,
+  misUnidadIds,
+} from "./model/authz";
 
 /**
  * Comprobantes de pago subidos por propietarios (foto/PDF, normalmente vía
@@ -33,6 +38,105 @@ export const crearDesdeBot = internalMutation({
       estado: "pendiente_revision",
       createdAt: Date.now(),
     });
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// API del propietario: sube el comprobante desde la app y consulta
+// en qué va la revisión. Canal manual mientras la pasarela Aval
+// termina de quedar en producción.
+// ─────────────────────────────────────────────────────────────
+
+/** El propietario adjunta el comprobante de un pago que ya hizo. */
+export const crearMio = mutation({
+  args: {
+    condominioId: v.id("condominios"),
+    facturaId: v.optional(v.id("facturas")),
+    url: v.string(),
+    mimeType: v.optional(v.string()),
+    nota: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const user = await requireAppUser(ctx);
+    const unidadIds = await misUnidadIds(ctx, user._id, args.condominioId);
+    if (unidadIds.size === 0) {
+      throw new Error("No tienes unidades vinculadas en este condominio.");
+    }
+    if (!args.url.trim()) throw new Error("Falta el archivo del comprobante.");
+
+    // La factura (si se indicó) tiene que ser de una unidad suya.
+    let unidadId = [...unidadIds][0]!;
+    if (args.facturaId) {
+      const factura = await ctx.db.get(args.facturaId);
+      if (!factura || factura.condominioId !== args.condominioId) {
+        throw new Error("Factura no encontrada.");
+      }
+      if (!unidadIds.has(factura.unidadId)) {
+        throw new Error("Esa factura no pertenece a tu unidad.");
+      }
+      unidadId = factura.unidadId;
+
+      // Evita que se acumulen comprobantes duplicados sin revisar.
+      const previos = await ctx.db
+        .query("soportesPago")
+        .withIndex("by_factura", (q) => q.eq("facturaId", args.facturaId))
+        .collect();
+      if (previos.some((s) => s.estado === "pendiente_revision")) {
+        throw new Error(
+          "Ya tienes un comprobante en revisión para esta factura.",
+        );
+      }
+    }
+
+    return await ctx.db.insert("soportesPago", {
+      condominioId: args.condominioId,
+      unidadId,
+      facturaId: args.facturaId,
+      userId: user._id,
+      origen: "app",
+      url: args.url.trim(),
+      mimeType: args.mimeType,
+      nota: args.nota?.trim() || undefined,
+      estado: "pendiente_revision",
+      createdAt: Date.now(),
+    });
+  },
+});
+
+/** Comprobantes que el propietario ha enviado, con el resultado de la revisión. */
+export const listMios = query({
+  args: { condominioId: v.id("condominios") },
+  handler: async (ctx, args) => {
+    const user = await getCurrentAppUser(ctx);
+    if (!user) return [];
+    const unidadIds = await misUnidadIds(ctx, user._id, args.condominioId);
+    if (unidadIds.size === 0) return [];
+
+    const soportes = await ctx.db
+      .query("soportesPago")
+      .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
+      .order("desc")
+      .take(200);
+
+    // Suyos: los que subió él, o cualquiera atado a una unidad suya
+    // (p. ej. el que mandó por WhatsApp desde otro teléfono de la familia).
+    return soportes
+      .filter(
+        (s) =>
+          s.userId === user._id ||
+          (s.unidadId != null && unidadIds.has(s.unidadId)),
+      )
+      .map((s) => ({
+        _id: s._id,
+        facturaId: s.facturaId ?? null,
+        url: s.url,
+        mimeType: s.mimeType ?? null,
+        nota: s.nota ?? null,
+        estado: s.estado,
+        notaRevision: s.notaRevision ?? null,
+        revisadoAt: s.revisadoAt ?? null,
+        createdAt: s.createdAt,
+      }));
   },
 });
 

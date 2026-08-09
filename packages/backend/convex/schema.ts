@@ -892,10 +892,18 @@ export default defineSchema({
     // Uno de los dos. Qué documento mantiene vivo este pulso.
     sesionId: v.optional(v.id("asambleaSesiones")),
     presenciaId: v.optional(v.id("salaPresencias")),
+    /* El emisor del respaldo P2P. Repetía el mismo error que costó los 41 GB:
+     * `salaVideo.latidoEmisor` reescribía `ultimoLatido` DENTRO de
+     * `salaEmisores`, que es la tabla que la consulta `emisores` lee y filtra
+     * — o sea que cada pulso despertaba la consulta de todos los
+     * espectadores. No estalló porque ese día se usó LiveKit y la malla
+     * quedó inerte. Ahora late aquí, como todo lo demás. */
+    emisorId: v.optional(v.id("salaEmisores")),
     ultimoLatido: v.number(),
   })
     .index("by_sesion", ["sesionId"])
     .index("by_presencia", ["presenciaId"])
+    .index("by_emisor", ["emisorId"])
     // Para el cron, que barre por antigüedad sin importar la asamblea.
     .index("by_latido", ["ultimoLatido"]),
 
@@ -915,6 +923,14 @@ export default defineSchema({
   salaMensajes: defineTable({
     condominioId: v.id("condominios"),
     asambleaId: v.id("asambleas"),
+    /* La foto se congela AQUI, al escribir el mensaje.
+     *
+     * Antes el chat la resolvia al leer: un `ctx.db.get` por autor mas un
+     * barrido completo de `salaPresencias` para buscar avatares. Eso ataba la
+     * consulta del chat a la tabla de presencias, asi que cada entrada y cada
+     * salida de la sala reejecutaba el chat para los 173 conectados. 27 GB en
+     * una sola asamblea. El nombre ya se guardaba asi; la foto faltaba. */
+    imageUrl: v.optional(v.string()),
     texto: v.string(),
     nombre: v.string(),
     userId: v.optional(v.id("users")),
@@ -1948,7 +1964,11 @@ export default defineSchema({
     facturaId: v.optional(v.id("facturas")),
     userId: v.optional(v.id("users")),
     telefono: v.optional(v.string()),
-    origen: v.union(v.literal("whatsapp"), v.literal("web")),
+    origen: v.union(
+      v.literal("whatsapp"),
+      v.literal("web"),
+      v.literal("app"), // subido por el propietario desde la app móvil
+    ),
 
     url: v.string(), // comprobante en S3
     mimeType: v.optional(v.string()),

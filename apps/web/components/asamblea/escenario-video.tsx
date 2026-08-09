@@ -23,6 +23,7 @@ import {
   type EmisorRemoto,
 } from "@/hooks/use-video-sala";
 import { useAudioHablando } from "@/hooks/use-audio-hablando";
+import { useAvisoMicApagado } from "@/hooks/use-aviso-mic-apagado";
 import {
   formatearElapsed,
   useGrabacionSala,
@@ -434,6 +435,11 @@ export function EscenarioVideo({
     codigoInvitado,
     calidad,
   });
+
+  /* Solo se activa para quien PUEDE hablar y tiene el micrófono cerrado: son
+   * cinco o seis personas, no las ciento setenta. Abre una captura de audio
+   * aparte porque una pista silenciada no le entrega nada al analizador. */
+  const avisoMicApagado = useAvisoMicApagado(puedoHablar && !video.micOn);
   const streamsGrabacion = [
     ...video.audios.map((a) => a.stream),
     /* Solo video remoto: el mic local se añade aparte y NUNCA se reproduce
@@ -592,6 +598,19 @@ export function EscenarioVideo({
           />
         )}
       </div>
+
+      {/* Cuatro de los cinco de la mesa hablaron muteados en la asamblea de
+          Arboleda y nadie se enteró — ni ellos. Este aviso es para eso. */}
+      {avisoMicApagado && (
+        <div className="pointer-events-none absolute bottom-24 left-1/2 z-30 -translate-x-1/2 px-4">
+          <div className="flex items-center gap-2.5 rounded-full bg-red-600 px-4 py-2.5 shadow-lg">
+            <MicOff className="h-4 w-4 shrink-0 text-white" aria-hidden />
+            <p className="text-sm font-medium text-white">
+              Está hablando con el micrófono apagado
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* ── El sonido de la sala ─────────────────────────────────────────────
           Va por elementos propios, fuera del mosaico. En una asamblea casi

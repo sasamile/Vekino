@@ -5,7 +5,7 @@ import { useParams } from "next/navigation";
 import { useQuery, useMutation, usePaginatedQuery } from "convex/react";
 import {
   ReceiptText, FileText, Loader2, Check, X, Link2,
-  MessageCircle, ExternalLink, Search,
+  MessageCircle, Smartphone, ExternalLink, Search,
 } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
@@ -29,7 +29,7 @@ type SoporteRow = {
   mimeType?: string;
   nota?: string;
   telefono?: string;
-  origen: "whatsapp" | "web";
+  origen: "whatsapp" | "web" | "app";
   estado: EstadoSoporte;
   createdAt: number;
   revisadoPorNombre?: string;
@@ -238,6 +238,9 @@ function SoporteCard({
             </span>
             {s.origen === "whatsapp" && (
               <Badge tone="success"><MessageCircle className="h-3 w-3" />WhatsApp</Badge>
+            )}
+            {s.origen === "app" && (
+              <Badge tone="info"><Smartphone className="h-3 w-3" />App</Badge>
             )}
             {!pendiente && (
               <Badge tone={ESTADO_META[s.estado].tone}>{ESTADO_META[s.estado].label}</Badge>

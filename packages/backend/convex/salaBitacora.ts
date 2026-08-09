@@ -131,13 +131,23 @@ export const listar = query({
     const asamblea = await ctx.db.get(args.asambleaId);
     if (!asamblea) return [];
     await requireCondominioRole(ctx, asamblea.condominioId, []);
-    const filas = await ctx.db
+    /* Las ÚLTIMAS 150, no las 2.000.
+     *
+     * La mesa tiene esto suscrito en vivo, y la bitácora se escribe con cada
+     * mensaje de chat y con cada desconexión de wifi. Releer 2.000 filas en
+     * cada escritura, por cada miembro de la mesa, era 3,5 GB en una sola
+     * asamblea para enseñar una lista de la que solo se mira el final.
+     *
+     * El registro completo sigue intacto en la tabla y el acta lo lee entero
+     * (acta.ts): no se pierde nada con valor probatorio. */
+    const recientes = await ctx.db
       .query("salaBitacora")
       .withIndex("by_asamblea_created", (q) =>
         q.eq("asambleaId", args.asambleaId),
       )
-      .order("asc")
-      .take(2000);
+      .order("desc")
+      .take(150);
+    const filas = recientes.reverse();
     return filas.map((f) => ({
       _id: f._id,
       tipo: f.tipo,

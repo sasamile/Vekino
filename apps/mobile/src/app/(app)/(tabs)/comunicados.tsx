@@ -8,15 +8,19 @@ import {
   Image,
   TextInput,
   Alert,
-  Linking,
+  useWindowDimensions,
   StyleSheet,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
+// Las remotas van con expo-image (caché en disco + memoria); el `Image` de RN
+// se queda solo para los previews locales del formulario (file:// sin caché).
+import { Image as CachedImage } from "expo-image";
 import { useQuery, useMutation, useAction, Authenticated } from "convex/react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
 import { getDocumentPicker } from "@/lib/document-picker";
+import { openDocument } from "@/lib/open-document";
 import { useCondominio } from "@/context/condominio-context";
 import { NoCondominioScreen } from "@/components/ui/no-condominio";
 import { SoftHomeHeader } from "@/components/ui/soft-home-header";
@@ -227,15 +231,23 @@ function ComunicadosContent() {
                       .map((a, i) => (
                         <Pressable
                           key={`img-${i}`}
-                          onPress={() => setLightbox(a.url)}
+                          // Cerramos el detalle antes de abrir el visor: dos
+                          // Modales apilados en iOS se quedan sin responder.
+                          onPress={() => {
+                            setSelected(null);
+                            setLightbox(a.url);
+                          }}
                         >
-                          <Image
+                          <CachedImage
                             source={{ uri: a.url }}
                             style={{
                               width: 160,
                               height: 120,
                               borderRadius: SoftUI.radius.cardSm,
                             }}
+                            contentFit="cover"
+                            transition={150}
+                            cachePolicy="memory-disk"
                           />
                         </Pressable>
                       ))}
@@ -247,9 +259,7 @@ function ComunicadosContent() {
                     <Tap
                       key={`doc-${i}`}
                       style={styles.attachRow}
-                      onPress={() => {
-                        if (a.url) Linking.openURL(a.url);
-                      }}
+                      onPress={() => openDocument(a.url, { accent: theme.accent })}
                     >
                       <View style={styles.attachIcon}>
                         <Ionicons
@@ -302,30 +312,11 @@ function ComunicadosContent() {
         />
       )}
 
-      <BottomSheet
-        visible={lightbox !== null}
-        onClose={() => setLightbox(null)}
-        maxHeight="80%"
-      >
-        {lightbox && (
-          <View
-            style={{
-              padding: SoftUI.padH,
-              paddingBottom: SoftUI.space.xxl,
-            }}
-          >
-            <Image
-              source={{ uri: lightbox }}
-              style={{
-                width: "100%",
-                height: 360,
-                borderRadius: SoftUI.radius.cardSm,
-              }}
-              resizeMode="contain"
-            />
-          </View>
-        )}
-      </BottomSheet>
+      {/* Montado solo cuando hay imagen: un Modal siempre presente encima del
+          Modal del BottomSheet dejaba la pantalla sin responder a los toques. */}
+      {lightbox ? (
+        <Lightbox uri={lightbox} onClose={() => setLightbox(null)} />
+      ) : null}
     </View>
   );
 }
@@ -681,6 +672,99 @@ function CrearAvisoSheet({
   );
 }
 
+/**
+ * Visor a pantalla completa. Antes era una hoja inferior con alto fijo de
+ * 360 px, así que las imágenes verticales salían recortadas.
+ *
+ * Es una capa superpuesta y no un `Modal` a propósito: montar un Modal aquí
+ * (aun cerrado) dejaba toda la lista sin responder a los toques, porque el
+ * detalle ya usa un Modal por debajo (BottomSheet).
+ */
+function Lightbox({
+  uri,
+  onClose,
+}: {
+  uri: string | null;
+  onClose: () => void;
+}) {
+  const { width, height } = useWindowDimensions();
+
+  return (
+    <View
+      style={[
+        StyleSheet.absoluteFillObject,
+        { backgroundColor: "rgba(0,0,0,0.94)", zIndex: 50 },
+      ]}
+    >
+      <View style={{ flex: 1 }}>
+        {/* El zoom nativo del ScrollView (pellizcar y arrastrar) evita tener
+            que montar GestureHandlerRootView en la raíz solo para esto. */}
+        <ScrollView
+          style={{ flex: 1 }}
+          contentContainerStyle={{
+            flexGrow: 1,
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+          maximumZoomScale={6}
+          minimumZoomScale={1}
+          bouncesZoom
+          centerContent
+          showsHorizontalScrollIndicator={false}
+          showsVerticalScrollIndicator={false}
+        >
+          {uri ? (
+            <CachedImage
+              source={{ uri }}
+              style={{ width, height: height * 0.82 }}
+              contentFit="contain"
+              transition={150}
+              cachePolicy="memory-disk"
+            />
+          ) : null}
+        </ScrollView>
+
+        <Text
+          style={{
+            position: "absolute",
+            bottom: 44,
+            alignSelf: "center",
+            color: "rgba(255,255,255,0.55)",
+            fontSize: SoftUI.type.chip.size,
+            fontFamily: AuthUI.font.regular,
+          }}
+        >
+          Pellizca para acercar
+        </Text>
+
+        {/* Cerrar solo con la X: un "tocar para cerrar" en toda la pantalla
+            se dispararía al terminar de hacer zoom. */}
+        <Pressable
+          onPress={onClose}
+          hitSlop={12}
+          style={{
+            position: "absolute",
+            top: 60,
+            right: SoftUI.padH,
+            width: 40,
+            height: 40,
+            borderRadius: 20,
+            // Oscuro y opaco: al hacer zoom sobre un flyer blanco, un botón
+            // translúcido claro desaparecía y no se podía cerrar el visor.
+            backgroundColor: "rgba(0,0,0,0.6)",
+            borderWidth: StyleSheet.hairlineWidth,
+            borderColor: "rgba(255,255,255,0.35)",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <Ionicons name="close" size={22} color="#fff" />
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
 function ComunicadoCard({
   c,
   onPress,
@@ -743,7 +827,12 @@ function ComunicadoCard({
                 gap: SoftUI.space.sm,
               }}
             >
-              <Text style={styles.cardTitle} numberOfLines={1}>
+              {/* flexShrink deja que el título ocupe el espacio libre; sin él
+                  la etiqueta se lo comía y quedaba en "Delegast…". */}
+              <Text
+                style={[styles.cardTitle, { flexShrink: 1 }]}
+                numberOfLines={2}
+              >
                 {c.titulo}
               </Text>
               {c.prioridad !== "normal" && (
@@ -768,8 +857,14 @@ function ComunicadoCard({
                   {initials(c.autorNombre)}
                 </Text>
               </View>
-              <Text style={styles.metaText}>
-                {c.autorNombre} · {fmtFechaCorta(c.createdAt)}
+              {/* Una sola línea: los nombres largos se cortan en vez de
+                  partir la fila y desalinear la fecha. */}
+              <Text style={[styles.metaText, { flexShrink: 1 }]} numberOfLines={1}>
+                {c.autorNombre}
+              </Text>
+              <Text style={styles.metaDot}>·</Text>
+              <Text style={styles.metaText} numberOfLines={1}>
+                {fmtFechaCorta(c.createdAt)}
               </Text>
               {pdfCount > 0 ? (
                 <View
@@ -792,13 +887,16 @@ function ComunicadoCard({
           </View>
           {primerImagen ? (
             <Pressable onPress={() => onImagePress(primerImagen.url)}>
-              <Image
+              <CachedImage
                 source={{ uri: primerImagen.url }}
                 style={{
                   width: 68,
                   height: 68,
                   borderRadius: SoftUI.radius.icon,
                 }}
+                contentFit="cover"
+                transition={150}
+                cachePolicy="memory-disk"
               />
             </Pressable>
           ) : null}
@@ -875,6 +973,11 @@ const styles = StyleSheet.create({
   },
   metaText: {
     color: SoftUI.textSecondary,
+    fontSize: SoftUI.type.chip.size - 1,
+    fontFamily: AuthUI.font.regular,
+  },
+  metaDot: {
+    color: SoftUI.textDisabled,
     fontSize: SoftUI.type.chip.size - 1,
     fontFamily: AuthUI.font.regular,
   },

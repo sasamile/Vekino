@@ -484,7 +484,12 @@ export function BotonChatSala({
   codigoPoder?: string;
   codigoInvitado?: string;
 }) {
-  const mensajes = useQuery(api.salaVideo.mensajesSala, {
+  /* Solo las marcas de tiempo, no el chat entero.
+   *
+   * Antes este botón tenía suscrito `mensajesSala` completo y SIN `skip`: con
+   * el chat cerrado, los 173 asistentes seguían descargando 80 mensajes, 140
+   * presencias y 80 usuarios para pintar un número de dos dígitos. */
+  const marcas = useQuery(api.salaVideo.marcasChat, {
     asambleaId,
     codigoPoder,
     codigoInvitado,
@@ -495,8 +500,7 @@ export function BotonChatSala({
     if (abierto) setVistoHasta(Date.now());
   }, [abierto]);
 
-  const noLeidos = (mensajes ?? []).filter((m) => m.createdAt > vistoHasta)
-    .length;
+  const noLeidos = (marcas ?? []).filter((t) => t > vistoHasta).length;
 
   return (
     <button

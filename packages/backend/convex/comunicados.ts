@@ -149,20 +149,32 @@ export const listRecent = query({
       .order("desc")
       .take(40);
 
-    return rows
+    const top = rows
       .sort((a, b) => {
         if (a.fijado !== b.fijado) return a.fijado ? -1 : 1;
         return b.createdAt - a.createdAt;
       })
-      .slice(0, limit)
-      .map((row) => ({
-        _id: row._id,
-        titulo: row.titulo,
-        cuerpo: row.cuerpo,
-        prioridad: row.prioridad,
-        fijado: row.fijado,
-        createdAt: row.createdAt,
-      }));
+      .slice(0, limit);
+
+    // El home solo pinta la imagen del primero (la tarjeta destacada), así que
+    // resolvemos esa URL y nada más: seguimos sin hidratar todos los adjuntos.
+    const destacado = top[0];
+    const portada = destacado
+      ? (destacado.archivos ?? []).find((a) =>
+          a.mimeType?.startsWith("image/"),
+        )
+      : undefined;
+    const portadaUrl = portada ? await resolveMediaUrl(ctx, portada) : "";
+
+    return top.map((row, i) => ({
+      _id: row._id,
+      titulo: row.titulo,
+      cuerpo: row.cuerpo,
+      prioridad: row.prioridad,
+      fijado: row.fijado,
+      createdAt: row.createdAt,
+      imagenUrl: i === 0 && portadaUrl ? portadaUrl : null,
+    }));
   },
 });
 

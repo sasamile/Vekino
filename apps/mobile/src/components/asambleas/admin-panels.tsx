@@ -9,7 +9,6 @@ import {
   Alert,
   ScrollView,
   Share,
-  Linking,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useMutation, useQuery } from "convex/react";
@@ -21,6 +20,7 @@ import { Tap } from "@/components/ui/tap";
 import { BottomSheet } from "@/components/ui/bottom-sheet";
 import { C } from "@/lib/theme";
 import { AuthUI } from "@/lib/auth-ui";
+import { openDocument } from "@/lib/open-document";
 
 type Punto = {
   titulo: string;
@@ -1420,11 +1420,7 @@ export function AdminPoderesTab({ asambleaId }: { asambleaId: Id<"asambleas"> })
             <View style={{ flexDirection: "row", gap: 10, flexWrap: "wrap" }}>
               {p.documentoUrl ? (
                 <Tap
-                  onPress={() => {
-                    Linking.openURL(p.documentoUrl!).catch(() =>
-                      Alert.alert("Error", "No se pudo abrir el documento."),
-                    );
-                  }}
+                  onPress={() => openDocument(p.documentoUrl)}
                 >
                   <View style={styles.secondaryBtn}>
                     <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>

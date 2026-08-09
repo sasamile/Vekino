@@ -8,7 +8,6 @@ import {
   ActivityIndicator,
   Alert,
   Modal,
-  Linking,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
@@ -22,6 +21,7 @@ import { ScreenBackground, GlassCard, GlassBadge } from "@/components/ui/glass";
 import { Tap } from "@/components/ui/tap";
 import { AuthUI } from "@/lib/auth-ui";
 import { C } from "@/lib/theme";
+import { openDocument } from "@/lib/open-document";
 import { uploadLocalFile } from "@/lib/guardia-upload";
 
 type Prioridad = "baja" | "media" | "alta";
@@ -197,7 +197,7 @@ function Inner() {
                       </Text>
                       {n.archivoUrl ? (
                         <Tap
-                          onPress={() => Linking.openURL(n.archivoUrl!)}
+                          onPress={() => openDocument(n.archivoUrl)}
                           style={styles.attach}
                         >
                           <Ionicons name="attach" size={14} color={C.brand} />

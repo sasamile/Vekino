@@ -17,6 +17,7 @@ import * as ImagePicker from "expo-image-picker";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
 import { getDocumentPicker } from "@/lib/document-picker";
+import { openDocument } from "@/lib/open-document";
 import { useCondominio } from "@/context/condominio-context";
 import { NoCondominioScreen } from "@/components/ui/no-condominio";
 import { SoftHomeHeader } from "@/components/ui/soft-home-header";
@@ -1024,7 +1025,14 @@ function FacturaDetalleModal({
     condominioId ? { condominioId } : "skip",
   );
   const crearPago = useAction(api.pagos.crearPagoFactura);
+  const generateUploadUrl = useAction(api.files.generateUploadUrl);
+  const crearSoporte = useMutation(api.soportesPago.crearMio);
+  const misSoportes = useQuery(
+    api.soportesPago.listMios,
+    condominioId ? { condominioId } : "skip",
+  );
   const [pagando, setPagando] = useState(false);
+  const [subiendo, setSubiendo] = useState(false);
 
   const puedePagar =
     detalle != null &&
@@ -1032,6 +1040,101 @@ function FacturaDetalleModal({
       detalle.estado === "vencida" ||
       detalle.estado === "abonada");
 
+  // Comprobante más reciente que el residente ya envió por esta factura.
+  const soporte = detalle
+    ? (misSoportes ?? []).find((s) => s.facturaId === detalle._id)
+    : undefined;
+
+  /**
+   * Canal manual mientras la pasarela Aval queda en producción: el residente
+   * adjunta el comprobante y la administración lo valida en el portal.
+   */
+  async function enviarSoporte(adjunto: PendingAdjunto) {
+    if (!detalle || !condominioId) return;
+    setSubiendo(true);
+    try {
+      const { uploadUrl, publicUrl } = await generateUploadUrl({
+        folder: `condominios/soportes/${condominioId}`,
+        contentType: adjunto.mimeType,
+        fileName: adjunto.nombre,
+      });
+      const blobRes = await fetch(adjunto.uri);
+      const blob = await blobRes.blob();
+      const upload = await fetch(uploadUrl, {
+        method: "PUT",
+        headers: { "Content-Type": adjunto.mimeType },
+        body: blob,
+      });
+      if (!upload.ok) throw new Error("No se pudo subir el comprobante.");
+
+      await crearSoporte({
+        condominioId,
+        facturaId: detalle._id,
+        url: publicUrl,
+        mimeType: adjunto.mimeType,
+      });
+      Alert.alert(
+        "Comprobante enviado",
+        "La administración lo revisará y te confirmará el pago.",
+      );
+    } catch (e) {
+      Alert.alert(
+        "No se pudo enviar",
+        e instanceof Error ? e.message : "Inténtalo de nuevo.",
+      );
+    } finally {
+      setSubiendo(false);
+    }
+  }
+
+  async function pickSoporteFoto() {
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) {
+      Alert.alert("Permiso necesario", "Activa el acceso a fotos para adjuntar.");
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"],
+      quality: 0.85,
+    });
+    if (result.canceled || !result.assets?.[0]) return;
+    const asset = result.assets[0];
+    await enviarSoporte({
+      uri: asset.uri,
+      mimeType: asset.mimeType ?? "image/jpeg",
+      nombre: asset.fileName ?? "comprobante.jpg",
+    });
+  }
+
+  async function pickSoportePdf() {
+    const DocumentPicker = await getDocumentPicker();
+    if (!DocumentPicker) return;
+    const result = await DocumentPicker.getDocumentAsync({
+      type: ["application/pdf"],
+      copyToCacheDirectory: true,
+    });
+    if (result.canceled || !result.assets?.[0]) return;
+    const asset = result.assets[0];
+    await enviarSoporte({
+      uri: asset.uri,
+      mimeType: asset.mimeType ?? "application/pdf",
+      nombre: asset.name ?? "comprobante.pdf",
+    });
+  }
+
+  function elegirSoporte() {
+    Alert.alert("Enviar comprobante", "¿De dónde tomamos el soporte?", [
+      { text: "Foto de la galería", onPress: pickSoporteFoto },
+      { text: "Archivo PDF", onPress: pickSoportePdf },
+      { text: "Cancelar", style: "cancel" },
+    ]);
+  }
+
+  /**
+   * Salida al navegador externo. Reservada para la pasarela del banco: ahí el
+   * usuario puede necesitar saltar a la app de su entidad y volver, así que no
+   * la metemos en el visor incrustado (los PDF sí, con `openDocument`).
+   */
   async function openUrl(url: string) {
     const can = await Linking.canOpenURL(url);
     if (!can) {
@@ -1253,6 +1356,8 @@ function FacturaDetalleModal({
             ) : null}
           </GlassCard>
 
+          {soporte ? <SoporteEstado soporte={soporte} /> : null}
+
           <View style={{ gap: SoftUI.space.sm }}>
             {puedePagar ? (
               <GlassButton
@@ -1266,6 +1371,23 @@ function FacturaDetalleModal({
                 disabled={pagando || condo === undefined}
               />
             ) : null}
+            {puedePagar && soporte?.estado !== "pendiente_revision" ? (
+              <GlassButton
+                label={subiendo ? "Enviando…" : "Ya pagué, enviar soporte"}
+                variant="secondary"
+                loading={subiendo}
+                icon={
+                  subiendo ? undefined : (
+                    <Ionicons
+                      name="cloud-upload-outline"
+                      size={18}
+                      color={theme.accent}
+                    />
+                  )
+                }
+                onPress={subiendo ? undefined : elegirSoporte}
+              />
+            ) : null}
             {detalle.pdfUrl ? (
               <GlassButton
                 label="Ver PDF"
@@ -1277,16 +1399,9 @@ function FacturaDetalleModal({
                     color={puedePagar ? theme.accent : SoftUI.white}
                   />
                 }
-                onPress={async () => {
-                  try {
-                    await openUrl(detalle.pdfUrl!);
-                  } catch {
-                    Alert.alert(
-                      "Error",
-                      "No se pudo abrir el archivo. Intenta de nuevo.",
-                    );
-                  }
-                }}
+                onPress={() =>
+                  openDocument(detalle.pdfUrl, { accent: theme.accent })
+                }
               />
             ) : (
               <GlassButton
@@ -1300,6 +1415,83 @@ function FacturaDetalleModal({
         </ScrollView>
       )}
     </BottomSheet>
+  );
+}
+
+/** Estado del comprobante que el residente envió para esta factura. */
+function SoporteEstado({
+  soporte,
+}: {
+  soporte: { estado: string; notaRevision: string | null };
+}) {
+  const meta =
+    soporte.estado === "pendiente_revision"
+      ? {
+          icon: "time-outline" as const,
+          bg: SoftUI.warningSoft,
+          fg: "#B8860B",
+          titulo: "Comprobante en revisión",
+          sub: "La administración lo está validando.",
+        }
+      : soporte.estado === "aprobado"
+        ? {
+            icon: "checkmark-circle-outline" as const,
+            bg: SoftUI.successSoft,
+            fg: SoftUI.success,
+            titulo: "Comprobante aprobado",
+            sub: "Tu pago quedó registrado.",
+          }
+        : {
+            icon: "close-circle-outline" as const,
+            bg: SoftUI.dangerSoft,
+            fg: SoftUI.danger,
+            titulo: "Comprobante rechazado",
+            sub: "Puedes enviar uno nuevo.",
+          };
+
+  return (
+    <GlassCard
+      style={{
+        padding: SoftUI.space.base,
+        marginBottom: SoftUI.space.md,
+        flexDirection: "row",
+        alignItems: "center",
+        gap: SoftUI.space.md,
+      }}
+    >
+      <View
+        style={{
+          width: SoftUI.iconBtn,
+          height: SoftUI.iconBtn,
+          borderRadius: SoftUI.radius.chip,
+          backgroundColor: meta.bg,
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <Ionicons name={meta.icon} size={20} color={meta.fg} />
+      </View>
+      <View style={{ flex: 1, gap: 2, minWidth: 0 }}>
+        <Text
+          style={{
+            color: SoftUI.text,
+            fontSize: SoftUI.type.body.size - 1,
+            fontFamily: AuthUI.font.semibold,
+          }}
+        >
+          {meta.titulo}
+        </Text>
+        <Text
+          style={{
+            color: SoftUI.textSecondary,
+            fontSize: SoftUI.type.chip.size,
+            fontFamily: AuthUI.font.regular,
+          }}
+        >
+          {soporte.notaRevision || meta.sub}
+        </Text>
+      </View>
+    </GlassCard>
   );
 }
 

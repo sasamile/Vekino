@@ -2,12 +2,13 @@ import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
 import { query, mutation, internalQuery, internalMutation } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
-import type { Doc, Id } from "./_generated/dataModel";
+import type { Doc } from "./_generated/dataModel";
 import {
   requireCondominioRole,
   requireAppUser,
   getCurrentAppUser,
   getMembership,
+  misUnidadIds,
 } from "./model/authz";
 
 const ADMIN_ROLES = ["administrador", "junta_directiva", "contadora"] as const;
@@ -308,21 +309,6 @@ export const remove = mutation({
 // API del propietario: crea y ve las reservas de SUS unidades.
 // ─────────────────────────────────────────────────────────────
 
-/** Unidades vinculadas al usuario en el condominio. */
-async function misUnidadIds(
-  ctx: QueryCtx | MutationCtx,
-  userId: Id<"users">,
-  condominioId: Id<"condominios">,
-): Promise<Set<Id<"unidades">>> {
-  const membership = await getMembership(ctx, userId, condominioId);
-  if (!membership || !membership.isActive) return new Set();
-  const links = await ctx.db
-    .query("usuarioUnidad")
-    .withIndex("by_membership", (q) => q.eq("membershipId", membership._id))
-    .collect();
-  return new Set(links.map((l) => l.unidadId));
-}
-
 /** Reservas de las unidades del usuario autenticado (más recientes primero). */
 export const listMias = query({
   args: { condominioId: v.id("condominios") },
@@ -387,6 +373,35 @@ export const createMia = mutation({
       createdAt: now,
       updatedAt: now,
     });
+  },
+});
+
+/**
+ * El propietario cancela una reserva de SUS unidades.
+ *
+ * No la borra: la deja en "cancelada" para que la administración conserve el
+ * histórico. Borrar sigue siendo exclusivo de la administración (`remove`).
+ */
+export const cancelarMia = mutation({
+  args: { id: v.id("reservas") },
+  handler: async (ctx, args) => {
+    const user = await requireAppUser(ctx);
+    const reserva = await ctx.db.get(args.id);
+    if (!reserva) throw new Error("Reserva no encontrada.");
+
+    const unidadIds = await misUnidadIds(ctx, user._id, reserva.condominioId);
+    if (!unidadIds.has(reserva.unidadId)) {
+      throw new Error("Esa reserva no pertenece a tu unidad.");
+    }
+    if (reserva.estado === "cancelada") {
+      throw new Error("La reserva ya está cancelada.");
+    }
+    if (reserva.estado === "rechazada") {
+      throw new Error("Una reserva rechazada no se puede cancelar.");
+    }
+
+    await ctx.db.patch(args.id, { estado: "cancelada", updatedAt: Date.now() });
+    return args.id;
   },
 });
 

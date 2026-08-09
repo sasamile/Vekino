@@ -7,6 +7,7 @@ import {
   Pressable,
   TextInput,
   StyleSheet,
+  Alert,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useQuery, useMutation, Authenticated } from "convex/react";
@@ -91,20 +92,31 @@ export default function ReservasScreen() {
 
 function ReservasContent() {
   const me = useQuery(api.users.me);
-  const { condominioId, condominioName, isSuperadmin, theme } = useCondominio();
+  const { condominioId, condominioName, isSuperadmin, canManage, theme } =
+    useCondominio();
+
+  // Administración: todo el condominio. Propietario: solo lo de sus unidades.
   const reservas = useQuery(
-    api.reservas.listByCondominio,
+    canManage ? api.reservas.listByCondominio : api.reservas.listMias,
     condominioId ? { condominioId } : "skip",
   );
   const zonas = useQuery(
     api.reservas.listZonas,
     condominioId ? { condominioId } : "skip",
   );
-  const unidades = useQuery(
+  const todasLasUnidades = useQuery(
     api.unidades.listByCondominio,
-    condominioId ? { condominioId } : "skip",
+    condominioId && canManage ? { condominioId } : "skip",
+  );
+  const home = useQuery(
+    api.portal.home,
+    condominioId && !canManage ? { condominioId } : "skip",
   );
   const createReserva = useMutation(api.reservas.create);
+  const createReservaMia = useMutation(api.reservas.createMia);
+
+  const misUnidades = home && home.allowed ? home.unidades : [];
+  const unidades = (canManage ? todasLasUnidades : misUnidades) ?? [];
   const [filtro, setFiltro] = useState<"" | Estado>("");
   const [showForm, setShowForm] = useState(false);
   const [zonaId, setZonaId] = useState<Id<"zonasComunes"> | "">("");
@@ -129,7 +141,12 @@ function ReservasContent() {
 
   function resetForm() {
     setZonaId("");
-    setUnidadId("");
+    // Al propietario con una sola unidad no le preguntamos cuál es: es la suya.
+    setUnidadId(
+      !canManage && unidades.length === 1
+        ? (unidades[0]!._id as Id<"unidades">)
+        : "",
+    );
     setFecha("");
     setHoraInicio("08:00");
     setHoraFin("10:00");
@@ -146,7 +163,7 @@ function ReservasContent() {
     setSaving(true);
     setFormError(null);
     try {
-      await createReserva({
+      const args = {
         condominioId,
         zonaId,
         unidadId,
@@ -154,7 +171,9 @@ function ReservasContent() {
         horaInicio,
         horaFin,
         observaciones: observaciones || undefined,
-      });
+      };
+      // createMia valida que la unidad sea del usuario; create exige rol admin.
+      await (canManage ? createReserva(args) : createReservaMia(args));
       setShowForm(false);
       resetForm();
     } catch (e) {
@@ -270,7 +289,7 @@ function ReservasContent() {
           >
             <View style={{ gap: SoftUI.space.md }}>
               {filtered.map((r) => (
-                <ReservaCard key={r._id} r={r} />
+                <ReservaCard key={r._id} r={r} puedeCancelar={!canManage} />
               ))}
             </View>
           </GlassSection>
@@ -345,7 +364,13 @@ function ReservasContent() {
             </View>
           </View>
 
-          {unidades && unidades.length > 0 && (
+          {/* Con una sola unidad no hay nada que elegir: ya quedó fijada. */}
+          {unidades.length === 1 && !canManage ? (
+            <View style={{ marginBottom: SoftUI.space.base }}>
+              <Text style={styles.formLabel}>Unidad</Text>
+              <Text style={styles.unidadFija}>{unidades[0]!.numero}</Text>
+            </View>
+          ) : unidades.length > 0 ? (
             <View style={{ marginBottom: SoftUI.space.base }}>
               <Text style={styles.formLabel}>Unidad</Text>
               <ScrollView
@@ -358,7 +383,7 @@ function ReservasContent() {
                   return (
                     <Pressable
                       key={u._id}
-                      onPress={() => setUnidadId(u._id)}
+                      onPress={() => setUnidadId(u._id as Id<"unidades">)}
                       style={[
                         styles.chip,
                         active && { backgroundColor: theme.accent },
@@ -377,7 +402,7 @@ function ReservasContent() {
                 })}
               </ScrollView>
             </View>
-          )}
+          ) : null}
 
           <GlassInput
             label="Fecha (YYYY-MM-DD)"
@@ -517,9 +542,48 @@ function EstadoChips({
   );
 }
 
-function ReservaCard({ r }: { r: ReservaRow }) {
+function ReservaCard({
+  r,
+  puedeCancelar,
+}: {
+  r: ReservaRow;
+  puedeCancelar: boolean;
+}) {
   const estado = r.estado as Estado;
   const iconMeta = ESTADO_ICON[estado] ?? ESTADO_ICON.cancelada;
+  const cancelar = useMutation(api.reservas.cancelarMia);
+  const [cancelando, setCancelando] = useState(false);
+
+  // Solo tiene sentido cancelar lo que sigue vigente.
+  const cancelable =
+    puedeCancelar && (estado === "pendiente" || estado === "aprobada");
+
+  function confirmarCancelar() {
+    Alert.alert(
+      "Cancelar reserva",
+      `¿Cancelar tu reserva de ${r.zonaNombre} el ${fmtFechaCortaStr(r.fecha)}?`,
+      [
+        { text: "No", style: "cancel" },
+        {
+          text: "Sí, cancelar",
+          style: "destructive",
+          onPress: async () => {
+            setCancelando(true);
+            try {
+              await cancelar({ id: r._id });
+            } catch (e) {
+              Alert.alert(
+                "No se pudo cancelar",
+                e instanceof Error ? e.message : "Inténtalo de nuevo.",
+              );
+            } finally {
+              setCancelando(false);
+            }
+          },
+        },
+      ],
+    );
+  }
 
   return (
     <GlassCard style={styles.reservaCard}>
@@ -567,6 +631,17 @@ function ReservaCard({ r }: { r: ReservaRow }) {
           </View>
           <Text style={styles.personText}>{r.solicitanteNombre}</Text>
         </View>
+
+        {cancelable ? (
+          <GlassButton
+            label={cancelando ? "Cancelando…" : "Cancelar reserva"}
+            variant="ghost"
+            size="sm"
+            disabled={cancelando}
+            onPress={cancelando ? undefined : confirmarCancelar}
+            style={{ marginTop: SoftUI.space.sm, alignSelf: "flex-start" }}
+          />
+        ) : null}
       </View>
     </GlassCard>
   );
@@ -698,6 +773,11 @@ const styles = StyleSheet.create({
     fontSize: SoftUI.type.caption.size,
     fontFamily: AuthUI.font.semibold,
     marginBottom: SoftUI.space.sm,
+  },
+  unidadFija: {
+    color: SoftUI.text,
+    fontSize: SoftUI.type.body.size,
+    fontFamily: AuthUI.font.bold,
   },
   zonaChip: {
     flexDirection: "row",

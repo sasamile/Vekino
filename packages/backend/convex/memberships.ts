@@ -1,6 +1,12 @@
 import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
-import { query, mutation, internalMutation } from "./_generated/server";
+import {
+  query,
+  mutation,
+  internalMutation,
+  type MutationCtx,
+} from "./_generated/server";
+import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import {
   requireCondominioRole,
@@ -190,6 +196,7 @@ export const setRoles = mutation({
         isActive: true,
         updatedAt: now,
       });
+      await sincronizarVozEnAsambleaViva(ctx, args.condominioId, args.userId);
       return existing._id;
     }
 
@@ -531,3 +538,40 @@ export const setPlatformRole = mutation({
     });
   },
 });
+
+/**
+ * Si hay una asamblea en curso y esta persona esta dentro, le actualiza el
+ * permiso de hablar en el servidor de medios.
+ *
+ * El permiso viaja dentro del token, que se firma AL ENTRAR y dura seis
+ * horas. Sin esto, darle el rol de la mesa a alguien que ya estaba conectado
+ * no le sirve de nada: habla y no sale nada, y el ve su microfono encendido.
+ * Le paso a un miembro de la mesa en la asamblea de Arboleda.
+ */
+async function sincronizarVozEnAsambleaViva(
+  ctx: MutationCtx,
+  condominioId: Id<"condominios">,
+  userId: Id<"users">,
+) {
+  const enCurso = await ctx.db
+    .query("asambleas")
+    .withIndex("by_condominio", (q) => q.eq("condominioId", condominioId))
+    .filter((q) => q.eq(q.field("estado"), "en_curso"))
+    .first();
+  if (!enCurso) return;
+
+  /* Solo si esta conectado: a quien no ha entrado no hay nada que
+   * actualizarle, y su token nuevo ya vendra con el permiso correcto. */
+  const presente = await ctx.db
+    .query("salaPresencias")
+    .withIndex("by_asamblea", (q) => q.eq("asambleaId", enCurso._id))
+    .filter((q) => q.eq(q.field("userId"), userId))
+    .first();
+  if (!presente) return;
+
+  await ctx.scheduler.runAfter(0, internal.salaPermisos.sincronizarPalabra, {
+    asambleaId: enCurso._id,
+    identidad: userId as string,
+    puedePublicar: true,
+  });
+}
