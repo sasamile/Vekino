@@ -74,6 +74,9 @@ export function EditCondoDialog({
   const [whatsappActivo, setWhatsappActivo] = useState(
     (initial.activeModules ?? []).includes("whatsapp"),
   );
+  const [salaCfActiva, setSalaCfActiva] = useState(
+    (initial.activeModules ?? []).includes("sala_cloudflare"),
+  );
   const [logoProgress, setLogoProgress] = useState<UploadUi | null>(null);
   const [coverProgress, setCoverProgress] = useState<UploadUi | null>(null);
   const [busy, setBusy] = useState(false);
@@ -216,12 +219,16 @@ export function EditCondoDialog({
           subscriptionPlan: plan,
           unitLimit: limit,
           avalPortalUrl: avalPortalUrl.trim(),
-          activeModules: whatsappActivo
-            ? [
-                ...(initial.activeModules ?? []).filter((m) => m !== "whatsapp"),
-                "whatsapp",
-              ]
-            : (initial.activeModules ?? []).filter((m) => m !== "whatsapp"),
+          /* Se reconstruye la lista quitando los que gobierna este diálogo y
+           * volviendo a añadir los encendidos, para no pisar módulos que se
+           * activen desde otro sitio. */
+          activeModules: [
+            ...(initial.activeModules ?? []).filter(
+              (m) => m !== "whatsapp" && m !== "sala_cloudflare",
+            ),
+            ...(whatsappActivo ? ["whatsapp"] : []),
+            ...(salaCfActiva ? ["sala_cloudflare"] : []),
+          ],
         },
       });
       onClose();
@@ -513,6 +520,28 @@ export function EditCondoDialog({
                 type="checkbox"
                 checked={whatsappActivo}
                 onChange={(e) => setWhatsappActivo(e.target.checked)}
+                disabled={busy || uploading}
+                className="mt-0.5 h-5 w-9 shrink-0 cursor-pointer appearance-none rounded-full bg-muted transition-colors before:mt-0.5 before:ml-0.5 before:block before:h-4 before:w-4 before:rounded-full before:bg-white before:shadow before:transition-transform checked:bg-brand checked:before:translate-x-4"
+              />
+            </label>
+
+            <label className="mt-2 flex cursor-pointer items-start justify-between gap-3 rounded-xl border border-border bg-background px-3 py-3">
+              <span className="min-w-0">
+                <span className="block text-sm font-medium text-foreground">
+                  Sala de asamblea sobre Cloudflare
+                </span>
+                <span className="mt-0.5 block text-xs text-muted-foreground">
+                  Cambia el motor de audio y video de este conjunto. Se cobra
+                  por gigabyte en vez de por minuto y participante, así que una
+                  asamblea grande cuesta unos pocos dólares en lugar de decenas.
+                  Enciéndelo primero en un conjunto pequeño: si algo falla, lo
+                  nota esa asamblea y no una de doscientas personas.
+                </span>
+              </span>
+              <input
+                type="checkbox"
+                checked={salaCfActiva}
+                onChange={(e) => setSalaCfActiva(e.target.checked)}
                 disabled={busy || uploading}
                 className="mt-0.5 h-5 w-9 shrink-0 cursor-pointer appearance-none rounded-full bg-muted transition-colors before:mt-0.5 before:ml-0.5 before:block before:h-4 before:w-4 before:rounded-full before:bg-white before:shadow before:transition-transform checked:bg-brand checked:before:translate-x-4"
               />

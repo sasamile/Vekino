@@ -42,6 +42,37 @@ export const disponible = query({
   handler: async () => configRealtime() != null,
 });
 
+/**
+ * El módulo que enciende este motor para un conjunto.
+ *
+ * Se estrena conjunto por conjunto a propósito. Arboleda son 173 personas en
+ * un acto con efectos legales: si el motor nuevo falla allí, falla una
+ * asamblea de verdad. Con el interruptor se prueba primero donde un fallo se
+ * arregla repitiendo la reunión.
+ */
+export const MODULO_SALA_CF = "sala_cloudflare";
+
+/**
+ * ¿Qué motor le toca a esta asamblea?
+ *
+ * No pide sesión: los invitados y los apoderados entran con código, no
+ * autenticados, y necesitan la misma respuesta que todos los demás. Lo único
+ * que revela es qué tecnología usa una sala, que no es un secreto.
+ */
+export const motor = query({
+  args: { asambleaId: v.id("asambleas") },
+  handler: async (ctx, args): Promise<"cloudflare" | "otro"> => {
+    if (configRealtime() == null) return "otro";
+    const asamblea = await ctx.db.get(args.asambleaId);
+    if (!asamblea) return "otro";
+    const condominio = await ctx.db.get(asamblea.condominioId);
+    if (!condominio) return "otro";
+    return condominio.activeModules.includes(MODULO_SALA_CF)
+      ? "cloudflare"
+      : "otro";
+  },
+});
+
 // ─────────────────────────────────────────────────────────────
 // Señalización: el directorio de pistas
 // ─────────────────────────────────────────────────────────────

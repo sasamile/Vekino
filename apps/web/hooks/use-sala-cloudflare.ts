@@ -80,7 +80,15 @@ export function useSalaCloudflare(
   const [error, setError] = useState<string | null>(null);
   const [remotas, setRemotas] = useState<PistaRemota[]>([]);
   const [micOn, setMicOn] = useState(false);
+  const [camOn, setCamOn] = useState(false);
   const [compartiendo, setCompartiendo] = useState(false);
+  /** Lo que uno mismo emite, para verse en pantalla. */
+  const [locales, setLocales] = useState<
+    { medio: "camara" | "pantalla"; stream: MediaStream }[]
+  >([]);
+  /* El navegador no deja sonar nada hasta que la persona toque algo. Sin
+   * esto la asamblea entera se ve pero no se oye, y nadie sabe por qué. */
+  const [audioBloqueado, setAudioBloqueado] = useState(false);
   /* Safari en iPhone/iPad no tiene `getDisplayMedia`: en el móvil no se puede
    * compartir pantalla, punto. Enseñar el botón allí solo produce un error
    * incomprensible ("getDisplayMedia is not a function") a quien lo pulsa. */
@@ -96,6 +104,13 @@ export function useSalaCloudflare(
   const sesionRef = useRef<string | null>(null);
   const micRef = useRef<MediaStreamTrack | null>(null);
   const pantallaRef = useRef<MediaStreamTrack | null>(null);
+  const camRef = useRef<MediaStreamTrack | null>(null);
+  /* El emisor de la cámara se guarda aparte porque apagar vídeo NO es como
+   * silenciar: una pista de vídeo «deshabilitada» sigue mandando fotogramas
+   * negros, y con 173 personas eso es ancho de banda tirado. Con
+   * `replaceTrack(null)` deja de mandar de verdad y —esto importa— sin
+   * renegociar, que es lo que rompía el micrófono. */
+  const camSenderRef = useRef<RTCRtpSender | null>(null);
   const misPistasRef = useRef<string[]>([]);
   /** Pistas remotas ya pedidas, para no volver a suscribirse a lo mismo. */
   const suscritasRef = useRef<Set<string>>(new Set());
@@ -197,6 +212,9 @@ export function useSalaCloudflare(
     micRef.current = null;
     pantallaRef.current?.stop();
     pantallaRef.current = null;
+    camRef.current?.stop();
+    camRef.current = null;
+    camSenderRef.current = null;
     pcRef.current?.close();
     pcRef.current = null;
     sesionRef.current = null;
@@ -204,7 +222,9 @@ export function useSalaCloudflare(
     suscritasRef.current.clear();
     midRef.current.clear();
     setRemotas([]);
+    setLocales([]);
     setMicOn(false);
+    setCamOn(false);
     setCompartiendo(false);
     setEstado("inactiva");
   }, [dejarDePublicarAccion]);
@@ -295,15 +315,20 @@ export function useSalaCloudflare(
   /** Le pone nombre a cada pista remota cuando el catálogo lo dice. */
   useEffect(() => {
     if (!catalogo) return;
-    setRemotas((prev) =>
-      prev.map((r) => {
+    setRemotas((prev) => {
+      let cambio = false;
+      const siguiente = prev.map((r) => {
         const meta = catalogo.find((c) => c.trackName === r.trackName);
-        if (!meta) return r;
-        return meta.nombre !== r.nombre || meta.tipo !== r.tipo
-          ? { ...r, nombre: meta.nombre, tipo: meta.tipo }
-          : r;
-      }),
-    );
+        if (!meta || (meta.nombre === r.nombre && meta.tipo === r.tipo)) return r;
+        cambio = true;
+        return { ...r, nombre: meta.nombre, tipo: meta.tipo };
+      });
+      /* Devolver `prev` cuando nada cambió no es un detalle: `.map` siempre
+       * crea un array nuevo, y con el catálogo llegando cada pocos segundos
+       * eso repintaba la sala entera —y volvía a probar el audio— sin que
+       * hubiera pasado nada. */
+      return cambio ? siguiente : prev;
+    });
   }, [catalogo]);
 
   // ── Micrófono ───────────────────────────────────────────────
@@ -430,6 +455,10 @@ export function useSalaCloudflare(
         pantallaRef.current = null;
         return;
       }
+      setLocales((prev) => [
+        ...prev.filter((l) => l.medio !== "pantalla"),
+        { medio: "pantalla", stream },
+      ]);
       setCompartiendo(true);
     } catch (e) {
       /* Cancelar el diálogo del navegador lanza aquí y no es un error. */
@@ -442,6 +471,7 @@ export function useSalaCloudflare(
     const sid = sesionRef.current;
     pantallaRef.current?.stop();
     pantallaRef.current = null;
+    setLocales((prev) => prev.filter((l) => l.medio !== "pantalla"));
     setCompartiendo(false);
     if (!sid) return;
     const nombres = misPistasRef.current.filter((n) => n.startsWith("pantalla-"));
@@ -466,6 +496,132 @@ export function useSalaCloudflare(
     setMicOn(false);
   }, []);
 
+  // ── Cámara ──────────────────────────────────────────────────
+
+  /**
+   * Enciende la cámara.
+   *
+   * La primera vez negocia; a partir de ahí encender y apagar es cambiar la
+   * pista del emisor, sin tocar el SDP. Se pide 640×360 a 20 fps a propósito:
+   * en una asamblea las caras viven en un mosaico pequeño y la diferencia con
+   * 720p no se ve, pero sí se paga.
+   */
+  const encenderCam = useCallback(async () => {
+    const pc = pcRef.current;
+    const sid = sesionRef.current;
+    if (!pc || !sid) return;
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          width: { ideal: 640 },
+          height: { ideal: 360 },
+          frameRate: { max: 20 },
+        },
+      });
+      const pista = stream.getVideoTracks()[0];
+      if (!pista) return;
+      camRef.current = pista;
+
+      // Ya se publicó antes: basta con volver a colgar una pista del emisor.
+      if (camSenderRef.current) {
+        await camSenderRef.current.replaceTrack(pista);
+        setLocales((prev) => [
+          ...prev.filter((l) => l.medio !== "camara"),
+          { medio: "camara", stream },
+        ]);
+        setCamOn(true);
+        return;
+      }
+
+      const ok = await enFila(async () => {
+        const trans = pc.addTransceiver(pista, { direction: "sendonly" });
+        const oferta = await pc.createOffer();
+        await pc.setLocalDescription(oferta);
+        await esperarIce(pc);
+
+        const trackName = `cam-${sid.slice(0, 8)}`;
+        const r = await publicarAccion({
+          asambleaId,
+          sessionId: sid,
+          sdp: pc.localDescription!.sdp,
+          pistas: [{ mid: trans.mid ?? "0", trackName, tipo: "video" as const }],
+        });
+        if ("error" in r) {
+          setError(r.error);
+          return false;
+        }
+        await pc.setRemoteDescription({ type: "answer", sdp: r.sdp });
+        camSenderRef.current = trans.sender;
+        misPistasRef.current = [...misPistasRef.current, trackName];
+        return true;
+      });
+
+      if (!ok) {
+        pista.stop();
+        camRef.current = null;
+        return;
+      }
+      setLocales((prev) => [
+        ...prev.filter((l) => l.medio !== "camara"),
+        { medio: "camara", stream },
+      ]);
+      setCamOn(true);
+    } catch (e) {
+      camRef.current?.stop();
+      camRef.current = null;
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }, [asambleaId, publicarAccion, enFila]);
+
+  const apagarCam = useCallback(async () => {
+    /* Se para el dispositivo además de soltar la pista: si no, la luz de la
+     * cámara sigue encendida y la persona cree —con razón— que la estamos
+     * grabando con el vídeo «apagado». */
+    await camSenderRef.current?.replaceTrack(null).catch(() => {});
+    camRef.current?.stop();
+    camRef.current = null;
+    setLocales((prev) => prev.filter((l) => l.medio !== "camara"));
+    setCamOn(false);
+  }, []);
+
+  /**
+   * Deja sonar el audio.
+   *
+   * Se llama desde el botón que pinta la sala cuando el navegador bloquea la
+   * reproducción. Reproducir un elemento con gesto del usuario levanta el
+   * bloqueo para todos los demás de la página.
+   */
+  const desbloquearAudio = useCallback(async () => {
+    const audios = document.querySelectorAll("audio");
+    await Promise.all(
+      Array.from(audios).map((a) => a.play().catch(() => {})),
+    );
+    setAudioBloqueado(false);
+  }, []);
+
+  /* Se prueba con la primera pista que llega: si el navegador la rechaza,
+   * hay que pedirle a la persona que toque el botón.
+   *
+   * La prueba va SIN silenciar y con el volumen a cero. Silenciada no sirve
+   * de nada: el navegador siempre deja reproducir lo que no suena, así que
+   * daría permitido incluso cuando la asamblea se está oyendo en mudo. */
+  useEffect(() => {
+    const primera = remotas[0];
+    if (!primera) return;
+    const sonido = new Audio();
+    sonido.srcObject = primera.stream;
+    sonido.volume = 0;
+    sonido
+      .play()
+      .then(() => setAudioBloqueado(false))
+      .catch(() => setAudioBloqueado(true))
+      .finally(() => {
+        sonido.pause();
+        sonido.srcObject = null;
+      });
+  }, [remotas]);
+
 
   return {
     /** false mientras no esté configurado el SFU: la sala usa el motor viejo. */
@@ -473,9 +629,15 @@ export function useSalaCloudflare(
     estado,
     error,
     remotas,
+    locales,
     micOn,
     encenderMic,
     apagarMic,
+    camOn,
+    encenderCam,
+    apagarCam,
+    audioBloqueado,
+    desbloquearAudio,
     puedeCompartirPantalla,
     compartiendo,
     compartirPantalla,

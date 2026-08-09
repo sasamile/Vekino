@@ -694,8 +694,10 @@ export function EscenarioVideo({
         </div>
       ) : null}
 
-      {/* ── Contador de conexiones del emisor ───────────────────────────── */}
-      {puedoHablar && video.transmitiendo ? (
+      {/* ── Contador de conexiones del emisor ─────────────────────────────
+          `tope: 0` es «sin tope»: con un repetidor de medios no hay un número
+          a partir del cual la sala se llena, así que no hay de qué avisar. */}
+      {puedoHablar && video.transmitiendo && video.tope > 0 ? (
         <span
           className={cn(
             "absolute right-4 top-16 z-10 rounded-full px-2.5 py-1 text-[11px] font-medium",

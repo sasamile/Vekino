@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useAction } from "convex/react";
+import { useAction, useQuery } from "convex/react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
 import { useSalaP2P } from "./use-sala-p2p";
 import { useSalaLiveKit, type ConexionSala } from "./use-sala-livekit";
+import { useSalaCloudflareVideo } from "./use-sala-cloudflare-video";
 import type { Calidad, EmisorRemoto, Medio, SalaVideo } from "./sala-tipos";
 
 export type { Calidad, EmisorRemoto, Medio, SalaVideo };
@@ -34,7 +35,7 @@ export function useVideoSala(
     codigoInvitado?: string;
     calidad?: Calidad;
   } = {},
-): SalaVideo & { motor: "sfu" | "malla" | "cargando" } {
+): SalaVideo & { motor: "sfu" | "malla" | "cloudflare" | "cargando" } {
   const pedirToken = useAction(api.salaToken.tokenSala);
   const pedirTokenInvitado = useAction(api.salaToken.tokenSalaInvitado);
   const pedirTokenPoder = useAction(api.salaToken.tokenSalaPoder);
@@ -42,6 +43,15 @@ export function useVideoSala(
   const [resuelto, setResuelto] = useState(false);
   const codigoInvitado = opts.codigoInvitado;
   const codigoPoder = opts.codigoPoder;
+
+  /* Qué motor le toca a este conjunto. Se decide en el backend porque la
+   * respuesta tiene que ser la misma para los 173, vengan autenticados,
+   * con código de invitado o con poder. */
+  const motorElegido = useQuery(
+    api.salaCloudflare.motor,
+    activo ? { asambleaId } : "skip",
+  );
+  const usarCloudflare = activo && motorElegido === "cloudflare";
 
   /* Se pide una vez por sala. El token dura seis horas: más que la asamblea
    * más larga, así que no hace falta renovarlo en pleno acto.
@@ -54,7 +64,10 @@ export function useVideoSala(
    */
   const pedido = useRef<string | null>(null);
   useEffect(() => {
-    if (!activo) {
+    /* Mientras no se sepa el motor no se pide nada, y si toca Cloudflare no
+     * se pide nunca: un token de LiveKit que nadie va a usar es una conexión
+     * de más y —lo que importa— minutos-participante facturados. */
+    if (!activo || motorElegido === undefined || usarCloudflare) {
       pedido.current = null;
       setConexion(null);
       setResuelto(false);
@@ -97,19 +110,27 @@ export function useVideoSala(
     asambleaId,
     codigoInvitado,
     codigoPoder,
+    motorElegido,
+    usarCloudflare,
     pedirToken,
     pedirTokenInvitado,
     pedirTokenPoder,
   ]);
 
-  const usarSfu = resuelto && conexion !== null;
-  const usarMalla = resuelto && conexion === null;
+  const usarSfu = !usarCloudflare && resuelto && conexion !== null;
+  const usarMalla = !usarCloudflare && resuelto && conexion === null;
 
   const sfu = useSalaLiveKit(usarSfu ? conexion : null, usarSfu, {
     calidad: opts.calidad,
   });
   const malla = useSalaP2P(asambleaId, activo && usarMalla, opts);
+  const cloudflare = useSalaCloudflareVideo(
+    asambleaId,
+    usarCloudflare,
+    opts.calidad ?? "normal",
+  );
 
+  if (usarCloudflare) return { ...cloudflare, motor: "cloudflare" };
   if (!resuelto) {
     return { ...VACIO, calidad: opts.calidad ?? "normal", motor: "cargando" };
   }
