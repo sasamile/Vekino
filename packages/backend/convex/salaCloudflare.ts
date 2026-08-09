@@ -282,12 +282,15 @@ export const suscribir = action({
   handler: async (
     ctx,
     args,
-  ): Promise<{ sdp: string | null } | { error: string }> => {
+  ): Promise<
+    | { sdp: string | null; mapa: { mid: string; trackName: string }[] }
+    | { error: string }
+  > => {
     const cfg = configRealtime();
     if (!cfg) return { error: "El SFU de Cloudflare no está configurado." };
 
     try {
-      const { oferta } = await suscribirPistas(
+      const { oferta, pistas } = await suscribirPistas(
         cfg,
         args.sessionId,
         args.pistas.map((p) => ({
@@ -296,7 +299,19 @@ export const suscribir = action({
           trackName: p.trackName,
         })),
       );
-      return { sdp: oferta?.sdp ?? null };
+      /* Se devuelve QUÉ `mid` corresponde a cada pista.
+       *
+       * Sin este mapa el navegador recibe medios sin saber de quién son: el
+       * evento `track` solo trae el `mid`. Y peor: no puede distinguir una
+       * pista real de la que Cloudflare devuelve por el transceptor vacío que
+       * se usa para abrir la sesión — que aparecía en pantalla como una
+       * persona llamada "0" que nadie sabía quién era. */
+      return {
+        sdp: oferta?.sdp ?? null,
+        mapa: (pistas ?? [])
+          .filter((p: any) => p?.mid && p?.trackName)
+          .map((p: any) => ({ mid: String(p.mid), trackName: String(p.trackName) })),
+      };
     } catch (e) {
       return { error: e instanceof Error ? e.message : String(e) };
     }

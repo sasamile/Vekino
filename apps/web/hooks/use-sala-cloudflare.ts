@@ -89,8 +89,9 @@ export function useSalaCloudflare(
   const misPistasRef = useRef<string[]>([]);
   /** Pistas remotas ya pedidas, para no volver a suscribirse a lo mismo. */
   const suscritasRef = useRef<Set<string>>(new Set());
-  /** Streams por `mid`, para casarlos con el nombre cuando llega `ontrack`. */
-  const streamsRef = useRef<Map<string, MediaStream>>(new Map());
+  /** `mid` → nombre de pista. Lo llena `suscribir`: es la única forma de
+   *  saber de quién es un medio, porque el evento `track` solo trae el mid. */
+  const midRef = useRef<Map<string, string>>(new Map());
 
   // ── Conexión ────────────────────────────────────────────────
 
@@ -106,17 +107,19 @@ export function useSalaCloudflare(
     pcRef.current = pc;
 
     pc.addEventListener("track", (ev) => {
-      const stream = ev.streams[0] ?? new MediaStream([ev.track]);
       const mid = ev.transceiver.mid ?? "";
-      streamsRef.current.set(mid, stream);
-      /* El nombre lo pone el catálogo de Convex; aquí solo se guarda el
-       * medio. Casarlos se hace en el efecto de abajo, que ya tiene los dos. */
+      /* Solo se acepta lo que pedimos. Al abrir la sesión se manda un
+       * transceptor vacío —hace falta para que la oferta sea válida— y
+       * Cloudflare responde por él: eso llegaba aquí y se pintaba como una
+       * persona llamada "0" que nadie sabía quién era. */
+      const trackName = midRef.current.get(mid);
+      if (!trackName) return;
+
+      const stream = ev.streams[0] ?? new MediaStream([ev.track]);
       setRemotas((prev) => {
-        if (prev.some((p) => p.stream.id === stream.id)) return prev;
-        /* El tipo se sabe por la pista que llegó; el catálogo lo confirma
-         * después con el nombre de quien la publica. */
+        if (prev.some((p) => p.trackName === trackName)) return prev;
         const tipo = ev.track.kind === "video" ? "pantalla" : "audio";
-        return [...prev, { trackName: mid, nombre: "", tipo, stream }];
+        return [...prev, { trackName, nombre: "", tipo, stream }];
       });
     });
 
@@ -170,7 +173,7 @@ export function useSalaCloudflare(
     sesionRef.current = null;
     misPistasRef.current = [];
     suscritasRef.current.clear();
-    streamsRef.current.clear();
+    midRef.current.clear();
     setRemotas([]);
     setMicOn(false);
     setCompartiendo(false);
@@ -240,6 +243,7 @@ export function useSalaCloudflare(
         setError(r.error);
         return;
       }
+      for (const m of r.mapa) midRef.current.set(m.mid, m.trackName);
       if (!r.sdp) return;
 
       await pc.setRemoteDescription({ type: "offer", sdp: r.sdp });

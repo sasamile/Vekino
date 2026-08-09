@@ -1,9 +1,9 @@
 import { useEffect } from "react";
-import { View, ActivityIndicator } from "react-native";
 import { Stack, useRouter, useRootNavigationState } from "expo-router";
 import { Authenticated, Unauthenticated, AuthLoading } from "convex/react";
 import { CondominioProvider } from "@/context/condominio-context";
 import { PushBootstrap } from "@/components/push-bootstrap";
+import { SplashPantalla } from "@/components/ui/splash-marca";
 
 function RedirectToLogin() {
   const router = useRouter();
@@ -14,18 +14,7 @@ function RedirectToLogin() {
     router.replace("/(auth)/login" as never);
   }, [router, navState?.key]);
 
-  return (
-    <View
-      style={{
-        flex: 1,
-        alignItems: "center",
-        justifyContent: "center",
-        backgroundColor: "#FCFBFD",
-      }}
-    >
-      <ActivityIndicator color="#0E0E0F" size="large" />
-    </View>
-  );
+  return <SplashPantalla />;
 }
 
 /**
@@ -36,16 +25,7 @@ export default function AppLayout() {
   return (
     <>
       <AuthLoading>
-        <View
-          style={{
-            flex: 1,
-            alignItems: "center",
-            justifyContent: "center",
-            backgroundColor: "#FCFBFD",
-          }}
-        >
-          <ActivityIndicator color="#0E0E0F" size="large" />
-        </View>
+        <SplashPantalla />
       </AuthLoading>
       <Unauthenticated>
         <RedirectToLogin />
