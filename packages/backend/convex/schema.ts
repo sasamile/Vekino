@@ -907,6 +907,36 @@ export default defineSchema({
     // Para el cron, que barre por antigüedad sin importar la asamblea.
     .index("by_latido", ["ultimoLatido"]),
 
+  /**
+   * Directorio de pistas en vivo del SFU de Cloudflare.
+   *
+   * Cloudflare repite medios pero no sabe quién es quién: no tiene lista de
+   * participantes ni concepto de sala. Esta tabla es esa lista — lo único que
+   * un cliente necesita para saber a qué suscribirse.
+   *
+   * Se escribe SOLO cuando alguien empieza o deja de publicar, o sea cinco o
+   * seis veces en toda una asamblea. Nada de latidos aquí: ese fue el error
+   * que costó 185 GB, y se repitió dos veces en este mismo proyecto (las
+   * presencias y los emisores P2P). La frescura vive en `salaLatidos`.
+   */
+  salaPistasCf: defineTable({
+    asambleaId: v.id("asambleas"),
+    /** Sesión de Cloudflare de quien publica. */
+    sessionId: v.string(),
+    /** Nombre de la pista según Cloudflare: con esto se suscriben los demás. */
+    trackName: v.string(),
+    tipo: v.union(v.literal("audio"), v.literal("video"), v.literal("pantalla")),
+    /** Quién publica. Uno de los tres, igual que en el resto de la sala. */
+    userId: v.optional(v.id("users")),
+    codigoPoder: v.optional(v.string()),
+    codigoInvitado: v.optional(v.string()),
+    nombre: v.string(),
+    createdAt: v.number(),
+  })
+    .index("by_asamblea", ["asambleaId"])
+    .index("by_sesion", ["sessionId"])
+    .index("by_asamblea_track", ["asambleaId", "trackName"]),
+
   /** Reacciones efímeras tipo Meet (👍👏❤️…): viven unos segundos en pantalla. */
   salaReacciones: defineTable({
     condominioId: v.id("condominios"),

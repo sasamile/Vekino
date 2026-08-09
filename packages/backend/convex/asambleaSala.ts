@@ -40,7 +40,7 @@ import {
  * acumulado; aquí vive el detalle temporal.
  */
 
-const WRITE_ROLES = [
+export const WRITE_ROLES = [
   "administrador",
   "junta_directiva",
   "representante_asamblea",
