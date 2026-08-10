@@ -2,26 +2,35 @@
 
 import { useState } from "react";
 import { useQuery } from "convex/react";
-import { AlertTriangle, Database, TrendingUp } from "lucide-react";
+import { Database, TrendingUp } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
-import { Select } from "@/components/ui/input";
+import { Input, Select } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 
 /**
- * Lo que va a costar una asamblea, antes de celebrarla.
+ * Lo que va a costar una asamblea, antes de celebrarla — en plata.
  *
- * Existe por una factura de 185 GB que nadie vio venir. El problema no fue el
- * consumo: fue que era invisible hasta que llegaba el cobro un mes después,
- * cuando ya no había nada que hacer. Esto lo pone delante antes.
+ * Existe por una factura de 185 GB que nadie vio venir. Los pesos se miden
+ * ejecutando las consultas reales; la proyección va por defecto a la asamblea
+ * llena (todas las unidades del conjunto), no a la sala vacía de hoy.
  */
 export function CosteSalaPanel() {
   const condos = useQuery(api.automatizaciones.condominiosConAsambleas);
   const [asambleaId, setAsambleaId] = useState<Id<"asambleas"> | "">("");
+  const [gente, setGente] = useState<string>("");
 
+  const simular = Number(gente);
   const coste = useQuery(
     api.diagnosticoSala.costeDeLaSala,
-    asambleaId ? { asambleaId: asambleaId as Id<"asambleas"> } : "skip",
+    asambleaId
+      ? {
+          asambleaId: asambleaId as Id<"asambleas">,
+          ...(Number.isFinite(simular) && simular > 0
+            ? { simular }
+            : {}),
+        }
+      : "skip",
   );
 
   const asambleas = (condos ?? []).flatMap((c) =>
@@ -40,15 +49,16 @@ export function CosteSalaPanel() {
             Qué le va a costar una asamblea a la base de datos
           </h2>
           <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-            No son estimaciones: se miden las consultas de verdad, con los datos
-            que hay ahora en esa asamblea. Lo único supuesto es la
-            multiplicación por cuánta gente hay conectada.
+            Los pesos se miden con los datos reales de esa asamblea. La
+            proyección asume la asamblea llena — todas las unidades del
+            conjunto — salvo que pongas otro número de gente.
           </p>
         </div>
       </div>
 
-      <div className="mt-4 max-w-md">
+      <div className="mt-4 flex max-w-2xl flex-wrap gap-2">
         <Select
+          className="min-w-64 flex-1"
           value={asambleaId}
           onChange={(e) => setAsambleaId(e.target.value as Id<"asambleas"> | "")}
           aria-label="Asamblea"
@@ -60,6 +70,15 @@ export function CosteSalaPanel() {
             </option>
           ))}
         </Select>
+        <Input
+          className="w-36"
+          type="number"
+          min={1}
+          placeholder="¿Cuánta gente?"
+          value={gente}
+          onChange={(e) => setGente(e.target.value)}
+          aria-label="Personas a simular"
+        />
       </div>
 
       {asambleaId && coste === undefined && (
@@ -70,44 +89,51 @@ export function CosteSalaPanel() {
 
       {coste && (
         <div className="mt-5 space-y-5">
+          {/* La cifra que importa: la plata. */}
+          <div className="rounded-xl border border-border bg-background px-4 py-3.5">
+            <p className="text-[11px] text-muted-foreground">
+              Costo estimado de esta asamblea con {coste.simuladoCon} personas
+            </p>
+            <p className="mt-1 text-2xl font-semibold tracking-tight text-foreground">
+              {coste.costo.total}
+            </p>
+            <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
+              {coste.totalTransferido} transferidos ({coste.costo.transferencia})
+              + {coste.totalLlamadas.toLocaleString("es-CO")} llamadas a
+              funciones ({coste.costo.llamadas}). Equivale al{" "}
+              {coste.porcentajeDelPlanMensual}% de los 50 GB mensuales que
+              incluye el plan. Cambio usado: {coste.precios.cambio}.
+            </p>
+          </div>
+
           <div className="flex flex-wrap items-baseline gap-x-6 gap-y-2">
-            <Cifra etiqueta="Conectados ahora" valor={String(coste.suscriptores)} />
+            <Cifra
+              etiqueta="Conectados ahora"
+              valor={String(coste.conectadosAhora)}
+            />
+            <Cifra
+              etiqueta="Unidades del conjunto"
+              valor={String(coste.unidades)}
+            />
             <Cifra
               etiqueta="Peso de todo lo suscrito"
               valor={coste.pesoTodasLasConsultas}
             />
-            <Cifra
-              etiqueta="Consumo estimado de la asamblea"
-              valor={coste.totalEstimado}
-              destacado
-            />
           </div>
 
-          {coste.advertencia && (
-            <div className="flex gap-2.5 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3.5 py-3">
-              <AlertTriangle
-                className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400"
-                aria-hidden
-              />
-              <p className="text-xs leading-relaxed text-amber-700 dark:text-amber-400">
-                {coste.advertencia}
-              </p>
-            </div>
-          )}
-
-          {/* Qué evento cuesta qué. Ordenado por lo que más pesa, que casi
-              nunca es lo que uno cree. */}
           <div>
             <h3 className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-foreground">
               <TrendingUp className="h-3.5 w-3.5" aria-hidden />
-              Lo que cuesta cada cosa que pasa
+              Lo que cuesta cada cosa que pasa, con {coste.simuladoCon} personas
             </h3>
             <div className="overflow-x-auto">
               <table className="w-full min-w-[34rem] text-left text-xs">
                 <thead>
                   <tr className="border-b border-border text-[11px] text-muted-foreground">
                     <th className="pb-1.5 pr-3 font-medium">Evento</th>
-                    <th className="pb-1.5 pr-3 text-right font-medium">Cada vez</th>
+                    <th className="pb-1.5 pr-3 text-right font-medium">
+                      Cada vez
+                    </th>
                     <th className="pb-1.5 pr-3 text-right font-medium">Veces</th>
                     <th className="pb-1.5 text-right font-medium">Total</th>
                   </tr>
@@ -125,7 +151,7 @@ export function CosteSalaPanel() {
                         {e.porVez}
                       </td>
                       <td className="py-2 pr-3 text-right font-mono text-muted-foreground">
-                        {e.vecesTipicas}
+                        {e.veces.toLocaleString("es-CO")}
                       </td>
                       <td className="py-2 text-right font-mono font-medium text-foreground">
                         {e.total}
@@ -135,6 +161,12 @@ export function CosteSalaPanel() {
                 </tbody>
               </table>
             </div>
+            <p className="mt-2 text-[10.5px] leading-relaxed text-muted-foreground">
+              Los pesos están medidos; las <em>veces</em> son el supuesto
+              (30 puntos de orden del día, una votación por persona, dos
+              entradas/salidas por persona). Después de la próxima asamblea se
+              ajustan con lo que pase de verdad.
+            </p>
           </div>
 
           <div>
@@ -153,10 +185,11 @@ export function CosteSalaPanel() {
                     </span>
                     <span className="ml-2 text-[11px] text-muted-foreground">
                       {c.que}
+                      {c.creceConGente ? " — engorda con la gente" : ""}
                     </span>
                   </span>
                   <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
-                    {c.documentos} docs · {c.peso}
+                    {c.peso}
                   </span>
                 </li>
               ))}
@@ -168,27 +201,11 @@ export function CosteSalaPanel() {
   );
 }
 
-function Cifra({
-  etiqueta,
-  valor,
-  destacado,
-}: {
-  etiqueta: string;
-  valor: string;
-  destacado?: boolean;
-}) {
+function Cifra({ etiqueta, valor }: { etiqueta: string; valor: string }) {
   return (
     <div>
       <p className="text-[11px] text-muted-foreground">{etiqueta}</p>
-      <p
-        className={
-          destacado
-            ? "text-xl font-semibold tracking-tight text-foreground"
-            : "text-base font-medium text-foreground"
-        }
-      >
-        {valor}
-      </p>
+      <p className="text-base font-medium text-foreground">{valor}</p>
     </div>
   );
 }
