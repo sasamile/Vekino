@@ -1004,11 +1004,20 @@ export const miParticipacion = query({
       )
       .collect();
 
-    const votos = await ctx.db
+    /* Solo los votos PROPIOS, por índice.
+     *
+     * Antes traía todos los de la asamblea y filtraba en memoria. Eso costaba
+     * dos veces: leía cientos de documentos por ejecución, y —lo caro— al
+     * haber recorrido el rango entero, cada voto de cualquier vecino
+     * reejecutaba esta consulta en los 173 conectados. Una votación de 173
+     * personas disparaba ~30.000 ejecuciones de esto. Ahora el voto ajeno
+     * cae fuera del rango leído y no despierta a nadie. */
+    const misVotos = await ctx.db
       .query("votosAsamblea")
-      .withIndex("by_asamblea", (q) => q.eq("asambleaId", args.asambleaId))
+      .withIndex("by_asamblea_user", (q) =>
+        q.eq("asambleaId", args.asambleaId).eq("userId", user._id),
+      )
       .collect();
-    const misVotos = votos.filter((vt) => vt.userId === user._id);
 
     // Casas que este usuario representa por poder (validado) — si es apoderado con cuenta.
     const poderesRecibidos = await ctx.db

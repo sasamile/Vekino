@@ -39,6 +39,12 @@ export function useSalaLatido(asambleaId: Id<"asambleas"> | null) {
   latidoPresenciaRef.current = latidoPresencia;
   salirPresenciaRef.current = salirPresencia;
 
+  /* ── El pulso ─────────────────────────────────────────────────────────
+   *
+   * Sin salida en la limpieza, a propósito. Antes esta función llamaba a
+   * `salirDeSala`, y como una limpieza corre en CADA cambio de dependencias
+   * —no solo al desmontar— cualquier variación de `latidoMs` o de `debeLatir`
+   * expulsaba a la persona de la sala y la volvía a meter. */
   useEffect(() => {
     if (!asambleaId || (!debeLatir && !debeLatirPresencia)) return;
 
@@ -56,27 +62,51 @@ export function useSalaLatido(asambleaId: Id<"asambleas"> | null) {
     enviar();
     const id = setInterval(enviar, intervaloMs);
 
+    /* Al volver del bloqueo de pantalla se late enseguida en vez de esperar
+     * al siguiente intervalo: si la sesión sigue abierta, este pulso no
+     * despierta a nadie —vive en `salaLatidos`— y evita que el cron la cierre
+     * por unos segundos de retraso. */
     const onVisibilidad = () => {
       if (document.visibilityState === "visible") enviar();
     };
-    const onSalida = () => {
-      if (debeLatir) void salirRef.current({ asambleaId }).catch(() => {});
-      if (debeLatirPresencia) {
-        void salirPresenciaRef.current({ asambleaId }).catch(() => {});
-      }
-    };
-
     document.addEventListener("visibilitychange", onVisibilidad);
-    window.addEventListener("pagehide", onSalida);
 
     return () => {
       vivo = false;
       clearInterval(id);
       document.removeEventListener("visibilitychange", onVisibilidad);
-      window.removeEventListener("pagehide", onSalida);
-      onSalida();
     };
   }, [asambleaId, debeLatir, debeLatirPresencia, intervaloMs]);
+
+  /* ── La salida ────────────────────────────────────────────────────────
+   *
+   * Solo al salirse de la sala de verdad. Ya NO se sale en `pagehide`.
+   *
+   * `pagehide` se dispara al bloquear el teléfono o cambiar de aplicación, y
+   * eso no es irse: en una asamblea la gente apaga la pantalla y sigue
+   * escuchando. Tratarlo como salida cerraba la sesión, bajaba el quórum,
+   * escribía bitácora y borraba la presencia — y al desbloquear rehacía las
+   * cuatro cosas. Cada una de esas escrituras reejecuta `salaEnVivo` en TODOS
+   * los conectados, y esa consulta devuelve unos 40 KB. Con 173 personas
+   * mirando el móvil cada tanto son miles de idas y venidas falsas: decenas
+   * de gigabytes por una pantalla que se apaga.
+   *
+   * Quien de verdad se va deja de latir, y el cron `cerrarSesionesInactivas`
+   * lo cierra a los 90 segundos fechando la salida en su último pulso — o
+   * sea, la permanencia y el quórum salen igual de exactos, con una sola
+   * escritura en vez de miles.
+   */
+  const salidaRef = useRef({ debeLatir, debeLatirPresencia });
+  salidaRef.current = { debeLatir, debeLatirPresencia };
+
+  useEffect(() => {
+    if (!asambleaId) return;
+    return () => {
+      const { debeLatir: d, debeLatirPresencia: p } = salidaRef.current;
+      if (d) void salirRef.current({ asambleaId }).catch(() => {});
+      if (p) void salirPresenciaRef.current({ asambleaId }).catch(() => {});
+    };
+  }, [asambleaId]);
 
   return {
     cargando: sala === undefined,

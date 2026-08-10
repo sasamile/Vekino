@@ -44,7 +44,12 @@ export function SalaTab({
   estado: string;
   modalidad: string;
 }) {
-  const sala = useQuery(api.asambleaSala.salaEnVivo, { asambleaId });
+  /* El panel de la mesa sí enseña la lista nominal de conexiones, así que es
+   * el único que la pide. La sala no la usa. */
+  const sala = useQuery(api.asambleaSala.salaEnVivo, {
+    asambleaId,
+    conDetalle: true,
+  });
   const perm = useQuery(api.asambleaSala.permanencia, { asambleaId });
   const votaciones = useQuery(api.asambleas.listVotaciones, { asambleaId });
   const exigir = useMutation(api.asambleaSala.exigirConexionParaVotar);

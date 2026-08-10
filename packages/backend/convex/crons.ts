@@ -60,4 +60,20 @@ crons.daily(
   {},
 );
 
+/**
+ * Borra las pistas de video de asambleas que ya terminaron.
+ *
+ * Una pista solo se retira sola en una salida ordenada. Quien cierra la
+ * pestaña de golpe o se queda sin batería deja la fila anunciada, y el
+ * catálogo de la sala —que TODOS los conectados tienen suscrito— la sigue
+ * repartiendo. La limpieza por persona al reconectar cubre a quien vuelve;
+ * esto cubre a quien no volvió.
+ */
+crons.daily(
+  "clean orphan sfu tracks",
+  { hourUTC: 6, minuteUTC: 20 },
+  internal.salaCloudflare.limpiarPistasHuerfanas,
+  {},
+);
+
 export default crons;

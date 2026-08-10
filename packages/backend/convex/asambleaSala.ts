@@ -747,7 +747,20 @@ export const cerrarSesionesInactivas = internalMutation({
  * representan. Es el número que la mesa proyecta durante la asamblea.
  */
 export const salaEnVivo = query({
-  args: { asambleaId: v.id("asambleas") },
+  args: {
+    asambleaId: v.id("asambleas"),
+    /**
+     * La lista nominal de conexiones por unidad. Solo la pide el panel de la
+     * mesa.
+     *
+     * Va bajo petición porque son hasta 300 entradas que la sala NO usa: allí
+     * las caras salen de `personas`, y `conectados` era únicamente un respaldo
+     * para cuando aún no hay presencias. Mandársela a los 173 en cada
+     * reejecución duplicaba el peso de la consulta más despertada de la
+     * asamblea para que casi nadie la mirara.
+     */
+    conDetalle: v.optional(v.boolean()),
+  },
   handler: async (ctx, args) => {
     const asamblea = await ctx.db.get(args.asambleaId);
     if (!asamblea) return null;
@@ -836,16 +849,20 @@ export const salaEnVivo = query({
       hayQuorum: pct >= (asamblea.quorumRequerido ?? 51),
       iniciadaEn: asamblea.iniciadaEn ?? null,
       exigeConexionParaVotar: !!asamblea.exigirConexionParaVotar,
-      conectados: abiertas
-        .sort((a, b) => b.entroEn - a.entroEn)
-        .slice(0, 300)
-        .map((s) => ({
-          unidadNumero: s.unidadNumero,
-          userNombre: s.userNombre,
-          entroEn: s.entroEn,
-          esPoder: !!s.esPoder,
-          origen: s.origen,
-        })),
+      /** Cuántas conexiones hay. Esto sí lo quiere todo el mundo. */
+      totalConectados: abiertas.length,
+      conectados: args.conDetalle
+        ? abiertas
+            .sort((a, b) => b.entroEn - a.entroEn)
+            .slice(0, 300)
+            .map((s) => ({
+              unidadNumero: s.unidadNumero,
+              userNombre: s.userNombre,
+              entroEn: s.entroEn,
+              esPoder: !!s.esPoder,
+              origen: s.origen,
+            }))
+        : [],
     };
   },
 });

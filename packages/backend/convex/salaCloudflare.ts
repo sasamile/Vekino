@@ -191,6 +191,70 @@ export const contextoSala = internalQuery({
   },
 });
 
+/**
+ * Borra las pistas que esta persona dejó colgando de una sesión anterior.
+ *
+ * Hace falta porque una pista solo se retira en una salida ordenada. Cerrar la
+ * pestaña de golpe, bloquear el móvil o quedarse sin batería deja la fila
+ * anunciada para siempre: los demás se suscriben a un emisor que ya no existe,
+ * y el catálogo engorda toda la asamblea. Cada reconexión añadía otra.
+ *
+ * Se llama al abrir sesión, que es justo cuando sabemos que la anterior de
+ * esta persona ya no vale. Si no hay nada que borrar no escribe nada, así que
+ * no despierta a los conectados.
+ */
+export const olvidarPistasAnteriores = internalMutation({
+  args: { asambleaId: v.id("asambleas"), sessionIdNueva: v.string() },
+  handler: async (ctx, args) => {
+    const user = await getCurrentAppUser(ctx);
+    if (!user) return { borradas: 0 };
+
+    const filas = await ctx.db
+      .query("salaPistasCf")
+      .withIndex("by_asamblea", (q) => q.eq("asambleaId", args.asambleaId))
+      .collect();
+
+    let borradas = 0;
+    for (const f of filas) {
+      if (f.userId !== user._id) continue;
+      if (f.sessionId === args.sessionIdNueva) continue;
+      await ctx.db.delete(f._id);
+      borradas++;
+    }
+    return { borradas };
+  },
+});
+
+/**
+ * Barrido de pistas de asambleas que ya no están en curso.
+ *
+ * La limpieza por persona no alcanza a quien se fue y no volvió. Esto corre
+ * una vez al día y deja la tabla en cero fuera de las asambleas vivas.
+ */
+export const limpiarPistasHuerfanas = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    /* Con tope: una vuelta tiene que caber en una transacción. Lo que sobre
+     * se barre mañana; nadie lo está leyendo. */
+    const filas = await ctx.db.query("salaPistasCf").take(2000);
+    let borradas = 0;
+    const estados = new Map<string, boolean>();
+    for (const f of filas) {
+      const clave = f.asambleaId as string;
+      let enCurso = estados.get(clave);
+      if (enCurso === undefined) {
+        const a = await ctx.db.get(f.asambleaId);
+        enCurso = a?.estado === "en_curso";
+        estados.set(clave, enCurso);
+      }
+      if (enCurso) continue;
+      await ctx.db.delete(f._id);
+      borradas++;
+    }
+    return { borradas };
+  },
+});
+
 // ─────────────────────────────────────────────────────────────
 // El puente con Cloudflare
 // ─────────────────────────────────────────────────────────────
@@ -225,6 +289,15 @@ export const abrirSesion = action({
         type: "offer",
         sdp: args.sdp,
       });
+
+      /* Abrir sesión significa que la anterior de esta persona murió: es el
+       * único momento en que se puede afirmar eso sin adivinar. Si no dejó
+       * nada colgando, esto no escribe y nadie se entera. */
+      await ctx.runMutation(internal.salaCloudflare.olvidarPistasAnteriores, {
+        asambleaId: args.asambleaId,
+        sessionIdNueva: sessionId,
+      });
+
       return { sessionId, sdp: respuesta.sdp };
     } catch (e) {
       return { error: e instanceof Error ? e.message : String(e) };

@@ -1225,7 +1225,14 @@ export default defineSchema({
   })
     .index("by_votacion", ["votacionId"])
     .index("by_votacion_unidad", ["votacionId", "unidadId"])
-    .index("by_asamblea", ["asambleaId"]),
+    .index("by_asamblea", ["asambleaId"])
+    /* Para que "¿yo ya voté?" no tenga que leer los votos de los demás.
+     *
+     * Con `by_asamblea` esa pregunta barría la asamblea entera y filtraba en
+     * memoria — y como la consulta había LEÍDO el rango completo, el voto de
+     * cualquiera la reejecutaba en los 173 conectados. Con este índice cada
+     * quien lee solo lo suyo y el voto ajeno ya no despierta a nadie. */
+    .index("by_asamblea_user", ["asambleaId", "userId"]),
 
   // ─────────────────────────────────────────────────────────────
   // Votaciones (dentro de una asamblea)
