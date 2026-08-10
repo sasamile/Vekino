@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Image,
   Modal,
   Pressable,
   ScrollView,
@@ -329,27 +330,14 @@ export default function SalaAsambleaScreen() {
             </Text>
           </View>
         ) : (
-          <View
-            style={{
-              flex: 1,
-              borderRadius: 16,
-              backgroundColor: "rgba(255,255,255,0.04)",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 8,
-            }}
-          >
-            <Ionicons
-              name="volume-high-outline"
-              size={30}
-              color="rgba(255,255,255,0.35)"
-            />
-            <Text style={{ color: "rgba(255,255,255,0.45)", fontSize: 13 }}>
-              {audios.length > 0
-                ? `Oyendo a ${audios.length} ${audios.length === 1 ? "persona" : "personas"}`
-                : "Nadie está emitiendo todavía"}
-            </Text>
-          </View>
+          <Mosaico
+            personas={(censo?.personas ?? []).map((p) => ({
+              nombre: p.nombre,
+              imageUrl: p.imageUrl,
+              esMesa: p.esMesa,
+            }))}
+            hablando={audios.length}
+          />
         )}
 
         {/* Los demás videos, en tira */}
@@ -756,6 +744,172 @@ function Zoomable({ children }: { children: React.ReactNode }) {
       <Animated.View style={estilo}>{children}</Animated.View>
     </GestureDetector>
   );
+}
+
+/* Paleta del círculo de avatar, la misma que la web: el color se deriva del
+ * nombre para que cada persona salga siempre del mismo color. */
+const COLORES_AVATAR = [
+  "#1a73e8",
+  "#188038",
+  "#c5221f",
+  "#e37400",
+  "#9334e6",
+  "#00786a",
+];
+function colorDe(nombre: string) {
+  let h = 0;
+  for (let i = 0; i < nombre.length; i++) h = (h * 31 + nombre.charCodeAt(i)) | 0;
+  return COLORES_AVATAR[Math.abs(h) % COLORES_AVATAR.length]!;
+}
+
+type PersonaTile = {
+  nombre: string;
+  imageUrl?: string | null;
+  esMesa?: boolean;
+};
+
+/**
+ * Las personas de la sala, en cuadrícula — como Meet.
+ *
+ * Antes aquí decía «Nadie está emitiendo todavía», que además de deprimente
+ * era engañoso: en una asamblea casi nadie emite video, pero la sala está
+ * llena de gente. Lo que hay que enseñar es quién está, no quién transmite.
+ */
+function Mosaico({
+  personas,
+  hablando,
+}: {
+  personas: PersonaTile[];
+  /** Cuántas voces se están oyendo; solo para el pie del bloque. */
+  hablando: number;
+}) {
+  /* Como Meet: no se dibujan doscientas fichas. Caben nueve y el resto se
+   * cuenta — en una asamblea grande el mosaico completo no aporta nada. */
+  const TOPE = 9;
+  const visibles = personas.slice(0, TOPE);
+  const resto = personas.length - visibles.length;
+  const columnas = visibles.length <= 1 ? 1 : visibles.length <= 4 ? 2 : 3;
+
+  if (personas.length === 0) {
+    return (
+      <View
+        style={{
+          flex: 1,
+          borderRadius: 16,
+          backgroundColor: "rgba(255,255,255,0.04)",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 8,
+        }}
+      >
+        <ActivityIndicator color="rgba(255,255,255,0.4)" />
+        <Text style={{ color: "rgba(255,255,255,0.45)", fontSize: 13 }}>
+          Entrando a la sala…
+        </Text>
+      </View>
+    );
+  }
+
+  return (
+    <View style={{ flex: 1 }}>
+      <View
+        style={{
+          flex: 1,
+          flexDirection: "row",
+          flexWrap: "wrap",
+          gap: 6,
+        }}
+      >
+        {visibles.map((p, i) => (
+          <View
+            key={`${p.nombre}-${i}`}
+            style={{
+              width: `${100 / columnas}%`,
+              flexGrow: 1,
+              flexBasis: `${100 / columnas - 2}%`,
+              minHeight: 110,
+              borderRadius: 14,
+              overflow: "hidden",
+              backgroundColor: "#202124",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            {p.imageUrl ? (
+              <Image
+                source={{ uri: p.imageUrl }}
+                style={{
+                  width: visibles.length <= 2 ? 88 : 54,
+                  height: visibles.length <= 2 ? 88 : 54,
+                  borderRadius: 44,
+                }}
+              />
+            ) : (
+              <View
+                style={{
+                  width: visibles.length <= 2 ? 88 : 54,
+                  height: visibles.length <= 2 ? 88 : 54,
+                  borderRadius: 44,
+                  backgroundColor: colorDe(p.nombre || "?"),
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <Text
+                  style={{
+                    color: "#fff",
+                    fontSize: visibles.length <= 2 ? 34 : 21,
+                    fontWeight: "600",
+                  }}
+                >
+                  {(p.nombre || "?").trim().charAt(0).toUpperCase()}
+                </Text>
+              </View>
+            )}
+            <Text
+              numberOfLines={1}
+              style={{
+                position: "absolute",
+                left: 8,
+                bottom: 7,
+                maxWidth: "88%",
+                color: "rgba(255,255,255,0.95)",
+                fontSize: 11,
+                backgroundColor: "rgba(0,0,0,0.6)",
+                paddingHorizontal: 7,
+                paddingVertical: 3,
+                borderRadius: 7,
+              }}
+            >
+              {p.nombre}
+              {p.esMesa ? " · mesa" : ""}
+            </Text>
+          </View>
+        ))}
+      </View>
+
+      {(resto > 0 || hablando > 0) && (
+        <Text
+          style={{
+            color: "rgba(255,255,255,0.4)",
+            fontSize: 11.5,
+            textAlign: "center",
+            paddingTop: 6,
+          }}
+        >
+          {resto > 0 ? `y ${resto} más en la sala` : ""}
+          {resto > 0 && hablando > 0 ? " · " : ""}
+          {hablando > 0
+            ? `oyendo a ${hallando(hablando)}`
+            : ""}
+        </Text>
+      )}
+    </View>
+  );
+}
+
+function hallando(n: number) {
+  return n === 1 ? "1 persona" : `${n} personas`;
 }
 
 function Centro({ children }: { children: React.ReactNode }) {

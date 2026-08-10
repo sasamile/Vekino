@@ -11,8 +11,6 @@ import {
   MicOff,
   MonitorUp,
   Circle,
-  Video,
-  VideoOff,
   Volume2,
   VolumeX,
   WifiOff,
