@@ -8,7 +8,7 @@ import {
   Pressable,
   ScrollView,
 } from "react-native";
-import { useLocalSearchParams } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { useQuery, useMutation, Authenticated } from "convex/react";
 import { api } from "@vekino/backend/api";
@@ -152,6 +152,47 @@ function Inner() {
 
   return (
     <Section title={a.titulo}>
+      {/* La sala es una ruta aparte, no una pestaña: las pestañas se
+       * desmontan al cambiar y desmontar la sala es colgar la llamada. */}
+      {a.estado === "en_curso" ? (
+        <Pressable
+          onPress={() => router.push(`/asambleas/sala/${asambleaId}`)}
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 12,
+            marginTop: -4,
+            marginBottom: 12,
+            paddingHorizontal: 16,
+            paddingVertical: 14,
+            borderRadius: 16,
+            backgroundColor: "#101211",
+          }}
+        >
+          <View
+            style={{
+              width: 38,
+              height: 38,
+              borderRadius: 19,
+              backgroundColor: "rgba(52,211,153,0.18)",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <Ionicons name="radio-outline" size={19} color="#34d399" />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={{ color: "#fff", fontWeight: "600", fontSize: 15 }}>
+              La asamblea está en vivo
+            </Text>
+            <Text style={{ color: "rgba(255,255,255,0.5)", fontSize: 12.5 }}>
+              Entra a la sala para oír y participar
+            </Text>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.5)" />
+        </Pressable>
+      ) : null}
+
       <View style={{ marginTop: -8, marginBottom: 10, gap: 6 }}>
         <Text style={{ color: C.textMuted, fontSize: 13 }}>
           {a.fecha} · {a.hora} · {a.modalidad}

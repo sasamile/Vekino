@@ -12,7 +12,10 @@
       "supportsTablet": true,
       "usesAppleSignIn": true,
       "infoPlist": {
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "UIBackgroundModes": [
+          "audio"
+        ]
       }
     },
     "android": {
@@ -25,7 +28,10 @@
       },
       "permissions": [
         "android.permission.RECORD_AUDIO",
-        "android.permission.CAMERA"
+        "android.permission.CAMERA",
+        "android.permission.CHANGE_NETWORK_STATE",
+        "android.permission.BLUETOOTH_CONNECT",
+        "android.permission.POST_NOTIFICATIONS"
       ]
     },
     "web": {
@@ -58,7 +64,8 @@
         "expo-camera",
         {
           "cameraPermission": "Vekino necesita la cámara para escanear el QR de asistencia en asambleas.",
-          "barcodeScannerEnabled": true
+          "barcodeScannerEnabled": true,
+          "microphonePermission": "Vekino usa el micrófono para que intervengas en la asamblea."
         }
       ],
       [
@@ -66,6 +73,13 @@
         {
           "icon": "./assets/images/icon.png",
           "color": "#042046"
+        }
+      ],
+      [
+        "@config-plugins/react-native-webrtc",
+        {
+          "cameraPermission": "Vekino usa la cámara para que te vean en la asamblea.",
+          "microphonePermission": "Vekino usa el micrófono para que intervengas en la asamblea."
         }
       ]
     ],

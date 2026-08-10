@@ -142,6 +142,12 @@ export default function AppLayout() {
               name="asambleas/[id]"
               options={{ gestureEnabled: true }}
             />
+            {/* Sin gesto de volver: un roce en el borde colgaría la llamada
+             * en plena asamblea. Se sale con el botón rojo, adrede. */}
+            <Stack.Screen
+              name="asambleas/sala/[id]"
+              options={{ gestureEnabled: false }}
+            />
             <Stack.Screen
               name="asambleas/apoderado"
               options={{ gestureEnabled: true }}
