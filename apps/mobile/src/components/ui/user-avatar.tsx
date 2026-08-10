@@ -15,6 +15,7 @@ export function UserAvatar({
 }) {
   const { theme } = useCondominio();
   const radius = size / 2;
+  const fuente = Math.max(12, Math.round(size * 0.34));
   const uri = typeof image === "string" && image.trim().length > 0 ? image.trim() : null;
 
   if (uri) {
@@ -45,10 +46,14 @@ export function UserAvatar({
         style={[
           styles.initials,
           {
-            fontSize: Math.max(12, size * 0.34),
+            fontSize: fuente,
+            // Sin un lineHeight explícito el Text de iOS reserva su propio
+            // espacio de línea y las iniciales quedan corridas hacia arriba.
+            lineHeight: fuente,
             color: theme.accent,
           },
         ]}
+        numberOfLines={1}
       >
         {initials(name)}
       </Text>
@@ -65,5 +70,8 @@ const styles = StyleSheet.create({
   initials: {
     fontFamily: AuthUI.font.bold,
     color: SoftUI.blue,
+    textAlign: "center",
+    // Android: quita el relleno vertical que la fuente trae de fábrica.
+    includeFontPadding: false,
   },
 });

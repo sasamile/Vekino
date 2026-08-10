@@ -155,6 +155,10 @@ export function useSalaCloudflare(
   }, []);
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
+  /* ¿Sigue montada la sala? Un ciclo de reconexión que quedó esperando la
+   * red puede despertar después de que la persona salió: abriría una sesión
+   * huérfana en Cloudflare que nadie va a cerrar. */
+  const vivoRef = useRef(false);
   const sesionRef = useRef<string | null>(null);
   const micRef = useRef<MediaStreamTrack | null>(null);
   const pantallaRef = useRef<MediaStreamTrack | null>(null);
@@ -194,7 +198,7 @@ export function useSalaCloudflare(
   // ── Conexión ────────────────────────────────────────────────
 
   const conectar = useCallback(async () => {
-    if (pcRef.current) return;
+    if (pcRef.current || !vivoRef.current) return;
     setEstado("conectando");
     setError(null);
 
@@ -242,6 +246,9 @@ export function useSalaCloudflare(
         sdp: pc.localDescription!.sdp,
       });
       if ("error" in r) {
+        /* Soltar el pc: con `pcRef` ocupado, hasta reintentar era un no-op. */
+        pc.close();
+        if (pcRef.current === pc) pcRef.current = null;
         setError(r.error);
         setEstado("error");
         return;
@@ -249,6 +256,8 @@ export function useSalaCloudflare(
       sesionRef.current = r.sessionId;
       await pc.setRemoteDescription({ type: "answer", sdp: r.sdp });
     } catch (e) {
+      pc.close();
+      if (pcRef.current === pc) pcRef.current = null;
       setError(e instanceof Error ? e.message : String(e));
       setEstado("error");
     }
@@ -290,8 +299,10 @@ export function useSalaCloudflare(
      * 173 personas abriendo la sala a las 8:00 en punto topan ese límite en
      * el primer segundo y la mitad se queda fuera sin saber por qué. */
     const espera = Math.floor(Math.random() * 4000);
+    vivoRef.current = true;
     const id = setTimeout(() => void conectar(), espera);
     return () => {
+      vivoRef.current = false;
       clearTimeout(id);
       void desconectar();
     };
@@ -309,6 +320,7 @@ export function useSalaCloudflare(
     const id = setTimeout(() => {
       void (async () => {
         await desconectar();
+        if (!vivoRef.current) return;
         await conectar();
       })();
     }, 2000);
@@ -366,12 +378,24 @@ export function useSalaCloudflare(
     })();
   }, [catalogo, estado, asambleaId, suscribirAccion, responderAccion, enFila]);
 
-  /** Le pone nombre a cada pista remota cuando el catálogo lo dice. */
+  /** Nombra cada pista remota — y BORRA las que ya nadie anuncia.
+   *
+   * Sin la poda, dejar de compartir pantalla dejaba el último fotograma
+   * clavado en el escenario de todos, como una foto: la pista moría en
+   * Cloudflare pero nadie la sacaba de la lista de cosas que pintar. */
   useEffect(() => {
     if (!catalogo) return;
     setRemotas((prev) => {
       let cambio = false;
-      const siguiente = prev.map((r) => {
+      const vivas = prev.filter((r) => {
+        const sigue = catalogo.some((c) => c.trackName === r.trackName);
+        if (!sigue) {
+          cambio = true;
+          suscritasRef.current.delete(r.trackName);
+        }
+        return sigue;
+      });
+      const siguiente = vivas.map((r) => {
         const meta = catalogo.find((c) => c.trackName === r.trackName);
         if (!meta || (meta.nombre === r.nombre && meta.tipo === r.tipo)) return r;
         cambio = true;
@@ -761,7 +785,11 @@ export function useSalaCloudflare(
     compartiendo,
     compartirPantalla,
     dejarDeCompartir,
-    reconectar: conectar,
+    /* Desde cualquier estado: primero derriba lo que quede a medio morir. */
+    reconectar: async () => {
+      await desconectar();
+      await conectar();
+    },
     diagnostico,
   };
 }

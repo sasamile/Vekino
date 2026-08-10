@@ -2,7 +2,7 @@ import { useState } from "react";
 import { View, Text, StyleSheet, Platform } from "react-native";
 import { BlurView } from "expo-blur";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
+import { useRouter, usePathname } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@vekino/backend/api";
@@ -15,6 +15,19 @@ import { formatDisplayName } from "@/lib/utils";
 import { useCondominio } from "@/context/condominio-context";
 
 const AVATAR = 48;
+
+/**
+ * Rutas raíz de la barra inferior: ahí NO va flecha de volver.
+ * Si se agrega una pestaña nueva en `(app)/(tabs)`, hay que sumarla aquí.
+ */
+const RUTAS_PESTANA = new Set([
+  "/",
+  "/facturas",
+  "/comunicados",
+  "/mas",
+  "/perfil",
+  "/administradores",
+]);
 
 /**
  * Encabezado Soft UI + liquid glass.
@@ -34,15 +47,20 @@ export function SoftHomeHeader({
   badgeLabel?: string | null;
   showNotifDot?: boolean;
   /**
-   * Botón de volver. Si no se pasa, se decide solo: los módulos van apilados
-   * sobre las pestañas y ahí la barra inferior no se ve, así que sin este
-   * botón la única salida es el gesto de deslizar desde el borde (invisible).
+   * Botón de volver. Si no se pasa, se decide por la ruta: en las pestañas no
+   * va (son la raíz), y en los módulos sí, porque van apilados encima y ahí la
+   * barra inferior no se ve — sin el botón la única salida sería el gesto de
+   * deslizar desde el borde, que es invisible.
    */
   showBack?: boolean;
 }) {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const puedeVolver = showBack ?? router.canGoBack();
+  // Por ruta y NO con `canGoBack()`: esa función devuelve true en las pestañas
+  // (por el replace del arranque) y ahí la flecha sobra, además de que al
+  // tocarla saltaba "GO_BACK was not handled by any navigator".
+  const pathname = usePathname();
+  const puedeVolver = showBack ?? !RUTAS_PESTANA.has(pathname);
   const me = useQuery(api.users.me);
   const { theme, condominioId } = useCondominio();
 
@@ -83,20 +101,31 @@ export function SoftHomeHeader({
 
       {/* Contenido por encima del blur */}
       <View style={styles.row}>
+        {/* El volver va ANTES del avatar, no en su lugar: antes lo reemplazaba
+            y en los módulos se perdía la foto del usuario. */}
         {puedeVolver ? (
-          <View style={styles.backBtn} onTouchEnd={() => router.back()}>
-            <Ionicons name="chevron-back" size={24} color={SoftUI.text} />
-          </View>
-        ) : (
           <View
-            style={styles.avatarHit}
-            onTouchEnd={() => router.push("/(app)/(tabs)/perfil" as never)}
+            style={styles.backBtn}
+            onTouchEnd={() => {
+              // `canGoBack()` a veces dice que sí y el navegador no tiene a
+              // dónde volver (pantallas abiertas con replace): sin esta
+              // salvaguarda saltaba "GO_BACK was not handled by any navigator".
+              if (router.canGoBack()) router.back();
+              else router.replace("/(app)/(tabs)" as never);
+            }}
           >
-            <View style={styles.avatarRing}>
-              <UserAvatar name={nameForAvatar} image={photo} size={AVATAR} />
-            </View>
+            <Ionicons name="chevron-back" size={22} color={SoftUI.text} />
           </View>
-        )}
+        ) : null}
+
+        <View
+          style={styles.avatarHit}
+          onTouchEnd={() => router.push("/(app)/(tabs)/perfil" as never)}
+        >
+          <View style={styles.avatarRing}>
+            <UserAvatar name={nameForAvatar} image={photo} size={AVATAR} />
+          </View>
+        </View>
 
         <View style={styles.textCol}>
           <View style={styles.greetRow}>
@@ -177,10 +206,11 @@ const styles = StyleSheet.create({
     flexShrink: 0,
   },
   backBtn: {
-    width: AVATAR,
-    height: AVATAR,
+    // Más compacto que el avatar: comparten fila y el saludo necesita aire.
+    width: 38,
+    height: 38,
     flexShrink: 0,
-    borderRadius: AVATAR / 2,
+    borderRadius: 19,
     backgroundColor: SoftUI.white,
     alignItems: "center",
     justifyContent: "center",

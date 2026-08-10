@@ -15,7 +15,14 @@ import * as Haptics from "expo-haptics";
 import { useQuery, useMutation, useAction, Authenticated } from "convex/react";
 import { api } from "@vekino/backend/api";
 import * as ImagePicker from "expo-image-picker";
-import { ScreenBackground, GlassBadge, GlassCard } from "@/components/ui/glass";
+import {
+  ScreenBackground,
+  GlassBadge,
+  GlassCard,
+  GlassButton,
+  GlassInput,
+} from "@/components/ui/glass";
+import { BottomSheet } from "@/components/ui/bottom-sheet";
 import { Tap } from "@/components/ui/tap";
 import { useCondominio } from "@/context/condominio-context";
 import { initials } from "@/lib/utils";
@@ -25,6 +32,16 @@ import { SoftUI } from "@/lib/soft-ui";
 import type { Id } from "@vekino/backend/dataModel";
 import { uploadLocalFile } from "@/lib/guardia-upload";
 import { themeFromPrimary } from "@/lib/condo-theme";
+import { evaluarPassword } from "@vekino/backend/passwordFuerte";
+
+/** Color de la barra de seguridad por puntaje (0 a 4). */
+const COLOR_FUERZA = [
+  SoftUI.danger,
+  SoftUI.danger,
+  SoftUI.warning,
+  SoftUI.success,
+  SoftUI.success,
+];
 
 const ROL_LABEL: Record<string, string> = {
   administrador: "Administrador",
@@ -69,6 +86,8 @@ function PerfilContent() {
   const deleteMyAccount = useAction(api.users.deleteMyAccount);
   const [uploading, setUploading] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [editando, setEditando] = useState(false);
+  const [cambiandoClave, setCambiandoClave] = useState(false);
 
   async function signOut() {
     Alert.alert("Cerrar sesión", "¿Seguro que quieres salir?", [
@@ -253,7 +272,70 @@ function PerfilContent() {
             <GlassBadge label="Superadmin" tone="orange" />
           </View>
         ) : null}
+        <View
+          style={{
+            flexDirection: "row",
+            gap: SoftUI.space.sm,
+            marginTop: SoftUI.space.md,
+          }}
+        >
+          <GlassButton
+            label="Editar datos"
+            variant="secondary"
+            size="sm"
+            icon={<Ionicons name="create-outline" size={16} color={theme.accent} />}
+            onPress={() => setEditando(true)}
+            style={{ width: "auto" }}
+          />
+          <GlassButton
+            label="Contraseña"
+            variant="secondary"
+            size="sm"
+            icon={<Ionicons name="key-outline" size={16} color={theme.accent} />}
+            onPress={() => setCambiandoClave(true)}
+            style={{ width: "auto" }}
+          />
+        </View>
       </GlassCard>
+
+      {/* Mientras siga con la clave que le enviaron, se lo recordamos. */}
+      {me.claveTemporal ? (
+        <Tap onPress={() => setCambiandoClave(true)}>
+          <GlassCard style={styles.avisoClave}>
+            <Ionicons name="shield-half-outline" size={22} color={SoftUI.danger} />
+            <View style={{ flex: 1, gap: 2, minWidth: 0 }}>
+              <Text style={styles.avisoClaveTitulo}>
+                Estás usando una clave temporal
+              </Text>
+              <Text style={styles.avisoClaveSub}>
+                Es la que te envió la administración. Cámbiala para que sea solo
+                tuya.
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={SoftUI.textDisabled} />
+          </GlassCard>
+        </Tap>
+      ) : null}
+
+      <CambiarPasswordSheet
+        key={cambiandoClave ? "clave-abierta" : "clave-cerrada"}
+        visible={cambiandoClave}
+        onClose={() => setCambiandoClave(false)}
+        email={me.email}
+        nombre={me.name}
+      />
+
+      <EditarPerfilSheet
+        // Remonta al abrir para que los campos partan de los datos actuales.
+        key={editando ? "abierto" : "cerrado"}
+        visible={editando}
+        onClose={() => setEditando(false)}
+        inicial={{
+          firstName: me.firstName ?? "",
+          lastName: me.lastName ?? "",
+          telefono: me.telefono ?? "",
+        }}
+      />
 
       {me.memberships.length > 0 && (
         <View style={styles.section}>
@@ -426,7 +508,303 @@ function PerfilContent() {
   );
 }
 
+/**
+ * Cambio de contraseña. Reusa `users.cambiarMiPassword`, que además apaga la
+ * bandera `claveTemporal`: a partir de ahí la clave es del usuario y deja de
+ * salir el aviso.
+ */
+function CambiarPasswordSheet({
+  visible,
+  onClose,
+  email,
+  nombre,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  email?: string;
+  nombre?: string;
+}) {
+  const cambiar = useAction(api.users.cambiarMiPassword);
+  const [actual, setActual] = useState("");
+  const [nueva, setNueva] = useState("");
+  const [repetir, setRepetir] = useState("");
+  const [guardando, setGuardando] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // Un solo interruptor para los tres campos: escribir una clave a ciegas y
+  // repetirla es la causa más común de "no coinciden".
+  const [verClaves, setVerClaves] = useState(false);
+
+  // Misma función que valida el backend: las pistas coinciden con lo que
+  // realmente va a aceptar al guardar.
+  const fuerza = evaluarPassword(nueva, { email, nombre });
+
+  const ojo = (
+    <Tap onPress={() => setVerClaves((v) => !v)} haptic={false}>
+      <Ionicons
+        name={verClaves ? "eye-off-outline" : "eye-outline"}
+        size={20}
+        color={SoftUI.textSecondary}
+      />
+    </Tap>
+  );
+
+  async function guardar() {
+    if (!fuerza.ok) {
+      setError(fuerza.problemas[0]!);
+      return;
+    }
+    if (nueva !== repetir) {
+      setError("Las contraseñas nuevas no coinciden.");
+      return;
+    }
+    setGuardando(true);
+    setError(null);
+    try {
+      await cambiar({ actual, nueva });
+      Alert.alert("Listo", "Tu contraseña quedó actualizada.");
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudo cambiar.");
+    } finally {
+      setGuardando(false);
+    }
+  }
+
+  return (
+    <BottomSheet visible={visible} onClose={onClose} maxHeight="88%">
+      <ScrollView
+        bounces={false}
+        contentContainerStyle={styles.editScroll}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
+        <Text style={styles.editTitle}>Cambiar contraseña</Text>
+
+        <GlassInput
+          label="Contraseña actual"
+          value={actual}
+          onChangeText={setActual}
+          placeholder="La que usas hoy"
+          secureTextEntry={!verClaves}
+          autoCapitalize="none"
+          autoCorrect={false}
+          rightAction={ojo}
+        />
+        <GlassInput
+          label="Nueva contraseña"
+          value={nueva}
+          onChangeText={setNueva}
+          placeholder="Mínimo 8 caracteres"
+          secureTextEntry={!verClaves}
+          autoCapitalize="none"
+          autoCorrect={false}
+          rightAction={ojo}
+        />
+
+        {nueva.length > 0 ? (
+          <View style={{ gap: 6 }}>
+            <View style={styles.barraFondo}>
+              <View
+                style={[
+                  styles.barraLlena,
+                  {
+                    width: `${(fuerza.puntaje / 4) * 100}%`,
+                    backgroundColor: COLOR_FUERZA[fuerza.puntaje] ?? SoftUI.danger,
+                  },
+                ]}
+              />
+            </View>
+            <Text
+              style={[
+                styles.fuerzaTexto,
+                { color: COLOR_FUERZA[fuerza.puntaje] ?? SoftUI.danger },
+              ]}
+            >
+              Seguridad: {fuerza.etiqueta}
+            </Text>
+            {fuerza.problemas.map((p) => (
+              <Text key={p} style={styles.fuerzaPista}>
+                • {p}
+              </Text>
+            ))}
+          </View>
+        ) : null}
+        <GlassInput
+          label="Repite la nueva"
+          value={repetir}
+          onChangeText={setRepetir}
+          placeholder="Escríbela otra vez"
+          secureTextEntry={!verClaves}
+          autoCapitalize="none"
+          autoCorrect={false}
+          rightAction={ojo}
+        />
+
+        {error ? <Text style={styles.editError}>{error}</Text> : null}
+
+        <View style={{ gap: SoftUI.space.sm, marginTop: SoftUI.space.sm }}>
+          <GlassButton
+            label="Cambiar contraseña"
+            loading={guardando}
+            onPress={guardando ? undefined : guardar}
+          />
+          <GlassButton label="Cancelar" variant="secondary" onPress={onClose} />
+        </View>
+      </ScrollView>
+    </BottomSheet>
+  );
+}
+
+/**
+ * Edición de los datos propios. Mismos campos que el portal web
+ * (`/mi/[id]/perfil`) porque comparten la mutation `users.updateMyProfile`.
+ *
+ * El correo no se edita aquí: es la credencial de acceso y cambiarlo pasa por
+ * la administración. El teléfono sí, y ojo que importa más de lo que parece:
+ * es por donde el bot de WhatsApp reconoce a la persona.
+ */
+function EditarPerfilSheet({
+  visible,
+  onClose,
+  inicial,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  inicial: { firstName: string; lastName: string; telefono: string };
+}) {
+  const actualizar = useMutation(api.users.updateMyProfile);
+  const [firstName, setFirstName] = useState(inicial.firstName);
+  const [lastName, setLastName] = useState(inicial.lastName);
+  const [telefono, setTelefono] = useState(inicial.telefono);
+  const [guardando, setGuardando] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function guardar() {
+    if (!firstName.trim()) {
+      setError("El nombre es obligatorio.");
+      return;
+    }
+    setGuardando(true);
+    setError(null);
+    try {
+      await actualizar({
+        firstName: firstName.trim(),
+        lastName: lastName.trim() || undefined,
+        telefono: telefono.trim() || undefined,
+      });
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudo guardar.");
+    } finally {
+      setGuardando(false);
+    }
+  }
+
+  return (
+    <BottomSheet visible={visible} onClose={onClose} maxHeight="88%">
+      <ScrollView
+        bounces={false}
+        contentContainerStyle={styles.editScroll}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
+        <Text style={styles.editTitle}>Editar datos</Text>
+
+        <GlassInput
+          label="Nombre"
+          value={firstName}
+          onChangeText={setFirstName}
+          placeholder="Tu nombre"
+          autoCapitalize="words"
+        />
+        <GlassInput
+          label="Apellidos"
+          value={lastName}
+          onChangeText={setLastName}
+          placeholder="Tus apellidos"
+          autoCapitalize="words"
+        />
+        <GlassInput
+          label="Teléfono"
+          value={telefono}
+          onChangeText={setTelefono}
+          placeholder="Ej: 300 123 4567"
+          keyboardType="phone-pad"
+        />
+
+        {error ? <Text style={styles.editError}>{error}</Text> : null}
+
+        <View style={{ gap: SoftUI.space.sm, marginTop: SoftUI.space.sm }}>
+          <GlassButton
+            label="Guardar cambios"
+            loading={guardando}
+            onPress={guardando ? undefined : guardar}
+          />
+          <GlassButton label="Cancelar" variant="secondary" onPress={onClose} />
+        </View>
+      </ScrollView>
+    </BottomSheet>
+  );
+}
+
 const styles = StyleSheet.create({
+  editScroll: {
+    paddingHorizontal: SoftUI.padH,
+    paddingTop: SoftUI.space.xs,
+    paddingBottom: SoftUI.space.base,
+    gap: SoftUI.space.md,
+  },
+  editTitle: {
+    color: SoftUI.text,
+    fontSize: SoftUI.type.hero.size - 4,
+    fontFamily: AuthUI.font.bold,
+    marginBottom: SoftUI.space.xs,
+  },
+  editError: {
+    color: SoftUI.danger,
+    fontSize: 13,
+    fontFamily: AuthUI.font.regular,
+  },
+  barraFondo: {
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: SoftUI.bgSecondary,
+    overflow: "hidden",
+  },
+  barraLlena: {
+    height: "100%",
+    borderRadius: 3,
+  },
+  fuerzaTexto: {
+    fontSize: 12,
+    fontFamily: AuthUI.font.semibold,
+  },
+  fuerzaPista: {
+    color: SoftUI.textSecondary,
+    fontSize: 12,
+    lineHeight: 17,
+    fontFamily: AuthUI.font.regular,
+  },
+  avisoClave: {
+    marginTop: SoftUI.space.base,
+    padding: SoftUI.space.base,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: SoftUI.space.md,
+    borderWidth: StyleSheet.hairlineWidth * 2,
+    borderColor: SoftUI.dangerSoft,
+  },
+  avisoClaveTitulo: {
+    color: SoftUI.text,
+    fontSize: SoftUI.type.body.size - 1,
+    fontFamily: AuthUI.font.semibold,
+  },
+  avisoClaveSub: {
+    color: SoftUI.textSecondary,
+    fontSize: SoftUI.type.chip.size,
+    lineHeight: SoftUI.type.chip.size + 5,
+    fontFamily: AuthUI.font.regular,
+  },
   loading: {
     flex: 1,
     alignItems: "center",

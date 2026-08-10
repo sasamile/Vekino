@@ -8,6 +8,7 @@ import {
   Pressable,
   Image,
   Alert,
+  Share,
   StyleSheet,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
@@ -89,6 +90,25 @@ const ESTADO_ICON: Record<
 
 function qrUrl(id: string) {
   return `https://api.qrserver.com/v1/create-qr-code/?size=240x240&margin=8&data=${encodeURIComponent(id)}`;
+}
+
+/**
+ * Manda el pase por la hoja de compartir del sistema (WhatsApp, mensajes…).
+ *
+ * Va como enlace a la imagen del QR, no como archivo: así el visitante lo abre
+ * desde el chat y lo muestra en portería sin instalar nada. Ojo, el QR es el
+ * pase: quien tenga el enlace puede presentarlo.
+ */
+async function compartirQr(id: string) {
+  try {
+    await Share.share({
+      message:
+        `Tu pase de ingreso:\n${qrUrl(id)}\n\n` +
+        "Muéstralo en portería el día de la visita.",
+    });
+  } catch {
+    // El usuario canceló la hoja de compartir: no es un error que mostrar.
+  }
 }
 
 export default function VisitantesScreen() {
@@ -256,7 +276,18 @@ function Inner() {
               source={{ uri: qrUrl(qrId) }}
               style={styles.qrImage}
             />
-            <GlassButton label="Cerrar" onPress={() => setQrId(null)} />
+            <GlassButton
+              label="Compartir con el visitante"
+              icon={
+                <Ionicons name="share-outline" size={18} color={SoftUI.white} />
+              }
+              onPress={() => compartirQr(qrId)}
+            />
+            <GlassButton
+              label="Cerrar"
+              variant="secondary"
+              onPress={() => setQrId(null)}
+            />
           </View>
         ) : null}
       </BottomSheet>

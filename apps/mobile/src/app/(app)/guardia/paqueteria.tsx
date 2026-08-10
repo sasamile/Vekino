@@ -70,6 +70,35 @@ function Inner() {
   );
   const recibir = useMutation(api.guardia.recibirPaquete);
   const entregar = useMutation(api.guardia.entregarPaquete);
+  const eliminar = useMutation(api.guardia.eliminarPaqueteReciente);
+
+  /**
+   * Solo para deshacer un registro recién hecho: el backend lo limita a
+   * paquetes sin entregar y de la última media hora.
+   */
+  function confirmarEliminar(id: Id<"paquetes">, unidad: string) {
+    Alert.alert(
+      "Eliminar registro",
+      `¿Borrar el paquete de la unidad ${unidad}? Úsalo solo si lo registraste por error.`,
+      [
+        { text: "Cancelar", style: "cancel" },
+        {
+          text: "Eliminar",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await eliminar({ id });
+            } catch (e) {
+              Alert.alert(
+                "No se pudo eliminar",
+                e instanceof Error ? e.message : "Inténtalo de nuevo.",
+              );
+            }
+          },
+        },
+      ],
+    );
+  }
   const generateUploadUrl = useAction(api.files.generateUploadUrl);
 
   const [tab, setTab] = useState<"recibido" | "entregado">("recibido");
@@ -296,12 +325,21 @@ function Inner() {
                       <Image source={{ uri: p.fotoUrl }} style={styles.thumb} />
                     ) : null}
                     {p.estado === "recibido" ? (
-                      <Tap
-                        onPress={() => setEntregarPaq(p)}
-                        style={styles.entregarBtn}
-                      >
-                        <Text style={styles.entregarText}>Marcar entregado</Text>
-                      </Tap>
+                      <>
+                        <Tap
+                          onPress={() => setEntregarPaq(p)}
+                          style={styles.entregarBtn}
+                        >
+                          <Text style={styles.entregarText}>Marcar entregado</Text>
+                        </Tap>
+                        <Tap
+                          onPress={() => confirmarEliminar(p._id, p.unidadNumero)}
+                          style={styles.eliminarBtn}
+                        >
+                          <Ionicons name="trash-outline" size={15} color={C.danger} />
+                          <Text style={styles.eliminarText}>Eliminar registro</Text>
+                        </Tap>
+                      </>
                     ) : null}
                   </GlassCard>
                 ))}
@@ -523,6 +561,19 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   entregarText: { color: "#fff", fontFamily: AuthUI.font.semibold, fontSize: 14 },
+  eliminarBtn: {
+    marginTop: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    paddingVertical: 8,
+  },
+  eliminarText: {
+    color: C.danger,
+    fontFamily: AuthUI.font.semibold,
+    fontSize: 13,
+  },
   denied: { fontSize: 16, fontFamily: AuthUI.font.semibold, color: AuthUI.text },
   modalHead: {
     flexDirection: "row",

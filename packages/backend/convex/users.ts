@@ -17,6 +17,7 @@ import {
   requireCondominioRole,
 } from "./model/authz";
 import { tipoDocumentoValidator } from "./model/roles";
+import { evaluarPassword } from "./lib/passwordFuerte";
 import { resolveUserImage } from "./model/userImage";
 import { scheduleDeleteS3Keys, s3KeyFromPublicUrl } from "./model/s3";
 import { normalizarTelefonoE164 } from "./lib/telefono";
@@ -852,9 +853,6 @@ export const cambiarMiPassword = action({
   args: { actual: v.string(), nueva: v.string() },
   handler: async (ctx, args): Promise<{ ok: true }> => {
     const nueva = args.nueva.trim();
-    if (nueva.length < 8) {
-      throw new Error("La nueva contraseña debe tener al menos 8 caracteres.");
-    }
     if (args.actual.trim() && nueva === args.actual.trim()) {
       throw new Error("La nueva contraseña debe ser distinta de la actual.");
     }
@@ -870,6 +868,11 @@ export const cambiarMiPassword = action({
       authId: identity.subject,
     });
     if (!perfil) throw new Error("Perfil no encontrado o inactivo.");
+
+    // Fuerza de la clave. Se valida AQUÍ y no solo en la app: la app usa la
+    // misma función para las pistas en vivo, pero eso se puede saltar.
+    const fuerza = evaluarPassword(nueva, { email: perfil.email });
+    if (!fuerza.ok) throw new Error(fuerza.problemas[0]!);
 
     /* A quien todavía usa la clave que le dimos NO se le pide la actual.
      *

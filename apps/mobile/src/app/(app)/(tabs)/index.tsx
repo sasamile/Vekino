@@ -620,8 +620,8 @@ const styles = StyleSheet.create({
     gap: SoftUI.space.md,
   },
   featuredThumbWrap: {
-    width: 54,
-    height: 70,
+    width: 104,
+    height: 134,
     borderRadius: SoftUI.radius.cardSm,
     overflow: "hidden",
     backgroundColor: "rgba(255,255,255,0.95)",

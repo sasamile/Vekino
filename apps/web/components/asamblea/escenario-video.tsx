@@ -749,18 +749,11 @@ export function EscenarioVideo({
                     <MicOff className="h-4 w-4 sm:h-5 sm:w-5" aria-hidden />
                   )}
                 </BotonRedondo>
-                <BotonRedondo
-                  encendido={video.camOn}
-                  busy={busy}
-                  onClick={() => void accion(video.toggleCam)}
-                  label={video.camOn ? "Apagar cámara" : "Encender cámara"}
-                >
-                  {video.camOn ? (
-                    <Video className="h-4 w-4 sm:h-5 sm:w-5" aria-hidden />
-                  ) : (
-                    <VideoOff className="h-4 w-4 sm:h-5 sm:w-5" aria-hidden />
-                  )}
-                </BotonRedondo>
+                {/* Sin botón de cámara, por decisión: una asamblea es voz y
+                    documento, nadie tiene que enseñar la cara. Cada cámara
+                    encendida además multiplica el ancho de banda por persona
+                    suscrita — es la parte cara de la factura. El código de
+                    cámara sigue en el hook por si algún día se revierte. */}
                 {onCambiarCalidad ? (
                   <BotonRedondo
                     encendido={calidad === "normal"}

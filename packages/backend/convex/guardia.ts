@@ -857,6 +857,40 @@ export const entregarPaquete = mutation({
 });
 
 /** Elimina un registro de paquete hecho por error (solo admin). */
+/** Margen para que portería deshaga un registro mal hecho. */
+const VENTANA_CORRECCION_MS = 30 * 60 * 1000;
+
+/**
+ * Portería borra un paquete que acaba de registrar mal.
+ *
+ * Acotado a propósito: solo si sigue SIN entregar y dentro de la media hora
+ * siguiente. Es para corregir un error de digitación, no para editar el
+ * histórico de la minuta — borrar cualquier otro registro sigue siendo de la
+ * administración (`removePaquete`).
+ */
+export const eliminarPaqueteReciente = mutation({
+  args: { id: v.id("paquetes") },
+  handler: async (ctx, args) => {
+    const p = await ctx.db.get(args.id);
+    if (!p) return;
+    await requireCondominioRole(ctx, p.condominioId, [...GUARD_ROLES]);
+
+    if (p.estado !== "recibido") {
+      throw new Error(
+        "Ese paquete ya fue entregado. Pídele a la administración que lo elimine.",
+      );
+    }
+    if (Date.now() - p.fechaRecibido > VENTANA_CORRECCION_MS) {
+      throw new Error(
+        "Solo puedes eliminarlo dentro de los 30 minutos siguientes al registro. Escríbele a la administración.",
+      );
+    }
+
+    if (p.fotoStorageId) await ctx.storage.delete(p.fotoStorageId).catch(() => {});
+    await ctx.db.delete(args.id);
+  },
+});
+
 export const removePaquete = mutation({
   args: { id: v.id("paquetes") },
   handler: async (ctx, args) => {

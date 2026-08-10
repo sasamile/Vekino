@@ -1050,6 +1050,38 @@ const revocarEnServidorDeMediosPoder = (
   codigoPoder: string,
 ) => sincronizarPalabraPoder(ctx, asambleaId, codigoPoder, false);
 
+/**
+ * Le quita a alguien las pistas que está emitiendo por el SFU de Cloudflare.
+ *
+ * Sin esto, retirar la palabra era una petición amable: el motor de Cloudflare
+ * NO corta del lado del servidor —cualquiera con la pista publicada sigue
+ * sonando para los 173— y el corte vivía solo en el navegador de quien
+ * hablaba. Si su pantalla estaba dormida, si el efecto no llegó a correr, o si
+ * simplemente decidió no obedecer, la mesa se quedaba sin forma de callarlo.
+ *
+ * Borrar la fila del catálogo es el corte de verdad: los demás dejan de estar
+ * suscritos y la pista se queda sin nadie al otro lado.
+ */
+async function apagarPistasCf(
+  ctx: MutationCtx,
+  asambleaId: Id<"asambleas">,
+  quien: { userId?: Id<"users">; codigoInvitado?: string; codigoPoder?: string },
+) {
+  const filas = await ctx.db
+    .query("salaPistasCf")
+    .withIndex("by_asamblea", (q) => q.eq("asambleaId", asambleaId))
+    .collect();
+  const inv = quien.codigoInvitado?.trim().toUpperCase();
+  const pod = quien.codigoPoder?.trim().toUpperCase();
+  for (const f of filas) {
+    const suya =
+      (quien.userId && f.userId === quien.userId) ||
+      (inv && f.codigoInvitado === inv) ||
+      (pod && f.codigoPoder === pod);
+    if (suya) await ctx.db.delete(f._id);
+  }
+}
+
 async function apagarEmisionesDeUsuario(
   ctx: MutationCtx,
   asambleaId: Id<"asambleas">,
@@ -1065,6 +1097,7 @@ async function apagarEmisionesDeUsuario(
       await ctx.db.delete(e._id);
     }
   }
+  await apagarPistasCf(ctx, asambleaId, { userId });
 }
 
 async function apagarEmisionesInvitado(
@@ -1082,6 +1115,7 @@ async function apagarEmisionesInvitado(
       await ctx.db.delete(e._id);
     }
   }
+  await apagarPistasCf(ctx, asambleaId, { codigoInvitado });
 }
 
 async function apagarEmisionesPoder(
@@ -1100,6 +1134,7 @@ async function apagarEmisionesPoder(
       await ctx.db.delete(e._id);
     }
   }
+  await apagarPistasCf(ctx, asambleaId, { codigoPoder: codigo });
 }
 
 /** Manos y palabra en curso. `mia` marca la fila del usuario que consulta. */

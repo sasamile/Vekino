@@ -1,15 +1,33 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Platform } from "react-native";
+import { AppState, NativeModules } from "react-native";
 import { useAction, useQuery } from "convex/react";
-import {
-  RTCPeerConnection,
-  mediaDevices,
-  MediaStream,
-  type MediaStreamTrack,
-} from "react-native-webrtc";
-import InCallManager from "react-native-incall-manager";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
+import { getWebRtc, webrtcDisponible } from "@/lib/webrtc-native";
+
+type MediaStream = import("react-native-webrtc").MediaStream;
+type MediaStreamTrack = import("react-native-webrtc").MediaStreamTrack;
+type RTCPeerConnection = import("react-native-webrtc").RTCPeerConnection;
+
+function inCallStart() {
+  try {
+    if (!NativeModules.InCallManager) return;
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    require("react-native-incall-manager").default.start({ media: "video" });
+  } catch {
+    /* Expo Go / sin nativo */
+  }
+}
+
+function inCallStop() {
+  try {
+    if (!NativeModules.InCallManager) return;
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    require("react-native-incall-manager").default.stop();
+  } catch {
+    /* Expo Go / sin nativo */
+  }
+}
 
 /**
  * La sala sobre el SFU de Cloudflare, versión teléfono.
@@ -44,6 +62,7 @@ import type { Id } from "@vekino/backend/dataModel";
  * más escucha este evento, así que pisarla no le quita el sitio a nadie.
  */
 async function esperarIce(pc: RTCPeerConnection): Promise<void> {
+  /* Tipado como el PC nativo; en Expo Go este archivo no llega a llamarse. */
   if (pc.iceGatheringState === "complete") return;
   await new Promise<void>((resolve) => {
     /* Con un tope: si un candidato se atasca es mejor mandar la oferta
@@ -144,6 +163,11 @@ export function useSalaCloudflare(
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
+  /* ¿Sigue montada la sala? Sin esto, un ciclo de reconexión que quedó
+   * esperando la red puede despertar DESPUÉS de que la persona colgó:
+   * abriría otra sesión en Cloudflare y encendería el modo llamada del
+   * teléfono sin que nadie lo vaya a apagar jamás. */
+  const vivoRef = useRef(false);
   const sesionRef = useRef<string | null>(null);
   const micRef = useRef<MediaStreamTrack | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
@@ -152,6 +176,8 @@ export function useSalaCloudflare(
   const camSenderRef = useRef<ReturnType<
     RTCPeerConnection["addTransceiver"]
   > | null>(null);
+  /** Streams propios creados para envolver pistas remotas; se liberan al salir. */
+  const wrappersRef = useRef<MediaStream[]>([]);
   const misPistasRef = useRef<string[]>([]);
   const suscritasRef = useRef<Set<string>>(new Set());
   /** `mid` → nombre de pista: la única forma de saber de quién es un medio. */
@@ -172,17 +198,30 @@ export function useSalaCloudflare(
   // ── Conexión ────────────────────────────────────────────────
 
   const conectar = useCallback(async () => {
-    if (pcRef.current) return;
+    if (pcRef.current || !vivoRef.current) return;
     setEstado("conectando");
     setError(null);
 
-    /* La sesión de audio del sistema, en modo llamada y por el ALTAVOZ.
-     * Sin esto la asamblea suena por el auricular de las llamadas, y la
-     * persona —con razón— cree que no funciona. Se arranca aquí y no al
-     * recibir la primera pista para que iOS configure la sesión antes de
-     * que empiece a llegar sonido. */
-    InCallManager.start({ media: "audio" });
-    InCallManager.setForceSpeakerphoneOn(true);
+    /* La sesión de audio del sistema, en modo videollamada.
+     *
+     * `media: "video"` y NO forzar el altavoz a mano: con esto la librería
+     * hace lo que cualquier app de llamadas — altavoz por defecto, pero los
+     * audífonos (cableados o Bluetooth) tienen prioridad y el sistema maneja
+     * conectarlos y desconectarlos a mitad de asamblea. Forzar el altavoz
+     * pisaba los AirPods de quien escucha en el bus y le sacaba los estados
+     * financieros del conjunto a todo volumen en público. Además "video" no
+     * enciende el sensor de proximidad, que con "audio" apaga la pantalla. */
+    inCallStart();
+
+    const webrtc = getWebRtc();
+    if (!webrtc) {
+      setError(
+        "La sala de video no está disponible en Expo Go. Abre Vekino con el development build.",
+      );
+      setEstado("error");
+      return;
+    }
+    const { RTCPeerConnection, MediaStream } = webrtc;
 
     const pc = new RTCPeerConnection({
       iceServers: [{ urls: "stun:stun.cloudflare.com:3478" }],
@@ -197,14 +236,18 @@ export function useSalaCloudflare(
       const trackName = midRef.current.get(mid);
       if (!trackName) return;
 
-      /* SOLO `ev.streams[0]`. El plan B de la web —envolver la pista en un
-       * MediaStream nuevo— aquí crea un stream LOCAL con otro identificador
-       * nativo, y la vista lo pinta en negro sin decir por qué. */
-      const stream: MediaStream | undefined = ev.streams?.[0];
-      if (!stream) {
-        setError("Llegó una pista sin stream; avisa de esto.");
-        return;
-      }
+      /* CADA pista en su propio MediaStream, sin compartir `ev.streams[0]`.
+       *
+       * Dos razones. Cloudflare no garantiza el `a=msid` en sus ofertas (su
+       * ejemplo oficial ni usa `ev.streams`), así que puede venir vacío. Y
+       * peor: si agrupa cámara y pantalla del mismo emisor bajo un solo
+       * stream, RTCView —que no tiene forma de elegir pista— pintaría
+       * siempre la primera: la cara del presidente donde deberían ir los
+       * estados financieros. Envolver cada pista es un camino soportado en
+       * react-native-webrtc 124: el nativo resuelve las pistas remotas por
+       * su conexión, no por el stream que las envuelve. */
+      const stream = new MediaStream([ev.track]);
+      wrappersRef.current.push(stream);
       setRemotas((prev) => {
         if (prev.some((p) => p.trackName === trackName)) return prev;
         const tipo = ev.track.kind === "video" ? "pantalla" : "audio";
@@ -213,15 +256,30 @@ export function useSalaCloudflare(
     };
 
     (pc as any).onconnectionstatechange = () => {
+      /* Un pc viejo que agoniza no puede opinar sobre el estado del nuevo. */
+      if (pcRef.current !== pc) return;
       const s = pc.connectionState;
       if (s === "connected") {
         setEstado("conectada");
-        /* libwebrtc reinicia la sesión de audio al conectar y puede pisar la
-         * ruta: se vuelve a forzar el altavoz cada vez que conecta. */
-        InCallManager.setForceSpeakerphoneOn(true);
       } else if (s === "disconnected" || s === "failed" || s === "closed") {
         setEstado("reconectando");
       }
+    };
+
+    /* Un solo camino de fallo. Sin esto, un error al entrar dejaba el
+     * teléfono en modo llamada (InCallManager encendido sin nadie que lo
+     * apague) y `pcRef` ocupado, con lo que hasta reintentar era un no-op. */
+    const fallar = (mensaje: string, transitorio: boolean) => {
+      pc.close();
+      if (pcRef.current !== pc) return; // una conexión más nueva ya manda
+      pcRef.current = null;
+      sesionRef.current = null;
+      inCallStop();
+      setError(mensaje);
+      /* Una excepción es la red (el ascensor, el cambio de wifi a datos):
+       * eso se reintenta solo. "error" queda para cuando el backend dice
+       * que no a propósito — ahí reintentar en bucle solo martilla. */
+      setEstado(transitorio ? "reconectando" : "error");
     };
 
     try {
@@ -235,16 +293,21 @@ export function useSalaCloudflare(
         asambleaId,
         sdp: pc.localDescription!.sdp,
       });
+      if (!vivoRef.current) {
+        /* La persona colgó mientras la action viajaba: no dejar la sesión
+         * huérfana viva en Cloudflare ni el teléfono en modo llamada. */
+        pc.close();
+        inCallStop();
+        return;
+      }
       if ("error" in r) {
-        setError(r.error);
-        setEstado("error");
+        fallar(r.error, false);
         return;
       }
       sesionRef.current = r.sessionId;
       await pc.setRemoteDescription({ type: "answer", sdp: r.sdp });
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-      setEstado("error");
+      fallar(e instanceof Error ? e.message : String(e), true);
     }
   }, [abrirSesion, asambleaId]);
 
@@ -268,8 +331,23 @@ export function useSalaCloudflare(
     camStreamRef.current?.release();
     camStreamRef.current = null;
     camSenderRef.current = null;
-    pcRef.current?.close();
+    /* Silenciar el pc ANTES de cerrarlo. En react-native-webrtc, a diferencia
+     * del navegador, un `close()` propio SÍ dispara `connectionstatechange`
+     * con 'closed' — la propia librería depende de ese evento para liberar
+     * el objeto nativo. Sin quitar el handler, cada desconexión deliberada
+     * ponía "reconectando" ~50 ms después y rearmaba un ciclo que en redes
+     * lentas no convergía nunca. */
+    const pcViejo = pcRef.current;
+    if (pcViejo) {
+      (pcViejo as any).onconnectionstatechange = null;
+      (pcViejo as any).ontrack = null;
+      pcViejo.close();
+    }
     pcRef.current = null;
+    /* Los envoltorios de pistas remotas: liberar el objeto nativo sin tocar
+     * las pistas (que son de la conexión, no nuestras). */
+    wrappersRef.current.forEach((s) => s.release(false));
+    wrappersRef.current = [];
     sesionRef.current = null;
     misPistasRef.current = [];
     suscritasRef.current.clear();
@@ -279,16 +357,25 @@ export function useSalaCloudflare(
     setMicOn(false);
     setCamOn(false);
     setEstado("inactiva");
-    InCallManager.stop();
+    inCallStop();
   }, [dejarDePublicarAccion]);
 
   useEffect(() => {
     if (!activo || disponible !== true) return;
+    if (!webrtcDisponible()) {
+      setEstado("error");
+      setError(
+        "La sala de video no está disponible en Expo Go. Abre Vekino con el development build.",
+      );
+      return;
+    }
+    vivoRef.current = true;
     /* Entrada escalonada, igual que la web: el SFU acepta 50 llamadas por
      * segundo, y una asamblea entra en tropel a la hora en punto. */
     const espera = Math.floor(Math.random() * 4000);
     const id = setTimeout(() => void conectar(), espera);
     return () => {
+      vivoRef.current = false;
       clearTimeout(id);
       void desconectar();
     };
@@ -298,18 +385,54 @@ export function useSalaCloudflare(
   // ── Reconexión ──────────────────────────────────────────────
 
   useEffect(() => {
-    if (estado !== "reconectando") return;
+    /* Con `activo` en la guarda: al terminar la asamblea nada puede volver
+     * a conectar, venga el estado de donde venga. */
+    if (!activo || estado !== "reconectando") return;
     /* Se rehace la sesión entera: reconstruir es más fiable que adivinar en
      * qué estado quedó la de Cloudflare. En un teléfono esto pasa cada vez
      * que cambia de wifi a datos; tiene que ser aburrido. */
     const id = setTimeout(() => {
       void (async () => {
         await desconectar();
+        if (!vivoRef.current) return;
         await conectar();
       })();
     }, 2000);
     return () => clearTimeout(id);
-  }, [estado, conectar, desconectar]);
+  }, [activo, estado, conectar, desconectar]);
+
+  // ── Volver de una llamada o del segundo plano ───────────────
+
+  useEffect(() => {
+    if (estado !== "conectada") return;
+    /* Una llamada telefónica interrumpe la sesión de audio pero el RTP sigue
+     * "connected": ningún evento de WebRTC avisa. Al volver la app a primer
+     * plano se sondea de verdad — dos lecturas de bytes recibidos con dos
+     * segundos entre ellas. Si hay pistas suscritas y los bytes no avanzan,
+     * el audio murió: se fuerza la reconstrucción, que ya sabe rehacer la
+     * sesión de audio completa. */
+    const sub = AppState.addEventListener("change", (s) => {
+      if (s !== "active") return;
+      void (async () => {
+        const pc = pcRef.current;
+        if (!pc || suscritasRef.current.size === 0) return;
+        const leer = async () => {
+          let bytes = 0;
+          const stats = await pc.getStats();
+          stats.forEach((x: any) => {
+            if (x.type === "inbound-rtp") bytes += x.bytesReceived ?? 0;
+          });
+          return bytes;
+        };
+        const antes = await leer();
+        await new Promise((r) => setTimeout(r, 2000));
+        if (pcRef.current !== pc || !vivoRef.current) return;
+        const despues = await leer();
+        if (despues <= antes) setEstado("reconectando");
+      })();
+    });
+    return () => sub.remove();
+  }, [estado]);
 
   // ── Suscripción a lo que publican los demás ─────────────────
 
@@ -353,12 +476,24 @@ export function useSalaCloudflare(
     })();
   }, [catalogo, estado, asambleaId, suscribirAccion, responderAccion, enFila]);
 
-  /** Le pone nombre a cada pista remota cuando el catálogo lo dice. */
+  /** Nombra cada pista remota — y BORRA las que ya nadie anuncia.
+   *
+   * Sin la poda, dejar de compartir pantalla dejaba el último fotograma
+   * clavado como una foto: la pista moría en Cloudflare pero nadie la
+   * sacaba de la lista de cosas que pintar. */
   useEffect(() => {
     if (!catalogo) return;
     setRemotas((prev) => {
       let cambio = false;
-      const siguiente = prev.map((r) => {
+      const vivas = prev.filter((r) => {
+        const sigue = catalogo.some((c) => c.trackName === r.trackName);
+        if (!sigue) {
+          cambio = true;
+          suscritasRef.current.delete(r.trackName);
+        }
+        return sigue;
+      });
+      const siguiente = vivas.map((r) => {
         const meta = catalogo.find((c) => c.trackName === r.trackName);
         if (!meta || (meta.nombre === r.nombre && meta.tipo === r.tipo)) return r;
         cambio = true;
@@ -384,7 +519,9 @@ export function useSalaCloudflare(
     }
 
     try {
-      const stream = await mediaDevices.getUserMedia({ audio: true });
+      const webrtc = getWebRtc();
+      if (!webrtc) return;
+      const stream = await webrtc.mediaDevices.getUserMedia({ audio: true });
       const pista = stream.getAudioTracks()[0];
       if (!pista) return;
       micRef.current = pista;
@@ -442,7 +579,9 @@ export function useSalaCloudflare(
     if (!pc || !sid) return;
 
     try {
-      const stream = await mediaDevices.getUserMedia({
+      const webrtc = getWebRtc();
+      if (!webrtc) return;
+      const stream = await webrtc.mediaDevices.getUserMedia({
         video: {
           facingMode: "user",
           width: { ideal: 640 },
@@ -572,6 +711,11 @@ export function useSalaCloudflare(
     /** En la v1 del teléfono no se comparte pantalla; ver la de otros, sí. */
     puedeCompartirPantalla: false as const,
     diagnostico,
-    reconectar: conectar,
+    /* Desde cualquier estado: primero derriba lo que haya. El `conectar`
+     * pelado era un no-op si quedaba un pc a medio morir. */
+    reconectar: async () => {
+      await desconectar();
+      await conectar();
+    },
   };
 }
