@@ -1,9 +1,12 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import { View, StyleSheet } from "react-native";
 import { Stack, useRouter, useRootNavigationState } from "expo-router";
-import { Authenticated, Unauthenticated, AuthLoading } from "convex/react";
-import { CondominioProvider } from "@/context/condominio-context";
+import { Authenticated, Unauthenticated, AuthLoading, useQuery } from "convex/react";
+import { api } from "@vekino/backend/api";
+import { CondominioProvider, useCondominio } from "@/context/condominio-context";
 import { PushBootstrap } from "@/components/push-bootstrap";
-import { SplashPantalla } from "@/components/ui/splash-marca";
+import { SplashPantalla, SALIDA_MS } from "@/components/ui/splash-marca";
+import { useSplashCumplido, precargarImagenes } from "@/lib/arranque";
 
 function RedirectToLogin() {
   const router = useRouter();
@@ -15,6 +18,64 @@ function RedirectToLogin() {
   }, [router, navState?.key]);
 
   return <SplashPantalla />;
+}
+
+/**
+ * Sostiene el splash sobre la app recién montada hasta que valga la pena
+ * mostrarla: cuando la primera pantalla ya tiene datos y sus imágenes están en
+ * caché, y cuando la animación de marca alcanzó a verse completa.
+ *
+ * Va aquí y no en la ruta raíz a propósito: aquí las consultas ya están
+ * corriendo, así que la espera se usa para cargar en vez de solo retrasar.
+ */
+function Preparando() {
+  const { condominioId, coverImage } = useCondominio();
+  const splashCumplido = useSplashCumplido();
+
+  const facturas = useQuery(
+    api.facturas.listMia,
+    condominioId ? { condominioId } : "skip",
+  );
+  const comunicados = useQuery(
+    api.comunicados.listRecent,
+    condominioId ? { condominioId, limit: 3 } : "skip",
+  );
+
+  const portadaAviso = comunicados?.[0]?.imagenUrl ?? null;
+
+  useEffect(() => {
+    precargarImagenes([coverImage, portadaAviso]);
+  }, [coverImage, portadaAviso]);
+
+  // Sin condominio resuelto no hay nada que esperar (p. ej. superadmin).
+  const datosListos =
+    !condominioId || (facturas !== undefined && comunicados !== undefined);
+  const listo = splashCumplido && datosListos;
+
+  const [saliendo, setSaliendo] = useState(false);
+  const [retirado, setRetirado] = useState(false);
+
+  // El giro de salida ES la transición: primero se reproduce, y solo cuando
+  // termina soltamos la pantalla. Van en dos efectos separados a propósito:
+  // con `saliendo` como dependencia del mismo efecto, activarlo lo re-ejecuta
+  // y su limpieza cancelaba el temporizador — el velo se quedaba para siempre.
+  useEffect(() => {
+    if (listo) setSaliendo(true);
+  }, [listo]);
+
+  useEffect(() => {
+    if (!saliendo) return;
+    const id = setTimeout(() => setRetirado(true), SALIDA_MS);
+    return () => clearTimeout(id);
+  }, [saliendo]);
+
+  if (retirado) return null;
+
+  return (
+    <View style={StyleSheet.absoluteFill} pointerEvents={saliendo ? "none" : "auto"}>
+      <SplashPantalla saliendo={saliendo} />
+    </View>
+  );
 }
 
 /**
@@ -91,6 +152,8 @@ export default function AppLayout() {
             <Stack.Screen name="historial" options={{ gestureEnabled: true }} />
             <Stack.Screen name="reportes" options={{ gestureEnabled: true }} />
           </Stack>
+          {/* Va después del Stack para quedar por encima mientras prepara. */}
+          <Preparando />
         </CondominioProvider>
       </Authenticated>
     </>

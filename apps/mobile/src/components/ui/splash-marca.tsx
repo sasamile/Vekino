@@ -5,20 +5,25 @@ import Animated, {
   useAnimatedStyle,
   useDerivedValue,
   withRepeat,
+  withDelay,
   withTiming,
   Easing,
   cancelAnimation,
 } from "react-native-reanimated";
 import { useEffect } from "react";
 import { ASPAS, PUNTO, MARCA_VIEWBOX, MARCA_COLOR } from "@/lib/marca-vekino";
+import { segundosDesdeArranque } from "@/lib/arranque";
 
 /**
  * Animación de marca del arranque (variante "Revelado" del handoff).
  *
- * Toda la pieza es una función pura del tiempo: un reloj de 0→3.6 s en bucle
- * y cada propiedad se deriva de él, igual que en el prototipo. Las secciones
- * son Entrada (0–1.3 s), Pulso (1.3–2.3 s) y Cierre (2.3–3.6 s); termina y
- * empieza en opacidad 0, así el bucle no se nota.
+ * Se reproduce la pieza completa, pero en dos actos y NO en bucle:
+ *
+ *  1. Entrada + Pulso — el punto entra y desde él se revelan las aspas.
+ *     Al terminar la marca queda armada, respirando mientras la app carga.
+ *  2. Cierre — gira 114°, crece y se desvanece. Solo se dispara cuando la app
+ *     ya está lista (`saliendo`), así el giro ES la transición de salida y la
+ *     pantalla nunca se queda vacía esperando.
  *
  * El punto entra primero y las aspas se revelan detrás con una ventana
  * circular que crece DESDE EL PUNTO. Ojo: en la marca real el punto está
@@ -26,9 +31,11 @@ import { ASPAS, PUNTO, MARCA_VIEWBOX, MARCA_COLOR } from "@/lib/marca-vekino";
  * prototipo asumía un punto centrado).
  */
 
-const TOTAL = 3.6;
-const CIERRE = 2.3;
+/** Cuándo queda armada la marca (fin del acto 1). */
+const ARMADA = 1.9;
 const PULSO = 1.3;
+/** Duración del acto 2. */
+export const SALIDA_MS = 1100;
 
 /** Centro y radio del punto como fracción del lienzo. */
 const CX = PUNTO.cx / MARCA_VIEWBOX;
@@ -64,18 +71,58 @@ function tramo(
   return from + (to - from) * ease((t - start) / (end - start));
 }
 
-export function SplashMarca({ size = 220 }: { size?: number }) {
+export function SplashMarca({
+  size = 220,
+  saliendo = false,
+}: {
+  size?: number;
+  /** Dispara el acto 2: giro, crecida y desvanecido. */
+  saliendo?: boolean;
+}) {
   const t = useSharedValue(0);
+  const respira = useSharedValue(0);
+  const salida = useSharedValue(0);
 
   useEffect(() => {
-    t.value = 0;
-    t.value = withRepeat(
-      withTiming(TOTAL, { duration: TOTAL * 1000, easing: Easing.linear }),
-      -1,
-      false,
+    if (!saliendo) return;
+    salida.value = withTiming(1, {
+      duration: SALIDA_MS,
+      easing: Easing.linear,
+    });
+  }, [saliendo, salida]);
+
+  useEffect(() => {
+    // Arrancamos en el punto que corresponde al tiempo ya transcurrido desde
+    // que la app abrió, no en cero: al arrancar el splash se monta dos veces
+    // (ruta raíz → dentro de la app) y si cada instancia empezara de nuevo se
+    // vería cortarse y repetirse.
+    const yaVan = segundosDesdeArranque();
+    const falta = Math.max(0, ARMADA - yaVan);
+
+    t.value = Math.min(yaVan, ARMADA);
+    if (falta > 0) {
+      t.value = withTiming(ARMADA, {
+        duration: falta * 1000,
+        easing: Easing.linear,
+      });
+    }
+
+    // Respiración suave una vez armada: señala que sigue trabajando sin
+    // volver a reproducir la animación entera.
+    respira.value = withDelay(
+      falta * 1000,
+      withRepeat(
+        withTiming(1, { duration: 1400, easing: Easing.inOut(Easing.quad) }),
+        -1,
+        true,
+      ),
     );
-    return () => cancelAnimation(t);
-  }, [t]);
+
+    return () => {
+      cancelAnimation(t);
+      cancelAnimation(respira);
+    };
+  }, [t, respira]);
 
   // Radio de la ventana circular, en píxeles.
   const radio = useDerivedValue(() =>
@@ -84,14 +131,35 @@ export function SplashMarca({ size = 220 }: { size?: number }) {
 
   const grupo = useAnimatedStyle(() => {
     const asentar = tramo(t.value, 0.45, PULSO + 0.4, 1.06, 1, easeInOutQuart);
-    const crecer = tramo(t.value, CIERRE + 0.1, TOTAL, 1, 1.22, easeInOutQuart);
-    const deriva = tramo(t.value, 0.45, CIERRE, 0, 6, easeInOutQuart);
-    const giro = tramo(t.value, CIERRE - 0.1, TOTAL - 0.1, 0, 114, easeInOutQuart);
+    const deriva = tramo(t.value, 0.45, ARMADA, 0, 6, easeInOutQuart);
+    // La ventana ya arranca del tamaño del punto, así que sin este velo se
+    // alcanzaba a ver un trozo de aspa recortado antes de que el punto entrara.
+    const aparecer = tramo(t.value, 0.1, 0.45, 0, 1, easeOutExpo);
+
+    // Acto 2, sobre el progreso normalizado de la salida (0→1). Las
+    // proporciones son las del handoff: el giro ocupa todo el tramo, la
+    // crecida entra enseguida y el desvanecido va sobre el final.
+    const s = salida.value;
+    const giro = tramo(s, 0, 1, 0, 114, easeInOutQuart);
+    const crecer = tramo(s, 0.08, 1, 1, 1.22, easeInOutQuart);
+    const irse = tramo(s, 0.35, 0.96, 1, 0, easeInOutQuart);
+
+    // Giro y crecida alrededor del PUNTO, no del centro de la caja: en esta
+    // marca el punto está descentrado y con el eje al centro la pieza se veía
+    // irse de lado. Se hace con traslaciones y NO con `transformOrigin`:
+    // esa propiedad, junto a un transform animado, deja la vista sin dibujar.
+    const ox = (CX - 0.5) * size;
+    const oy = (CY - 0.5) * size;
+
     return {
-      opacity: tramo(t.value, CIERRE + 0.45, TOTAL - 0.05, 1, 0, easeInOutQuart),
+      opacity: aparecer * irse,
       transform: [
+        { translateX: ox },
+        { translateY: oy },
         { rotate: `${deriva + giro}deg` },
-        { scale: asentar * crecer },
+        { scale: asentar * crecer * (1 + 0.03 * respira.value) },
+        { translateX: -ox },
+        { translateY: -oy },
       ],
     };
   });
@@ -154,10 +222,16 @@ export function SplashMarca({ size = 220 }: { size?: number }) {
 }
 
 /** Pantalla completa de carga con la marca animada. */
-export function SplashPantalla({ background = "#FCFBFD" }: { background?: string }) {
+export function SplashPantalla({
+  background = "#FCFBFD",
+  saliendo = false,
+}: {
+  background?: string;
+  saliendo?: boolean;
+}) {
   return (
     <View style={[styles.full, { backgroundColor: background }]}>
-      <SplashMarca />
+      <SplashMarca saliendo={saliendo} />
     </View>
   );
 }

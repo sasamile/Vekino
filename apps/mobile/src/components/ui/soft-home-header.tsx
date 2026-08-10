@@ -1,10 +1,12 @@
+import { useState } from "react";
 import { View, Text, StyleSheet, Platform } from "react-native";
 import { BlurView } from "expo-blur";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { useQuery } from "convex/react";
+import { useQuery, useMutation } from "convex/react";
 import { api } from "@vekino/backend/api";
+import { NotificacionesSheet } from "@/components/ui/notificaciones-sheet";
 import { UserAvatar } from "@/components/ui/user-avatar";
 import { WavingHand } from "@/components/ui/waving-hand";
 import { SoftUI } from "@/lib/soft-ui";
@@ -42,7 +44,24 @@ export function SoftHomeHeader({
   const router = useRouter();
   const puedeVolver = showBack ?? router.canGoBack();
   const me = useQuery(api.users.me);
-  const { theme } = useCondominio();
+  const { theme, condominioId } = useCondominio();
+
+  const [bandeja, setBandeja] = useState(false);
+  const [vistasPrevias, setVistasPrevias] = useState(0);
+  const feed = useQuery(
+    api.notificacionesFeed.feed,
+    condominioId ? { condominioId } : "skip",
+  );
+  const marcarVistas = useMutation(api.notificacionesFeed.marcarVistas);
+  const sinLeer = feed?.sinLeer ?? 0;
+
+  function abrirBandeja() {
+    // Congelamos la marca ANTES de actualizarla: si no, al abrir se marcaría
+    // todo como visto al instante y nunca verías cuáles llegaron nuevas.
+    setVistasPrevias(feed?.vistasAt ?? 0);
+    setBandeja(true);
+    void marcarVistas({}).catch(() => {});
+  }
   const pretty = formatDisplayName(displayName);
   const first =
     pretty.trim().split(/\s+/).filter(Boolean)[0] ?? pretty;
@@ -101,14 +120,18 @@ export function SoftHomeHeader({
           ) : null}
         </View>
 
-        <View
-          style={styles.bellBtn}
-          onTouchEnd={() => router.push("/(app)/notificaciones" as never)}
-        >
+        <View style={styles.bellBtn} onTouchEnd={abrirBandeja}>
           <Ionicons name="notifications-outline" size={22} color={SoftUI.text} />
-          {showNotifDot ? <View style={styles.dot} /> : null}
+          {showNotifDot || sinLeer > 0 ? <View style={styles.dot} /> : null}
         </View>
       </View>
+
+      <NotificacionesSheet
+        visible={bandeja}
+        onClose={() => setBandeja(false)}
+        condominioId={condominioId}
+        vistasAt={vistasPrevias}
+      />
     </View>
   );
 }

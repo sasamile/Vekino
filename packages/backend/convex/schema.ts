@@ -118,6 +118,12 @@ export default defineSchema({
      */
     ultimoIngresoAt: v.optional(v.number()),
 
+    /**
+     * Última vez que el usuario abrió su campana de notificaciones. Todo lo
+     * creado después cuenta como "sin leer" en el feed (notificaciones.feed).
+     */
+    notificacionesVistasAt: v.optional(v.number()),
+
     active: v.boolean(),
 
     // Capa 1: rol de plataforma. undefined = usuario normal.

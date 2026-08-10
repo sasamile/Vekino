@@ -6,15 +6,24 @@ import { StatusBar } from "expo-status-bar";
 import { storageGet } from "@/lib/storage";
 import { ONBOARDING_KEY, SPLASH_ONLY } from "@/lib/auth-ui";
 import { SplashPantalla, SplashMarca } from "@/components/ui/splash-marca";
+import { useSplashCumplido } from "@/lib/arranque";
 
-function Redirect({ to }: { to: string }) {
+/**
+ * `esperarSplash` retiene el salto hasta que la animación se vea completa.
+ * Solo se usa hacia el login: ahí no hay nada que precargar, así que la espera
+ * es puro momento de marca. Hacia la app NO se espera aquí — conviene entrar
+ * ya y aprovechar ese tiempo cargando datos (lo hace `(app)/_layout`).
+ */
+function Redirect({ to, esperarSplash = false }: { to: string; esperarSplash?: boolean }) {
   const router = useRouter();
   const navState = useRootNavigationState();
+  const splashCumplido = useSplashCumplido();
 
   useEffect(() => {
     if (!navState?.key) return;
+    if (esperarSplash && !splashCumplido) return;
     router.replace(to as never);
-  }, [router, to, navState?.key]);
+  }, [router, to, navState?.key, esperarSplash, splashCumplido]);
 
   return <SplashPantalla />;
 }
@@ -34,7 +43,7 @@ function UnauthGate() {
 
   if (!target) return <SplashPantalla />;
 
-  return <Redirect to={target} />;
+  return <Redirect to={target} esperarSplash />;
 }
 
 export default function Index() {
@@ -50,7 +59,11 @@ export default function Index() {
         <UnauthGate />
       </Unauthenticated>
       <Authenticated>
-        {SPLASH_ONLY ? <Redirect to="/(auth)/welcome" /> : <Redirect to="/(app)" />}
+        {SPLASH_ONLY ? (
+          <Redirect to="/(auth)/welcome" esperarSplash />
+        ) : (
+          <Redirect to="/(app)" />
+        )}
       </Authenticated>
     </View>
   );
