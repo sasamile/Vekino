@@ -43,14 +43,14 @@ export const disponible = query({
 });
 
 /**
- * El módulo que enciende este motor para un conjunto.
+ * Freno de emergencia, no interruptor de encendido.
  *
- * Se estrena conjunto por conjunto a propósito. Arboleda son 173 personas en
- * un acto con efectos legales: si el motor nuevo falla allí, falla una
- * asamblea de verdad. Con el interruptor se prueba primero donde un fallo se
- * arregla repitiendo la reunión.
+ * Cloudflare es el motor de la sala en cuanto está configurado: no hay nada
+ * que activar. Este módulo existe para lo contrario — devolver un conjunto al
+ * motor anterior si en plena asamblea algo sale mal. Que exista un botón de
+ * pánico no significa que haya que pulsarlo para empezar.
  */
-export const MODULO_SALA_CF = "sala_cloudflare";
+export const MODULO_SIN_CF = "sala_sin_cloudflare";
 
 /**
  * ¿Qué motor le toca a esta asamblea?
@@ -67,9 +67,9 @@ export const motor = query({
     if (!asamblea) return "otro";
     const condominio = await ctx.db.get(asamblea.condominioId);
     if (!condominio) return "otro";
-    return condominio.activeModules.includes(MODULO_SALA_CF)
-      ? "cloudflare"
-      : "otro";
+    return condominio.activeModules.includes(MODULO_SIN_CF)
+      ? "otro"
+      : "cloudflare";
   },
 });
 

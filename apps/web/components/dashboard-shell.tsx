@@ -107,7 +107,6 @@ function Shell({ children }: { children: React.ReactNode }) {
       pathname.startsWith("/dashboard/automatizaciones") ||
       pathname.startsWith("/dashboard/inbox") ||
       pathname.startsWith("/dashboard/uso") ||
-      pathname.startsWith("/dashboard/sala-prueba") ||
       pathname.startsWith("/dashboard/soporte"))
   ) {
     return <Redirect to="/dashboard" />;
