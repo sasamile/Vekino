@@ -20,6 +20,10 @@
     "./codigoAsistencia": {
       "types": "./convex/lib/codigoAsistencia.ts",
       "default": "./convex/lib/codigoAsistencia.ts"
+    },
+    "./passwordFuerte": {
+      "types": "./convex/lib/passwordFuerte.ts",
+      "default": "./convex/lib/passwordFuerte.ts"
     }
   },
   "dependencies": {
