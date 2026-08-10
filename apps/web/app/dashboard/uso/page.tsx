@@ -8,6 +8,7 @@ import type { Id } from "@vekino/backend/dataModel";
 import { Spinner } from "@/components/ui/spinner";
 import { Select } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { CosteSalaPanel } from "@/components/dashboard/coste-sala-panel";
 
 const MESES_CORTOS = [
   "ene", "feb", "mar", "abr", "may", "jun",
@@ -303,6 +304,8 @@ export default function UsoPage() {
           </div>
         </section>
       )}
+
+      <CosteSalaPanel />
     </div>
   );
 }
