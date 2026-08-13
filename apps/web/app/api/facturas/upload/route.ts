@@ -1,11 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { PDFDocument } from "pdf-lib";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
-import { execSync } from "child_process";
-import { writeFileSync, unlinkSync, existsSync, mkdirSync } from "fs";
-import { tmpdir } from "os";
-import { join } from "path";
-import { randomUUID } from "crypto";
+import { existsSync, mkdirSync } from "fs";
+import { extraerTextoConLayout } from "../pdf-layout";
 
 // ─── S3 ────────────────────────────────────────────────────────────────────────
 const s3 = new S3Client({
@@ -37,15 +34,17 @@ async function uploadPdfToS3(
 
 // ─── PDF split & text extraction ───────────────────────────────────────────────
 
-/** Extrae texto de bytes PDF usando pdftotext -layout (requiere poppler). */
-function extractText(pdfBytes: Uint8Array): string {
-  const tmp = join(tmpdir(), `factura-${randomUUID()}.pdf`);
-  try {
-    writeFileSync(tmp, pdfBytes);
-    return execSync(`pdftotext -layout "${tmp}" -`, { encoding: "utf8", maxBuffer: 2 * 1024 * 1024 });
-  } finally {
-    try { unlinkSync(tmp); } catch {}
-  }
+/**
+ * Texto del PDF con las columnas en su sitio.
+ *
+ * Antes llamaba a `pdftotext -layout` por consola. Funcionaba en el portatil
+ * y NO en el servidor: Vercel no trae poppler, y subir facturas moria en
+ * produccion con "pdftotext: command not found". Ahora se reconstruye la
+ * rejilla desde las posiciones del PDF, sin depender de que haya un binario
+ * instalado en la maquina que ejecuta la funcion.
+ */
+function extractText(pdfBytes: Uint8Array): Promise<string> {
+  return extraerTextoConLayout(pdfBytes);
 }
 
 /** True si la página contiene una cabecera de nueva factura. */
@@ -240,7 +239,7 @@ export async function POST(req: NextRequest) {
       const [page] = await singleDoc.copyPages(doc, [i]);
       singleDoc.addPage(page);
       const singleBytes = await singleDoc.save();
-      pageTexts.push(extractText(singleBytes));
+      pageTexts.push(await extractText(singleBytes));
     }
 
     // 2. Agrupar páginas por factura (páginas sin cabecera = continúan la anterior)
