@@ -4,11 +4,11 @@ import { useState } from "react";
 import { useParams } from "next/navigation";
 import { useQuery, useMutation } from "convex/react";
 import {
-  ShieldCheck, BookOpenCheck, Timer, AlertTriangle, Settings2, Search, Plus,
-  Loader2, Trash2, Eye, Download, Footprints, ClipboardCheck, Paperclip,
+  AlertTriangle, BookOpenCheck, Car, Check, ClipboardCheck, Download, Eye, Footprints, Loader2, Paperclip, Plus, Search, Settings2, ShieldCheck, Timer, Trash2,
 } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import type { Id, Doc } from "@vekino/backend/dataModel";
+import type { FunctionReturnType } from "convex/server";
 import { PageContainer } from "@/components/layout/page-container";
 import { PageHeader } from "@/components/layout/page-header";
 import { StatCard } from "@/components/layout/stat-card";
@@ -362,28 +362,129 @@ function NovedadesTab({ condominioId }: { condominioId: Id<"condominios"> }) {
     <EmptyState icon={AlertTriangle} title="Sin novedades" description="Los incidentes reportados por los guardias aparecerán aquí." />
   ) : (
     <div className="space-y-3">
-      {reportes.map((n) => (
-        <Card key={n._id} className="p-4">
-          <div className="flex flex-wrap items-center gap-2">
-            <p className="font-semibold text-foreground">{n.titulo}</p>
-            <span className={cn("rounded-md px-2 py-0.5 text-[11px] font-semibold", PRIORIDAD_CLS[n.prioridad])}>
-              {n.prioridad.toUpperCase()}
-            </span>
-          </div>
-          <p className="mt-1 whitespace-pre-line text-sm text-foreground">{n.descripcion}</p>
-          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-            <span>{n.reportadoPorNombre}</span>
-            <span>·</span>
-            <span>{fmtFechaHora(n.createdAt)}</span>
-            {n.archivoUrl && (
-              <a href={n.archivoUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 font-medium text-brand hover:underline">
-                <Paperclip className="h-3 w-3" /> {n.archivoNombre ?? "Adjunto"}
-              </a>
-            )}
-          </div>
-        </Card>
-      ))}
+      {reportes.map((n) => <NovedadCard key={n._id} n={n} cls={PRIORIDAD_CLS} />)}
     </div>
+  );
+}
+
+/**
+ * Una novedad vista por la administración.
+ *
+ * Lo que el guarda reporta desde la ronda llega aquí con la placa, la unidad
+ * y las fotos. La decisión de cobrar es de la administración, no del guarda:
+ * él registra lo que ve, y esa separación es la que hace que un cobro se
+ * pueda sostener si el propietario reclama.
+ */
+function NovedadCard({
+  n,
+  cls,
+}: {
+  n: FunctionReturnType<typeof api.guardia.listNovedadReportes>[number];
+  cls: Record<string, string>;
+}) {
+  const gestionar = useMutation(api.guardia.gestionarNovedad);
+  const [busy, setBusy] = useState(false);
+  const estado = n.gestion ?? "pendiente";
+
+  async function marcar(gestion: "pendiente" | "cobrada" | "descartada") {
+    setBusy(true);
+    try {
+      await gestionar({ novedadId: n._id, gestion });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card className="p-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="font-semibold text-foreground">{n.titulo}</p>
+        <span className={cn("rounded-md px-2 py-0.5 text-[11px] font-semibold", cls[n.prioridad])}>
+          {n.prioridad.toUpperCase()}
+        </span>
+        {estado === "cobrada" && (
+          <span className="rounded-md bg-emerald-500/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-700 dark:text-emerald-400">
+            COBRADA
+          </span>
+        )}
+        {estado === "descartada" && (
+          <span className="rounded-md bg-muted px-2 py-0.5 text-[11px] font-semibold text-muted-foreground">
+            DESCARTADA
+          </span>
+        )}
+      </div>
+
+      {n.vehiculoPlaca && (
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <span className="inline-flex items-center gap-1.5 rounded-md bg-muted px-2 py-1 font-mono text-[13px] font-bold tracking-wider text-foreground">
+            <Car className="h-3.5 w-3.5" aria-hidden /> {n.vehiculoPlaca}
+          </span>
+          {n.unidadNumero ? (
+            <span className="text-sm font-medium text-foreground">Unidad {n.unidadNumero}</span>
+          ) : (
+            <span className="text-sm text-amber-600 dark:text-amber-400">Placa no registrada</span>
+          )}
+          {n.vehiculoDescripcion && (
+            <span className="text-xs text-muted-foreground">{n.vehiculoDescripcion}</span>
+          )}
+        </div>
+      )}
+
+      <p className="mt-1.5 whitespace-pre-line text-sm text-foreground">{n.descripcion}</p>
+
+      {n.fotos && n.fotos.length > 0 && (
+        <div className="mt-2.5 flex flex-wrap gap-2">
+          {n.fotos.map((fo) => (
+            <a
+              key={fo.url}
+              href={fo.url}
+              target="_blank"
+              rel="noreferrer"
+              className="block h-20 w-20 overflow-hidden rounded-lg border border-border transition-opacity hover:opacity-80"
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={fo.url} alt={fo.nombre ?? "Evidencia"} className="h-full w-full object-cover" />
+            </a>
+          ))}
+        </div>
+      )}
+
+      <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+        <span>{n.reportadoPorNombre}</span>
+        <span>·</span>
+        <span>{fmtFechaHora(n.createdAt)}</span>
+        {n.archivoUrl && (
+          <a href={n.archivoUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 font-medium text-brand hover:underline">
+            <Paperclip className="h-3 w-3" /> {n.archivoNombre ?? "Adjunto"}
+          </a>
+        )}
+      </div>
+
+      {/* Solo se ofrece cobrar cuando hay a quién: sin unidad no hay a quién
+          pasarle el cargo, y un botón que no lleva a nada confunde más que
+          ayudar. */}
+      {n.unidadNumero && estado === "pendiente" && (
+        <div className="mt-3 flex flex-wrap gap-2 border-t border-border pt-3">
+          <Button size="sm" disabled={busy} onClick={() => marcar("cobrada")}>
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+            Marcar cobrada a la unidad {n.unidadNumero}
+          </Button>
+          <Button variant="ghost" size="sm" disabled={busy} onClick={() => marcar("descartada")}>
+            Descartar
+          </Button>
+        </div>
+      )}
+      {estado !== "pendiente" && (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => marcar("pendiente")}
+          className="mt-2 text-xs text-muted-foreground underline-offset-2 hover:underline"
+        >
+          Reabrir
+        </button>
+      )}
+    </Card>
   );
 }
 

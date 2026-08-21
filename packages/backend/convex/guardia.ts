@@ -1081,6 +1081,88 @@ export const resolverDepositoReserva = mutation({
 // Novedades / incidentes de seguridad
 // ─────────────────────────────────────────────────────────────
 
+/**
+ * Busca un vehículo por placa para señalarlo en una novedad.
+ *
+ * Vive aquí y no en `vehiculos.ts` porque el guarda no tiene permiso sobre
+ * ese módulo —no debe poder listar el parque automotor entero del conjunto—
+ * pero sí necesita resolver UNA placa cuando está haciendo la ronda.
+ *
+ * Por eso exige texto y devuelve poco: es un buscador, no un listado.
+ */
+export const buscarVehiculo = query({
+  args: { condominioId: v.id("condominios"), texto: v.string() },
+  handler: async (ctx, args) => {
+    await requireCondominioRole(ctx, args.condominioId, [...GUARD_ROLES]);
+
+    /* Las placas se escriben de mil formas: "ABC 123", "abc-123", "ABC123".
+     * Se comparan sin nada que no sea letra o número para que el guarda no
+     * tenga que adivinar el formato con el que quedó registrada. */
+    const aguja = args.texto.replace(/[^a-z0-9]/gi, "").toUpperCase();
+    if (aguja.length < 2) return [];
+
+    const vehiculos = await ctx.db
+      .query("vehiculos")
+      .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
+      .collect();
+
+    const coinciden = vehiculos
+      .filter((v) =>
+        v.placa.replace(/[^a-z0-9]/gi, "").toUpperCase().includes(aguja),
+      )
+      .slice(0, 12);
+
+    return await Promise.all(
+      coinciden.map(async (v) => {
+        const unidad = await ctx.db.get(v.unidadId);
+        return {
+          _id: v._id,
+          placa: v.placa,
+          tipo: v.tipo,
+          descripcion:
+            [v.marca, v.color].filter(Boolean).join(" · ") || null,
+          unidadNumero: unidad?.numero ?? null,
+          unidadTorre: unidad?.torre ?? null,
+        };
+      }),
+    );
+  },
+});
+
+/**
+ * La administración decide qué hacer con una novedad.
+ *
+ * Separado del reporte a propósito: el guarda registra lo que ve, y quién
+ * decide si eso se le cobra a una unidad es la administración. Un guarda no
+ * debería poder generar un cobro desde la ronda.
+ */
+export const gestionarNovedad = mutation({
+  args: {
+    novedadId: v.id("guardiaNovedadReportes"),
+    gestion: v.union(
+      v.literal("pendiente"),
+      v.literal("cobrada"),
+      v.literal("descartada"),
+    ),
+    nota: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const novedad = await ctx.db.get(args.novedadId);
+    if (!novedad) throw new Error("Novedad no encontrada.");
+    const { user } = await requireCondominioRole(
+      ctx,
+      novedad.condominioId,
+      [...ADMIN_ROLES],
+    );
+    await ctx.db.patch(args.novedadId, {
+      gestion: args.gestion,
+      gestionNota: args.nota?.trim() || undefined,
+      gestionPorUserId: user._id,
+      gestionEn: Date.now(),
+    });
+  },
+});
+
 export const listNovedadReportes = query({
   args: { condominioId: v.id("condominios") },
   handler: async (ctx, args) => {
@@ -1098,6 +1180,19 @@ export const listNovedadReportes = query({
             url: n.archivoUrl,
             storageId: n.archivoStorageId,
           })) || null,
+        /* Las fotos pasan por el mismo resolvedor que el adjunto: hoy son
+         * URLs de S3 y salen tal cual, pero si alguna quedara guardada como
+         * archivo de Convex igual se resolvería sola. */
+        fotos: n.fotos
+          ? (
+              await Promise.all(
+                n.fotos.map(async (fo) => ({
+                  url: (await resolveMediaUrl(ctx, { url: fo.url })) || fo.url,
+                  nombre: fo.nombre ?? null,
+                })),
+              )
+            ).filter((fo) => fo.url)
+          : [],
       })),
     );
   },
@@ -1112,12 +1207,38 @@ export const reportarNovedad = mutation({
     archivoStorageId: v.optional(v.id("_storage")),
     archivoUrl: v.optional(v.string()),
     archivoNombre: v.optional(v.string()),
+    /** Vehículo señalado (mal parqueo, bloqueo, placa desconocida…). */
+    vehiculoId: v.optional(v.id("vehiculos")),
+    /** Evidencia. Varias fotos: una sola casi nunca prueba nada. */
+    fotos: v.optional(
+      v.array(v.object({ url: v.string(), nombre: v.optional(v.string()) })),
+    ),
   },
   handler: async (ctx, args) => {
     const { user } = await requireCondominioRole(ctx, args.condominioId, [...GUARD_ROLES]);
     const titulo = args.titulo.trim();
     const descripcion = args.descripcion.trim();
     if (!titulo || !descripcion) throw new Error("Título y descripción son obligatorios.");
+
+    /* Los datos del vehículo se COPIAN, no se dejan solo referenciados: si
+     * mañana venden el carro o lo reasignan, la novedad tiene que seguir
+     * diciendo a quién se le hizo. Es lo que sostiene el cobro cuando el
+     * propietario reclama meses después. */
+    let vehiculoPlaca: string | undefined;
+    let vehiculoDescripcion: string | undefined;
+    let unidadId: Id<"unidades"> | undefined;
+    let unidadNumero: string | undefined;
+    if (args.vehiculoId) {
+      const veh = await ctx.db.get(args.vehiculoId);
+      if (!veh || veh.condominioId !== args.condominioId) {
+        throw new Error("Vehículo no encontrado en este condominio.");
+      }
+      vehiculoPlaca = veh.placa;
+      vehiculoDescripcion =
+        [veh.tipo, veh.marca, veh.color].filter(Boolean).join(" · ") || undefined;
+      unidadId = veh.unidadId;
+      unidadNumero = (await ctx.db.get(veh.unidadId))?.numero;
+    }
 
     const turno = await turnoAbierto(ctx, args.condominioId);
     const now = Date.now();
@@ -1130,6 +1251,14 @@ export const reportarNovedad = mutation({
       archivoStorageId: args.archivoStorageId,
       archivoUrl: args.archivoUrl,
       archivoNombre: args.archivoNombre?.trim() || undefined,
+      vehiculoId: args.vehiculoId,
+      vehiculoPlaca,
+      vehiculoDescripcion,
+      unidadId,
+      unidadNumero,
+      fotos: args.fotos?.length ? args.fotos : undefined,
+      // Nace pendiente: reportar no es cobrar, eso lo decide la administración.
+      gestion: "pendiente",
       reportadoPorUserId: user._id,
       reportadoPorNombre: user.name,
       createdAt: now,
@@ -1138,7 +1267,9 @@ export const reportarNovedad = mutation({
       condominioId: args.condominioId,
       modulo: "novedades",
       tipo: `Reporte ${args.prioridad.toUpperCase()}`,
-      unidad: "Portería",
+      // Con vehículo la minuta apunta a la unidad, no a "Portería": es lo
+      // que hace que el evento se pueda encontrar buscando por la unidad.
+      unidad: unidadNumero ?? "Portería",
       resumen: `${titulo}: ${descripcion.slice(0, 140)}${descripcion.length > 140 ? "…" : ""}`,
       estado: "abierto",
       actorUserId: user._id,

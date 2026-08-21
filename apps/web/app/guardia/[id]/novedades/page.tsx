@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useParams } from "next/navigation";
 import { useQuery, useMutation } from "convex/react";
 import {
-  AlertTriangle, Plus, Loader2, Paperclip, FileText,
+  AlertTriangle, Plus, Loader2, Paperclip, FileText, Car,
 } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
@@ -18,6 +18,7 @@ import { PageContainer } from "@/components/layout/page-container";
 import { PageHeader } from "@/components/layout/page-header";
 import { cn } from "@/lib/utils";
 import { useUploadToS3 } from "@/hooks/use-upload-s3";
+import { NovedadVehiculoModal } from "@/components/guardia/novedad-vehiculo";
 
 type Prioridad = "baja" | "media" | "alta";
 
@@ -36,6 +37,7 @@ export default function GuardiaNovedadesPage() {
   const condominioId = params.id as Id<"condominios">;
   const reportes = useQuery(api.guardia.listNovedadReportes, { condominioId });
   const [formOpen, setFormOpen] = useState(false);
+  const [vehiculoOpen, setVehiculoOpen] = useState(false);
 
   return (
     <PageContainer>
@@ -44,9 +46,16 @@ export default function GuardiaNovedadesPage() {
           title="Novedades"
           description="Reporta incidentes de seguridad a la administración"
           action={
-            <Button size="sm" onClick={() => setFormOpen(true)}>
-              <Plus className="h-4 w-4" /> Reportar novedad
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              {/* Primero el de vehículo: es el que se usa en la ronda, con el
+                  celular en la mano y de pie en el parqueadero. */}
+              <Button size="sm" onClick={() => setVehiculoOpen(true)}>
+                <Car className="h-4 w-4" /> Reportar vehículo
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => setFormOpen(true)}>
+                <Plus className="h-4 w-4" /> Otra novedad
+              </Button>
+            </div>
           }
         />
 
@@ -74,7 +83,27 @@ export default function GuardiaNovedadesPage() {
                         Prioridad {meta.label}
                       </span>
                     </div>
+                    {n.vehiculoPlaca && (
+                      <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                        <span className="inline-flex items-center gap-1.5 rounded-md bg-muted px-2 py-0.5 font-mono text-[12px] font-bold tracking-wider text-foreground">
+                          <Car className="h-3 w-3" aria-hidden /> {n.vehiculoPlaca}
+                        </span>
+                        {n.unidadNumero && (
+                          <span className="text-xs text-muted-foreground">Unidad {n.unidadNumero}</span>
+                        )}
+                      </div>
+                    )}
                     <p className="mt-1 whitespace-pre-line text-sm text-foreground">{n.descripcion}</p>
+                    {n.fotos && n.fotos.length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {n.fotos.map((fo) => (
+                          <a key={fo.url} href={fo.url} target="_blank" rel="noreferrer" className="block h-16 w-16 overflow-hidden rounded-lg border border-border">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={fo.url} alt={fo.nombre ?? "Evidencia"} className="h-full w-full object-cover" />
+                          </a>
+                        ))}
+                      </div>
+                    )}
                     <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
                       <span>{n.reportadoPorNombre}</span>
                       <span>·</span>
@@ -94,6 +123,9 @@ export default function GuardiaNovedadesPage() {
       )}
 
       {formOpen && <NovedadModal condominioId={condominioId} onClose={() => setFormOpen(false)} />}
+      {vehiculoOpen && (
+        <NovedadVehiculoModal condominioId={condominioId} onClose={() => setVehiculoOpen(false)} />
+      )}
       </div>
     </PageContainer>
   );

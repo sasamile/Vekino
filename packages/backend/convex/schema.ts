@@ -1596,10 +1596,54 @@ export default defineSchema({
     archivoStorageId: v.optional(v.id("_storage")), // legacy
     archivoUrl: v.optional(v.string()),
     archivoNombre: v.optional(v.string()),
+
+    /**
+     * Vehiculo senalado, cuando la novedad es sobre uno.
+     *
+     * La placa, la unidad y el duenno van COPIADOS, no solo referenciados: si
+     * despues venden el carro o lo reasignan a otra unidad, la novedad tiene
+     * que seguir diciendo a quien se le hizo. Es lo que sostiene el cobro
+     * cuando el propietario reclama meses despues.
+     */
+    vehiculoId: v.optional(v.id("vehiculos")),
+    vehiculoPlaca: v.optional(v.string()),
+    vehiculoDescripcion: v.optional(v.string()), // "Carro · Mazda · Gris"
+    unidadId: v.optional(v.id("unidades")),
+    unidadNumero: v.optional(v.string()),
+
+    /**
+     * Evidencia fotografica. Varias, no una.
+     *
+     * Una sola foto casi nunca prueba un mal parqueo: hace falta la placa
+     * legible Y el sitio donde esta. El campo `archivoUrl` de arriba se deja
+     * para las novedades que ya existian.
+     */
+    fotos: v.optional(
+      v.array(v.object({ url: v.string(), nombre: v.optional(v.string()) })),
+    ),
+
+    /**
+     * Estado del cobro. Lo mueve la administracion, no el guarda: el guarda
+     * reporta lo que ve, quien decide si se cobra es la mesa.
+     */
+    gestion: v.optional(
+      v.union(
+        v.literal("pendiente"),  // recien reportada
+        v.literal("cobrada"),    // se le paso a la unidad
+        v.literal("descartada"), // se reviso y no procede
+      ),
+    ),
+    gestionNota: v.optional(v.string()),
+    gestionPorUserId: v.optional(v.id("users")),
+    gestionEn: v.optional(v.number()),
+
     reportadoPorUserId: v.id("users"),
     reportadoPorNombre: v.string(),
     createdAt: v.number(),
-  }).index("by_condominio", ["condominioId"]),
+  })
+    .index("by_condominio", ["condominioId"])
+    // Historial de un vehiculo: "esta placa ya lleva tres veces este mes".
+    .index("by_vehiculo", ["vehiculoId"]),
 
   /**
    * Depósito / garantía de una reserva de zona común, controlado en portería.
