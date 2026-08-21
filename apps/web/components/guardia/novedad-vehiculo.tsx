@@ -83,7 +83,7 @@ export function NovedadVehiculoModal({
     unidadTorre: string | null;
   } | null>(null);
 
-  const [motivo, setMotivo] = useState("Parqueado en horario no permitido");
+  const [motivo, setMotivo] = useState("");
   const [prioridad, setPrioridad] = useState<Prioridad>("media");
   const [nota, setNota] = useState("");
   const [fotos, setFotos] = useState<Foto[]>([]);
@@ -98,6 +98,17 @@ export function NovedadVehiculoModal({
     const t = setTimeout(() => setBusqueda(placa.trim()), 250);
     return () => clearTimeout(t);
   }, [placa]);
+
+  /* Los motivos los configura la administración; si no ha puesto ninguno el
+   * backend devuelve los de por defecto para que el guarda nunca se quede
+   * sin poder escoger. */
+  const catalogo = useQuery(api.guardia.listMotivosVehiculo, { condominioId });
+  const motivos = catalogo?.motivos ?? [];
+
+  // Se elige el primero en cuanto llega la lista, no antes.
+  useEffect(() => {
+    if (!motivo && motivos.length > 0) setMotivo(motivos[0]!);
+  }, [motivo, motivos]);
 
   const resultados = useQuery(
     api.guardia.buscarVehiculo,
@@ -130,7 +141,8 @@ export function NovedadVehiculoModal({
   }
 
   const placaFinal = elegido?.placa ?? placa.trim().toUpperCase();
-  const valido = placaFinal.length >= 3 && fotos.length > 0 && !subiendo;
+  const valido =
+    placaFinal.length >= 3 && motivo.length > 0 && fotos.length > 0 && !subiendo;
 
   async function enviar() {
     if (!valido) return;
@@ -273,13 +285,24 @@ export function NovedadVehiculoModal({
         <div className="grid grid-cols-3 gap-3">
           <div className="col-span-2 space-y-1.5">
             <label className="block text-xs font-medium text-foreground">Motivo</label>
-            <Select value={motivo} onChange={(e) => setMotivo(e.target.value)}>
-              <option>Parqueado en horario no permitido</option>
-              <option>Parqueado en zona no autorizada</option>
-              <option>Obstruye el paso o una salida</option>
-              <option>Ocupa un parqueadero ajeno</option>
-              <option>Parqueado en zona de visitantes sin permiso</option>
-              <option>Otro</option>
+            <Select
+              value={motivo}
+              onChange={(e) => setMotivo(e.target.value)}
+              disabled={catalogo === undefined}
+            >
+              {catalogo === undefined ? (
+                <option>Cargando…</option>
+              ) : (
+                <>
+                  {motivos.map((m) => (
+                    <option key={m}>{m}</option>
+                  ))}
+                  {/* "Otro" no se configura: siempre tiene que haber salida
+                      para lo que nadie previó. Lo que pasó se escribe en la
+                      observación. */}
+                  <option>Otro</option>
+                </>
+              )}
             </Select>
           </div>
           <div className="space-y-1.5">

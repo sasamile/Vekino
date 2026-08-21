@@ -1090,6 +1090,177 @@ export const resolverDepositoReserva = mutation({
  *
  * Por eso exige texto y devuelve poco: es un buscador, no un listado.
  */
+/**
+ * Motivos con los que se puede señalar un vehículo, si la administración no
+ * ha configurado los suyos.
+ *
+ * No es una lista "provisional": es la que usa un conjunto que nunca entra a
+ * configurar nada, que son la mayoría. Se exporta para que la interfaz pueda
+ * mostrarla como punto de partida cuando el administrador abra el catálogo.
+ */
+export const MOTIVOS_VEHICULO_POR_DEFECTO = [
+  "Parqueado en horario no permitido",
+  "Parqueado en zona no autorizada",
+  "Obstruye el paso o una salida",
+  "Ocupa un parqueadero ajeno",
+  "Parqueado en zona de visitantes sin permiso",
+] as const;
+
+/**
+ * Motivos que ve el guarda en el desplegable.
+ *
+ * Si el conjunto no ha configurado ninguno devuelve los de por defecto, en
+ * vez de una lista vacía: dejar al guarda sin poder escoger motivo sería
+ * dejarlo sin poder reportar.
+ */
+export const listMotivosVehiculo = query({
+  args: { condominioId: v.id("condominios") },
+  handler: async (ctx, args) => {
+    await requireCondominioRole(ctx, args.condominioId, [...GUARD_ROLES]);
+    const propios = await ctx.db
+      .query("guardiaMotivosVehiculo")
+      .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
+      .collect();
+
+    const activos = propios
+      .filter((m) => m.activo)
+      .sort((a, b) => a.orden - b.orden || a.createdAt - b.createdAt);
+
+    return {
+      motivos: activos.length
+        ? activos.map((m) => m.nombre)
+        : [...MOTIVOS_VEHICULO_POR_DEFECTO],
+      /** true cuando la lista sale de la configuración del conjunto. */
+      propios: activos.length > 0,
+    };
+  },
+});
+
+/** Catálogo completo para la administración (incluye los desactivados). */
+export const listMotivosVehiculoAdmin = query({
+  args: { condominioId: v.id("condominios") },
+  handler: async (ctx, args) => {
+    await requireCondominioRole(ctx, args.condominioId, [...ADMIN_ROLES]);
+    const propios = await ctx.db
+      .query("guardiaMotivosVehiculo")
+      .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
+      .collect();
+    return {
+      motivos: propios.sort(
+        (a, b) => a.orden - b.orden || a.createdAt - b.createdAt,
+      ),
+      porDefecto: [...MOTIVOS_VEHICULO_POR_DEFECTO],
+    };
+  },
+});
+
+export const createMotivoVehiculo = mutation({
+  args: {
+    condominioId: v.id("condominios"),
+    nombre: v.string(),
+    orden: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    await requireCondominioRole(ctx, args.condominioId, [...ADMIN_ROLES]);
+    const nombre = args.nombre.trim();
+    if (!nombre) throw new Error("El motivo no puede quedar vacío.");
+    if (nombre.length > 120) throw new Error("El motivo es demasiado largo.");
+
+    /* Sin repetidos: dos motivos iguales en el desplegable solo sirven para
+     * que el guarda dude cuál escoger. */
+    const existentes = await ctx.db
+      .query("guardiaMotivosVehiculo")
+      .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
+      .collect();
+    const igual = (a: string, b: string) =>
+      a.trim().toLowerCase() === b.trim().toLowerCase();
+    if (existentes.some((m) => igual(m.nombre, nombre))) {
+      throw new Error("Ese motivo ya está en la lista.");
+    }
+
+    const now = Date.now();
+    return await ctx.db.insert("guardiaMotivosVehiculo", {
+      condominioId: args.condominioId,
+      nombre,
+      activo: true,
+      orden: args.orden ?? existentes.length + 1,
+      createdAt: now,
+      updatedAt: now,
+    });
+  },
+});
+
+export const updateMotivoVehiculo = mutation({
+  args: {
+    id: v.id("guardiaMotivosVehiculo"),
+    nombre: v.optional(v.string()),
+    activo: v.optional(v.boolean()),
+    orden: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const motivo = await ctx.db.get(args.id);
+    if (!motivo) throw new Error("Motivo no encontrado.");
+    await requireCondominioRole(ctx, motivo.condominioId, [...ADMIN_ROLES]);
+    const nombre = args.nombre?.trim();
+    if (args.nombre !== undefined && !nombre) {
+      throw new Error("El motivo no puede quedar vacío.");
+    }
+    await ctx.db.patch(args.id, {
+      ...(nombre ? { nombre } : {}),
+      ...(args.activo !== undefined ? { activo: args.activo } : {}),
+      ...(args.orden !== undefined ? { orden: args.orden } : {}),
+      updatedAt: Date.now(),
+    });
+  },
+});
+
+export const removeMotivoVehiculo = mutation({
+  args: { id: v.id("guardiaMotivosVehiculo") },
+  handler: async (ctx, args) => {
+    const motivo = await ctx.db.get(args.id);
+    if (!motivo) return;
+    await requireCondominioRole(ctx, motivo.condominioId, [...ADMIN_ROLES]);
+    /* Se borra el motivo, no las novedades: el título de cada reporte ya
+     * lleva el texto copiado, así que un reporte viejo sigue diciendo por
+     * qué se hizo aunque el conjunto cambie de criterio. */
+    await ctx.db.delete(args.id);
+  },
+});
+
+/**
+ * Copia los motivos por defecto al catálogo del conjunto.
+ *
+ * Es el atajo para empezar: la administración los trae, borra los que no le
+ * aplican y agrega los suyos, en vez de escribir cinco desde cero.
+ */
+export const sembrarMotivosVehiculo = mutation({
+  args: { condominioId: v.id("condominios") },
+  handler: async (ctx, args) => {
+    await requireCondominioRole(ctx, args.condominioId, [...ADMIN_ROLES]);
+    const existentes = await ctx.db
+      .query("guardiaMotivosVehiculo")
+      .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
+      .collect();
+    const ya = new Set(existentes.map((m) => m.nombre.trim().toLowerCase()));
+
+    const now = Date.now();
+    let creados = 0;
+    for (const [i, nombre] of MOTIVOS_VEHICULO_POR_DEFECTO.entries()) {
+      if (ya.has(nombre.toLowerCase())) continue;
+      await ctx.db.insert("guardiaMotivosVehiculo", {
+        condominioId: args.condominioId,
+        nombre,
+        activo: true,
+        orden: existentes.length + i + 1,
+        createdAt: now,
+        updatedAt: now,
+      });
+      creados++;
+    }
+    return { creados };
+  },
+});
+
 export const buscarVehiculo = query({
   args: { condominioId: v.id("condominios"), texto: v.string() },
   handler: async (ctx, args) => {

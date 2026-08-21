@@ -488,12 +488,145 @@ function NovedadCard({
   );
 }
 
+/**
+ * Motivos con los que el guarda puede señalar un vehículo.
+ *
+ * Cada conjunto cobra por cosas distintas —unos por parquear en visitantes,
+ * otros ni lo miran—, así que la lista la arma la administración.
+ *
+ * Mientras no configure ninguno, el guarda ve una lista por defecto: un
+ * desplegable vacío lo dejaría sin poder reportar, que es peor que una lista
+ * genérica. Por eso aquí se ofrece traerlos y ajustarlos, en vez de obligar
+ * a escribirlos desde cero.
+ */
+function MotivosVehiculoConfig({ condominioId }: { condominioId: Id<"condominios"> }) {
+  const data = useQuery(api.guardia.listMotivosVehiculoAdmin, { condominioId });
+  const create = useMutation(api.guardia.createMotivoVehiculo);
+  const update = useMutation(api.guardia.updateMotivoVehiculo);
+  const remove = useMutation(api.guardia.removeMotivoVehiculo);
+  const sembrar = useMutation(api.guardia.sembrarMotivosVehiculo);
+
+  const [nombre, setNombre] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const motivos = data?.motivos ?? [];
+  const usandoPorDefecto = data !== undefined && motivos.length === 0;
+
+  async function agregar() {
+    if (!nombre.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await create({ condominioId, nombre });
+      setNombre("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudo agregar.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card className="p-5">
+      <div className="mb-1 flex items-center gap-2">
+        <Car className="h-4 w-4 text-brand" aria-hidden />
+        <h3 className="font-semibold text-foreground">Motivos de vehículo</h3>
+      </div>
+      <p className="mb-4 text-sm text-muted-foreground">
+        Lo que el guarda puede escoger al reportar un carro en la ronda.
+      </p>
+
+      {data === undefined ? (
+        <div className="space-y-2">
+          {[...Array(3)].map((_, i) => <Skeleton key={i} className="h-10 rounded-lg" />)}
+        </div>
+      ) : usandoPorDefecto ? (
+        <div className="rounded-xl border border-dashed border-border p-4">
+          <p className="text-sm text-foreground">
+            Están usándose los motivos por defecto:
+          </p>
+          <ul className="mt-2 space-y-1">
+            {data.porDefecto.map((m) => (
+              <li key={m} className="text-[13px] text-muted-foreground">· {m}</li>
+            ))}
+          </ul>
+          <Button
+            size="sm"
+            className="mt-3"
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true);
+              try {
+                await sembrar({ condominioId });
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+            Traerlos para poder editarlos
+          </Button>
+        </div>
+      ) : (
+        <ul className="mb-3 space-y-2">
+          {motivos.map((m) => (
+            <li
+              key={m._id}
+              className={cn(
+                "flex items-center gap-2 rounded-lg border border-border px-3 py-2",
+                !m.activo && "opacity-55",
+              )}
+            >
+              <span className="min-w-0 flex-1 truncate text-sm text-foreground">
+                {m.nombre}
+              </span>
+              <button
+                type="button"
+                onClick={() => void update({ id: m._id, activo: !m.activo })}
+                className="shrink-0 rounded-md px-2 py-0.5 text-[11px] font-semibold text-muted-foreground hover:bg-accent"
+              >
+                {m.activo ? "Activo" : "Oculto"}
+              </button>
+              <button
+                type="button"
+                onClick={() => void remove({ id: m._id })}
+                aria-label={`Eliminar ${m.nombre}`}
+                className="shrink-0 rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-destructive"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <div className="flex gap-2">
+        <Input
+          value={nombre}
+          onChange={(e) => setNombre(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && void agregar()}
+          placeholder="Ej. Parqueado sobre zona verde"
+        />
+        <Button size="sm" onClick={agregar} disabled={busy || !nombre.trim()}>
+          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+        </Button>
+      </div>
+      {error && <p className="mt-2 text-sm text-destructive">{error}</p>}
+      <p className="mt-2 text-[11px] text-muted-foreground">
+        «Otro» siempre aparece: tiene que haber salida para lo que nadie previó.
+      </p>
+    </Card>
+  );
+}
+
 /* ───────── Configuración (catálogos) ───────── */
 function ConfigTab({ condominioId }: { condominioId: Id<"condominios"> }) {
   return (
     <div className="grid gap-4 lg:grid-cols-2">
       <ChecklistConfig condominioId={condominioId} />
       <ZonasConfig condominioId={condominioId} />
+      <MotivosVehiculoConfig condominioId={condominioId} />
     </div>
   );
 }

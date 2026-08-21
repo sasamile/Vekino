@@ -1515,6 +1515,24 @@ export default defineSchema({
     updatedAt: v.number(),
   }).index("by_condominio", ["condominioId"]),
 
+  /**
+   * Motivos por los que un guarda puede senalar un vehiculo.
+   *
+   * Cada conjunto tiene sus propias reglas —unos cobran por parquear en
+   * visitantes, otros ni lo miran—, asi que la lista la arma la
+   * administracion. Mientras no configure ninguno se usan los de
+   * `MOTIVOS_VEHICULO_POR_DEFECTO`: un desplegable vacio dejaria al guarda
+   * sin poder reportar, y eso es peor que una lista generica.
+   */
+  guardiaMotivosVehiculo: defineTable({
+    condominioId: v.id("condominios"),
+    nombre: v.string(),
+    activo: v.boolean(),
+    orden: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_condominio", ["condominioId"]),
+
   guardiaTurnos: defineTable({
     condominioId: v.id("condominios"),
     guardiaUserId: v.id("users"),
