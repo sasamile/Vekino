@@ -47,15 +47,38 @@ function extractText(pdfBytes: Uint8Array): Promise<string> {
   return extraerTextoConLayout(pdfBytes);
 }
 
-/** True si la página contiene una cabecera de nueva factura. */
-function isInvoiceStart(text: string): boolean {
-  return /CUENTA DE COBRO/i.test(text);
-}
-
 /** Detecta el formato de la factura a partir del texto. */
 type Format = "arboleda" | "cdc";
 function detectFormat(text: string): Format {
   return /DESARROLLO URBANO CIUDAD DEL CAMPO/i.test(text) ? "cdc" : "arboleda";
+}
+
+/** Bloque que identifica la unidad en Ciudad del Campo. */
+const CASA_CDC = /Casa\s+(\S+)\s+MANZANA\s+(\S+)/i;
+
+/**
+ * ¿Esta página ABRE una factura nueva?
+ *
+ * No basta con que diga "CUENTA DE COBRO". En Ciudad del Campo el membrete
+ * —logo, NIT, dirección y ese título— se repite en TODAS las hojas, y las
+ * cuentas de las casas con mora acumulada ocupan hasta cinco. Cortando por
+ * el membrete, cada hoja de continuación se convertía en una factura suelta:
+ *
+ *   · salían como "sin unidad", porque el bloque `Casa N MANZANA M` solo
+ *     aparece en la primera hoja;
+ *   · y —mucho peor— la factura de verdad se quedaba con la primera hoja
+ *     sola, que NO lleva los totales. Las 16 casas más morosas del PDF de
+ *     agosto de 2026 se habrían insertado en $0, con su visto bueno verde,
+ *     mientras $225 millones flotaban en filas huérfanas.
+ *
+ * Lo que abre una factura es que la hoja identifique una unidad. El formato
+ * de Arboleda se deja como estaba: ahí cada factura ocupa una sola página y
+ * cambiar la regla sin un PDF con el que comprobarlo sería adivinar.
+ */
+function isInvoiceStart(text: string): boolean {
+  if (!/CUENTA DE COBRO/i.test(text)) return false;
+  if (detectFormat(text) === "cdc") return CASA_CDC.test(text);
+  return true;
 }
 
 // ─── Parsers ──────────────────────────────────────────────────────────────────
@@ -159,7 +182,7 @@ function parseCdc(text: string): ParsedInvoice {
   const numeroInterno = nroMatch?.[1] ?? "";
   const nombreMatch = text.match(/Nombre\s+(.+?)\s{3,}/);
   const residenteNombre = nombreMatch?.[1]?.trim() ?? "";
-  const casaMatch = text.match(/Casa\s+(\S+)\s+MANZANA\s+(\S+)/i);
+  const casaMatch = text.match(CASA_CDC);
   const casa = casaMatch ? `${casaMatch[1] ?? ""} M${casaMatch[2] ?? ""}` : undefined;
   const unitNum = casaMatch?.[1] ?? "";
   const mesActualMatch = text.match(/\*\s+\d{3}\s+.*?([A-Za-záéíóúñÁÉÍÓÚÑ]+\s*\/\s*\d{4})/);
