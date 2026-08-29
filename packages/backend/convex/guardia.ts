@@ -1,4 +1,5 @@
 import { v } from "convex/values";
+import { internal } from "./_generated/api";
 import { query, mutation } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
@@ -829,6 +830,23 @@ export const recibirPaquete = mutation({
       actorUserId: user._id,
       actorNombre: user.name,
     });
+
+    /* Aviso al teléfono de quien vive ahí. Agendado y no en línea: enviar
+     * sale a internet, y si Expo está caído eso no puede hacer fallar el
+     * registro del paquete, que ya quedó hecho.
+     *
+     * Sin `unidad` resuelta no hay a quién avisarle; el paquete se registra
+     * igual porque la portería no puede quedarse sin recibirlo. */
+    if (unidad) {
+      await ctx.scheduler.runAfter(0, internal.push.avisarAUnidades, {
+        unidadIds: [unidad._id],
+        titulo: "Tienes un paquete",
+        cuerpo: args.remitente?.trim()
+          ? `Llegó a portería un envío de ${args.remitente.trim()}.`
+          : "Llegó un envío a portería.",
+        ruta: "/(app)/paqueteria",
+      });
+    }
     return id;
   },
 });
@@ -1524,6 +1542,20 @@ export const reportarNovedad = mutation({
       actorNombre: user.name,
       turnoId: turno?._id,
     });
+
+    /* Solo se avisa a las casas señaladas. Una novedad de portería o de una
+     * zona común no es asunto de nadie en particular, y mandarla a todo el
+     * conjunto acabaría con que la gente apague las notificaciones. */
+    if (unidades.length > 0) {
+      await ctx.scheduler.runAfter(0, internal.push.avisarAUnidades, {
+        unidadIds: unidades.map((u) => u.unidadId),
+        titulo,
+        cuerpo: vehiculoPlaca
+          ? `Portería reportó el vehículo ${vehiculoPlaca}.`
+          : "Portería registró una novedad de tu casa.",
+        ruta: "/(app)/novedades",
+      });
+    }
     return id;
   },
 });
