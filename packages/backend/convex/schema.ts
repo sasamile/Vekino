@@ -47,6 +47,35 @@ export default defineSchema({
     // abre este portal en vez de usar la API de la pasarela.
     avalPortalUrl: v.optional(v.string()),
 
+    /**
+     * Aporte voluntario de areas comunes (el cupo de parqueadero).
+     *
+     * No se guarda quien pago: eso ya esta en las facturas, en la linea de
+     * concepto "CONT VOLUNTARIA AREAS COMUN". Lo unico que hace falta
+     * configurar es con que se comparan esos montos.
+     *
+     * Va en el condominio y no quemado en el codigo porque las tarifas suben
+     * cada ano con el IPC, y porque el umbral de mora es una decision de
+     * cada administracion. Si Adriana dice que la regla es otra, esto es
+     * cambiar un numero.
+     */
+    aporteVoluntario: v.optional(
+      v.object({
+        /** Tarifa mensual por carro. En Ciudad del Campo, $7.000. */
+        tarifaCarro: v.number(),
+        /** Tarifa mensual por moto. En Ciudad del Campo, $3.000. */
+        tarifaMoto: v.number(),
+        /**
+         * Meses de atraso a partir de los cuales sale en rojo.
+         *
+         * Adriana dijo "60 dias o mas". Dos meses es la lectura directa de
+         * eso con lo que se puede calcular hoy: cuanto debe, dividido entre
+         * la tarifa. Configurable porque la regla exacta esta por confirmar.
+         */
+        mesesParaMora: v.number(),
+      }),
+    ),
+
     // Plan / límites
     subscriptionPlan: v.optional(subscriptionPlanValidator),
     unitLimit: v.optional(v.number()),

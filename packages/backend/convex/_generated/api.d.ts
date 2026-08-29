@@ -9,6 +9,7 @@
  */
 
 import type * as acta from "../acta.js";
+import type * as aporte from "../aporte.js";
 import type * as asambleaInvitados from "../asambleaInvitados.js";
 import type * as asambleaSala from "../asambleaSala.js";
 import type * as asambleas from "../asambleas.js";
@@ -31,6 +32,7 @@ import type * as historial from "../historial.js";
 import type * as hogar from "../hogar.js";
 import type * as http from "../http.js";
 import type * as intervenciones from "../intervenciones.js";
+import type * as lib_aporte from "../lib/aporte.js";
 import type * as lib_brevo from "../lib/brevo.js";
 import type * as lib_cloudflareRealtime from "../lib/cloudflareRealtime.js";
 import type * as lib_codigoAsistencia from "../lib/codigoAsistencia.js";
@@ -97,6 +99,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   acta: typeof acta;
+  aporte: typeof aporte;
   asambleaInvitados: typeof asambleaInvitados;
   asambleaSala: typeof asambleaSala;
   asambleas: typeof asambleas;
@@ -119,6 +122,7 @@ declare const fullApi: ApiFromModules<{
   hogar: typeof hogar;
   http: typeof http;
   intervenciones: typeof intervenciones;
+  "lib/aporte": typeof lib_aporte;
   "lib/brevo": typeof lib_brevo;
   "lib/cloudflareRealtime": typeof lib_cloudflareRealtime;
   "lib/codigoAsistencia": typeof lib_codigoAsistencia;

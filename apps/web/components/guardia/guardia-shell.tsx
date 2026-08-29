@@ -7,6 +7,7 @@ import { Authenticated, Unauthenticated, AuthLoading, useQuery } from "convex/re
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
 import {
+  Car,
   ShieldCheck,
   BookOpenCheck,
   UserCheck,
@@ -32,6 +33,7 @@ const NAV: { label: string; segment: string; icon: LucideIcon }[] = [
   { label: "Paquetería", segment: "paqueteria", icon: Package },
   { label: "Reservas", segment: "reservas", icon: CalendarCheck },
   { label: "Novedades", segment: "novedades", icon: AlertTriangle },
+  { label: "Parqueadero", segment: "parqueadero", icon: Car },
   { label: "Avisos", segment: "avisos", icon: Megaphone },
 ];
 

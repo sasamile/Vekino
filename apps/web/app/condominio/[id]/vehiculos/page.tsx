@@ -5,19 +5,13 @@ import { useParams } from "next/navigation";
 import { usePaginatedQuery, useQuery, useMutation } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import {
-  Car,
-  Bike,
-  Plus,
-  Pencil,
-  Trash2,
-  Loader2,
-  CircleDot,
-  type LucideIcon,
+  Bike, Car, CircleDot, FileSpreadsheet, Loader2, Pencil, Plus, Trash2, type LucideIcon,
 } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
 import { PageContainer } from "@/components/layout/page-container";
 import { PageHeader } from "@/components/layout/page-header";
+import { ReporteAporteModal } from "@/components/vehiculos/reporte-aporte";
 import { useNuevoQuery } from "@/hooks/use-nuevo-query";
 import { StatCard } from "@/components/layout/stat-card";
 import { SearchInput, Input, Select, Textarea } from "@/components/ui/input";
@@ -118,6 +112,7 @@ export default function VehiculosPage() {
   const reclassify = useMutation(api.vehiculos.reclassifyByPlaca);
 
   const [search, setSearch] = useState("");
+  const [aporteAbierto, setAporteAbierto] = useState(false);
   const deferredSearch = useDebounced(search, 280);
   const [tipoFiltro, setTipoFiltro] = useState<"" | Tipo>("");
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -174,6 +169,11 @@ export default function VehiculosPage() {
           <PageHeader
             title="Vehículos"
             description="Registro vehicular del conjunto"
+            action={
+              <Button variant="outline" size="sm" onClick={() => setAporteAbierto(true)}>
+                <FileSpreadsheet className="h-4 w-4" /> Aporte voluntario
+              </Button>
+            }
           />
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex gap-2">
@@ -348,6 +348,9 @@ export default function VehiculosPage() {
 
       {deleteTarget && (
         <DeleteDialog id={deleteTarget} onClose={() => setDeleteTarget(null)} />
+      )}
+      {aporteAbierto && (
+        <ReporteAporteModal condominioId={condominioId} onClose={() => setAporteAbierto(false)} />
       )}
     </PageContainer>
   );
