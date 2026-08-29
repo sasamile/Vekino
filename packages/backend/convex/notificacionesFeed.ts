@@ -11,7 +11,7 @@ import {
  * Bandeja de novedades del residente.
  *
  * El feed se DERIVA de lo que ya existe (facturas, comunicados, documentos,
- * visitantes, asambleas) en vez de escribirse en una tabla aparte. Así no hay
+ * visitantes, paquetes, novedades, asambleas) en vez de escribirse en una tabla aparte. Así no hay
  * que instrumentar cada mutation y la bandeja funciona con el histórico que ya
  * está cargado. El costo es leer varias tablas por consulta, acotado con
  * `take` por fuente y una ventana de tiempo.
@@ -28,7 +28,14 @@ const TOTAL = 40;
 
 type Item = {
   id: string;
-  tipo: "factura" | "comunicado" | "documento" | "visitante" | "asamblea";
+  tipo:
+    | "factura"
+    | "comunicado"
+    | "documento"
+    | "visitante"
+    | "asamblea"
+    | "paquete"
+    | "novedad";
   titulo: string;
   detalle: string | null;
   createdAt: number;
@@ -131,6 +138,76 @@ export const feed = query({
               : "Visitante autorizado",
           createdAt: vis.fechaIngreso ?? vis.createdAt,
           ruta: "/(app)/visitantes",
+        });
+      }
+    }
+
+    // ── Paquetes que llegaron a SUS unidades ────────────────────
+    //
+    // La portería registra el paquete y el residente se entera aquí. Antes
+    // no aparecía en ningún lado: el paquete quedaba en la lista del guarda
+    // y el dueño solo se enteraba si bajaba a preguntar.
+    if (unidadIds.size > 0) {
+      const paquetes = await ctx.db
+        .query("paquetes")
+        .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
+        .order("desc")
+        .take(120);
+      /* Los paquetes viejos no tienen `unidadId`: se guardaba solo el
+       * numero como texto. Para esos se compara por numero, que es lo unico
+       * que hay. Los nuevos ya vienen vinculados. */
+      const misNumeros = new Set(
+        (await Promise.all([...unidadIds].map((id) => ctx.db.get(id))))
+          .filter(Boolean)
+          .map((u) => u!.numero.trim().toLowerCase().replace(/\s+/g, "")),
+      );
+      for (const p of paquetes) {
+        const mio = p.unidadId
+          ? unidadIds.has(p.unidadId)
+          : misNumeros.has(p.unidadNumero.trim().toLowerCase().replace(/\s+/g, ""));
+        if (!mio || p.fechaRecibido < desde) continue;
+        if (items.filter((i) => i.tipo === "paquete").length >= POR_FUENTE) break;
+        const entregado = p.estado === "entregado";
+        items.push({
+          id: p._id,
+          tipo: "paquete",
+          titulo: entregado ? "Paquete entregado" : "Tienes un paquete",
+          detalle: [p.remitente, p.descripcion].filter(Boolean).join(" · ") || null,
+          createdAt: p.fechaEntregado ?? p.fechaRecibido,
+          ruta: "/(app)/paqueteria",
+        });
+      }
+    }
+
+    // ── Novedades que tocan a SUS unidades ──────────────────────
+    //
+    // Solo las que señalan la casa. Una novedad de portería o de una zona
+    // común no es asunto de nadie en particular y llenaría la bandeja de
+    // todo el conjunto con cosas que no le competen.
+    if (unidadIds.size > 0) {
+      const novedades = await ctx.db
+        .query("guardiaNovedadReportes")
+        .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
+        .order("desc")
+        .take(120);
+      for (const n of novedades) {
+        if (n.createdAt < desde) continue;
+        const suyas = (
+          n.unidades ?? (n.unidadId ? [{ unidadId: n.unidadId }] : [])
+        ).some((u) => unidadIds.has(u.unidadId));
+        if (!suyas) continue;
+        if (items.filter((i) => i.tipo === "novedad").length >= POR_FUENTE) break;
+        items.push({
+          id: n._id,
+          tipo: "novedad",
+          titulo: n.titulo,
+          detalle: n.vehiculoPlaca
+            ? `Vehículo ${n.vehiculoPlaca}`
+            : "Novedad reportada por portería",
+          // La hora del hecho, no la del registro: es la que le importa a
+          // quien la recibe.
+          createdAt: n.ocurrioEn ?? n.createdAt,
+          ruta: "/(app)/novedades",
         });
       }
     }

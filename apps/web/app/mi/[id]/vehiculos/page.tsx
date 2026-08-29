@@ -5,7 +5,7 @@ import { useParams } from "next/navigation";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
-import { Car, Plus, Trash2, X, Loader2 } from "lucide-react";
+import { Car, Plus, Archive, ArchiveRestore, X, Loader2 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
@@ -105,29 +105,44 @@ function VehiculoCard({
     marca?: string;
     color?: string;
     unidadNumero: string;
+    archivadoEn?: number;
   };
 }) {
   const remove = useMutation(api.vehiculos.removeMio);
+  const restaurar = useMutation(api.vehiculos.restaurarMio);
   const [busy, setBusy] = useState(false);
   const tipoLabel = TIPOS.find((t) => t.value === veh.tipo)?.label ?? veh.tipo;
+  const archivado = veh.archivadoEn != null;
 
-  async function eliminar() {
-    if (!confirm(`¿Eliminar el vehículo ${veh.placa}?`)) return;
+  /* Retirar no borra: archiva. El vigilante tiene que poder mirar atrás —si
+   * el carro se vendió y alguien pregunta por un reporte de hace meses, la
+   * placa tiene que seguir existiendo—. Y si el vehículo vuelve, se
+   * desarchiva en vez de quedar registrado dos veces. */
+  async function alternar() {
+    if (!archivado && !confirm(`¿Retirar el vehículo ${veh.placa}?`)) return;
     setBusy(true);
     try {
-      await remove({ id: veh._id });
-    } catch {
+      if (archivado) await restaurar({ id: veh._id });
+      else await remove({ id: veh._id });
+    } finally {
       setBusy(false);
     }
   }
 
   return (
-    <Card className="flex items-center gap-4 p-5">
+    <Card className={`flex items-center gap-4 p-5 ${archivado ? "opacity-60" : ""}`}>
       <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-brand/10 text-brand">
         <Car className="h-6 w-6" />
       </div>
       <div className="min-w-0 flex-1">
-        <p className="text-lg font-bold tracking-wide text-foreground">{veh.placa}</p>
+        <p className="text-lg font-bold tracking-wide text-foreground">
+          {veh.placa}
+          {archivado && (
+            <span className="ml-2 rounded-md bg-muted px-2 py-0.5 align-middle text-[11px] font-semibold text-muted-foreground">
+              Retirado
+            </span>
+          )}
+        </p>
         <p className="text-sm text-muted-foreground">
           {tipoLabel}
           {veh.marca ? ` · ${veh.marca}` : ""}
@@ -136,12 +151,19 @@ function VehiculoCard({
         <p className="text-xs text-muted-foreground">Unidad {veh.unidadNumero}</p>
       </div>
       <button
-        onClick={eliminar}
+        onClick={alternar}
         disabled={busy}
-        aria-label="Eliminar vehículo"
-        className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-red-50 hover:text-red-600 disabled:opacity-50 dark:hover:bg-red-950/20"
+        aria-label={archivado ? "Volver a activar" : "Retirar vehículo"}
+        title={archivado ? "Volver a activar" : "Retirar vehículo"}
+        className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
       >
-        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+        {busy ? (
+          <Loader2 className="h-4 w-4 animate-spin" />
+        ) : archivado ? (
+          <ArchiveRestore className="h-4 w-4" />
+        ) : (
+          <Archive className="h-4 w-4" />
+        )}
       </button>
     </Card>
   );

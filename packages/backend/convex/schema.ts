@@ -341,6 +341,15 @@ export default defineSchema({
     marca: v.optional(v.string()),
     color: v.optional(v.string()),
     observaciones: v.optional(v.string()),
+    /**
+     * Cuando se archivo. Un vehiculo archivado no sale en los buscadores.
+     *
+     * Se archiva en vez de borrarse porque el guarda necesita poder mirar
+     * atras: si el carro se vendio y alguien pregunta por un reporte de hace
+     * tres meses, la placa tiene que seguir existiendo. Y si el vehiculo
+     * vuelve, se desarchiva en vez de quedar registrado dos veces.
+     */
+    archivadoEn: v.optional(v.number()),
     legacyId: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),
@@ -445,6 +454,15 @@ export default defineSchema({
       ),
     ),
     requiereAprobacion: v.optional(v.boolean()),
+    /**
+     * Deposito que se deja al reservar y se devuelve si se entrega limpio.
+     *
+     * Va en la zona y no en cada reserva porque es una regla del conjunto
+     * —en Ciudad del Campo son $60.000 para las areas comunes—, no algo que
+     * se negocie reserva por reserva. La reserva copia el monto vigente al
+     * crearse, para que subir la tarifa no cambie lo que ya se pacto.
+     */
+    depositoRequerido: v.optional(v.number()),
     capacidad: v.optional(v.number()),
     descripcion: v.optional(v.string()),
     activa: v.boolean(),
@@ -473,6 +491,15 @@ export default defineSchema({
       v.literal("cancelada")
     ),
     observaciones: v.optional(v.string()),
+    /**
+     * Deposito pactado, copiado de la zona al crear la reserva.
+     *
+     * Copiado y no leido de la zona: si la administracion sube el deposito
+     * en marzo, una reserva hecha en febrero sigue debiendo lo que se
+     * acordo. Lo que el guarda recibe de verdad vive en
+     * `guardiaReservaDepositos`; esto es lo que se esperaba recibir.
+     */
+    depositoRequerido: v.optional(v.number()),
     // Control operativo en portería (guardia).
     ingresoValidadoAt: v.optional(v.number()),
     salidaValidadaAt: v.optional(v.number()),
@@ -1456,6 +1483,15 @@ export default defineSchema({
   // ─────────────────────────────────────────────────────────────
   paquetes: defineTable({
     condominioId: v.id("condominios"),
+    /**
+     * La unidad de verdad, no solo su numero.
+     *
+     * Sin esto no habia forma de avisarle al residente que le llego un
+     * paquete: la porteria guardaba el numero como texto y nadie podia
+     * resolver quien vive ahi. Es opcional porque los paquetes anteriores
+     * no lo traen; para esos se sigue comparando por numero.
+     */
+    unidadId: v.optional(v.id("unidades")),
     unidadNumero: v.string(),
     destinatario: v.optional(v.string()),      // nombre de quien recibe
     remitente: v.optional(v.string()),          // empresa / transportadora
@@ -1626,8 +1662,36 @@ export default defineSchema({
     vehiculoId: v.optional(v.id("vehiculos")),
     vehiculoPlaca: v.optional(v.string()),
     vehiculoDescripcion: v.optional(v.string()), // "Carro · Mazda · Gris"
+
+    /**
+     * Casas a las que toca la novedad. Ninguna, una o varias.
+     *
+     * Varias porque hay novedades que son de mas de una casa —una gotera
+     * entre dos apartamentos, un ruido que afecta a la manzana— y obligar a
+     * abrir un reporte por casa hacia que el guarda abriera uno solo y
+     * escribiera el resto en la descripcion, donde no se puede buscar.
+     *
+     * Ninguna porque tampoco puede ser obligatorio: la mayoria de las
+     * novedades son de la porteria o de una zona comun.
+     *
+     * El numero va copiado junto al id por lo mismo de siempre: el reporte
+     * tiene que seguir diciendo a que casa se referia.
+     */
+    unidades: v.optional(
+      v.array(v.object({ unidadId: v.id("unidades"), numero: v.string() })),
+    ),
+    /** Legado: la unica unidad de antes de que se aceptaran varias. */
     unidadId: v.optional(v.id("unidades")),
     unidadNumero: v.optional(v.string()),
+
+    /**
+     * Cuando OCURRIO, que no es cuando se registro.
+     *
+     * El guarda ve algo a las 2 a. m. y lo escribe cuando vuelve a la
+     * caseta. `createdAt` guarda lo segundo; para cobrar y para el acta
+     * importa lo primero. Si no se indica, se asume que fue al registrar.
+     */
+    ocurrioEn: v.optional(v.number()),
 
     /**
      * Evidencia fotografica. Varias, no una.

@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useParams } from "next/navigation";
 import { useQuery, useMutation } from "convex/react";
 import {
-  AlertTriangle, Plus, Loader2, Paperclip, FileText, Car,
+  AlertTriangle, Plus, Loader2, Paperclip, FileText, Car, Home, Clock,
 } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
@@ -19,6 +19,7 @@ import { PageHeader } from "@/components/layout/page-header";
 import { cn } from "@/lib/utils";
 import { useUploadToS3 } from "@/hooks/use-upload-s3";
 import { NovedadVehiculoModal } from "@/components/guardia/novedad-vehiculo";
+import { SelectorUnidades, type UnidadElegida } from "@/components/guardia/selector-unidades";
 
 type Prioridad = "baja" | "media" | "alta";
 
@@ -83,14 +84,18 @@ export default function GuardiaNovedadesPage() {
                         Prioridad {meta.label}
                       </span>
                     </div>
-                    {n.vehiculoPlaca && (
-                      <div className="mt-1.5 flex flex-wrap items-center gap-2">
-                        <span className="inline-flex items-center gap-1.5 rounded-md bg-muted px-2 py-0.5 font-mono text-[12px] font-bold tracking-wider text-foreground">
-                          <Car className="h-3 w-3" aria-hidden /> {n.vehiculoPlaca}
-                        </span>
-                        {n.unidadNumero && (
-                          <span className="text-xs text-muted-foreground">Unidad {n.unidadNumero}</span>
+                    {(n.vehiculoPlaca || n.unidades.length > 0) && (
+                      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                        {n.vehiculoPlaca && (
+                          <span className="inline-flex items-center gap-1.5 rounded-md bg-muted px-2 py-0.5 font-mono text-[12px] font-bold tracking-wider text-foreground">
+                            <Car className="h-3 w-3" aria-hidden /> {n.vehiculoPlaca}
+                          </span>
                         )}
+                        {n.unidades.map((u) => (
+                          <span key={u.unidadId} className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-0.5 text-[12px] text-foreground">
+                            <Home className="h-3 w-3 text-muted-foreground" aria-hidden /> {u.numero}
+                          </span>
+                        ))}
                       </div>
                     )}
                     <p className="mt-1 whitespace-pre-line text-sm text-foreground">{n.descripcion}</p>
@@ -107,7 +112,12 @@ export default function GuardiaNovedadesPage() {
                     <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
                       <span>{n.reportadoPorNombre}</span>
                       <span>·</span>
-                      <span>{fmtFechaHora(n.createdAt)}</span>
+                      <span>{fmtFechaHora(n.ocurrioEn)}</span>
+                      {n.ocurrioEn !== n.createdAt && (
+                        <span className="text-muted-foreground/70">
+                          (registrada {fmtFechaHora(n.createdAt)})
+                        </span>
+                      )}
                       {n.archivoUrl && (
                         <a href={n.archivoUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 font-medium text-brand hover:underline">
                           <Paperclip className="h-3 w-3" /> {n.archivoNombre ?? "Adjunto"}
@@ -138,6 +148,13 @@ function NovedadModal({ condominioId, onClose }: { condominioId: Id<"condominios
   const [prioridad, setPrioridad] = useState<Prioridad>("media");
   const [descripcion, setDescripcion] = useState("");
   const [archivo, setArchivo] = useState<File | null>(null);
+  const [unidades, setUnidades] = useState<UnidadElegida[]>([]);
+  /* Arranca en la hora actual, que es lo correcto la mayoría de las veces.
+     Se cambia cuando el guarda escribe algo que vio hace rato. */
+  const [hora, setHora] = useState(() => {
+    const d = new Date();
+    return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -156,9 +173,23 @@ function NovedadModal({ condominioId, onClose }: { condominioId: Id<"condominios
         );
         archivoUrl = uploaded.url;
       }
+      /* La hora se interpreta sobre el día de hoy. Si es mayor que ahora, se
+         asume que fue ayer: a las 00:20 el guarda que reporta algo de las
+         23:50 se refiere a la noche anterior, no a dentro de 23 horas. */
+      let ocurrioEn: number | undefined;
+      const [hh, mm] = hora.split(":").map(Number);
+      if (Number.isFinite(hh) && Number.isFinite(mm)) {
+        const d = new Date();
+        d.setHours(hh!, mm!, 0, 0);
+        if (d.getTime() > Date.now() + 60_000) d.setDate(d.getDate() - 1);
+        ocurrioEn = d.getTime();
+      }
+
       await reportar({
         condominioId, titulo, descripcion, prioridad,
         archivoUrl, archivoNombre: archivo?.name,
+        unidadIds: unidades.map((u) => u._id),
+        ocurrioEn,
       });
       onClose();
     } catch (e) {
@@ -194,6 +225,27 @@ function NovedadModal({ condominioId, onClose }: { condominioId: Id<"condominios
               <option value="media">Media</option>
               <option value="alta">Alta</option>
             </Select>
+          </div>
+        </div>
+        <div className="grid grid-cols-3 gap-3">
+          <div className="col-span-2 space-y-1.5">
+            <label className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+              <Home className="h-3.5 w-3.5" /> Casas afectadas (opcional)
+            </label>
+            <SelectorUnidades
+              condominioId={condominioId}
+              elegidas={unidades}
+              onChange={setUnidades}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+              <Clock className="h-3.5 w-3.5" /> Hora del hecho
+            </label>
+            <Input type="time" value={hora} onChange={(e) => setHora(e.target.value)} />
+            <p className="text-[11px] text-muted-foreground">
+              Cuándo pasó, no cuándo lo escribes.
+            </p>
           </div>
         </div>
         <div className="space-y-1.5">

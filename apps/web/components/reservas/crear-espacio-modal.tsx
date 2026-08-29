@@ -52,6 +52,7 @@ export function CrearEspacioModal({
   const [precioPorHora, setPrecioPorHora] = useState("");
   const [precioPorDia, setPrecioPorDia] = useState("");
   const [requiereAprobacion, setRequiereAprobacion] = useState(true);
+  const [deposito, setDeposito] = useState("");
   const [porDia, setPorDia] =
     useState<Record<number, DiaHorarioEstado>>(defaultPorDiaLaboral);
   const [horariosError, setHorariosError] = useState<string | undefined>();
@@ -112,6 +113,9 @@ export function CrearEspacioModal({
         precioPorDia: diaN != null && !Number.isNaN(diaN) ? diaN : undefined,
         horariosPorDia: horarios,
         requiereAprobacion,
+        depositoRequerido: deposito.trim() && !Number.isNaN(Number(deposito))
+          ? Number(deposito)
+          : undefined,
       });
       onClose();
     } catch (e) {
@@ -252,6 +256,25 @@ export function CrearEspacioModal({
               disabled={busy}
             />
           </div>
+        </div>
+
+        <div className="space-y-1.5">
+          <label className="block text-xs font-medium text-foreground">
+            Depósito (COP)
+          </label>
+          <Input
+            type="number"
+            min={0}
+            step={1000}
+            value={deposito}
+            onChange={(e) => setDeposito(e.target.value)}
+            placeholder="Opcional — ej. 60000"
+            disabled={busy}
+          />
+          <p className="text-[11px] text-muted-foreground">
+            Lo que se deja al reservar y se devuelve si el espacio se entrega
+            bien. La portería lo registra al recibirlo.
+          </p>
         </div>
         <p className="-mt-2 text-xs text-muted-foreground">
           Puedes definir solo uno o ambos. El cobro al reservar usa la tarifa que

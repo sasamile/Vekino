@@ -98,6 +98,8 @@ export const createZona = mutation({
     precioPorMes: v.optional(v.number()),
     horariosPorDia: v.optional(v.array(horarioDiaValidator)),
     requiereAprobacion: v.optional(v.boolean()),
+    /** Depósito que se deja al reservar y se devuelve si se entrega bien. */
+    depositoRequerido: v.optional(v.number()),
     capacidad: v.optional(v.number()),
     descripcion: v.optional(v.string()),
   },
@@ -133,12 +135,56 @@ export const createZona = mutation({
       precioPorMes,
       horariosPorDia: horarios.length > 0 ? horarios : undefined,
       requiereAprobacion: args.requiereAprobacion ?? true,
+      depositoRequerido: args.depositoRequerido,
       capacidad: args.capacidad,
       descripcion: args.descripcion?.trim() || undefined,
       activa: true,
       createdAt: now,
       updatedAt: now,
     });
+  },
+});
+
+/**
+ * Edita una zona comun ya creada.
+ *
+ * Hacia falta: hasta ahora una zona solo se podia crear o desactivar, asi
+ * que para ponerle el deposito a una que ya existia habria que borrarla y
+ * volverla a crear —perdiendo el historial de reservas que cuelga de ella.
+ */
+export const updateZona = mutation({
+  args: {
+    id: v.id("zonasComunes"),
+    nombre: v.optional(v.string()),
+    tipo: v.optional(tipoZonaValidator),
+    unidadTiempo: v.optional(unidadTiempoValidator),
+    precioPorHora: v.optional(v.number()),
+    precioPorDia: v.optional(v.number()),
+    precioPorMes: v.optional(v.number()),
+    requiereAprobacion: v.optional(v.boolean()),
+    depositoRequerido: v.optional(v.number()),
+    capacidad: v.optional(v.number()),
+    descripcion: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const zona = await ctx.db.get(args.id);
+    if (!zona) throw new Error("Zona no encontrada.");
+    await requireCondominioRole(ctx, zona.condominioId, [...ADMIN_ROLES]);
+
+    const { id, ...campos } = args;
+    const nombre = campos.nombre?.trim();
+    if (campos.nombre !== undefined && !nombre) {
+      throw new Error("El nombre no puede quedar vacio.");
+    }
+
+    /* Solo se tocan los campos que vinieron. `undefined` significa "no lo
+     * cambies", no "borralo": pasar el objeto entero borraria el precio de
+     * una zona por editarle el nombre. */
+    const patch: Record<string, unknown> = { updatedAt: Date.now() };
+    for (const [k, valor] of Object.entries(campos)) {
+      if (valor !== undefined) patch[k] = k === "nombre" ? nombre : valor;
+    }
+    await ctx.db.patch(id, patch);
   },
 });
 
@@ -276,6 +322,9 @@ export const create = mutation({
       horaFin: args.horaFin,
       estado: "pendiente",
       observaciones: args.observaciones?.trim(),
+      /* Copiado, no leído de la zona: si la administración sube el depósito
+       * en marzo, una reserva de febrero sigue debiendo lo pactado. */
+      depositoRequerido: zona.depositoRequerido,
       createdAt: now,
       updatedAt: now,
     });
@@ -310,6 +359,78 @@ export const remove = mutation({
 // ─────────────────────────────────────────────────────────────
 
 /** Reservas de las unidades del usuario autenticado (más recientes primero). */
+/**
+ * Reporte de reservas de un rango de fechas, con el estado del deposito.
+ *
+ * Cruza tres cosas que hoy viven separadas: la reserva, lo que la porteria
+ * recibio de deposito y si lo devolvio. Sin ese cruce la administracion no
+ * puede responder la pregunta que de verdad hace —"a quien le queda
+ * pendiente devolverle el deposito"— sin mirar dos pantallas.
+ */
+export const reporte = query({
+  args: {
+    condominioId: v.id("condominios"),
+    /** "2026-08-01". Inclusive. */
+    desde: v.string(),
+    /** "2026-08-31". Inclusive. */
+    hasta: v.string(),
+  },
+  handler: async (ctx, args) => {
+    await requireCondominioRole(ctx, args.condominioId, [...ADMIN_ROLES]);
+
+    const reservas = await ctx.db
+      .query("reservas")
+      .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
+      .collect();
+
+    /* Las fechas son "AAAA-MM-DD", asi que comparar como texto ya ordena
+     * bien. No hace falta convertirlas ni preocuparse por zonas horarias. */
+    const enRango = reservas
+      .filter((r) => r.fecha >= args.desde && r.fecha <= args.hasta)
+      .sort((a, b) => a.fecha.localeCompare(b.fecha) || a.horaInicio.localeCompare(b.horaInicio));
+
+    const filas = await Promise.all(
+      enRango.map(async (r) => {
+        const dep = await ctx.db
+          .query("guardiaReservaDepositos")
+          .withIndex("by_reserva", (q) => q.eq("reservaId", r._id))
+          .first();
+        return {
+          _id: r._id,
+          fecha: r.fecha,
+          horaInicio: r.horaInicio,
+          horaFin: r.horaFin,
+          zonaNombre: r.zonaNombre,
+          unidadNumero: r.unidadNumero,
+          solicitanteNombre: r.solicitanteNombre,
+          estado: r.estado,
+          depositoRequerido: r.depositoRequerido ?? null,
+          depositoRecibido: dep?.monto ?? null,
+          depositoEstado: dep?.estado ?? null,
+          ingresoValidadoAt: r.ingresoValidadoAt ?? null,
+          salidaValidadaAt: r.salidaValidadaAt ?? null,
+        };
+      }),
+    );
+
+    /* Los totales se calculan aqui y no en el navegador: son los numeros que
+     * la administracion va a cuadrar contra la caja. */
+    const cobrables = filas.filter((f) => f.estado !== "cancelada" && f.estado !== "rechazada");
+    return {
+      filas,
+      resumen: {
+        total: filas.length,
+        aprobadas: filas.filter((f) => f.estado === "aprobada").length,
+        canceladas: filas.filter((f) => f.estado === "cancelada").length,
+        depositoEsperado: cobrables.reduce((s, f) => s + (f.depositoRequerido ?? 0), 0),
+        depositoRecibido: cobrables.reduce((s, f) => s + (f.depositoRecibido ?? 0), 0),
+        depositosSinDevolver: filas.filter((f) => f.depositoEstado === "registrado").length,
+        depositosRetenidos: filas.filter((f) => f.depositoEstado === "no_devuelto").length,
+      },
+    };
+  },
+});
+
 export const listMias = query({
   args: { condominioId: v.id("condominios") },
   handler: async (ctx, args) => {
@@ -370,6 +491,9 @@ export const createMia = mutation({
       horaFin: args.horaFin,
       estado: "pendiente",
       observaciones: args.observaciones?.trim(),
+      /* Copiado, no leído de la zona: si la administración sube el depósito
+       * en marzo, una reserva de febrero sigue debiendo lo pactado. */
+      depositoRequerido: zona.depositoRequerido,
       createdAt: now,
       updatedAt: now,
     });
@@ -577,6 +701,9 @@ export const createFromBot = internalMutation({
       horaFin: args.horaFin,
       estado: "pendiente",
       observaciones: args.observaciones?.trim(),
+      /* Copiado, no leído de la zona: si la administración sube el depósito
+       * en marzo, una reserva de febrero sigue debiendo lo pactado. */
+      depositoRequerido: zona.depositoRequerido,
       createdAt: now,
       updatedAt: now,
     });

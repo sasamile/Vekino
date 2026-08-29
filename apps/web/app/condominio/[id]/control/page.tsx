@@ -414,14 +414,19 @@ function NovedadCard({
         )}
       </div>
 
-      {n.vehiculoPlaca && (
+      {(n.vehiculoPlaca || n.unidades.length > 0) && (
         <div className="mt-2 flex flex-wrap items-center gap-2">
-          <span className="inline-flex items-center gap-1.5 rounded-md bg-muted px-2 py-1 font-mono text-[13px] font-bold tracking-wider text-foreground">
-            <Car className="h-3.5 w-3.5" aria-hidden /> {n.vehiculoPlaca}
-          </span>
-          {n.unidadNumero ? (
-            <span className="text-sm font-medium text-foreground">Unidad {n.unidadNumero}</span>
-          ) : (
+          {n.vehiculoPlaca && (
+            <span className="inline-flex items-center gap-1.5 rounded-md bg-muted px-2 py-1 font-mono text-[13px] font-bold tracking-wider text-foreground">
+              <Car className="h-3.5 w-3.5" aria-hidden /> {n.vehiculoPlaca}
+            </span>
+          )}
+          {n.unidades.map((u) => (
+            <span key={u.unidadId} className="text-sm font-medium text-foreground">
+              Casa {u.numero}
+            </span>
+          ))}
+          {n.vehiculoPlaca && n.unidades.length === 0 && (
             <span className="text-sm text-amber-600 dark:text-amber-400">Placa no registrada</span>
           )}
           {n.vehiculoDescripcion && (
@@ -452,7 +457,12 @@ function NovedadCard({
       <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
         <span>{n.reportadoPorNombre}</span>
         <span>·</span>
-        <span>{fmtFechaHora(n.createdAt)}</span>
+        <span>Ocurrió {fmtFechaHora(n.ocurrioEn)}</span>
+        {n.ocurrioEn !== n.createdAt && (
+          <span className="text-muted-foreground/70">
+            · registrada {fmtFechaHora(n.createdAt)}
+          </span>
+        )}
         {n.archivoUrl && (
           <a href={n.archivoUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 font-medium text-brand hover:underline">
             <Paperclip className="h-3 w-3" /> {n.archivoNombre ?? "Adjunto"}
@@ -463,11 +473,13 @@ function NovedadCard({
       {/* Solo se ofrece cobrar cuando hay a quién: sin unidad no hay a quién
           pasarle el cargo, y un botón que no lleva a nada confunde más que
           ayudar. */}
-      {n.unidadNumero && estado === "pendiente" && (
+      {n.unidades.length > 0 && estado === "pendiente" && (
         <div className="mt-3 flex flex-wrap gap-2 border-t border-border pt-3">
           <Button size="sm" disabled={busy} onClick={() => marcar("cobrada")}>
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-            Marcar cobrada a la unidad {n.unidadNumero}
+            Marcar cobrada a {n.unidades.length === 1
+              ? `la casa ${n.unidades[0]!.numero}`
+              : `${n.unidades.length} casas`}
           </Button>
           <Button variant="ghost" size="sm" disabled={busy} onClick={() => marcar("descartada")}>
             Descartar

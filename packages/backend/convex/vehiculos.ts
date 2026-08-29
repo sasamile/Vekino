@@ -68,7 +68,12 @@ export const listByCondominio = query({
         unidadNumero: unidadMap.get(v.unidadId) ?? "—",
         duenoNombre: duenoMap.get(v.unidadId) ?? null,
       }))
-      .sort((a, b) => a.placa.localeCompare(b.placa));
+      // Los archivados al final; el resto por placa.
+      .sort(
+        (a, b) =>
+          Number(!!a.archivadoEn) - Number(!!b.archivadoEn) ||
+          a.placa.localeCompare(b.placa),
+      );
   },
 });
 
@@ -276,6 +281,8 @@ export const listMios = query({
       .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
       .collect();
 
+    /* Los archivados se devuelven marcados, no se esconden: el dueño tiene
+     * que poder ver lo que retiró y volver a activarlo. */
     const mios = vehiculos.filter((veh) => unidadIds.has(veh.unidadId));
     const unidades = await Promise.all([...unidadIds].map((id) => ctx.db.get(id)));
     const numeros = new Map(
@@ -366,6 +373,18 @@ export const updateMio = mutation({
 });
 
 /** El propietario elimina un vehículo de SUS unidades. */
+/**
+ * El propietario retira un vehículo suyo. NO lo borra: lo archiva.
+ *
+ * Borrarlo dejaría cojo al vigilante. Los reportes de portería copian la
+ * placa, así que un reporte viejo no se pierde — pero la placa sí
+ * desaparecería del buscador, y si alguien pregunta por un caso de hace tres
+ * meses no habría cómo llegar al vehículo. Archivado deja de aparecer donde
+ * estorba y sigue existiendo donde hace falta.
+ *
+ * De paso resuelve el caso contrario: si el carro vuelve, se desarchiva en
+ * vez de quedar registrado dos veces con la misma placa.
+ */
 export const removeMio = mutation({
   args: { id: v.id("vehiculos") },
   handler: async (ctx, args) => {
@@ -374,6 +393,25 @@ export const removeMio = mutation({
     if (!veh) throw new Error("Vehículo no encontrado.");
     const unidadIds = await misUnidadIds(ctx, user._id, veh.condominioId);
     if (!unidadIds.has(veh.unidadId)) throw new Error("No autorizado.");
-    await ctx.db.delete(args.id);
+    await ctx.db.patch(args.id, {
+      archivadoEn: Date.now(),
+      updatedAt: Date.now(),
+    });
+  },
+});
+
+/** Vuelve a poner en circulación un vehículo archivado. */
+export const restaurarMio = mutation({
+  args: { id: v.id("vehiculos") },
+  handler: async (ctx, args) => {
+    const user = await requireAppUser(ctx);
+    const veh = await ctx.db.get(args.id);
+    if (!veh) throw new Error("Vehículo no encontrado.");
+    const unidadIds = await misUnidadIds(ctx, user._id, veh.condominioId);
+    if (!unidadIds.has(veh.unidadId)) throw new Error("No autorizado.");
+    await ctx.db.patch(args.id, {
+      archivadoEn: undefined,
+      updatedAt: Date.now(),
+    });
   },
 });

@@ -792,9 +792,22 @@ export const recibirPaquete = mutation({
     const { user } = await requireCondominioRole(ctx, args.condominioId, [...GUARD_ROLES]);
     const unidadNumero = args.unidadNumero.trim();
     if (!unidadNumero) throw new Error("La unidad es obligatoria.");
+
+    /* Se resuelve la unidad para poder avisarle a quien vive ahi. Si no
+     * cuadra con ninguna no se bloquea el registro —la porteria no puede
+     * quedarse sin recibir un paquete porque el numero venga raro—, pero el
+     * aviso no saldra y por eso conviene que el guarda escoja de la lista. */
+    const unidades = await ctx.db
+      .query("unidades")
+      .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
+      .collect();
+    const norm = (x: string) => x.trim().toLowerCase().replace(/\s+/g, "");
+    const unidad = unidades.find((u) => norm(u.numero) === norm(unidadNumero));
+
     const now = Date.now();
     const id = await ctx.db.insert("paquetes", {
       condominioId: args.condominioId,
+      unidadId: unidad?._id,
       unidadNumero,
       tipo: args.tipo,
       remitente: args.remitente?.trim() || undefined,
@@ -1261,6 +1274,37 @@ export const sembrarMotivosVehiculo = mutation({
   },
 });
 
+/**
+ * Busca una casa por numero para senalarla en una novedad.
+ *
+ * Igual que `buscarVehiculo`: el guarda no tiene permiso sobre el modulo de
+ * unidades —no debe poder listar el censo del conjunto— pero si necesita
+ * resolver un numero cuando esta escribiendo un reporte.
+ */
+export const buscarUnidad = query({
+  args: { condominioId: v.id("condominios"), texto: v.string() },
+  handler: async (ctx, args) => {
+    await requireCondominioRole(ctx, args.condominioId, [...GUARD_ROLES]);
+    const aguja = args.texto.trim().toLowerCase();
+    if (aguja.length < 1) return [];
+
+    const unidades = await ctx.db
+      .query("unidades")
+      .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
+      .collect();
+
+    return unidades
+      .filter((u) =>
+        `${u.torre ?? ""} ${u.numero}`.toLowerCase().includes(aguja),
+      )
+      .sort((a, b) =>
+        a.numero.localeCompare(b.numero, undefined, { numeric: true }),
+      )
+      .slice(0, 15)
+      .map((u) => ({ _id: u._id, numero: u.numero, torre: u.torre ?? null }));
+  },
+});
+
 export const buscarVehiculo = query({
   args: { condominioId: v.id("condominios"), texto: v.string() },
   handler: async (ctx, args) => {
@@ -1278,8 +1322,11 @@ export const buscarVehiculo = query({
       .collect();
 
     const coinciden = vehiculos
-      .filter((v) =>
-        v.placa.replace(/[^a-z0-9]/gi, "").toUpperCase().includes(aguja),
+      .filter(
+        (v) =>
+          // Los archivados no se ofrecen: el carro ya no esta en el conjunto.
+          !v.archivadoEn &&
+          v.placa.replace(/[^a-z0-9]/gi, "").toUpperCase().includes(aguja),
       )
       .slice(0, 12);
 
@@ -1354,6 +1401,16 @@ export const listNovedadReportes = query({
         /* Las fotos pasan por el mismo resolvedor que el adjunto: hoy son
          * URLs de S3 y salen tal cual, pero si alguna quedara guardada como
          * archivo de Convex igual se resolvería sola. */
+        /* Las novedades viejas traen una sola unidad en los campos sueltos.
+         * Se normalizan aquí para que la interfaz vea siempre un arreglo y
+         * no tenga que conocer las dos formas. */
+        unidades:
+          n.unidades ??
+          (n.unidadId && n.unidadNumero
+            ? [{ unidadId: n.unidadId, numero: n.unidadNumero }]
+            : []),
+        /* Sin hora del hecho, ocurrió cuando se registró. */
+        ocurrioEn: n.ocurrioEn ?? n.createdAt,
         fotos: n.fotos
           ? (
               await Promise.all(
@@ -1380,6 +1437,10 @@ export const reportarNovedad = mutation({
     archivoNombre: v.optional(v.string()),
     /** Vehículo señalado (mal parqueo, bloqueo, placa desconocida…). */
     vehiculoId: v.optional(v.id("vehiculos")),
+    /** Casas afectadas. Ninguna, una o varias — nunca obligatorio. */
+    unidadIds: v.optional(v.array(v.id("unidades"))),
+    /** Cuándo ocurrió, si no fue ahora mismo. */
+    ocurrioEn: v.optional(v.number()),
     /** Evidencia. Varias fotos: una sola casi nunca prueba nada. */
     fotos: v.optional(
       v.array(v.object({ url: v.string(), nombre: v.optional(v.string()) })),
@@ -1397,8 +1458,17 @@ export const reportarNovedad = mutation({
      * propietario reclama meses después. */
     let vehiculoPlaca: string | undefined;
     let vehiculoDescripcion: string | undefined;
-    let unidadId: Id<"unidades"> | undefined;
-    let unidadNumero: string | undefined;
+    /* Se acumulan por id para no repetir una casa que llegue por dos vías
+     * (señalada a mano y además dueña del vehículo). */
+    const porUnidad = new Map<string, { unidadId: Id<"unidades">; numero: string }>();
+
+    const sumarUnidad = async (id: Id<"unidades">) => {
+      if (porUnidad.has(id)) return;
+      const u = await ctx.db.get(id);
+      if (!u || u.condominioId !== args.condominioId) return;
+      porUnidad.set(id, { unidadId: id, numero: u.numero });
+    };
+
     if (args.vehiculoId) {
       const veh = await ctx.db.get(args.vehiculoId);
       if (!veh || veh.condominioId !== args.condominioId) {
@@ -1407,9 +1477,14 @@ export const reportarNovedad = mutation({
       vehiculoPlaca = veh.placa;
       vehiculoDescripcion =
         [veh.tipo, veh.marca, veh.color].filter(Boolean).join(" · ") || undefined;
-      unidadId = veh.unidadId;
-      unidadNumero = (await ctx.db.get(veh.unidadId))?.numero;
+      // La casa del vehículo entra sola: es la que responde por el carro.
+      await sumarUnidad(veh.unidadId);
     }
+    for (const id of args.unidadIds ?? []) await sumarUnidad(id);
+
+    const unidades = [...porUnidad.values()].sort((a, b) =>
+      a.numero.localeCompare(b.numero, undefined, { numeric: true }),
+    );
 
     const turno = await turnoAbierto(ctx, args.condominioId);
     const now = Date.now();
@@ -1425,8 +1500,8 @@ export const reportarNovedad = mutation({
       vehiculoId: args.vehiculoId,
       vehiculoPlaca,
       vehiculoDescripcion,
-      unidadId,
-      unidadNumero,
+      unidades: unidades.length ? unidades : undefined,
+      ocurrioEn: args.ocurrioEn,
       fotos: args.fotos?.length ? args.fotos : undefined,
       // Nace pendiente: reportar no es cobrar, eso lo decide la administración.
       gestion: "pendiente",
@@ -1438,9 +1513,11 @@ export const reportarNovedad = mutation({
       condominioId: args.condominioId,
       modulo: "novedades",
       tipo: `Reporte ${args.prioridad.toUpperCase()}`,
-      // Con vehículo la minuta apunta a la unidad, no a "Portería": es lo
-      // que hace que el evento se pueda encontrar buscando por la unidad.
-      unidad: unidadNumero ?? "Portería",
+      /* La minuta apunta a las casas afectadas, no a "Portería": es lo que
+       * hace que el evento aparezca al buscar por la unidad. */
+      unidad: unidades.length
+        ? unidades.map((u) => u.numero).join(", ")
+        : "Portería",
       resumen: `${titulo}: ${descripcion.slice(0, 140)}${descripcion.length > 140 ? "…" : ""}`,
       estado: "abierto",
       actorUserId: user._id,

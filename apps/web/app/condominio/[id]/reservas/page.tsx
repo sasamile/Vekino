@@ -5,7 +5,7 @@ import { useParams } from "next/navigation";
 import { usePaginatedQuery, useQuery, useMutation } from "convex/react";
 import {
   CalendarCheck, Plus, Trash2, Loader2, CheckCircle, XCircle,
-  Settings, MapPin, Clock,
+  Settings, MapPin, Clock, FileSpreadsheet,
 } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
@@ -23,6 +23,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn, cop } from "@/lib/utils";
 import { CrearEspacioModal } from "@/components/reservas/crear-espacio-modal";
+import { ReporteReservasModal } from "@/components/reservas/reporte-reservas";
 
 const PAGE_SIZE = 30;
 
@@ -93,6 +94,7 @@ export default function ReservasPage() {
     { initialNumItems: PAGE_SIZE },
   );
 
+  const [reporteAbierto, setReporteAbierto] = useState(false);
   const loading = status === "LoadingFirstPage";
   const canLoadMore = status === "CanLoadMore";
   const loadingMore = status === "LoadingMore";
@@ -127,6 +129,11 @@ export default function ReservasPage() {
         <PageHeader
           title="Reservas"
           description="Reservas de zonas comunes del conjunto"
+          action={
+            <Button variant="outline" size="sm" onClick={() => setReporteAbierto(true)}>
+              <FileSpreadsheet className="h-4 w-4" /> Reporte
+            </Button>
+          }
         />
 
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
@@ -297,6 +304,9 @@ export default function ReservasPage() {
         <ZonasModal condominioId={condominioId} zonas={zonas ?? []} onClose={() => setZonasOpen(false)} />
       )}
       {deleteTarget && <DeleteDialog id={deleteTarget} onClose={() => setDeleteTarget(null)} />}
+      {reporteAbierto && (
+        <ReporteReservasModal condominioId={condominioId} onClose={() => setReporteAbierto(false)} />
+      )}
     </PageContainer>
   );
 }
