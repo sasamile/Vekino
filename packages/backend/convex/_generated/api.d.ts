@@ -28,6 +28,7 @@ import type * as facturas from "../facturas.js";
 import type * as files from "../files.js";
 import type * as guardia from "../guardia.js";
 import type * as historial from "../historial.js";
+import type * as hogar from "../hogar.js";
 import type * as http from "../http.js";
 import type * as intervenciones from "../intervenciones.js";
 import type * as lib_brevo from "../lib/brevo.js";
@@ -113,6 +114,7 @@ declare const fullApi: ApiFromModules<{
   files: typeof files;
   guardia: typeof guardia;
   historial: typeof historial;
+  hogar: typeof hogar;
   http: typeof http;
   intervenciones: typeof intervenciones;
   "lib/brevo": typeof lib_brevo;

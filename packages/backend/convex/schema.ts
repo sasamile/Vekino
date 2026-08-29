@@ -197,6 +197,32 @@ export default defineSchema({
     condominioId: v.id("condominios"), // desnormalizado para filtros por tenant
     vinculo: vinculoUnidadValidator,
     esPrincipal: v.boolean(), // unidad principal del usuario
+
+    /**
+     * Vigencia del vinculo. Para los arrendatarios, el periodo del contrato.
+     *
+     * Un arrendatario no deberia seguir viendo las facturas, los visitantes
+     * ni las asambleas de una casa donde ya no vive. Con `vigenciaHasta`
+     * puesta, el acceso se corta solo el dia que se vence: `misUnidadIds` no
+     * devuelve la unidad y con eso deja de ver todo lo que cuelga de ella.
+     *
+     * Se filtra al leer y no con un cron a proposito. Un cron se puede caer,
+     * atrasar o no haber corrido todavia, y el dia que eso pase alguien
+     * estaria viendo la casa de otro. Filtrando al leer, el corte es exacto.
+     *
+     * Sin fechas el vinculo es indefinido, que es lo normal para el
+     * propietario y para quien vive con el.
+     */
+    vigenciaDesde: v.optional(v.number()),
+    vigenciaHasta: v.optional(v.number()),
+
+    /**
+     * Quien creo el vinculo, cuando no fue la administracion.
+     *
+     * El propietario puede dar de alta a los suyos, asi que hace falta poder
+     * responder quien metio a alguien a una casa.
+     */
+    creadoPorUserId: v.optional(v.id("users")),
     createdAt: v.number(),
   })
     .index("by_membership", ["membershipId"])

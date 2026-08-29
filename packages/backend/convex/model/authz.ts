@@ -75,6 +75,24 @@ export async function getMembership(
  * Base de las APIs "mías" (reservas, vehículos, comprobantes de pago): el
  * propietario solo puede leer y escribir sobre sus propias unidades.
  */
+/**
+ * Deja solo los vínculos vigentes hoy.
+ *
+ * Un margen de un día al final: el contrato que vence "el 31" cubre el 31
+ * completo, no hasta las 00:00 de ese día.
+ */
+export function vigentes<T extends { vigenciaDesde?: number; vigenciaHasta?: number }>(
+  links: T[],
+): T[] {
+  const ahora = Date.now();
+  const FIN_DEL_DIA = 24 * 60 * 60 * 1000;
+  return links.filter(
+    (l) =>
+      (l.vigenciaDesde == null || l.vigenciaDesde <= ahora) &&
+      (l.vigenciaHasta == null || ahora < l.vigenciaHasta + FIN_DEL_DIA),
+  );
+}
+
 export async function misUnidadIds(
   ctx: Ctx,
   userId: Id<"users">,
@@ -86,7 +104,11 @@ export async function misUnidadIds(
     .query("usuarioUnidad")
     .withIndex("by_membership", (q) => q.eq("membershipId", membership._id))
     .collect();
-  return new Set(links.map((l) => l.unidadId));
+  /* Los vínculos vencidos no cuentan. Un arrendatario que ya se fue no debe
+   * seguir viendo las facturas ni los visitantes de esa casa, y como TODO el
+   * acceso del residente pasa por aquí, cortarlo en este punto lo corta en
+   * todas partes a la vez. Ver `vigenciaHasta` en el schema. */
+  return new Set(vigentes(links).map((l) => l.unidadId));
 }
 
 /**

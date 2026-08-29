@@ -15,6 +15,7 @@ import {
   VINCULO_LABEL,
   TIPO_UNIDAD_LABEL,
 } from "@/components/portal/portal-ui";
+import { HogarUnidad } from "@/components/portal/hogar-unidad";
 
 export default function MiUnidad() {
   const { id } = useParams<{ id: string }>();
@@ -89,6 +90,11 @@ export default function MiUnidad() {
               </Card>
             ))}
           </div>
+
+          {/* Personas de cada casa: quién vive ahí y hasta cuándo. */}
+          {home.unidades.map((u) => (
+            <HogarUnidad key={u._id} unidadId={u._id as Id<"unidades">} />
+          ))}
 
           {/* Vehículos */}
           <div>
