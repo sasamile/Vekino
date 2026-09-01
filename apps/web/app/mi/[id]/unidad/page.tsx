@@ -16,6 +16,7 @@ import {
   TIPO_UNIDAD_LABEL,
 } from "@/components/portal/portal-ui";
 import { HogarUnidad } from "@/components/portal/hogar-unidad";
+import { MisPaquetes } from "@/components/portal/mis-paquetes";
 
 export default function MiUnidad() {
   const { id } = useParams<{ id: string }>();
@@ -95,6 +96,9 @@ export default function MiUnidad() {
           {home.unidades.map((u) => (
             <HogarUnidad key={u._id} unidadId={u._id as Id<"unidades">} />
           ))}
+
+          {/* Paquetes: aquí aterriza el aviso de "tienes un paquete". */}
+          <MisPaquetes condominioId={condominioId} />
 
           {/* Vehículos */}
           <div>

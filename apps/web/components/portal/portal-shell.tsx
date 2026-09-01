@@ -11,6 +11,7 @@ import {
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
 import { PortalSidebarContent } from "@/components/portal/portal-sidebar";
+import { CampanaNotificaciones } from "@/components/portal/campana-notificaciones";
 import { PortalMobileNav } from "@/components/portal/portal-mobile-nav";
 import { Spinner } from "@/components/ui/spinner";
 import { CambiarClaveTemporalModal } from "@/components/cambiar-clave-temporal-modal";
@@ -144,6 +145,12 @@ function Guard({ children }: { children: React.ReactNode }) {
               isPlatform={home.isPlatform}
               roles={home.myRoles}
             />
+            {/* Barra fina solo para la campana. El portal no tenía cabecera
+                en escritorio, así que quien entra por el navegador no tenía
+                dónde enterarse de un paquete o de una novedad de su casa. */}
+            <div className="flex shrink-0 justify-end border-b border-border bg-background px-4 py-1.5 sm:px-6 lg:px-8">
+              <CampanaNotificaciones condominioId={condominioId} base={base} />
+            </div>
             <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain bg-background">
               <div className="w-full px-4 py-5 sm:px-6 sm:py-6 lg:px-8">
                 {children}

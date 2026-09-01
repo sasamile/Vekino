@@ -5,6 +5,7 @@ import {
   getCurrentAppUser,
   getMembership,
   hasPlatformRole,
+  misUnidadIds,
 } from "./model/authz";
 import { displayNameFromUser } from "./model/displayName";
 import { resolveUserImage } from "./model/userImage";
@@ -178,6 +179,61 @@ export const misActividades = query({
 /**
  * Contadores para badges del sidebar del portal (facturas vencidas, PQRS, etc.).
  */
+/**
+ * Los paquetes de las casas del residente.
+ *
+ * Existia la vista de la porteria —quien recibe y quien entrega— pero no la
+ * del duenno: el paquete quedaba en la lista del guarda y el residente solo
+ * se enteraba si bajaba a preguntar. Ahora la notificacion tiene donde
+ * aterrizar.
+ */
+export const misPaquetes = query({
+  args: { condominioId: v.id("condominios") },
+  handler: async (ctx, args) => {
+    const user = await getCurrentAppUser(ctx);
+    if (!user) return [];
+    const unidadIds = await misUnidadIds(ctx, user._id, args.condominioId);
+    if (unidadIds.size === 0) return [];
+
+    /* Los paquetes viejos no tienen `unidadId`: se guardaba solo el numero
+     * como texto. Para esos se compara por numero, que es lo unico que hay. */
+    const unidades = await Promise.all(
+      [...unidadIds].map((id) => ctx.db.get(id)),
+    );
+    const numeros = new Set(
+      unidades
+        .filter((u): u is NonNullable<typeof u> => u !== null)
+        .map((u) => u.numero.trim().toLowerCase().replace(/\s+/g, "")),
+    );
+
+    const todos = await ctx.db
+      .query("paquetes")
+      .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
+      .order("desc")
+      .take(200);
+
+    return todos
+      .filter((p) =>
+        p.unidadId
+          ? unidadIds.has(p.unidadId)
+          : numeros.has(p.unidadNumero.trim().toLowerCase().replace(/\s+/g, "")),
+      )
+      .slice(0, 40)
+      .map((p) => ({
+        _id: p._id,
+        tipo: p.tipo,
+        remitente: p.remitente ?? null,
+        descripcion: p.descripcion ?? null,
+        destinatario: p.destinatario ?? null,
+        unidadNumero: p.unidadNumero,
+        entregado: p.estado === "entregado",
+        fechaRecibido: p.fechaRecibido,
+        fechaEntregado: p.fechaEntregado ?? null,
+        entregadoANombre: p.entregadoANombre ?? null,
+      }));
+  },
+});
+
 export const navBadges = query({
   args: { condominioId: v.id("condominios") },
   handler: async (ctx, args) => {
