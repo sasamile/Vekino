@@ -58,10 +58,18 @@ export function HogarUnidad({ unidadId }: { unidadId: Id<"unidades"> }) {
   return (
     <div>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h2 className="flex items-center gap-2 text-lg font-semibold tracking-tight text-foreground">
-          <Users className="h-4 w-4 text-muted-foreground" aria-hidden />
-          Personas en la casa {hogar.unidadNumero}
-        </h2>
+        <div className="min-w-0">
+          <h2 className="flex items-center gap-2 text-lg font-semibold tracking-tight text-foreground">
+            <Users className="h-4 w-4 text-muted-foreground" aria-hidden />
+            Personas en la casa {hogar.unidadNumero}
+          </h2>
+          {hogar.soyPropietario && (
+            <p className="mt-0.5 text-sm text-muted-foreground">
+              Dales su propio usuario para que entren a la aplicación y vean
+              lo mismo que tú.
+            </p>
+          )}
+        </div>
         {hogar.soyPropietario && (
           <Button size="sm" onClick={() => setAbierto(true)}>
             <UserPlus className="h-4 w-4" /> Agregar
@@ -197,7 +205,7 @@ function AgregarModal({
       open
       onClose={onClose}
       title="Agregar a la casa"
-      description="Verá lo mismo que tú mientras el vínculo esté vigente"
+      description="Tendrá su propio usuario y verá lo mismo que tú"
       footer={
         <>
           <Button variant="ghost" size="sm" onClick={onClose} disabled={busy}>
@@ -217,13 +225,13 @@ function AgregarModal({
             value={vinculo}
             onChange={(e) => setVinculo(e.target.value as "residente" | "arrendatario")}
           >
-            <option value="residente">Residente — vive contigo</option>
-            <option value="arrendatario">Arrendatario — por un período</option>
+            <option value="residente">Residente — tu esposa, tus hijos, quien vive contigo</option>
+            <option value="arrendatario">Arrendatario — le arriendas la casa</option>
           </Select>
           <p className="text-[11px] text-muted-foreground">
             {esArriendo
-              ? "Deja de ver la casa el día que se vence el contrato."
-              : "Vínculo sin fecha de vencimiento."}
+              ? "Entra a la aplicación como tú y ve lo mismo, pero deja de ver la casa el día que se vence el contrato."
+              : "Entra a la aplicación con su propio correo y ve lo mismo que tú. Sin fecha de vencimiento."}
           </p>
         </div>
 

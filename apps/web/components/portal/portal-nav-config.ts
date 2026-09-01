@@ -1,4 +1,5 @@
 import {
+  Building2,
   Home,
   Wallet,
   Megaphone,
@@ -37,6 +38,16 @@ export const PORTAL_NAV_GROUPS: PortalNavGroup[] = [
     title: "Principal",
     items: [
       { label: "Inicio", segment: "", icon: Home },
+      {
+        /* Aquí vive lo de la casa: los datos, QUIÉN VIVE y los vehículos.
+         * La página existía desde antes pero no estaba en el menú, así que
+         * dar de alta a un residente o a un arrendatario era imposible de
+         * encontrar aunque estuviera hecho. */
+        label: "Mi unidad",
+        hint: "Datos, personas y vehículos",
+        segment: "unidad",
+        icon: Building2,
+      },
       {
         label: "Mis facturas",
         segment: "cuenta",

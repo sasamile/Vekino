@@ -42,7 +42,7 @@ export default function MiUnidad() {
     <PageContainer className="max-w-4xl space-y-8">
       <PageHeader
         title="Mi unidad"
-        description="Los datos de tu inmueble y los vehículos registrados."
+        description="Los datos de tu casa, quién vive en ella y los vehículos registrados."
       />
 
       {home.unidades.length === 0 ? (
