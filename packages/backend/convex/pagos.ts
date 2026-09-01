@@ -471,9 +471,31 @@ export const getPagoPorPmt = internalQuery({
 // Acciones (HTTP externo hacia Aval)
 // ─────────────────────────────────────────────────────────────
 
-/** Máximo de reintentos automáticos de consulta (cada 2 min ≈ 20 min). */
-const MAX_INTENTOS = 10;
+/**
+ * Cada cuánto se consulta el estado. Lo fija Aval, no nosotros: la
+ * especificación (4.1.3.1) dice "consultar cada 2 minutos hasta obtener un
+ * estado final".
+ */
 const INTERVALO_CONSULTA_MS = 2 * 60 * 1000;
+
+/**
+ * Cuántas veces se consulta antes de rendirse.
+ *
+ * Estaba en 10 —veinte minutos— y la especificación de Aval (4.1.3.3) dice
+ * que la pasarela tarda "un tiempo estimado de 50 minutos" en resolver una
+ * transacción pendiente, porque puede quedar esperando al banco, a ACH o a
+ * Redeban.
+ *
+ * Con veinte minutos, un pago que el banco confirmara al minuto 35 quedaba
+ * pendiente para siempre: el residente pagaba y la factura seguía debiendo.
+ * No hay webhook que lo rescate —Aval no notifica, hay que preguntar—, así
+ * que la ventana de consulta ES el único mecanismo.
+ *
+ * Treinta intentos son sesenta minutos: los cincuenta del peor caso más un
+ * margen. Preguntar de más cuesta una llamada HTTP; preguntar de menos
+ * cuesta un pago perdido.
+ */
+const MAX_INTENTOS = 30;
 
 /**
  * Flujo compartido de creación del pago (web y bot de WhatsApp) a partir de
