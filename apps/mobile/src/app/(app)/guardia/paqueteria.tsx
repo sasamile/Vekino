@@ -73,8 +73,8 @@ function Inner() {
   const eliminar = useMutation(api.guardia.eliminarPaqueteReciente);
 
   /**
-   * Solo para deshacer un registro recién hecho: el backend lo limita a
-   * paquetes sin entregar y de la última media hora.
+   * Deshace un registro mal hecho. El backend solo deja borrar paquetes
+   * que aún no se han entregado.
    */
   function confirmarEliminar(id: Id<"paquetes">, unidad: string) {
     Alert.alert(

@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useParams } from "next/navigation";
 import { useQuery, useMutation } from "convex/react";
 import {
-  Package, Plus, Loader2, Check, Search, PackageCheck, Camera, Eye, Image as ImageIcon,
+  Package, Plus, Loader2, Check, Search, PackageCheck, Camera, Eye, Image as ImageIcon, Trash2,
 } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import type { Id, Doc } from "@vekino/backend/dataModel";
@@ -45,6 +45,7 @@ export default function GuardiaPaqueteriaPage() {
   const [nuevoOpen, setNuevoOpen] = useState(false);
   const [entregar, setEntregar] = useState<Paq | null>(null);
   const [detalle, setDetalle] = useState<Paq | null>(null);
+  const [eliminar, setEliminar] = useState<Paq | null>(null);
 
   const pendientes = paquetes?.filter((p) => p.estado === "recibido").length ?? 0;
 
@@ -132,6 +133,14 @@ export default function GuardiaPaqueteriaPage() {
                   <button onClick={() => setDetalle(p)} className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
                     <Eye className="h-3.5 w-3.5" /> Detalle
                   </button>
+                  {p.estado === "recibido" && (
+                    <button
+                      onClick={() => setEliminar(p)}
+                      className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-destructive"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" /> Eliminar
+                    </button>
+                  )}
                 </div>
               </div>
             </Card>
@@ -141,7 +150,21 @@ export default function GuardiaPaqueteriaPage() {
 
       {nuevoOpen && <RecibirModal condominioId={condominioId} onClose={() => setNuevoOpen(false)} />}
       {entregar && <EntregarModal paquete={entregar} onClose={() => setEntregar(null)} />}
-      {detalle && <DetalleModal paquete={detalle} onClose={() => setDetalle(null)} />}
+      {detalle && (
+        <DetalleModal
+          paquete={detalle}
+          onClose={() => setDetalle(null)}
+          onEliminar={
+            detalle.estado === "recibido"
+              ? () => {
+                  setDetalle(null);
+                  setEliminar(detalle);
+                }
+              : undefined
+          }
+        />
+      )}
+      {eliminar && <EliminarModal paquete={eliminar} onClose={() => setEliminar(null)} />}
       </div>
     </PageContainer>
   );
@@ -306,9 +329,74 @@ function EntregarModal({ paquete, onClose }: { paquete: Paq; onClose: () => void
   );
 }
 
-function DetalleModal({ paquete, onClose }: { paquete: Paq; onClose: () => void }) {
+function EliminarModal({ paquete, onClose }: { paquete: Paq; onClose: () => void }) {
+  const eliminar = useMutation(api.guardia.eliminarPaqueteReciente);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function confirm() {
+    setBusy(true);
+    setError(null);
+    try {
+      await eliminar({ id: paquete._id });
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudo eliminar.");
+      setBusy(false);
+    }
+  }
+
   return (
-    <Modal open onClose={onClose} title="Detalle del paquete" description={`Unidad ${paquete.unidadNumero} · ${TIPO_LABEL[paquete.tipo]}`} className="max-w-lg">
+    <Modal
+      open
+      onClose={onClose}
+      title="Eliminar registro"
+      description={`Unidad ${paquete.unidadNumero} · ${TIPO_LABEL[paquete.tipo]}`}
+      className="max-w-sm"
+      footer={
+        <>
+          <Button variant="ghost" size="sm" onClick={onClose} disabled={busy}>Cancelar</Button>
+          <Button variant="destructive" size="sm" onClick={confirm} disabled={busy}>
+            {busy && <Loader2 className="h-4 w-4 animate-spin" />} Eliminar
+          </Button>
+        </>
+      }
+    >
+      <p className="text-sm text-muted-foreground">
+        Se borra el registro de portería. Úsalo si se registró por error (unidad equivocada, duplicado o prueba).
+      </p>
+      {error && <p className="mt-3 text-sm text-destructive">{error}</p>}
+    </Modal>
+  );
+}
+
+function DetalleModal({
+  paquete,
+  onClose,
+  onEliminar,
+}: {
+  paquete: Paq;
+  onClose: () => void;
+  onEliminar?: () => void;
+}) {
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title="Detalle del paquete"
+      description={`Unidad ${paquete.unidadNumero} · ${TIPO_LABEL[paquete.tipo]}`}
+      className="max-w-lg"
+      footer={
+        <>
+          {onEliminar && (
+            <Button variant="ghost" size="sm" onClick={onEliminar} className="mr-auto text-destructive hover:text-destructive">
+              <Trash2 className="h-4 w-4" /> Eliminar
+            </Button>
+          )}
+          <Button variant="ghost" size="sm" onClick={onClose}>Cerrar</Button>
+        </>
+      }
+    >
       <div className="space-y-4">
         <div className="grid grid-cols-2 gap-3">
           <FotoBox label="Llegada" url={paquete.fotoUrl} />
