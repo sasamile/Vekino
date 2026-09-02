@@ -66,7 +66,15 @@ function avalConfig(): AvalConfig {
       "L17Y8lLzv7M=ZnJOZm1OZ1JNUUlJTCtxZGdYNmhQUzh1N3ZwRXFMQlBZZG5VWDVFVXNKakUzQkNMSmpWcVltd0RhUVowZTA0VWZ1UWxyNGpWUTRhaWFDTTRPUEdHUkdiTXZTQWZveWkwNW1qSEJQc2tkOXo2dVNaeTVXOGxYazVxenBHd1FXK2k4ZWl1TGc9PQ==",
     agrmId: process.env.AVAL_AGRM_ID ?? "00002336",
     companyId: process.env.AVAL_COMPANY_ID ?? "00089898",
-    channel: process.env.AVAL_CHANNEL ?? "16",
+    /* El manual dice "valor constante: 16" y NO lo es: el canal se asigna
+     * por convenio. Con 16 la pasarela responde 105 —"No es posible realizar
+     * la transaccion"— sin decir por que, y se pierde media tarde buscando el
+     * error en el cuerpo del mensaje, que esta bien.
+     *
+     * Ciudad del Campo (00030713) usa 1. Comprobado contra QA: con 16 da 105,
+     * con 1 devuelve PmtAuthId y la URL de la pasarela. Si entra otro
+     * convenio, este es el primer valor que hay que preguntarle al banco. */
+    channel: process.env.AVAL_CHANNEL ?? "1",
     trnSrc: process.env.AVAL_TRN_SRC ?? "2", // 2 = Banco AvVillas
     secretUser: process.env.AVAL_SECRET_USER ?? "usuario1",
     secretPassword: process.env.AVAL_SECRET_PASSWORD ?? "usuario1951",
