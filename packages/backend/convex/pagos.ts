@@ -100,12 +100,27 @@ function convexSiteUrl(): string {
 }
 
 /** X-RqUID: identificador único numérico por transacción (máx 22 dígitos). */
+/**
+ * Identificador unico de la peticion.
+ *
+ * El manual dice Number(22) y con 22 digitos la pasarela responde 511 — "No
+ * es posible procesar la transaccion" — sin decir por que. El backend de
+ * Aval lo lee como un entero con signo de 64 bits, que tope en
+ * 9.223.372.036.854.775.807: DIECINUEVE digitos. Veintidos desbordan.
+ *
+ * Comprobado contra QA con el mismo cuerpo y la misma llave, cambiando solo
+ * el largo: 22 da 511, 19 y 18 devuelven PmtAuthId.
+ *
+ * Trece del reloj mas seis al azar: 19 digitos, empieza en 1 y por tanto
+ * cabe holgado, y deja una entre un millon de colisiones dentro del mismo
+ * milisegundo.
+ */
 function generarRqUID(): string {
-  const ts = Date.now().toString();
-  const rnd = Math.floor(Math.random() * 1e9)
+  const ts = Date.now().toString(); // 13 digitos
+  const rnd = Math.floor(Math.random() * 1e6)
     .toString()
-    .padStart(9, "0");
-  return (ts + rnd).slice(0, 22);
+    .padStart(6, "0");
+  return (ts + rnd).slice(0, 19);
 }
 
 /** Mapea el tipoDocumento de Vekino al tipo que espera Aval. */
