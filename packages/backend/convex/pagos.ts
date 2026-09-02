@@ -10,6 +10,7 @@ import type { ActionCtx, QueryCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { requireAppUser } from "./model/authz";
+import { etiquetaUnidad, referenciaPago } from "./lib/referenciaPago";
 
 // ─────────────────────────────────────────────────────────────
 // Integración con la Pasarela de Pagos Aval (AV Villas / Grupo Aval)
@@ -264,6 +265,10 @@ async function armarDatosTrn(
   const condominio = await ctx.db.get(factura.condominioId);
   if (!condominio) throw new Error("Condominio no encontrado.");
 
+  /* La unidad hace falta para la referencia que ve el banco: sin ella el
+   * recaudo vuelve identificado solo por un consecutivo contable. */
+  const unidad = await ctx.db.get(factura.unidadId);
+
   // Autorización: staff de plataforma pasa libre (si aplica); si no, debe
   // estar vinculado a la unidad de la factura en este condominio.
   const esPlataforma =
@@ -312,6 +317,11 @@ async function armarDatosTrn(
       numeroInterno: factura.numeroInterno,
       numeroFactura: factura.numeroFactura,
       periodoLabel: factura.periodoLabel,
+      periodo: factura.periodo,
+    },
+    unidad: {
+      torre: unidad?.torre ?? null,
+      numero: unidad?.numero ?? factura.apto ?? "",
     },
     monto: Math.round(monto),
     condominioNombre: condominio.name,
@@ -533,7 +543,18 @@ async function crearTrnYRegistrar(
   const cfg = avalConfig();
 
   const rqUID = generarRqUID();
-  const invoiceNum = datos.factura.numeroInterno || datos.factura.numeroFactura;
+  /* La referencia que vera el banco: casa + periodo, legible de un vistazo.
+   * Si por lo que sea no se puede armar (una unidad sin numero, un periodo
+   * raro), cae al consecutivo contable de siempre: es feo pero es unico, y
+   * quedarse sin referencia seria quedarse sin pago. */
+  const invoiceNum =
+    referenciaPago({
+      torre: datos.unidad.torre,
+      numero: datos.unidad.numero,
+      periodo: datos.factura.periodo,
+    }) ??
+    datos.factura.numeroInterno ??
+    datos.factura.numeroFactura;
 
   // URL de retorno: httpAction de Convex (.site). Aval le concatena ?pmtId=...
   const site = convexSiteUrl();
@@ -563,7 +584,7 @@ async function crearTrnYRegistrar(
         InvoiceInfo: {
           InvoiceType: "1",
           InvoiceNum: invoiceNum,
-          Desc: `Administracion ${datos.factura.periodoLabel} - ${datos.condominioNombre}`.slice(0, 150),
+          Desc: `${etiquetaUnidad(datos.unidad.torre, datos.unidad.numero)} - Administracion ${datos.factura.periodoLabel} - ${datos.condominioNombre}`.slice(0, 150),
           NIE: [invoiceNum],
           InvoiceSender: { Category: "0" },
         },
