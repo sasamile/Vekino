@@ -16,6 +16,48 @@ type FacturaPay = {
  * Paga una factura: portal Aval del condo o checkout Aval por API.
  * Usa el color de marca del condominio (--brand).
  */
+
+/**
+ * Traduce el error a algo que le sirva a quien está pagando.
+ *
+ * Lo que llega es un ladrillo: el prefijo de Convex, el id de la petición,
+ * el texto de la pasarela, el id interno del pago y el stack. Y el texto de
+ * Aval, además de larguísimo, trae los teléfonos y correos de SU soporte
+ * —en QA, los de un proveedor externo—. Nada de eso le sirve a un residente
+ * y varias cosas no deberían siquiera mostrársele.
+ *
+ * Se reconocen las situaciones que de verdad ocurren y se dice qué hacer.
+ * Para lo demás queda un mensaje corto y honesto: no adivinar es preferible
+ * a inventar una causa.
+ */
+function mensajeParaElResidente(e: unknown): string {
+  const crudo = e instanceof Error ? e.message : String(e ?? "");
+
+  // Ya hay una transacción abierta para esta factura (código 27 de Aval).
+  if (/PENDIENTE de recibir confirmaci/i.test(crudo)) {
+    return "Ya tienes un pago en proceso para esta factura. Espera unos minutos y vuelve a intentarlo.";
+  }
+  if (/ya está pagada/i.test(crudo)) {
+    return "Esta factura ya figura como pagada.";
+  }
+  if (/Failed to fetch|NetworkError|network/i.test(crudo)) {
+    return "No hay conexión con la pasarela. Revisa tu internet e intenta de nuevo.";
+  }
+
+  /* Cualquier otra cosa: se recorta a lo que dijo la pasarela, sin el
+   * envoltorio técnico ni el stack. */
+  const limpio = crudo
+    .replace(/^[\s\S]*?en la pasarela:\s*/i, "")
+    .replace(/\s*\(pagoId[\s\S]*$/i, "")
+    .replace(/\s*at [A-Za-z]+[\s\S]*$/i, "")
+    .trim();
+
+  if (!limpio || limpio.length > 160 || /Convex|Request ID|Server Error/i.test(limpio)) {
+    return "No se pudo iniciar el pago. Intenta de nuevo en unos minutos.";
+  }
+  return limpio;
+}
+
 export function PortalPayButton({
   facturaId,
   avalPortalUrl,
@@ -55,15 +97,7 @@ export function PortalPayButton({
        *
        * Un pago que falla en silencio es peor que uno que falla: la persona
        * no sabe si pagó, si debe reintentar, ni a quién preguntarle. */
-      const msg = e instanceof Error ? e.message : "No se pudo iniciar el pago.";
-      /* El servidor antepone su propio prefijo y agrega el id interno; al
-       * residente solo le sirve lo que dice la pasarela. */
-      setError(
-        msg
-          .replace(/^.*No se pudo crear el pago en la pasarela:\s*/, "")
-          .replace(/\s*\(pagoId [^)]*\)\s*$/, "")
-          .trim() || "No se pudo iniciar el pago. Intenta de nuevo.",
-      );
+      setError(mensajeParaElResidente(e));
       setLoading(false);
     }
   }
