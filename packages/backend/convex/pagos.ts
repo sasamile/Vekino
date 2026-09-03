@@ -547,12 +547,12 @@ async function crearTrnYRegistrar(
    * Si por lo que sea no se puede armar (una unidad sin numero, un periodo
    * raro), cae al consecutivo contable de siempre: es feo pero es unico, y
    * quedarse sin referencia seria quedarse sin pago. */
+  /* La referencia que vera el banco: el numero de la casa, lo mismo que pide
+   * el portal publico del convenio. Si la unidad no da un numero utilizable,
+   * cae al consecutivo contable de siempre: es feo pero es unico, y quedarse
+   * sin referencia seria quedarse sin pago. */
   const invoiceNum =
-    referenciaPago({
-      torre: datos.unidad.torre,
-      numero: datos.unidad.numero,
-      periodo: datos.factura.periodo,
-    }) ??
+    referenciaPago({ torre: datos.unidad.torre, numero: datos.unidad.numero }) ??
     datos.factura.numeroInterno ??
     datos.factura.numeroFactura;
 

@@ -2,19 +2,16 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
-  claveUnidad,
-  clavePeriodo,
-  descomponerReferencia,
   etiquetaUnidad,
   numeroDeTorre,
   referenciaPago,
 } from "../convex/lib/referenciaPago.ts";
 
-test("la casa se lee al principio de la referencia", () => {
-  assert.equal(
-    referenciaPago({ numero: "513", periodo: "2026-08" }),
-    "513202608",
-  );
+test("la referencia es el numero de la casa, igual que en el portal del banco", () => {
+  /* El portal publico del convenio muestra "Referencia: 409" cuando el
+   * residente escribe su numero de casa. Por la API tiene que dar lo mismo. */
+  assert.equal(referenciaPago({ numero: "409" }), "409");
+  assert.equal(referenciaPago({ numero: "513" }), "513");
 });
 
 test("una torre en romano se vuelve digito", () => {
@@ -27,44 +24,25 @@ test("una torre en romano se vuelve digito", () => {
 
 test("el relleno a cuatro digitos separa torre de apartamento", () => {
   /* Sin relleno los dos darian 11001 y serian la misma unidad. */
-  assert.notEqual(claveUnidad("T-I", "1001"), claveUnidad("T-II", "001"));
-  assert.equal(claveUnidad("T-I", "1001"), "11001");
-  assert.equal(claveUnidad("T-II", "001"), "20001");
+  assert.notEqual(referenciaPago({ torre: "T-I", numero: "1001" }), referenciaPago({ torre: "T-II", numero: "001" }));
+  assert.equal(referenciaPago({ torre: "T-I", numero: "1001" }), "11001");
+  assert.equal(referenciaPago({ torre: "T-II", numero: "001" }), "20001");
 });
 
-test("sin torre la clave es el numero pelado, sin ceros de adorno", () => {
-  assert.equal(claveUnidad(null, "0513"), "513");
-  assert.equal(claveUnidad("", "513"), "513");
+test("sin torre es el numero pelado, sin ceros de adorno", () => {
+  assert.equal(referenciaPago({ torre: null, numero: "0409" }), "409");
+  assert.equal(referenciaPago({ torre: "", numero: "409" }), "409");
 });
 
-test("el periodo son seis digitos o no es periodo", () => {
-  assert.equal(clavePeriodo("2026-08"), "202608");
-  assert.equal(clavePeriodo("202608"), "202608");
-  assert.equal(clavePeriodo("2026"), "");
-  assert.equal(clavePeriodo(""), "");
-});
-
-test("devuelve null cuando le falta algo, en vez de inventarse media referencia", () => {
-  assert.equal(referenciaPago({ numero: "", periodo: "2026-08" }), null);
-  assert.equal(referenciaPago({ numero: "513", periodo: "" }), null);
-  assert.equal(referenciaPago({ numero: "LOCAL", periodo: "2026-08" }), null);
-});
-
-test("la referencia se puede leer al reves", () => {
-  for (const [torre, numero] of [[null, "513"], ["T-III", "1001"], [null, "9"]] as const) {
-    const ref = referenciaPago({ torre, numero, periodo: "2026-08" })!;
-    assert.deepEqual(descomponerReferencia(ref), {
-      unidad: claveUnidad(torre, numero),
-      periodo: "2026-08",
-    });
+test("solo digitos: el manual de Aval define InvoiceNum como Number(50)", () => {
+  for (const u of [{ numero: "409" }, { torre: "T-IV", numero: "802" }]) {
+    assert.match(referenciaPago(u)!, /^\d+$/);
   }
 });
 
-test("no confunde una referencia vieja con una nueva", () => {
-  /* 11776 era el consecutivo contable: cinco digitos, sin periodo detras.
-   * Descomponerlo daria el mes 76, que no existe. */
-  assert.equal(descomponerReferencia("11776"), null);
-  assert.equal(descomponerReferencia("999999"), null);
+test("devuelve null cuando la unidad no da un numero, en vez de media referencia", () => {
+  assert.equal(referenciaPago({ numero: "" }), null);
+  assert.equal(referenciaPago({ numero: "LOCAL" }), null);
 });
 
 test("etiqueta legible para la pantalla de pago", () => {
@@ -80,7 +58,7 @@ test("ninguna unidad real choca con otra de su condominio", () => {
   let sinReferencia = 0;
 
   for (const u of unidades) {
-    const ref = referenciaPago({ torre: u.torre, numero: u.numero, periodo: "2026-08" });
+    const ref = referenciaPago({ torre: u.torre, numero: u.numero });
     if (!ref) {
       sinReferencia++;
       continue;

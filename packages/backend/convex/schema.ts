@@ -342,7 +342,7 @@ export default defineSchema({
     // Identificadores de la pasarela
     rqUID: v.string(),                 // X-RqUID único que enviamos por transacción
     pmtAuthId: v.optional(v.string()), // PmtAuthId devuelto por Trn (== PmtId en BasicData)
-    invoiceNum: v.string(),            // referencia enviada a Aval: unidad+periodo (lib/referenciaPago.ts)
+    invoiceNum: v.string(),            // referencia enviada a Aval: el numero de la casa (lib/referenciaPago.ts)
     approvalId: v.optional(v.string()), // X-ApprovalId final (ACH/banco/Redeban)
 
     // Montos
