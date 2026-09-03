@@ -4,6 +4,13 @@ import { query, mutation, internalQuery, internalMutation } from "./_generated/s
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Doc } from "./_generated/dataModel";
 import {
+  aMinutos,
+  cabeEnAlgunaFranja,
+  fechasVecinas,
+  rangoAbsoluto,
+  seSolapan,
+} from "./lib/horarios";
+import {
   requireCondominioRole,
   requireAppUser,
   getCurrentAppUser,
@@ -54,22 +61,11 @@ function assertHorarios(
     if (h.dia < 0 || h.dia > 6) {
       throw new Error("Día de la semana inválido.");
     }
-    const [sh, sm] = h.horaInicio.split(":").map(Number);
-    const [eh, em] = h.horaFin.split(":").map(Number);
-    const start = (sh ?? 0) * 60 + (sm ?? 0);
-    const end = (eh ?? 0) * 60 + (em ?? 0);
-    if (
-      Number.isNaN(sh) ||
-      Number.isNaN(sm) ||
-      Number.isNaN(eh) ||
-      Number.isNaN(em)
-    ) {
+    /* No se compara fin > inicio: un salón que abre a las 09:00 y cierra a
+     * las 02:00 es un horario legítimo, no un error de captura. `rango` lo
+     * lee como cierre del día siguiente (lib/horarios.ts). */
+    if (aMinutos(h.horaInicio) == null || aMinutos(h.horaFin) == null) {
       throw new Error("Formato de hora inválido (usa HH:MM).");
-    }
-    if (end <= start) {
-      throw new Error(
-        `El horario del día ${h.dia} debe terminar después de iniciar.`,
-      );
     }
   }
 }
@@ -474,8 +470,19 @@ export const createMia = mutation({
     const unidad = await ctx.db.get(args.unidadId);
     if (!unidad) throw new Error("Unidad no encontrada.");
 
-    if (args.horaFin <= args.horaInicio) {
-      throw new Error("La hora de fin debe ser posterior a la de inicio.");
+    /* Antes aquí solo se comparaban las horas como texto, lo que descartaba
+     * "22:00 a 01:00" y no miraba si el salón ya estaba cogido. Se delega en
+     * la misma comprobación que usa el bot: entiende los horarios que cruzan
+     * la medianoche y detecta el solape con lo ya reservado. */
+    const disponible = await checkDisponibilidadZona(
+      ctx,
+      zona,
+      args.fecha,
+      args.horaInicio,
+      args.horaFin,
+    );
+    if (!disponible.ok) {
+      throw new Error(disponible.motivo ?? "Ese horario no está disponible.");
     }
 
     const now = Date.now();
@@ -549,6 +556,11 @@ async function checkDisponibilidadZona(
 ): Promise<{ ok: boolean; motivo?: string }> {
   // Horarios de funcionamiento (0=domingo … 6=sábado, igual que el schema).
   // Mediodía + getUTCDay para que el día no dependa del timezone del runtime.
+  const pedido = rangoAbsoluto(fecha, horaInicio, horaFin);
+  if (!pedido) {
+    return { ok: false, motivo: "La fecha o la hora no son válidas." };
+  }
+
   const horarios = zona.horariosPorDia ?? [];
   if (horarios.length > 0) {
     const dia = new Date(fecha + "T12:00:00").getUTCDay();
@@ -556,11 +568,16 @@ async function checkDisponibilidadZona(
     if (franjas.length === 0) {
       return { ok: false, motivo: "La zona no abre ese día." };
     }
-    // Comparación lexicográfica de "HH:MM" (convención del archivo).
-    const cabe = franjas.some(
-      (f) => horaInicio >= f.horaInicio && horaFin <= f.horaFin,
-    );
-    if (!cabe) {
+    /* En minutos, no en texto: comparando "HH:MM" como cadena, una zona
+     * abierta hasta las 02:00 rechazaba una reserva de media mañana
+     * ("12:00" <= "02:00" es falso) y aceptaba casi cualquier cosa de
+     * noche. */
+    const inicioDelDia = rangoAbsoluto(fecha, "00:00", "00:01")!.inicio;
+    const relativo = {
+      inicio: pedido.inicio - inicioDelDia,
+      fin: pedido.fin - inicioDelDia,
+    };
+    if (!cabeEnAlgunaFranja(relativo, franjas)) {
       const rangos = franjas
         .map((f) => `de ${f.horaInicio} a ${f.horaFin}`)
         .join(" y ");
@@ -568,23 +585,30 @@ async function checkDisponibilidadZona(
     }
   }
 
-  // Solape con reservas vigentes (pendientes o aprobadas) de esa zona y fecha.
+  /* Solape con reservas vigentes de la zona.
+   *
+   * Se miran también la víspera y el día siguiente. Una reserva del viernes
+   * que termina a la 01:00 se guarda con fecha del VIERNES: sin mirar atrás,
+   * una del sábado a las 00:30 no la vería y se aprobarían las dos sobre el
+   * mismo salón. */
+  const diasAMirar = new Set(fechasVecinas(fecha));
   const existentes = await ctx.db
     .query("reservas")
     .withIndex("by_zona", (q) => q.eq("zonaId", zona._id))
     .collect();
-  const conflicto = existentes.find(
-    (r) =>
-      r.fecha === fecha &&
-      (r.estado === "pendiente" || r.estado === "aprobada") &&
-      horaInicio < r.horaFin &&
-      horaFin > r.horaInicio,
-  );
-  if (conflicto) {
-    return {
-      ok: false,
-      motivo: `Ya hay una reserva de ${conflicto.horaInicio} a ${conflicto.horaFin} ese día.`,
-    };
+
+  for (const r of existentes) {
+    if (!diasAMirar.has(r.fecha)) continue;
+    if (r.estado !== "pendiente" && r.estado !== "aprobada") continue;
+    const otra = rangoAbsoluto(r.fecha, r.horaInicio, r.horaFin);
+    if (otra && seSolapan(pedido, otra)) {
+      const cuando =
+        r.fecha === fecha ? "ese día" : `el ${r.fecha}`;
+      return {
+        ok: false,
+        motivo: `Ya hay una reserva de ${r.horaInicio} a ${r.horaFin} ${cuando}.`,
+      };
+    }
   }
 
   return { ok: true };
@@ -672,11 +696,8 @@ export const createFromBot = internalMutation({
     if (!/^\d{4}-\d{2}-\d{2}$/.test(args.fecha)) {
       throw new Error("La fecha no es válida.");
     }
-    if (args.horaFin <= args.horaInicio) {
-      throw new Error("La hora de fin debe ser posterior a la de inicio.");
-    }
-
-    // Misma lógica de disponibilidad que verificarDisponibilidad.
+    // La validación de horas la hace checkDisponibilidadZona, que sí entiende
+    // los cierres pasada la medianoche.
     const disponible = await checkDisponibilidadZona(
       ctx,
       zona,

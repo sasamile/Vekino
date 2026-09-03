@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "convex dev",
     "deploy": "convex deploy",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --test --experimental-strip-types 'pruebas/*.prueba.ts'"
   },
   "exports": {
     "./api": {
@@ -24,6 +25,10 @@
     "./passwordFuerte": {
       "types": "./convex/lib/passwordFuerte.ts",
       "default": "./convex/lib/passwordFuerte.ts"
+    },
+    "./horarios": {
+      "types": "./convex/lib/horarios.ts",
+      "default": "./convex/lib/horarios.ts"
     }
   },
   "dependencies": {

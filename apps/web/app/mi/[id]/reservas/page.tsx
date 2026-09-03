@@ -174,7 +174,10 @@ function ReservaForm({
     setError(null);
     if (!zonaId) return setError("Selecciona una zona.");
     if (!unidadId) return setError("Selecciona una unidad.");
-    if (horaFin <= horaInicio) return setError("La hora de fin debe ser posterior a la de inicio.");
+    /* No se compara fin > inicio: una reserva de 22:00 a 01:00 es válida si
+     * la zona cierra pasada la medianoche. Quien sabe si cabe es el backend,
+     * que conoce el horario de la zona y devuelve el motivo exacto. */
+    if (horaInicio === horaFin) return setError("La reserva no puede empezar y terminar a la misma hora.");
     setBusy(true);
     try {
       await create({

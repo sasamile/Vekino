@@ -3,6 +3,7 @@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { cruzaMedianoche } from "@vekino/backend/horarios";
 import {
   DIAS_SEMANA,
   porDiaStateToHorarios,
@@ -148,6 +149,11 @@ export function HorariosPorDiaEditor({
               <li key={s.dia}>
                 {DIAS_SEMANA.find((d) => d.value === s.dia)?.label}:{" "}
                 {s.horaInicio} – {s.horaFin}
+                {/* "09:00 – 02:00" se lee como un error si no se dice que el
+                    cierre es de madrugada. */}
+                {cruzaMedianoche(s.horaInicio, s.horaFin) && (
+                  <span className="text-foreground"> (del día siguiente)</span>
+                )}
               </li>
             ))}
           </ul>

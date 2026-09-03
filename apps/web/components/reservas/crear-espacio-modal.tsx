@@ -8,6 +8,7 @@ import type { Id } from "@vekino/backend/dataModel";
 import { Button } from "@/components/ui/button";
 import { Input, Select, Textarea } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
+import { aMinutos } from "@vekino/backend/horarios";
 import { HorariosPorDiaEditor } from "./horarios-por-dia-editor";
 import {
   defaultPorDiaLaboral,
@@ -78,13 +79,12 @@ export function CrearEspacioModal({
     }
     setHorariosError(undefined);
 
+    /* Un salón que abre a las 09:00 y cierra a las 02:00 es normal, así que
+     * no se exige que el fin sea mayor que el inicio: se entiende que cierra
+     * al día siguiente. Solo se comprueba que las horas sean horas. */
     for (const h of horarios) {
-      const [sh, sm] = h.horaInicio.split(":").map(Number);
-      const [eh, em] = h.horaFin.split(":").map(Number);
-      if ((eh ?? 0) * 60 + (em ?? 0) <= (sh ?? 0) * 60 + (sm ?? 0)) {
-        setError(
-          `En el día configurado: la hora de fin debe ser mayor que la de inicio.`,
-        );
+      if (aMinutos(h.horaInicio) == null || aMinutos(h.horaFin) == null) {
+        setError("Revisa las horas: deben tener el formato HH:MM.");
         return;
       }
     }
