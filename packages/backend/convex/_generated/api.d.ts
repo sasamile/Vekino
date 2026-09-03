@@ -33,6 +33,7 @@ import type * as hogar from "../hogar.js";
 import type * as http from "../http.js";
 import type * as intervenciones from "../intervenciones.js";
 import type * as lib_aporte from "../lib/aporte.js";
+import type * as lib_avalProduccion from "../lib/avalProduccion.js";
 import type * as lib_brevo from "../lib/brevo.js";
 import type * as lib_cloudflareRealtime from "../lib/cloudflareRealtime.js";
 import type * as lib_codigoAsistencia from "../lib/codigoAsistencia.js";
@@ -126,6 +127,7 @@ declare const fullApi: ApiFromModules<{
   http: typeof http;
   intervenciones: typeof intervenciones;
   "lib/aporte": typeof lib_aporte;
+  "lib/avalProduccion": typeof lib_avalProduccion;
   "lib/brevo": typeof lib_brevo;
   "lib/cloudflareRealtime": typeof lib_cloudflareRealtime;
   "lib/codigoAsistencia": typeof lib_codigoAsistencia;

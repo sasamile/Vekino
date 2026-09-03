@@ -11,6 +11,14 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { requireAppUser } from "./model/authz";
 import { etiquetaUnidad, referenciaPago } from "./lib/referenciaPago";
+import {
+  faltantesParaProduccion,
+  QA_AUTH_BASIC,
+  QA_ENDPOINT,
+  QA_SECRET_PASSWORD,
+  QA_SECRET_USER,
+  QA_X_AUTHORIZATION,
+} from "./lib/avalProduccion";
 
 // ─────────────────────────────────────────────────────────────
 // Integración con la Pasarela de Pagos Aval (AV Villas / Grupo Aval)
@@ -55,16 +63,12 @@ interface AvalConfig {
  * En producción se pasan por env en el dashboard de Convex.
  */
 function avalConfig(): AvalConfig {
-  return {
-    endpoint: process.env.AVAL_ENDPOINT ?? "https://qa.psp.ath.com.co",
+  const cfg: AvalConfig = {
+    endpoint: process.env.AVAL_ENDPOINT ?? QA_ENDPOINT,
     // Basic del servicio oauth2 — QA del manual (sección 4.3). Prod por env.
-    authBasic:
-      process.env.AVAL_AUTH_BASIC ??
-      "MzFoMHJlbzJwbTBndmhndjZyOGsycnFnamg6MTc0Y2o0bmp1bjYybXIzYmMxanRmY3Vsb2RsbmFjZmdmNDBvdDVkYzZjaHVvZG9rbDRxcA==",
-    // Llave del convenio (X-Authorization) — QA de ejemplo del manual. Prod por env.
-    xAuthorization:
-      process.env.AVAL_X_AUTHORIZATION ??
-      "L17Y8lLzv7M=ZnJOZm1OZ1JNUUlJTCtxZGdYNmhQUzh1N3ZwRXFMQlBZZG5VWDVFVXNKakUzQkNMSmpWcVltd0RhUVowZTA0VWZ1UWxyNGpWUTRhaWFDTTRPUEdHUkdiTXZTQWZveWkwNW1qSEJQc2tkOXo2dVNaeTVXOGxYazVxenBHd1FXK2k4ZWl1TGc9PQ==",
+    authBasic: process.env.AVAL_AUTH_BASIC ?? QA_AUTH_BASIC,
+    // Llave del convenio (X-Authorization) — QA de ejemplo. Prod por env.
+    xAuthorization: process.env.AVAL_X_AUTHORIZATION ?? QA_X_AUTHORIZATION,
     agrmId: process.env.AVAL_AGRM_ID ?? "00002336",
     companyId: process.env.AVAL_COMPANY_ID ?? "00089898",
     /* El manual dice "valor constante: 16" y NO lo es: el canal se asigna
@@ -77,8 +81,8 @@ function avalConfig(): AvalConfig {
      * convenio, este es el primer valor que hay que preguntarle al banco. */
     channel: process.env.AVAL_CHANNEL ?? "1",
     trnSrc: process.env.AVAL_TRN_SRC ?? "2", // 2 = Banco AvVillas
-    secretUser: process.env.AVAL_SECRET_USER ?? "usuario1",
-    secretPassword: process.env.AVAL_SECRET_PASSWORD ?? "usuario1951",
+    secretUser: process.env.AVAL_SECRET_USER ?? QA_SECRET_USER,
+    secretPassword: process.env.AVAL_SECRET_PASSWORD ?? QA_SECRET_PASSWORD,
     ambiente: process.env.AVAL_AMBIENTE ?? "qa",
     // TLS: en QA el endpoint no envía la cadena de CA completa, así que se
     // relaja la verificación. En producción SIEMPRE estricta (salvo opt-in
@@ -87,6 +91,14 @@ function avalConfig(): AvalConfig {
       process.env.AVAL_INSECURE_TLS === "1" ||
       (process.env.AVAL_AMBIENTE ?? "qa") !== "prod",
   };
+
+  const faltan = faltantesParaProduccion(cfg);
+  if (faltan.length > 0) {
+    throw new Error(
+      `Configuracion de produccion incompleta, no se envia nada al banco: ${faltan.join("; ")}.`,
+    );
+  }
+  return cfg;
 }
 
 /** URL pública de nuestra app web (para la pantalla de comprobante de retorno). */
