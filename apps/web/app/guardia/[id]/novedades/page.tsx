@@ -51,7 +51,7 @@ export default function GuardiaNovedadesPage() {
               {/* Primero el de vehículo: es el que se usa en la ronda, con el
                   celular en la mano y de pie en el parqueadero. */}
               <Button size="sm" onClick={() => setVehiculoOpen(true)}>
-                <Car className="h-4 w-4" /> Reportar vehículo
+                <Car className="h-4 w-4" /> Aporte voluntario
               </Button>
               <Button variant="outline" size="sm" onClick={() => setFormOpen(true)}>
                 <Plus className="h-4 w-4" /> Otra novedad

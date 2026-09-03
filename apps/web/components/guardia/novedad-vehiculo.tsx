@@ -183,7 +183,7 @@ export function NovedadVehiculoModal({
     <Modal
       open
       onClose={onClose}
-      title="Reportar vehículo"
+      title="Reporte aporte voluntario"
       description="Queda con la unidad, la hora y la evidencia para la administración"
       footer={
         <>

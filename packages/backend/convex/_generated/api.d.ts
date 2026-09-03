@@ -41,6 +41,7 @@ import type * as lib_emailCredenciales from "../lib/emailCredenciales.js";
 import type * as lib_expoPush from "../lib/expoPush.js";
 import type * as lib_fechaTexto from "../lib/fechaTexto.js";
 import type * as lib_guiasVekino from "../lib/guiasVekino.js";
+import type * as lib_horarios from "../lib/horarios.js";
 import type * as lib_livekitJwt from "../lib/livekitJwt.js";
 import type * as lib_mensajesAcceso from "../lib/mensajesAcceso.js";
 import type * as lib_passwordFuerte from "../lib/passwordFuerte.js";
@@ -133,6 +134,7 @@ declare const fullApi: ApiFromModules<{
   "lib/expoPush": typeof lib_expoPush;
   "lib/fechaTexto": typeof lib_fechaTexto;
   "lib/guiasVekino": typeof lib_guiasVekino;
+  "lib/horarios": typeof lib_horarios;
   "lib/livekitJwt": typeof lib_livekitJwt;
   "lib/mensajesAcceso": typeof lib_mensajesAcceso;
   "lib/passwordFuerte": typeof lib_passwordFuerte;
