@@ -11,6 +11,7 @@ import { Modal } from "@/components/ui/modal";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 import { useUploadToS3 } from "@/hooks/use-upload-s3";
+import { SelectorUnidades, type UnidadElegida } from "./selector-unidades";
 
 /**
  * Reporte de un vehículo desde la ronda.
@@ -84,6 +85,11 @@ export function NovedadVehiculoModal({
   } | null>(null);
 
   const [motivo, setMotivo] = useState("");
+  /* Casa que el guarda le asigna a una placa desconocida, y los datos con los
+   * que queda registrada en el parque automotor del conjunto. */
+  const [casas, setCasas] = useState<UnidadElegida[]>([]);
+  const [tipoNuevo, setTipoNuevo] = useState<"carro" | "moto" | "bicicleta" | "otro">("carro");
+  const [guardarVehiculo, setGuardarVehiculo] = useState(true);
   const [prioridad, setPrioridad] = useState<Prioridad>("media");
   const [nota, setNota] = useState("");
   const [fotos, setFotos] = useState<Foto[]>([]);
@@ -155,7 +161,9 @@ export function NovedadVehiculoModal({
       });
       const donde = elegido?.unidadNumero
         ? `unidad ${[elegido.unidadTorre, elegido.unidadNumero].filter(Boolean).join(" ")}`
-        : "placa no registrada en el conjunto";
+        : casas.length > 0
+          ? `casa ${casas.map((c) => c.numero).join(", ")} segun el guarda`
+          : "placa no registrada en el conjunto";
 
       await reportar({
         condominioId,
@@ -170,6 +178,17 @@ export function NovedadVehiculoModal({
           .join(" "),
         prioridad,
         vehiculoId: elegido?._id,
+        unidadIds: casas.map((c) => c._id),
+        /* Solo cuando la placa es nueva Y el guarda pidio guardarla: si ya
+         * existe el vehiculo, `vehiculoId` manda y esto ni se mira. */
+        vehiculoNuevo:
+          !elegido && guardarVehiculo && casas[0]
+            ? {
+                placa: placaFinal,
+                unidadId: casas[0]._id,
+                tipo: tipoNuevo,
+              }
+            : undefined,
         fotos: fotos.map((f) => ({ url: f.url, nombre: f.nombre })),
       });
       onClose();
@@ -270,13 +289,46 @@ export function NovedadVehiculoModal({
                 ))}
               </ul>
             ) : resultados && busqueda.length >= 2 ? (
-              /* Que no esté registrada no impide reportar: casi siempre el mal
-                 parqueo es de un visitante, que por definición no está en el
-                 parque automotor del conjunto. */
-              <p className="rounded-lg bg-amber-500/10 px-3 py-2 text-[13px] text-amber-700 dark:text-amber-400">
-                Esa placa no está registrada. Puedes reportarla igual: quedará
-                sin unidad asociada.
-              </p>
+              /* Que no esté registrada no impide reportar —casi siempre el mal
+                 parqueo es de un visitante—, pero cuando el guarda SÍ sabe de
+                 qué casa es, antes se perdía ese dato y el reporte quedaba
+                 huérfano. Ahora puede decirlo aquí mismo. */
+              <div className="space-y-3 rounded-lg bg-amber-500/10 p-3">
+                <p className="text-[13px] text-amber-700 dark:text-amber-400">
+                  Esa placa no está registrada. Si sabes de qué casa es,
+                  asígnala aquí; si no, repórtala igual.
+                </p>
+                <SelectorUnidades
+                  condominioId={condominioId}
+                  elegidas={casas}
+                  onChange={setCasas}
+                />
+                {casas.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-3">
+                    <label className="flex items-center gap-2 text-[13px] text-foreground">
+                      <input
+                        type="checkbox"
+                        checked={guardarVehiculo}
+                        onChange={(e) => setGuardarVehiculo(e.target.checked)}
+                        className="h-4 w-4 rounded border-border"
+                      />
+                      Guardar la placa en la casa {casas[0]!.numero}
+                    </label>
+                    {guardarVehiculo && (
+                      <Select
+                        value={tipoNuevo}
+                        onChange={(e) => setTipoNuevo(e.target.value as typeof tipoNuevo)}
+                        className="w-auto"
+                      >
+                        <option value="carro">Carro</option>
+                        <option value="moto">Moto</option>
+                        <option value="bicicleta">Bicicleta</option>
+                        <option value="otro">Otro</option>
+                      </Select>
+                    )}
+                  </div>
+                )}
+              </div>
             ) : null}
           </div>
         )}

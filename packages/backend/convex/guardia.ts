@@ -12,6 +12,7 @@ import { logMinuta, turnoAbierto } from "./model/minuta";
 import { esVisitanteVigente, ventanaHoyBogota } from "./model/visitantes";
 import { displayNameFromUser } from "./model/displayName";
 import { resolveMediaUrl, resolveMediaUrlList } from "./model/files";
+import { normalizarPlaca } from "./lib/placa";
 
 /** Roles que pueden operar la portería. */
 const GUARD_ROLES = ["guardia", "administrador", "junta_directiva"] as const;
@@ -1460,6 +1461,28 @@ export const reportarNovedad = mutation({
     archivoNombre: v.optional(v.string()),
     /** Vehículo señalado (mal parqueo, bloqueo, placa desconocida…). */
     vehiculoId: v.optional(v.id("vehiculos")),
+    /**
+     * Placa que no estaba en el conjunto y el guarda le asigna casa.
+     *
+     * Va en ESTA mutación y no en una aparte porque las dos escrituras tienen
+     * que pasar juntas o ninguna: crear el vehículo y que luego falle el
+     * reporte dejaría un carro registrado que nadie reportó, y al revés
+     * dejaría el reporte sin la placa que lo justifica.
+     */
+    vehiculoNuevo: v.optional(
+      v.object({
+        placa: v.string(),
+        unidadId: v.id("unidades"),
+        tipo: v.union(
+          v.literal("carro"),
+          v.literal("moto"),
+          v.literal("bicicleta"),
+          v.literal("otro"),
+        ),
+        marca: v.optional(v.string()),
+        color: v.optional(v.string()),
+      }),
+    ),
     /** Casas afectadas. Ninguna, una o varias — nunca obligatorio. */
     unidadIds: v.optional(v.array(v.id("unidades"))),
     /** Cuándo ocurrió, si no fue ahora mismo. */
@@ -1492,8 +1515,53 @@ export const reportarNovedad = mutation({
       porUnidad.set(id, { unidadId: id, numero: u.numero });
     };
 
-    if (args.vehiculoId) {
-      const veh = await ctx.db.get(args.vehiculoId);
+    /* La placa nueva se resuelve primero, para que el resto del handler la
+     * trate igual que a cualquier vehículo ya registrado. */
+    let vehiculoId = args.vehiculoId;
+    if (!vehiculoId && args.vehiculoNuevo) {
+      const placa = normalizarPlaca(args.vehiculoNuevo.placa);
+      if (placa.length < 3) throw new Error("La placa no es válida.");
+      const unidad = await ctx.db.get(args.vehiculoNuevo.unidadId);
+      if (!unidad || unidad.condominioId !== args.condominioId) {
+        throw new Error("Esa casa no pertenece a este condominio.");
+      }
+
+      /* ¿Ya existía? Puede estar archivado —el carro se fue y volvió— y
+       * entonces se revive en vez de crear un duplicado que no heredaría ni
+       * la casa ni el historial. */
+      const existentes = await ctx.db
+        .query("vehiculos")
+        .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
+        .collect();
+      const yaEsta = existentes.find((x) => normalizarPlaca(x.placa) === placa);
+
+      if (yaEsta) {
+        /* Si ya existe y está en otra casa NO se reasigna sola: mover un
+         * carro de casa cambia quién responde por él y quién paga el aporte
+         * voluntario, y eso no puede pasar por un reporte de ronda. La casa
+         * que señaló el guarda igual queda en el reporte. */
+        if (yaEsta.archivadoEn) {
+          await ctx.db.patch(yaEsta._id, { archivadoEn: undefined, updatedAt: Date.now() });
+        }
+        vehiculoId = yaEsta._id;
+      } else {
+        const ahora = Date.now();
+        vehiculoId = await ctx.db.insert("vehiculos", {
+          condominioId: args.condominioId,
+          unidadId: args.vehiculoNuevo.unidadId,
+          placa,
+          tipo: args.vehiculoNuevo.tipo,
+          marca: args.vehiculoNuevo.marca?.trim() || undefined,
+          color: args.vehiculoNuevo.color?.trim() || undefined,
+          observaciones: `Registrado por ${user.name} durante una ronda.`,
+          createdAt: ahora,
+          updatedAt: ahora,
+        });
+      }
+    }
+
+    if (vehiculoId) {
+      const veh = await ctx.db.get(vehiculoId);
       if (!veh || veh.condominioId !== args.condominioId) {
         throw new Error("Vehículo no encontrado en este condominio.");
       }
@@ -1520,7 +1588,7 @@ export const reportarNovedad = mutation({
       archivoStorageId: args.archivoStorageId,
       archivoUrl: args.archivoUrl,
       archivoNombre: args.archivoNombre?.trim() || undefined,
-      vehiculoId: args.vehiculoId,
+      vehiculoId,
       vehiculoPlaca,
       vehiculoDescripcion,
       unidades: unidades.length ? unidades : undefined,
