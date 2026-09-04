@@ -9,6 +9,7 @@ import {
 } from "./model/authz";
 import { displayNameFromUser } from "./model/displayName";
 import { resolveUserImage } from "./model/userImage";
+import { certificaPorApi } from "./lib/certificacion";
 
 /**
  * PORTAL DEL RESIDENTE / PROPIETARIO
@@ -98,7 +99,15 @@ export const home = query({
         logo: condominio.logo ?? null,
         coverImage: condominio.coverImage ?? null,
         primaryColor: condominio.primaryColor ?? null,
-        avalPortalUrl: condominio.avalPortalUrl ?? null,
+        /* Se le esconde la URL del portal a quien esta certificando, para
+         * que su boton de pagar use la API. Todos los demas siguen yendo al
+         * portal del banco, donde el pago es real (lib/certificacion.ts). */
+        avalPortalUrl: certificaPorApi(
+          user.email,
+          process.env.AVAL_CERTIFICACION_EMAILS,
+        )
+          ? null
+          : (condominio.avalPortalUrl ?? null),
       },
     };
   },

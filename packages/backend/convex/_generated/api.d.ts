@@ -35,6 +35,7 @@ import type * as intervenciones from "../intervenciones.js";
 import type * as lib_aporte from "../lib/aporte.js";
 import type * as lib_avalProduccion from "../lib/avalProduccion.js";
 import type * as lib_brevo from "../lib/brevo.js";
+import type * as lib_certificacion from "../lib/certificacion.js";
 import type * as lib_cloudflareRealtime from "../lib/cloudflareRealtime.js";
 import type * as lib_codigoAsistencia from "../lib/codigoAsistencia.js";
 import type * as lib_emailApoderado from "../lib/emailApoderado.js";
@@ -129,6 +130,7 @@ declare const fullApi: ApiFromModules<{
   "lib/aporte": typeof lib_aporte;
   "lib/avalProduccion": typeof lib_avalProduccion;
   "lib/brevo": typeof lib_brevo;
+  "lib/certificacion": typeof lib_certificacion;
   "lib/cloudflareRealtime": typeof lib_cloudflareRealtime;
   "lib/codigoAsistencia": typeof lib_codigoAsistencia;
   "lib/emailApoderado": typeof lib_emailApoderado;
