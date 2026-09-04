@@ -356,6 +356,190 @@ async function armarDatosTrn(
 }
 
 /**
+ * Crea una transacción con un monto y un titular arbitrarios, sin factura.
+ *
+ * Existe por el set de pruebas del banco, que exige un pago de 300 millones y
+ * otro de 6 mil millones. Ninguna cuota de administración se acerca a eso, y
+ * el flujo normal solo sabe cobrar el valor exacto de una factura: sin esto
+ * habría que inventar facturas falsas en la base de producción para poder
+ * certificar, y luego acordarse de borrarlas.
+ *
+ * No toca `facturas` ni `pagos`: nace y muere en la pasarela. Lo único que
+ * deja es lo que el banco necesita ver.
+ *
+ * Se niega en producción. Es una herramienta de certificación, y en
+ * producción crearía un cobro real que no le corresponde a nadie.
+ */
+export const crearTrnCertificacion = internalAction({
+  args: {
+    monto: v.number(),
+    tipoPersona: v.union(v.literal("natural"), v.literal("juridica")),
+    documento: v.optional(v.string()),
+    nombre: v.optional(v.string()),
+    email: v.optional(v.string()),
+    referencia: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const cfg = avalConfig();
+    if (cfg.ambiente === "prod") {
+      throw new Error(
+        "crearTrnCertificacion no se ejecuta en producción: crearía un cobro real sin dueño.",
+      );
+    }
+    if (!Number.isInteger(args.monto) || args.monto <= 0) {
+      throw new Error("El monto debe ser un entero positivo de pesos.");
+    }
+
+    const juridica = args.tipoPersona === "juridica";
+    /* Persona jurídica paga con NIT; natural con cédula. El banco pide un
+     * caso de cada una, y la pasarela decide el formulario de PSE por este
+     * par de campos. */
+    const govType = juridica ? "NIT" : "CC";
+    const documento = args.documento ?? (juridica ? "9001234567" : "1098526415");
+    const nombre =
+      args.nombre ?? (juridica ? "Certificacion Juridica SAS" : "Certificacion Natural");
+    /* Referencia distinta en cada corrida.
+     *
+     * Con una fija, el segundo caso del set de pruebas choca con el primero:
+     * la pasarela responde 27 ("transacción PENDIENTE para esta referencia")
+     * hasta que la anterior expire, y certificar los siete casos tomaría toda
+     * una tarde de esperas. Se puede fijar a mano con `referencia` cuando lo
+     * que se quiera enseñar sea justamente el número de casa. */
+    const referencia = args.referencia ?? String(Date.now()).slice(-9);
+
+    const rqUID = generarRqUID();
+    const site = convexSiteUrl();
+    const portalUrl = site ? `${site}/aval/retorno` : `${webAppUrl()}/pago/retorno`;
+    const token = await obtenerToken(ctx, cfg);
+    const headers = avalHeaders(cfg, token, rqUID, govType, documento, "127.0.0.1");
+
+    const partes = nombre.split(" ");
+    const body = {
+      Agreement: { AgrmId: cfg.agrmId },
+      SecretList: [
+        { SecretId: "user", Secret: cfg.secretUser },
+        { SecretId: "password", Secret: cfg.secretPassword },
+      ],
+      Fee: { CurAmt: { Amt: String(args.monto), CurCode: "COP" } },
+      TaxPmtInfo: { CurAmt: { Amt: "0", CurCode: "COP" } },
+      InvoicePmtInfo: {
+        InvoiceInfo: {
+          InvoiceType: "1",
+          InvoiceNum: referencia,
+          Desc: `Certificacion ${juridica ? "persona juridica" : "persona natural"} - ${args.monto} COP`.slice(0, 150),
+          NIE: [referencia],
+          InvoiceSender: { Category: "0" },
+        },
+        PmtStatus: { PmtMethod: "2" },
+      },
+      RefInfo: [
+        { RefId: "PortalURL", RefType: portalUrl },
+        { RefId: "Template", RefType: "0" },
+        { RefId: "TokenizedData", RefType: "0" },
+      ],
+      TrnSrcInfo: { TrnSrc: cfg.trnSrc },
+      CustInfo: {
+        PersonInfo: {
+          PersonName: {
+            FirstName: partes[0] ?? "Certificacion",
+            LastName: partes.slice(1).join(" ") || "-",
+            FullName: nombre,
+          },
+          ContactInfo: {
+            EmailAddr: args.email ?? "certificacion@vekino.com",
+            PhoneNum: { Phone: "3163801625" },
+          },
+        },
+      },
+    };
+
+    const res = await avalRequest(ctx, cfg, {
+      url: `${cfg.endpoint}/payment/Payments_Trn/Trn`,
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+    });
+
+    let json: any;
+    try {
+      json = JSON.parse(res.text);
+    } catch {
+      throw new Error(`Trn: respuesta no-JSON (HTTP ${res.status}): ${res.text.slice(0, 200)}`);
+    }
+    const estado = json?.InvoicePmtInfo?.PmtStatus;
+    const url = (json?.RefInfo ?? []).find(
+      (r: { RefId?: string }) => r.RefId === "URL",
+    )?.RefType;
+    if (!estado?.PmtAuthId || !url) {
+      throw new Error(
+        `La pasarela no devolvió transacción: ${JSON.stringify(json?.MsgRsHdr?.Status ?? json)}`,
+      );
+    }
+
+    return {
+      pmtAuthId: estado.PmtAuthId as string,
+      referencia,
+      monto: args.monto,
+      tipoPersona: args.tipoPersona,
+      govType,
+      documento,
+      urlPasarela: url as string,
+      urlRetorno: portalUrl,
+      rqUID,
+    };
+  },
+});
+
+/**
+ * Lo que el banco valida de una transacción, en un solo bloque.
+ *
+ * Consulta BasicData en vivo: la evidencia debe salir de la pasarela, no de
+ * nuestra copia, que es justamente lo que ellos quieren comprobar.
+ */
+export const evidenciaCertificacion = internalAction({
+  args: { pmtAuthId: v.string() },
+  handler: async (ctx, args) => {
+    const cfg = avalConfig();
+    const token = await obtenerToken(ctx, cfg);
+    const headers = avalHeaders(
+      cfg,
+      token,
+      generarRqUID(),
+      "GUEST",
+      "0",
+      "127.0.0.1",
+    );
+    const res = await avalRequest(ctx, cfg, {
+      url: `${cfg.endpoint}/payment/Payments_BasicData/BasicData/${args.pmtAuthId}`,
+      method: "GET",
+      headers,
+    });
+    let json: any;
+    try {
+      json = JSON.parse(res.text);
+    } catch {
+      throw new Error(`BasicData: respuesta no-JSON (HTTP ${res.status}): ${res.text.slice(0, 200)}`);
+    }
+    const info = json?.InvoicePmtInfo?.InvoiceInfo ?? {};
+    const st = json?.InvoicePmtInfo?.PmtStatus ?? {};
+    return {
+      pmtAuthId: args.pmtAuthId,
+      referencia: info.InvoiceNum ?? null,
+      descripcion: info.Desc ?? null,
+      monto: json?.Fee?.CurAmt?.Amt ?? null,
+      statusCode: st.StatusCode ?? null,
+      statusDesc: st.StatusDesc ?? null,
+      estadoLegible: mapStatusCode(String(st.StatusCode ?? "")),
+      medioPago: st.PmtMethodDesc ?? st.PmtMethod ?? null,
+      banco: st.BankName ?? null,
+      approvalId: st.ApprovalId ?? null,
+      fecha: st.EffDt ?? null,
+      crudo: json,
+    };
+  },
+});
+
+/**
  * Valida que el usuario autenticado puede pagar la factura y devuelve todos
  * los datos necesarios para armar la transacción Trn.
  */
