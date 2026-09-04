@@ -29,6 +29,10 @@
     "./horarios": {
       "types": "./convex/lib/horarios.ts",
       "default": "./convex/lib/horarios.ts"
+    },
+    "./periodos": {
+      "types": "./convex/lib/periodos.ts",
+      "default": "./convex/lib/periodos.ts"
     }
   },
   "dependencies": {

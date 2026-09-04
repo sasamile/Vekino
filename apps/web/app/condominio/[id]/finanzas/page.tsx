@@ -25,6 +25,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { usePersistedPeriodo } from "@/hooks/use-persisted-periodo";
 import { cop } from "@/lib/utils";
+import { periodoDe } from "@vekino/backend/periodos";
 
 const PAGE_SIZE = 30;
 
@@ -62,7 +63,10 @@ export default function FinanzasPage() {
   const { periodo, setPeriodo } = usePersistedPeriodo(condominioId, periodos);
   const [uploadKey, setUploadKey] = useState(0);
 
-  const periodoActivo = periodo ?? periodos?.[0] ?? "2026-03";
+  /* El respaldo era "2026-03" escrito a mano: un conjunto sin facturas
+   * aterrizaba en marzo de 2026 para siempre. El mes de hoy al menos es
+   * cierto. */
+  const periodoActivo = periodo ?? periodos?.[0] ?? periodoDe(new Date());
   const resumen = useQuery(api.facturas.resumenPeriodo, { condominioId, periodo: periodoActivo });
 
   const [search, setSearch] = useState("");

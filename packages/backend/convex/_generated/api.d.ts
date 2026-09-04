@@ -47,6 +47,7 @@ import type * as lib_horarios from "../lib/horarios.js";
 import type * as lib_livekitJwt from "../lib/livekitJwt.js";
 import type * as lib_mensajesAcceso from "../lib/mensajesAcceso.js";
 import type * as lib_passwordFuerte from "../lib/passwordFuerte.js";
+import type * as lib_periodos from "../lib/periodos.js";
 import type * as lib_permanencia from "../lib/permanencia.js";
 import type * as lib_redactor from "../lib/redactor.js";
 import type * as lib_referenciaPago from "../lib/referenciaPago.js";
@@ -142,6 +143,7 @@ declare const fullApi: ApiFromModules<{
   "lib/livekitJwt": typeof lib_livekitJwt;
   "lib/mensajesAcceso": typeof lib_mensajesAcceso;
   "lib/passwordFuerte": typeof lib_passwordFuerte;
+  "lib/periodos": typeof lib_periodos;
   "lib/permanencia": typeof lib_permanencia;
   "lib/redactor": typeof lib_redactor;
   "lib/referenciaPago": typeof lib_referenciaPago;

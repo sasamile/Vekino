@@ -9,6 +9,7 @@ import { emparejarLote, type ModoEmparejado } from "@/lib/emparejar-unidad";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { Select } from "@/components/ui/input";
+import { periodosElegibles } from "@vekino/backend/periodos";
 
 type Step = "idle" | "uploading" | "preview" | "inserting" | "done";
 
@@ -233,7 +234,9 @@ export function UploadFacturas({
             <div className="space-y-1.5">
               <label className="block text-xs font-medium text-foreground">Período</label>
               <Select value={periodo} onChange={(e) => setPeriodo(e.target.value)}>
-                {["2026-01","2026-02","2026-03","2026-04","2026-05","2026-06","2026-07","2026-08"].map((p) => (
+                {/* Generados desde hoy: la lista escrita a mano llegaba hasta
+                    agosto y el 1 de septiembre dejo de poderse facturar. */}
+                {periodosElegibles().map((p) => (
                   <option key={p} value={p}>{p}</option>
                 ))}
               </Select>
