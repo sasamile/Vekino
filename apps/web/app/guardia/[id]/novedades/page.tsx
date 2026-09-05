@@ -230,7 +230,7 @@ function NovedadModal({ condominioId, onClose }: { condominioId: Id<"condominios
         <div className="grid grid-cols-3 gap-3">
           <div className="col-span-2 space-y-1.5">
             <label className="flex items-center gap-1.5 text-xs font-medium text-foreground">
-              <Home className="h-3.5 w-3.5" /> Casas afectadas (opcional)
+              <Home className="h-3.5 w-3.5" /> Casa responsable (opcional)
             </label>
             <SelectorUnidades
               condominioId={condominioId}

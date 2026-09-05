@@ -8,7 +8,7 @@ import {
   getMembership,
   hasPlatformRole,
 } from "./model/authz";
-import { logMinuta, turnoAbierto } from "./model/minuta";
+import { logMinuta, rondaEnCurso, turnoAbierto } from "./model/minuta";
 import { esVisitanteVigente, ventanaHoyBogota } from "./model/visitantes";
 import { displayNameFromUser } from "./model/displayName";
 import { resolveMediaUrl, resolveMediaUrlList } from "./model/files";
@@ -1578,10 +1578,15 @@ export const reportarNovedad = mutation({
     );
 
     const turno = await turnoAbierto(ctx, args.condominioId);
+    /* Si hay ronda en curso, el reporte queda colgado de ella. No se le
+     * pregunta al guarda: la especificación pide que la asociación sea
+     * automática, y a las 2 a. m. nadie se acuerda de marcar una casilla. */
+    const ronda = await rondaEnCurso(ctx, args.condominioId);
     const now = Date.now();
     const id = await ctx.db.insert("guardiaNovedadReportes", {
       condominioId: args.condominioId,
       turnoId: turno?._id,
+      rondaId: ronda?._id,
       titulo,
       descripcion,
       prioridad: args.prioridad,

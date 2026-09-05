@@ -22,6 +22,25 @@ export async function turnoAbierto(
 }
 
 /**
+ * Ronda en curso del condominio (maximo una a la vez), o null.
+ *
+ * Se consulta por indice y no recorriendo el turno: cada evento de porteria
+ * pasa por aqui, y esto tiene que costar lo mismo con diez rondas que con
+ * diez mil.
+ */
+export async function rondaEnCurso(
+  ctx: QueryCtx | MutationCtx,
+  condominioId: Id<"condominios">,
+): Promise<Doc<"guardiaRondas"> | null> {
+  return await ctx.db
+    .query("guardiaRondas")
+    .withIndex("by_condominio_estado", (q) =>
+      q.eq("condominioId", condominioId).eq("estado", "en_curso"),
+    )
+    .first();
+}
+
+/**
  * Registra un evento en la minuta digital (append-only).
  *
  * Réplica de la regla transversal de VekinoApi: casi toda acción de portería
@@ -44,9 +63,15 @@ export async function logMinuta(
 ): Promise<void> {
   const turnoId =
     args.turnoId ?? (await turnoAbierto(ctx, args.condominioId))?._id;
+  /* La ronda se engancha sola. La especificacion pide que cada registro
+   * quede asociado a la ronda activa, y este es el unico sitio por donde
+   * pasan todos: pedirselo a cada mutacion garantizaria que alguna se
+   * olvidara. */
+  const rondaId = (await rondaEnCurso(ctx, args.condominioId))?._id;
   await ctx.db.insert("minutaEventos", {
     condominioId: args.condominioId,
     turnoId,
+    rondaId,
     modulo: args.modulo,
     tipo: args.tipo,
     unidad: args.unidad,

@@ -1656,7 +1656,20 @@ export default defineSchema({
     .index("by_condominio", ["condominioId"])
     .index("by_condominio_estado", ["condominioId", "estado"]),
 
-  /** Ronda de control dentro de un turno (zona + novedad + hasta 5 fotos). */
+  /**
+   * Un recorrido de vigilancia, con principio y fin.
+   *
+   * Nacio como un apunte suelto —zona, novedad y fotos— dentro del turno. La
+   * administracion pidio trazabilidad: quien la hizo, a que hora empezo, que
+   * paso durante el recorrido y cuanto duro. Asi que ahora tiene estado.
+   *
+   * Vive DENTRO del turno y no lo reemplaza: un turno son ocho o doce horas
+   * y contiene varias rondas de una hora. El turno responde por la jornada
+   * (dotacion, entrega al relevo); la ronda, por el recorrido.
+   *
+   * Todos los campos nuevos son opcionales porque las rondas viejas —las que
+   * eran un simple apunte— siguen en la tabla y tienen que seguir leyendose.
+   */
   guardiaRondas: defineTable({
     condominioId: v.id("condominios"),
     turnoId: v.id("guardiaTurnos"),
@@ -1664,10 +1677,31 @@ export default defineSchema({
     zona: v.string(), // nombre denormalizado
     novedad: v.optional(v.string()),
     fotos: v.array(v.string()), // URLs S3 (o storageId legacy como string)
+
+    /** Consecutivo por condominio, para poder nombrarla: "Ronda #14". */
+    numero: v.optional(v.number()),
+    /* Quien la hizo, copiado. El turno tiene su titular, pero una ronda la
+     * puede hacer el guarda secundario, y el reporte debe decir cual. */
+    guardiaUserId: v.optional(v.id("users")),
+    guardiaNombre: v.optional(v.string()),
+
+    /**
+     * `en_curso` admite registros; `finalizada` ya no.
+     *
+     * Ausente en las rondas viejas, que nunca tuvieron ciclo de vida: se
+     * leen como finalizadas, porque desde luego no estan en curso.
+     */
+    estado: v.optional(
+      v.union(v.literal("en_curso"), v.literal("finalizada")),
+    ),
+    fechaInicio: v.optional(v.number()),
+    fechaCierre: v.optional(v.number()),
+    observacionesCierre: v.optional(v.string()),
     createdAt: v.number(),
   })
     .index("by_turno", ["turnoId"])
-    .index("by_condominio", ["condominioId"]),
+    .index("by_condominio", ["condominioId"])
+    .index("by_condominio_estado", ["condominioId", "estado"]),
 
   /**
    * Minuta digital (bitácora append-only). Los eventos se generan
@@ -1677,6 +1711,10 @@ export default defineSchema({
   minutaEventos: defineTable({
     condominioId: v.id("condominios"),
     turnoId: v.optional(v.id("guardiaTurnos")), // turno activo al momento (si había)
+    /* Ronda en curso al momento del evento, si la habia. Se rellena sola en
+     * logMinuta: la especificacion pide que cada registro quede asociado a la
+     * ronda activa sin que el guarda tenga que acordarse de indicarlo. */
+    rondaId: v.optional(v.id("guardiaRondas")),
     modulo: v.union(
       v.literal("visitantes"),
       v.literal("paqueteria"),
@@ -1699,6 +1737,8 @@ export default defineSchema({
   guardiaNovedadReportes: defineTable({
     condominioId: v.id("condominios"),
     turnoId: v.optional(v.id("guardiaTurnos")),
+    /** Ronda durante la cual se reporto, si habia una en curso. */
+    rondaId: v.optional(v.id("guardiaRondas")),
     titulo: v.string(),
     descripcion: v.string(),
     prioridad: v.union(v.literal("baja"), v.literal("media"), v.literal("alta")),

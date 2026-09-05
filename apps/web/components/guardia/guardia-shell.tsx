@@ -25,6 +25,7 @@ import { CambiarClaveTemporalModal } from "@/components/cambiar-clave-temporal-m
 import { WhatsappFab } from "@/components/whatsapp-fab";
 import { hexToHslChannels, hexToBrandForeground, cn, initials } from "@/lib/utils";
 import { BrandThemeProvider } from "@/lib/brand-theme";
+import { Footprints } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 const NAV: { label: string; segment: string; icon: LucideIcon }[] = [
@@ -32,6 +33,7 @@ const NAV: { label: string; segment: string; icon: LucideIcon }[] = [
   { label: "Visitantes", segment: "visitantes", icon: UserCheck },
   { label: "Paquetería", segment: "paqueteria", icon: Package },
   { label: "Reservas", segment: "reservas", icon: CalendarCheck },
+  { label: "Rondas", segment: "rondas", icon: Footprints },
   { label: "Novedades", segment: "novedades", icon: AlertTriangle },
   { label: "Parqueadero", segment: "parqueadero", icon: Car },
   { label: "Avisos", segment: "avisos", icon: Megaphone },
