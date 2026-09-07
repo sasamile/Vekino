@@ -62,6 +62,7 @@ import type * as lib_ycloud from "../lib/ycloud.js";
 import type * as memberships from "../memberships.js";
 import type * as migrations from "../migrations.js";
 import type * as model_acceso from "../model/acceso.js";
+import type * as model_asignacion from "../model/asignacion.js";
 import type * as model_authz from "../model/authz.js";
 import type * as model_displayName from "../model/displayName.js";
 import type * as model_files from "../model/files.js";
@@ -166,6 +167,7 @@ declare const fullApi: ApiFromModules<{
   memberships: typeof memberships;
   migrations: typeof migrations;
   "model/acceso": typeof model_acceso;
+  "model/asignacion": typeof model_asignacion;
   "model/authz": typeof model_authz;
   "model/displayName": typeof model_displayName;
   "model/files": typeof model_files;

@@ -1,6 +1,8 @@
 import type { QueryCtx, MutationCtx } from "../_generated/server";
 import type { Doc, Id } from "../_generated/dataModel";
 import { getCurrentAppUser, getMembership, hasPlatformRole } from "./authz";
+import { asignacionVigente } from "./asignacion";
+
 import {
   capacidadesDePlataforma,
   capacidadesDeRolAsignacion,
@@ -10,6 +12,11 @@ import {
   unir,
   type Capacidad,
 } from "../lib/vigilancia";
+
+/* `asignacionVigente` vive en `model/asignacion.ts` para que `authz.ts`
+ * tambien pueda usarla sin cerrar un ciclo de imports. Se reexporta porque
+ * este sigue siendo el sitio donde se busca "el eje de seguridad". */
+export { asignacionVigente };
 
 type Ctx = QueryCtx | MutationCtx;
 
@@ -58,48 +65,6 @@ export async function getCompaniaMiembro(
     .withIndex("by_user", (q) => q.eq("userId", userId))
     .collect();
   return filas.find((m) => m.isActive) ?? null;
-}
-
-/**
- * La asignación con la que esta persona puede operar hoy en este conjunto.
- *
- * Devuelve null en cuanto falla cualquier eslabón de la cadena: compañía
- * suspendida, miembro dado de baja, contrato vencido o asignación terminada.
- * Todo se comprueba al leer, así que el corte es exacto y no depende de que
- * ningún proceso se haya ejecutado.
- */
-export async function asignacionVigente(
-  ctx: Ctx,
-  userId: Id<"users">,
-  condominioId: Id<"condominios">,
-  ahora: number = Date.now(),
-): Promise<{
-  asignacion: Doc<"asignaciones">;
-  contrato: Doc<"companiaContratos">;
-  compania: Doc<"companiasSeguridad">;
-} | null> {
-  const candidatas = await ctx.db
-    .query("asignaciones")
-    .withIndex("by_user_condominio", (q) =>
-      q.eq("userId", userId).eq("condominioId", condominioId),
-    )
-    .collect();
-
-  for (const asignacion of candidatas) {
-    if (!estaVigente(asignacion, ahora)) continue;
-
-    const contrato = await ctx.db.get(asignacion.contratoId);
-    if (!contrato || !estaVigente(contrato, ahora)) continue;
-
-    const compania = await ctx.db.get(asignacion.companiaId);
-    if (!compania || compania.estado !== "activa") continue;
-
-    const miembro = await ctx.db.get(asignacion.companiaMiembroId);
-    if (!miembro || !miembro.isActive) continue;
-
-    return { asignacion, contrato, compania };
-  }
-  return null;
 }
 
 /**

@@ -5,13 +5,18 @@ import { useQuery } from "convex/react";
 import {
   Building2,
   CheckCircle2,
+  ShieldCheck,
   Users,
   DoorOpen,
   LifeBuoy,
   ArrowUpRight,
 } from "lucide-react";
 import { api } from "@vekino/backend/api";
-import { homeHrefForRoles, isGuardiaOnly } from "@/lib/role-routing";
+import {
+  homeHrefForRoles,
+  homeHrefForAsignacion,
+  isGuardiaOnly,
+} from "@/lib/role-routing";
 import { PageContainer } from "@/components/layout/page-container";
 import { PageHeader } from "@/components/layout/page-header";
 import { StatCard } from "@/components/layout/stat-card";
@@ -466,6 +471,47 @@ function UserHome({
             )}
           </CardContent>
         </Card>
+
+        {/* El otro eje. Quien trabaja aquí por una compañía de vigilancia no
+            tiene membresía en el conjunto, y sin esta tarjeta la sesión se le
+            quedaba en blanco. */}
+        {me.asignaciones.length > 0 && (
+          <Card>
+            <CardHeader className="mb-0">
+              <CardTitle className="flex items-center gap-2">
+                <ShieldCheck className="h-4 w-4 text-brand" />
+                Donde trabajo ({me.asignaciones.length})
+              </CardTitle>
+              <CardDescription>
+                Conjuntos que cubres por la compañía de vigilancia.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <ul className="divide-y divide-border">
+                {me.asignaciones.map((a) => (
+                  <li key={a.asignacionId}>
+                    <Link
+                      href={homeHrefForAsignacion(a.condominioId, a.rol)}
+                      className="group flex items-center justify-between py-3 hover:text-brand"
+                    >
+                      <span className="flex flex-col">
+                        <span className="text-sm text-foreground">
+                          {a.condominioNombre}
+                        </span>
+                        <span className="text-xs text-muted-foreground">
+                          {a.rol} · {a.companiaNombre}
+                        </span>
+                      </span>
+                      <span className="text-xs text-brand opacity-0 group-hover:opacity-100">
+                        {a.rol === "supervisor" ? "Supervisión →" : "Portería →"}
+                      </span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </CardContent>
+          </Card>
+        )}
       </div>
     </PageContainer>
   );

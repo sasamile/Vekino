@@ -1,7 +1,12 @@
 import { v } from "convex/values";
-import { query, mutation, action } from "./_generated/server";
+import {
+  query,
+  mutation,
+  action,
+  internalMutation,
+} from "./_generated/server";
 import type { QueryCtx } from "./_generated/server";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { createAuth } from "./auth";
 import {
@@ -293,7 +298,16 @@ async function exigirNitLibre(
   }
 }
 
-export const create = mutation({
+/**
+ * Inserta la fila de la compania. Interna: el alta entra por `registrar`.
+ *
+ * Publica y suelta era justo el agujero de este modulo: dejaba nacer una
+ * compania sin una sola persona que pudiera entrar a ella, y el "Correo de
+ * contacto" del formulario —que es un dato de contacto, no una cuenta— hacia
+ * creer lo contrario. Una compania sin administrador no es un estado util del
+ * sistema, asi que deja de ser alcanzable.
+ */
+export const crearCompania = internalMutation({
   args: {
     nombre: v.string(),
     nit: v.optional(v.string()),
@@ -320,6 +334,141 @@ export const create = mutation({
       createdAt: now,
       updatedAt: now,
     });
+  },
+});
+
+/**
+ * Deshace un registro que no llegó a completarse.
+ *
+ * Solo se usa desde `registrar` y solo sobre la compañía que ese mismo
+ * intento acaba de crear, así que no puede haber nada anterior que perder.
+ * Existe para que un fallo a mitad de camino no deje una compañía sin
+ * administrador —el estado exacto que dejaba a la empresa sin poder entrar— y
+ * para que reintentar no choque contra "ya existe una compañía con ese NIT".
+ *
+ * El perfil de `users` NO se toca: puede ser una persona que ya existía
+ * (un residente que además va a administrar la empresa), y borrarlo sería
+ * destruir algo que el registro no creó. Un perfil sin membresía es inocuo y
+ * el reintento lo reutiliza.
+ */
+export const descartarRegistroFallido = internalMutation({
+  args: { companiaId: v.id("companiasSeguridad") },
+  handler: async (ctx, args) => {
+    const contratos = await ctx.db
+      .query("companiaContratos")
+      .withIndex("by_compania", (q) => q.eq("companiaId", args.companiaId))
+      .collect();
+    // Cinturón: una compañía recién creada no puede tener contratos. Si los
+    // tiene, no es la que creamos y no se toca.
+    if (contratos.length > 0) return { descartada: false as const };
+
+    const miembros = await ctx.db
+      .query("companiaMiembros")
+      .withIndex("by_compania", (q) => q.eq("companiaId", args.companiaId))
+      .collect();
+    for (const m of miembros) await ctx.db.delete(m._id);
+
+    await ctx.db.delete(args.companiaId);
+    return { descartada: true as const };
+  },
+});
+
+/**
+ * Registra una compañía: la empresa Y el usuario con el que va a entrar.
+ *
+ * Es la puerta del alta. Antes eran dos pasos sueltos —crear la compañía y,
+ * cuando alguien se acordara, darle de alta a su gente— y el primero se
+ * sentía completo: la compañía aparecía en la lista. Pero no existía ninguna
+ * cuenta con la que entrar, así que el intento de iniciar sesión con el
+ * correo de contacto respondía "user not found". Aquí las dos cosas son un
+ * solo acto.
+ *
+ * NO duplica nada del alta de personal: reutiliza `crearMiembro` tal cual,
+ * que es el mismo camino por el que se dan de alta el guarda y el supervisor
+ * (y, a su vez, el mismo `internalAdapter` de Better Auth que usa
+ * `users.createCondoMember`). El administrador que sale de aquí es
+ * estructuralmente idéntico a cualquier otro miembro de compañía: perfil en
+ * `users` con `authId`, credencial en Better Auth y fila en
+ * `companiaMiembros`.
+ */
+export const registrar = action({
+  args: {
+    nombre: v.string(),
+    nit: v.optional(v.string()),
+    contactoEmail: v.optional(v.string()),
+    contactoTelefono: v.optional(v.string()),
+    primaryColor: v.optional(v.string()),
+    /** La cuenta con la que la empresa entrará. Obligatoria: es el punto. */
+    adminEmail: v.string(),
+    adminName: v.string(),
+    adminPassword: v.string(),
+    adminTelefono: v.optional(v.string()),
+    adminCargo: v.optional(v.string()),
+  },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{
+    ok: true;
+    companiaId: Id<"companiasSeguridad">;
+    userId: Id<"users">;
+    miembroId: Id<"companiaMiembros">;
+    existed: boolean;
+  }> => {
+    /* Lo que se puede comprobar sin base, se comprueba ANTES de crear nada:
+     * un formulario mal llenado no debe dejar una compañía a medias. */
+    if (!args.adminEmail.trim() || !args.adminName.trim()) {
+      throw new Error(
+        "El nombre y el correo del administrador son obligatorios.",
+      );
+    }
+    if (args.adminPassword.trim().length < 8) {
+      throw new Error("La contraseña debe tener al menos 8 caracteres.");
+    }
+
+    const companiaId: Id<"companiasSeguridad"> = await ctx.runMutation(
+      internal.companias.crearCompania,
+      {
+        nombre: args.nombre,
+        nit: args.nit,
+        contactoEmail: args.contactoEmail,
+        contactoTelefono: args.contactoTelefono,
+        primaryColor: args.primaryColor,
+      },
+    );
+
+    try {
+      const admin: {
+        ok: true;
+        userId: Id<"users">;
+        miembroId: Id<"companiaMiembros">;
+        existed: boolean;
+      } = await ctx.runAction(api.companias.crearMiembro, {
+        companiaId,
+        email: args.adminEmail,
+        name: args.adminName,
+        password: args.adminPassword,
+        telefono: args.adminTelefono,
+        cargo: args.adminCargo,
+        roles: ["admin_compania"],
+      });
+
+      return {
+        ok: true as const,
+        companiaId,
+        userId: admin.userId,
+        miembroId: admin.miembroId,
+        existed: admin.existed,
+      };
+    } catch (e) {
+      /* Si el administrador no se pudo crear, la compañía no debe quedar.
+       * Que la empresa exista sin nadie que pueda entrar es exactamente el
+       * fallo que esta función viene a cerrar. */
+      await ctx.runMutation(internal.companias.descartarRegistroFallido, {
+        companiaId,
+      });
+      throw e;
+    }
   },
 });
 
@@ -599,7 +748,7 @@ export const crearMiembro = action({
       }
     }
 
-    await ctx.runMutation(api.users.linkAuthId, {
+    await ctx.runMutation(internal.users.linkAuthId, {
       userId: perfil.userId,
       authId: authUserId,
     });

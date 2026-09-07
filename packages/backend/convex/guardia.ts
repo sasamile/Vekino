@@ -8,6 +8,8 @@ import {
   getMembership,
   hasPlatformRole,
 } from "./model/authz";
+import { resolverAcceso } from "./model/acceso";
+import { asignacionVigente } from "./model/asignacion";
 import { logMinuta, rondaEnCurso, turnoAbierto } from "./model/minuta";
 import { esVisitanteVigente, ventanaHoyBogota } from "./model/visitantes";
 import { displayNameFromUser } from "./model/displayName";
@@ -71,15 +73,17 @@ export const home = query({
     const condominio = await ctx.db.get(args.condominioId);
     if (!condominio) return { allowed: false as const };
 
-    const isPlatform = hasPlatformRole(user, "superadmin", "admin");
-    const membership = await getMembership(ctx, user._id, args.condominioId);
-    const puede =
-      isPlatform ||
-      (!!membership &&
-        membership.isActive &&
-        membership.roles.some((r) => (GUARD_ROLES as readonly string[]).includes(r)));
-
-    if (!puede) return { allowed: false as const };
+    /* La puerta del turno se pregunta por CAPACIDAD y no por rol: así entra
+     * igual el guarda propio del conjunto y el que lo cubre por una compañía
+     * de vigilancia, que hasta ahora quedaba fuera de su propia portería.
+     * `porteria.operar` es exactamente lo que da GUARD_ROLES —administrador,
+     * junta_directiva y guardia— más el guarda asignado; el supervisor NO la
+     * tiene, y es correcto: supervisa, no releva. */
+    const acceso = await resolverAcceso(ctx, args.condominioId);
+    if (!acceso || !acceso.capacidades.has("porteria.operar")) {
+      return { allowed: false as const };
+    }
+    const isPlatform = acceso.esPlataforma;
 
     return {
       allowed: true as const,
@@ -129,14 +133,40 @@ export const equipo = query({
     const guardias = memberships.filter(
       (m) => m.isActive && m.roles.includes("guardia") && m.userId !== user._id,
     );
+
+    /* El turno compartido es de la portería, no de la tabla de la que cuelgue
+     * cada uno: los guardas que cubren por compañía son compañeros de turno
+     * igual que los del conjunto. Sin esto, dos guardas de la misma garita no
+     * se veían y no podían abrir turno juntos. */
+    const asignados = (
+      await ctx.db
+        .query("asignaciones")
+        .withIndex("by_condominio_rol", (q) =>
+          q.eq("condominioId", args.condominioId).eq("rol", "guardia"),
+        )
+        .collect()
+    ).filter((a) => a.userId !== user._id);
+
+    const ids = new Set<Id<"users">>();
+    for (const m of guardias) ids.add(m.userId);
+    for (const a of asignados) {
+      /* Una asignación vigente bajo un contrato vencido no pone a nadie en la
+       * garita: se comprueba la cadena entera, no solo la fila. */
+      if (await asignacionVigente(ctx, a.userId, args.condominioId)) {
+        ids.add(a.userId);
+      }
+    }
+
     const rows = await Promise.all(
-      guardias.map(async (m) => {
-        const u = await ctx.db.get(m.userId);
+      [...ids].map(async (userId) => {
+        const u = await ctx.db.get(userId);
         if (!u || !u.active) return null;
         return { userId: u._id, nombre: u.name };
       }),
     );
-    return rows.filter((r): r is NonNullable<typeof r> => r !== null);
+    return rows
+      .filter((r): r is NonNullable<typeof r> => r !== null)
+      .sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
   },
 });
 

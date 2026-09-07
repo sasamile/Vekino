@@ -15,7 +15,7 @@ import { LayoutDashboard, LogOut } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import { authClient } from "@/lib/auth-client";
 import { cn } from "@/lib/utils";
-import { homeHrefForRoles } from "@/lib/role-routing";
+import { homeHrefForRoles, homeHrefForAsignacion } from "@/lib/role-routing";
 import {
   PlatformSidebar,
   PlatformMobileNav,
@@ -95,9 +95,35 @@ function Shell({ children }: { children: React.ReactNode }) {
   const isPlatform =
     me.platformRole === "superadmin" || me.platformRole === "admin";
 
-  if (!isPlatform && me.memberships.length === 1 && me.memberships[0]) {
+  if (
+    !isPlatform &&
+    me.memberships.length === 1 &&
+    me.memberships[0] &&
+    me.asignaciones.length === 0
+  ) {
     const m = me.memberships[0];
     return <Redirect to={homeHrefForRoles(m.condominioId, m.roles)} />;
+  }
+
+  /* El personal de vigilancia no tiene membresías: pertenece a una compañía,
+   * no al conjunto. Sin esta rama caía en el panel de "Mis condominios" con
+   * la lista vacía —entraba bien y no veía nada— porque todo el ruteo se
+   * apoyaba solo en `memberships`. */
+  if (!isPlatform && me.memberships.length === 0 && me.asignaciones.length > 0) {
+    /* El supervisor primero: su panel es transversal a todos sus conjuntos,
+     * así que cubre también al que supervisa varios. */
+    const supervisa = me.asignaciones.find((a) => a.rol === "supervisor");
+    if (supervisa) {
+      return (
+        <Redirect
+          to={homeHrefForAsignacion(supervisa.condominioId, "supervisor")}
+        />
+      );
+    }
+    if (me.asignaciones.length === 1 && me.asignaciones[0]) {
+      const a = me.asignaciones[0];
+      return <Redirect to={homeHrefForAsignacion(a.condominioId, a.rol)} />;
+    }
   }
 
   if (

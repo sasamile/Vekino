@@ -20,6 +20,7 @@ import {
 import { tipoDocumentoValidator } from "./model/roles";
 import { evaluarPassword } from "./lib/passwordFuerte";
 import { resolveUserImage } from "./model/userImage";
+import { misAsignacionesVigentes } from "./model/asignacion";
 import { scheduleDeleteS3Keys, s3KeyFromPublicUrl } from "./model/s3";
 import { normalizarTelefonoE164 } from "./lib/telefono";
 
@@ -56,6 +57,16 @@ export const me = query({
         }),
     );
 
+    /* EL SEGUNDO EJE. `memberships` dice a qué conjuntos pertenece la persona;
+     * `asignaciones` dice en cuáles trabaja por una compañía de vigilancia.
+     * El supervisor y el guarda de compañía no tienen NINGUNA membresía —no
+     * son del conjunto, son de la empresa que lo cubre—, así que devolver
+     * solo lo de arriba los dejaba entrando a una sesión sin un solo conjunto
+     * a la vista. Van en un campo aparte, y no fingidos como membresías,
+     * porque no dan lo mismo: un guarda de compañía no es residente ni tiene
+     * unidades. */
+    const asignaciones = await misAsignacionesVigentes(ctx, user._id);
+
     return {
       id: user._id,
       name: user.name,
@@ -70,6 +81,7 @@ export const me = query({
       /** Sigue usando la clave que le generó la administración. */
       claveTemporal: user.claveTemporal === true,
       memberships: withCondominio,
+      asignaciones,
     };
   },
 });
@@ -643,13 +655,28 @@ export const upsertPlatformAdminProfile = mutation({
   },
 });
 
-export const linkAuthId = mutation({
+/**
+ * Enlaza un perfil con su identidad de Better Auth. Interna a propósito.
+ *
+ * Es el último paso de TODAS las altas con contraseña (`createPlatformAdmin`,
+ * `createCondoMember`, `companias.crearMiembro`). Era una `mutation` pública
+ * que exigía staff de plataforma, y esa exigencia rompía el alta a mitad de
+ * camino: quien tiene derecho a dar de alta —el administrador del conjunto,
+ * el administrador de la compañía— ya fue autorizado por la mutación de
+ * perfil, pero se estrellaba aquí después de haber creado la credencial,
+ * dejando el perfil con `authId` vacío y un error en pantalla sobre un alta
+ * que en realidad ya estaba hecha a medias.
+ *
+ * Siendo interna no la puede llamar ningún cliente, así que la superficie
+ * queda MÁS cerrada que antes: la autorización vive en la acción que la
+ * invoca, que es donde se sabe sobre qué conjunto o compañía se está obrando.
+ */
+export const linkAuthId = internalMutation({
   args: {
     userId: v.id("users"),
     authId: v.string(),
   },
   handler: async (ctx, args) => {
-    await requirePlatformStaff(ctx);
     await ctx.db.patch(args.userId, {
       authId: args.authId,
       updatedAt: Date.now(),
@@ -724,7 +751,7 @@ export const createPlatformAdmin = action({
       }
     }
 
-    await ctx.runMutation(api.users.linkAuthId, {
+    await ctx.runMutation(internal.users.linkAuthId, {
       userId: profile.userId,
       authId: authUserId,
     });
@@ -819,7 +846,7 @@ export const createCondoMember = action({
       }
     }
 
-    await ctx.runMutation(api.users.linkAuthId, {
+    await ctx.runMutation(internal.users.linkAuthId, {
       userId: profile.userId,
       authId: authUserId,
     });

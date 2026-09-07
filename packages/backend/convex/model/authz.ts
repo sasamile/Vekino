@@ -1,6 +1,7 @@
 import type { QueryCtx, MutationCtx } from "../_generated/server";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { OperationalRole, PlatformRole } from "./roles";
+import { asignacionVigente } from "./asignacion";
 
 type Ctx = QueryCtx | MutationCtx;
 
@@ -129,12 +130,36 @@ export async function requireCondominioRole(
   }
 
   const membership = await getMembership(ctx, user._id, condominioId);
+  const porMembresia =
+    !!membership &&
+    membership.isActive &&
+    (roles.length === 0 || membership.roles.some((r) => roles.includes(r)));
+  if (porMembresia) return { user, membership };
+
+  /* SEGUNDA VÍA: el guarda que llega por una compañía de vigilancia.
+   *
+   * No tiene fila en `memberships` —no es del conjunto, es de la empresa que
+   * lo cubre— así que por la vía de arriba no pasaba nunca y su asignación no
+   * le servía para nada: entraba a Vekino y la portería le rebotaba. Es el
+   * mismo trato que el guarda propio del conjunto, tal como lo declara
+   * `POR_ROL_ASIGNACION` en lib/vigilancia.ts, y por eso se resuelve aquí y
+   * no en ciento noventa llamadas.
+   *
+   * Solo cuando la operación admite explícitamente a un `guardia`. Con
+   * `roles: []` —que significa "cualquier miembro del conjunto": votar en
+   * asamblea, otorgar un poder— NO pasa: el personal de una empresa
+   * contratada no es parte de la comunidad, y esa puerta debe seguir cerrada.
+   *
+   * `asignacionVigente` comprueba la cadena entera (asignación, contrato,
+   * compañía activa, miembro no dado de baja), así que el acceso se corta
+   * solo el día que cualquiera de esos eslabones caduque. */
+  if (roles.includes("guardia" as OperationalRole)) {
+    const via = await asignacionVigente(ctx, user._id, condominioId);
+    if (via && via.asignacion.rol === "guardia") return { user, membership };
+  }
+
   if (!membership || !membership.isActive) {
     throw new Error("No pertenece a este condominio.");
   }
-  const ok =
-    roles.length === 0 || membership.roles.some((r) => roles.includes(r));
-  if (!ok) throw new Error("No tiene el rol requerido en este condominio.");
-
-  return { user, membership };
+  throw new Error("No tiene el rol requerido en este condominio.");
 }

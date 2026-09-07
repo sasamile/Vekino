@@ -9,6 +9,10 @@ import {
   getCompaniaMiembro,
   condominiosSupervisados,
 } from "./model/acceso";
+import {
+  asignacionVigente,
+  misAsignacionesVigentes,
+} from "./model/asignacion";
 import { rolAsignacionValidator } from "./model/roles";
 import {
   cabeDentro,
@@ -356,42 +360,88 @@ export const porCondominio = query({
 /**
  * Dónde trabaja una persona. Es la consulta del arranque de sesión: un guarda
  * con varias asignaciones tiene que poder elegir en qué conjunto entra.
+ *
+ * La resolución vive en `model/asignacion.ts` porque `users.me` necesita
+ * exactamente lo mismo para saber a dónde mandar a quien acaba de entrar, y
+ * dos copias con criterios de vigencia distintos es como se acaba mostrando
+ * un conjunto que ya no se cubre.
  */
 export const misAsignaciones = query({
   args: {},
   handler: async (ctx) => {
     const user = await getCurrentAppUser(ctx);
     if (!user) return [];
-    const filas = await ctx.db
-      .query("asignaciones")
-      .withIndex("by_user", (q) => q.eq("userId", user._id))
-      .collect();
-    const vigentes = filas.filter((a) => estaVigente(a));
+    return await misAsignacionesVigentes(ctx, user._id);
+  },
+});
+
+/**
+ * EL EQUIPO DEL SUPERVISOR: sus conjuntos y, en cada uno, sus guardas.
+ *
+ * El ámbito no es "su compañía" sino los conjuntos donde tiene asignación
+ * vigente con rol `supervisor` —lo mismo que ya aplica `companias.detail` y
+ * `historialDePersona`—, así que un supervisor de la zona norte no ve la sur
+ * ni, por supuesto, nada de otra empresa. `condominiosSupervisados` comprueba
+ * asignación y contrato; el conjunto se resuelve desde ahí y no desde ningún
+ * argumento del cliente, que es lo que hace que no haya nada que manipular.
+ *
+ * Devuelve solo a quien cubre HOY: un guarda cuya asignación o cuyo contrato
+ * ya venció dejó de estar bajo su responsabilidad.
+ */
+export const miEquipo = query({
+  args: {},
+  handler: async (ctx) => {
+    const user = await getCurrentAppUser(ctx);
+    if (!user) return [];
+
+    const supervisa = await condominiosSupervisados(ctx, user._id);
+    if (supervisa.size === 0) return [];
+
+    const mios = await misAsignacionesVigentes(ctx, user._id);
+    const porCondominio = new Map(mios.map((a) => [a.condominioId, a]));
 
     const salida = [];
-    for (const a of vigentes) {
-      /* Una asignación vigente bajo un contrato vencido no sirve de nada, y
-       * mostrarla llevaría al guarda a una portería que le va a rebotar. */
-      const contrato = await ctx.db.get(a.contratoId);
-      if (!contrato || !estaVigente(contrato)) continue;
-      const compania = await ctx.db.get(a.companiaId);
-      if (!compania || compania.estado !== "activa") continue;
-      const condo = await ctx.db.get(a.condominioId);
-      if (!condo || !condo.isActive) continue;
+    for (const condominioId of supervisa) {
+      const mia = porCondominio.get(condominioId);
+      if (!mia) continue;
+
+      const filas = await ctx.db
+        .query("asignaciones")
+        .withIndex("by_condominio_rol", (q) =>
+          q.eq("condominioId", condominioId).eq("rol", "guardia"),
+        )
+        .collect();
+
+      const guardas = [];
+      for (const a of filas) {
+        /* Solo los de SU compañía. Cuando un conjunto cambia de empresa los
+         * dos contratos se solapan a propósito durante el empalme, y en esos
+         * días el supervisor entrante no tiene por qué ver la nómina de la
+         * empresa saliente. */
+        if (a.companiaId !== mia.companiaId) continue;
+        if (!(await asignacionVigente(ctx, a.userId, condominioId))) continue;
+
+        const u = await ctx.db.get(a.userId);
+        if (!u || !u.active) continue;
+        guardas.push({
+          asignacionId: a._id,
+          userId: u._id,
+          nombre: displayNameFromUser(u),
+          email: u.email,
+          telefono: u.telefono ?? null,
+          vigenciaDesde: a.vigenciaDesde,
+          vigenciaHasta: a.vigenciaHasta ?? null,
+        });
+      }
 
       salida.push({
-        asignacionId: a._id,
-        condominioId: a.condominioId,
-        condominioNombre: condo.name,
-        condominioLogo: condo.logo ?? null,
-        condominioColor: condo.primaryColor ?? null,
-        companiaId: a.companiaId,
-        companiaNombre: compania.nombre,
-        rol: a.rol,
+        ...mia,
+        guardas: guardas.sort((a, b) => a.nombre.localeCompare(b.nombre, "es")),
       });
     }
+
     return salida.sort((a, b) =>
-      a.condominioNombre.localeCompare(b.condominioNombre),
+      a.condominioNombre.localeCompare(b.condominioNombre, "es"),
     );
   },
 });

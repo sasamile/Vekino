@@ -25,3 +25,18 @@ export function isGuardiaOnly(roles: string[]): boolean {
   );
   return !canAdmin && roles.includes("guardia");
 }
+
+/**
+ * Destino de quien llega por el eje de vigilancia (una compañía, no el
+ * conjunto). No tiene membresía, así que `homeHrefForRoles` no le aplica.
+ *
+ * - guardia → la misma app de portería que el guarda propio del conjunto.
+ * - supervisor → su panel, que es transversal a varios conjuntos y por eso no
+ *   lleva id en la ruta.
+ */
+export function homeHrefForAsignacion(
+  condominioId: string,
+  rol: "guardia" | "supervisor",
+): string {
+  return rol === "supervisor" ? "/vigilancia" : `/guardia/${condominioId}`;
+}

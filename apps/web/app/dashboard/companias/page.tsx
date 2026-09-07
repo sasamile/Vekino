@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery, useAction } from "convex/react";
 import { ShieldCheck, ChevronRight, Building2, Users } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import { PageContainer } from "@/components/layout/page-container";
@@ -162,11 +162,14 @@ function CrearCompaniaDialog({
   open: boolean;
   onClose: () => void;
 }) {
-  const crear = useMutation(api.companias.create);
+  const registrar = useAction(api.companias.registrar);
   const [nombre, setNombre] = useState("");
   const [nit, setNit] = useState("");
   const [email, setEmail] = useState("");
   const [telefono, setTelefono] = useState("");
+  const [adminNombre, setAdminNombre] = useState("");
+  const [adminEmail, setAdminEmail] = useState("");
+  const [adminPassword, setAdminPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -175,6 +178,9 @@ function CrearCompaniaDialog({
     setNit("");
     setEmail("");
     setTelefono("");
+    setAdminNombre("");
+    setAdminEmail("");
+    setAdminPassword("");
     setError(null);
     onClose();
   }
@@ -184,11 +190,14 @@ function CrearCompaniaDialog({
     setError(null);
     setBusy(true);
     try {
-      await crear({
+      await registrar({
         nombre,
         nit: nit || undefined,
         contactoEmail: email || undefined,
         contactoTelefono: telefono || undefined,
+        adminName: adminNombre,
+        adminEmail,
+        adminPassword,
       });
       cerrar();
     } catch (err) {
@@ -203,7 +212,7 @@ function CrearCompaniaDialog({
       open={open}
       onClose={cerrar}
       title="Nueva compañía de vigilancia"
-      description="Después podrás contratarla con uno o varios conjuntos y darle de alta a su personal."
+      description="Se crea la empresa y la cuenta de su administrador. Con esa cuenta entra a Vekino y da de alta a su propio personal."
     >
       <form onSubmit={submit} className="space-y-3.5">
         <Campo label="Nombre o razón social" requerido>
@@ -238,13 +247,65 @@ function CrearCompaniaDialog({
           />
         </Campo>
 
+        {/* La cuenta con la que la empresa entra. El correo de contacto de
+            arriba es un dato de la ficha, no una credencial: separarlos
+            visualmente evita que se confundan. */}
+        <div className="space-y-3.5 rounded-lg border border-border bg-muted/30 p-3.5">
+          <p className="text-[12.5px] font-medium text-foreground">
+            Administrador de la compañía
+          </p>
+          <p className="-mt-2 text-[11.5px] text-muted-foreground">
+            Entra con estas credenciales y desde ahí administra a sus
+            supervisores y guardas.
+          </p>
+          <Campo label="Nombre completo" requerido>
+            <Input
+              value={adminNombre}
+              onChange={(e) => setAdminNombre(e.target.value)}
+              placeholder="María Restrepo"
+              required
+            />
+          </Campo>
+          <Campo label="Correo" requerido>
+            <Input
+              type="email"
+              value={adminEmail}
+              onChange={(e) => setAdminEmail(e.target.value)}
+              placeholder="maria@empresa.com"
+              required
+            />
+          </Campo>
+          <Campo
+            label="Contraseña"
+            requerido
+            ayuda="Mínimo 8 caracteres. Es con la que entrará a la plataforma."
+          >
+            <Input
+              type="text"
+              value={adminPassword}
+              onChange={(e) => setAdminPassword(e.target.value)}
+              required
+              minLength={8}
+            />
+          </Campo>
+        </div>
+
         {error && <p className="text-sm text-destructive">{error}</p>}
 
         <div className="flex justify-end gap-2 pt-1">
           <Button type="button" variant="secondary" onClick={cerrar}>
             Cancelar
           </Button>
-          <Button type="submit" disabled={busy || !nombre.trim()}>
+          <Button
+            type="submit"
+            disabled={
+              busy ||
+              !nombre.trim() ||
+              !adminNombre.trim() ||
+              !adminEmail.trim() ||
+              adminPassword.trim().length < 8
+            }
+          >
             {busy ? "Creando…" : "Crear compañía"}
           </Button>
         </div>
