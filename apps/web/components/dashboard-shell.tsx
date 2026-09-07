@@ -11,7 +11,7 @@ import {
   useQuery,
   useMutation,
 } from "convex/react";
-import { LayoutDashboard, LogOut } from "lucide-react";
+import { LayoutDashboard, LogOut, ShieldCheck } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import { authClient } from "@/lib/auth-client";
 import { cn } from "@/lib/utils";
@@ -126,6 +126,21 @@ function Shell({ children }: { children: React.ReactNode }) {
     }
   }
 
+  /* El administrador de una compañía no tiene ni membresías ni asignaciones:
+   * no pisa ninguna portería, administra la empresa que las cubre. Sin esta
+   * rama caía en "Mis condominios" con la lista vacía, que es justo lo que se
+   * reportó: entra bien y no ve un solo conjunto. Su panel es el de su
+   * compañía, donde ya están sus contratos y su gente. */
+  if (
+    !isPlatform &&
+    me.memberships.length === 0 &&
+    me.asignaciones.length === 0 &&
+    me.compania?.roles.includes("admin_compania") &&
+    !pathname.startsWith(`/dashboard/companias/${me.compania.companiaId}`)
+  ) {
+    return <Redirect to={`/dashboard/companias/${me.compania.companiaId}`} />;
+  }
+
   if (
     !isPlatform &&
     (pathname.startsWith("/dashboard/condominios") ||
@@ -224,7 +239,7 @@ function UserMultiCondoShell({
                 className="h-7 w-auto dark:brightness-0 dark:invert"
               />
             </div>
-            <nav className="flex-1">
+            <nav className="flex-1 space-y-0.5">
               <Link
                 href="/dashboard"
                 className="flex h-8 items-center gap-2.5 rounded-lg bg-accent px-2.5 text-[13px] font-normal text-foreground"
@@ -232,6 +247,16 @@ function UserMultiCondoShell({
                 <LayoutDashboard className="h-3.75 w-3.75 stroke-2 text-brand" />
                 Mis condominios
               </Link>
+              {/* Para el personal de una compañía, esta es su casa. */}
+              {me.compania && (
+                <Link
+                  href={`/dashboard/companias/${me.compania.companiaId}`}
+                  className="flex h-8 items-center gap-2.5 rounded-lg px-2.5 text-[13px] font-normal text-foreground hover:bg-accent"
+                >
+                  <ShieldCheck className="h-3.75 w-3.75 stroke-2 text-brand" />
+                  {me.compania.nombre}
+                </Link>
+              )}
             </nav>
             <div className="border-t border-border/70 pt-2.5">
               <div className="px-1.5 py-1">

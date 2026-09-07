@@ -68,7 +68,15 @@ export default function CompaniaDetallePage() {
   const params = useParams<{ id: string }>();
   const companiaId = params.id as Id<"companiasSeguridad">;
   const data = useQuery(api.companias.detail, { companiaId });
+  const me = useQuery(api.users.me);
   const [tab, setTab] = useState<"personal" | "contratos">("personal");
+
+  /* Firmar contratos y suspender la empresa son decisiones comerciales del
+   * SaaS, no de la compañía: `crearContrato` y `setEstado` exigen plataforma
+   * en el backend. Mostrarle esos controles al administrador de la compañía
+   * solo le ofrecería botones que terminan en un error. */
+  const esPlataforma =
+    me?.platformRole === "superadmin" || me?.platformRole === "admin";
 
   if (data === undefined) {
     return (
@@ -100,7 +108,7 @@ export default function CompaniaDetallePage() {
           Compañías
         </Link>
 
-        <Cabecera compania={compania} />
+        <Cabecera compania={compania} esPlataforma={esPlataforma} />
 
         <div className="flex gap-1 border-b border-border">
           <Tab
@@ -126,6 +134,7 @@ export default function CompaniaDetallePage() {
             companiaId={companiaId}
             contratos={contratos}
             personal={personal}
+            esPlataforma={esPlataforma}
           />
         )}
       </div>
@@ -168,8 +177,10 @@ function Tab({
 
 function Cabecera({
   compania,
+  esPlataforma,
 }: {
   compania: { _id: Id<"companiasSeguridad">; nombre: string; estado: string; nit?: string; contactoEmail?: string };
+  esPlataforma: boolean;
 }) {
   const setEstado = useMutation(api.companias.setEstado);
   const [confirmar, setConfirmar] = useState<Estado | null>(null);
@@ -193,16 +204,18 @@ function Cabecera({
           </p>
         </div>
 
-        <Select
-          className="w-auto"
-          value={compania.estado}
-          onChange={(e) => setConfirmar(e.target.value as Estado)}
-          aria-label="Estado de la compañía"
-        >
-          <option value="activa">Activa</option>
-          <option value="suspendida">Suspendida</option>
-          <option value="inactiva">Dada de baja</option>
-        </Select>
+        {esPlataforma && (
+          <Select
+            className="w-auto"
+            value={compania.estado}
+            onChange={(e) => setConfirmar(e.target.value as Estado)}
+            aria-label="Estado de la compañía"
+          >
+            <option value="activa">Activa</option>
+            <option value="suspendida">Suspendida</option>
+            <option value="inactiva">Dada de baja</option>
+          </Select>
+        )}
       </div>
 
       <ConfirmarEstado
@@ -633,10 +646,12 @@ function PanelContratos({
   companiaId,
   contratos,
   personal,
+  esPlataforma,
 }: {
   companiaId: Id<"companiasSeguridad">;
   contratos: Contrato[];
   personal: Persona[];
+  esPlataforma: boolean;
 }) {
   const [nuevo, setNuevo] = useState(false);
   const [abierto, setAbierto] = useState<Id<"companiaContratos"> | null>(null);
@@ -648,18 +663,28 @@ function PanelContratos({
           Los conjuntos donde esta compañía presta servicio. El contrato es lo
           que autoriza: sin uno vigente, ninguna asignación funciona.
         </p>
-        <Button size="sm" onClick={() => setNuevo(true)}>
-          <Plus className="h-4 w-4" aria-hidden />
-          Contratar conjunto
-        </Button>
+        {esPlataforma && (
+          <Button size="sm" onClick={() => setNuevo(true)}>
+            <Plus className="h-4 w-4" aria-hidden />
+            Contratar conjunto
+          </Button>
+        )}
       </div>
 
       {contratos.length === 0 ? (
         <EmptyState
           icon={FileText}
           title="Sin conjuntos contratados"
-          description="Contrata un conjunto para poder asignarle supervisores y guardas."
-          action={<Button onClick={() => setNuevo(true)}>Contratar conjunto</Button>}
+          description={
+            esPlataforma
+              ? "Contrata un conjunto para poder asignarle supervisores y guardas."
+              : "Cuando Vekino firme un contrato con un conjunto aparecerá aquí y podrás asignarle tu personal."
+          }
+          action={
+            esPlataforma ? (
+              <Button onClick={() => setNuevo(true)}>Contratar conjunto</Button>
+            ) : undefined
+          }
         />
       ) : (
         <div className="space-y-3">

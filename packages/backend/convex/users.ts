@@ -21,6 +21,7 @@ import { tipoDocumentoValidator } from "./model/roles";
 import { evaluarPassword } from "./lib/passwordFuerte";
 import { resolveUserImage } from "./model/userImage";
 import { misAsignacionesVigentes } from "./model/asignacion";
+import { miCompaniaDe } from "./model/acceso";
 import { scheduleDeleteS3Keys, s3KeyFromPublicUrl } from "./model/s3";
 import { normalizarTelefonoE164 } from "./lib/telefono";
 
@@ -67,6 +68,12 @@ export const me = query({
      * unidades. */
     const asignaciones = await misAsignacionesVigentes(ctx, user._id);
 
+    /* Y EL TERCERO. El administrador de una compañía no tiene membresía ni
+     * asignación: no pisa ninguna portería, administra la empresa que las
+     * cubre. Sin este campo entraba a una sesión sin un solo conjunto a la
+     * vista, aunque su empresa tuviera contratos vigentes con varios. */
+    const compania = await miCompaniaDe(ctx, user._id);
+
     return {
       id: user._id,
       name: user.name,
@@ -82,6 +89,7 @@ export const me = query({
       claveTemporal: user.claveTemporal === true,
       memberships: withCondominio,
       asignaciones,
+      compania,
     };
   },
 });

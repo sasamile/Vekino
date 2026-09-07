@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useQuery, useAction } from "convex/react";
 import { ShieldCheck, ChevronRight, Building2, Users } from "lucide-react";
 import { api } from "@vekino/backend/api";
@@ -27,6 +28,18 @@ export function EstadoBadge({ estado }: { estado: Estado }) {
   return <Badge tone={TONO[estado]}>{estado}</Badge>;
 }
 
+function Redirect({ to }: { to: string }) {
+  const router = useRouter();
+  useEffect(() => {
+    router.replace(to);
+  }, [router, to]);
+  return (
+    <PageContainer>
+      <p className="text-sm text-muted-foreground">Abriendo tu compañía…</p>
+    </PageContainer>
+  );
+}
+
 export default function CompaniasPage() {
   const me = useQuery(api.users.me);
   const isPlatform =
@@ -44,7 +57,13 @@ export default function CompaniasPage() {
     );
   }
 
+  /* El directorio de compañías es de la plataforma, pero quien pertenece a
+   * una tiene todo el derecho a llegar A LA SUYA: antes esta pantalla le
+   * respondía "no tienes acceso" y ahí se acababa el recorrido. */
   if (!isPlatform) {
+    if (me?.compania) {
+      return <Redirect to={`/dashboard/companias/${me.compania.companiaId}`} />;
+    }
     return (
       <PageContainer>
         <p className="text-sm text-muted-foreground">

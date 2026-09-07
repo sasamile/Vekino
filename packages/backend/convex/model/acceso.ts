@@ -67,6 +67,69 @@ export async function getCompaniaMiembro(
   return filas.find((m) => m.isActive) ?? null;
 }
 
+/** La compañía de una persona, tal como la necesita el arranque de sesión. */
+export type MiCompania = {
+  companiaId: Id<"companiasSeguridad">;
+  nombre: string;
+  estado: Doc<"companiasSeguridad">["estado"];
+  logo: string | null;
+  primaryColor: string | null;
+  roles: Doc<"companiaMiembros">["roles"];
+};
+
+/**
+ * A qué compañía pertenece esta persona y con qué roles.
+ *
+ * EL TERCER EJE. `memberships` dice a qué conjuntos pertenece; `asignaciones`,
+ * en cuáles trabaja por una compañía; y esto, de qué empresa es. Son cosas
+ * distintas y se notó tarde: el administrador de una compañía no tiene ni
+ * membresía ni asignación —no pisa ninguna portería, administra la empresa
+ * que las cubre—, así que un contexto de sesión armado solo con los dos
+ * primeros lo dejaba dentro y sin nada que mirar.
+ *
+ * Vive aquí, junto a `getCompaniaMiembro`, para que `users.me` y
+ * `companias.miCompania` respondan lo mismo sin dos consultas paralelas.
+ */
+export async function miCompaniaDe(
+  ctx: Ctx,
+  userId: Id<"users">,
+): Promise<MiCompania | null> {
+  const miembro = await getCompaniaMiembro(ctx, userId);
+  if (!miembro) return null;
+  const compania = await ctx.db.get(miembro.companiaId);
+  if (!compania) return null;
+  return {
+    companiaId: compania._id,
+    nombre: compania.nombre,
+    estado: compania.estado,
+    logo: compania.logo ?? null,
+    primaryColor: compania.primaryColor ?? null,
+    roles: miembro.roles,
+  };
+}
+
+/**
+ * El contrato vigente que ampara a una compañía sobre un conjunto.
+ *
+ * Es lo que convierte "soy el administrador de Seguridad Andina" en "puedo
+ * mirar la portería de este conjunto": no el rol por sí solo, sino el rol más
+ * un contrato en vigor. El día que el contrato termina, deja de resolver.
+ */
+async function contratoVigente(
+  ctx: Ctx,
+  companiaId: Id<"companiasSeguridad">,
+  condominioId: Id<"condominios">,
+  ahora: number,
+): Promise<Doc<"companiaContratos"> | null> {
+  const contratos = await ctx.db
+    .query("companiaContratos")
+    .withIndex("by_condominio_compania", (q) =>
+      q.eq("condominioId", condominioId).eq("companiaId", companiaId),
+    )
+    .collect();
+  return contratos.find((k) => estaVigente(k, ahora)) ?? null;
+}
+
 /**
  * Resuelve todo lo que una persona puede hacer en un conjunto.
  *
@@ -100,7 +163,7 @@ export async function resolverAcceso(
     };
   }
 
-  /* Las dos vías se SUMAN. Un administrador del conjunto que además sea
+  /* Las vías se SUMAN. Un administrador del conjunto que además sea
    * supervisor de la compañía tiene lo de ambos, y un guarda que exista por
    * las dos vías no pierde acceso si una falla. */
   const delConjunto =
@@ -112,6 +175,35 @@ export async function resolverAcceso(
     ? capacidadesDeRolAsignacion(viaCompania.asignacion.rol)
     : new Set<Capacidad>();
 
+  /* TERCERA VÍA: el administrador de la compañía que cubre este conjunto.
+   *
+   * No tiene asignación —no cubre turnos, dirige a quien los cubre—, así que
+   * por las dos vías de arriba no alcanzaba nada: sus propios supervisores
+   * veían las rondas de un conjunto y él no. Lo que lo autoriza no es el rol
+   * suelto sino el CONTRATO: solo los conjuntos que su empresa atiende hoy, y
+   * solo para mirar. `porteria.operar` no está aquí a propósito.
+   *
+   * Se resuelve al final y SOLO si las otras dos vías no dieron nada: son dos
+   * lecturas por índice más y esto corre en cada página. La condición no
+   * pierde nada — cualquier rol del conjunto que otorgue algo ya otorga
+   * `porteria.ver`, que es lo único que esta vía añade. */
+  let deLaCompania = new Set<Capacidad>();
+  if (delConjunto.size === 0 && deLaAsignacion.size === 0) {
+    const miCompania = await getCompaniaMiembro(ctx, user._id);
+    if (miCompania?.roles.includes("admin_compania")) {
+      const empresa = await ctx.db.get(miCompania.companiaId);
+      if (empresa && empresa.estado === "activa") {
+        const contrato = await contratoVigente(
+          ctx,
+          miCompania.companiaId,
+          condominioId,
+          Date.now(),
+        );
+        if (contrato) deLaCompania = new Set<Capacidad>(["porteria.ver"]);
+      }
+    }
+  }
+
   return {
     user,
     esPlataforma,
@@ -119,7 +211,7 @@ export async function resolverAcceso(
     asignacion: viaCompania?.asignacion ?? null,
     contrato: viaCompania?.contrato ?? null,
     compania: viaCompania?.compania ?? null,
-    capacidades: unir(delConjunto, deLaAsignacion),
+    capacidades: unir(delConjunto, deLaAsignacion, deLaCompania),
   };
 }
 

@@ -18,6 +18,7 @@ import {
   exigirAccesoCompania,
   getCompaniaMiembro,
   condominiosSupervisados,
+  miCompaniaDe,
 } from "./model/acceso";
 import {
   companiaRoleValidator,
@@ -211,18 +212,7 @@ export const miCompania = query({
   handler: async (ctx) => {
     const user = await getCurrentAppUser(ctx);
     if (!user) return null;
-    const miembro = await getCompaniaMiembro(ctx, user._id);
-    if (!miembro) return null;
-    const compania = await ctx.db.get(miembro.companiaId);
-    if (!compania) return null;
-    return {
-      companiaId: compania._id,
-      nombre: compania.nombre,
-      estado: compania.estado,
-      logo: compania.logo ?? null,
-      primaryColor: compania.primaryColor ?? null,
-      roles: miembro.roles,
-    };
+    return await miCompaniaDe(ctx, user._id);
   },
 });
 
