@@ -5,8 +5,13 @@
     "moduleResolution": "Bundler",
     "jsx": "react-jsx",
     "noEmit": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": true
   },
-  "include": ["convex/**/*.ts"],
-  "exclude": ["convex/_generated"]
+  "include": [
+    "convex/**/*.ts"
+  ],
+  "exclude": [
+    "convex/_generated"
+  ]
 }

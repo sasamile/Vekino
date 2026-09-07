@@ -35,6 +35,10 @@
     "./periodos": {
       "types": "./convex/lib/periodos.ts",
       "default": "./convex/lib/periodos.ts"
+    },
+    "./costoReserva": {
+      "types": "./convex/lib/costoReserva.ts",
+      "default": "./convex/lib/costoReserva.ts"
     }
   },
   "dependencies": {

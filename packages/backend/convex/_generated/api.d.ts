@@ -40,6 +40,7 @@ import type * as lib_brevo from "../lib/brevo.js";
 import type * as lib_certificacion from "../lib/certificacion.js";
 import type * as lib_cloudflareRealtime from "../lib/cloudflareRealtime.js";
 import type * as lib_codigoAsistencia from "../lib/codigoAsistencia.js";
+import type * as lib_costoReserva from "../lib/costoReserva.js";
 import type * as lib_emailApoderado from "../lib/emailApoderado.js";
 import type * as lib_emailCredenciales from "../lib/emailCredenciales.js";
 import type * as lib_expoPush from "../lib/expoPush.js";
@@ -143,6 +144,7 @@ declare const fullApi: ApiFromModules<{
   "lib/certificacion": typeof lib_certificacion;
   "lib/cloudflareRealtime": typeof lib_cloudflareRealtime;
   "lib/codigoAsistencia": typeof lib_codigoAsistencia;
+  "lib/costoReserva": typeof lib_costoReserva;
   "lib/emailApoderado": typeof lib_emailApoderado;
   "lib/emailCredenciales": typeof lib_emailCredenciales;
   "lib/expoPush": typeof lib_expoPush;

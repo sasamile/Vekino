@@ -12,6 +12,7 @@ import { aMinutos } from "@vekino/backend/horarios";
 import { HorariosPorDiaEditor } from "./horarios-por-dia-editor";
 import {
   defaultPorDiaLaboral,
+  horariosToPorDiaState,
   porDiaStateToHorarios,
   type DiaHorarioEstado,
 } from "./horarios-por-dia-utils";
@@ -37,25 +38,70 @@ const UNIDAD_OPTIONS = [
 type TipoZona = (typeof TIPO_OPTIONS)[number]["value"];
 type UnidadTiempo = (typeof UNIDAD_OPTIONS)[number]["value"];
 
+/** La zona que se está editando, si el modal se abrió para eso. */
+export type ZonaEditable = {
+  _id: Id<"zonasComunes">;
+  nombre: string;
+  tipo?: string;
+  unidadTiempo?: string;
+  capacidad?: number;
+  descripcion?: string;
+  precioPorHora?: number;
+  precioPorDia?: number;
+  requiereAprobacion?: boolean;
+  depositoRequerido?: number;
+  horariosPorDia?: { dia: number; horaInicio: string; horaFin: string }[];
+};
+
+/**
+ * Crear o editar un espacio común.
+ *
+ * El mismo formulario para las dos cosas: separarlos habría dejado dos
+ * pantallas que envejecen aparte, y hasta ahora un horario mal puesto solo se
+ * podía arreglar borrando la zona —y con ella su historial de reservas— para
+ * volverla a crear.
+ */
 export function CrearEspacioModal({
   condominioId,
+  zona,
   onClose,
 }: {
   condominioId: Id<"condominios">;
+  zona?: ZonaEditable;
   onClose: () => void;
 }) {
   const createZona = useMutation(api.reservas.createZona);
-  const [nombre, setNombre] = useState("");
-  const [tipo, setTipo] = useState<TipoZona>("salon_social");
-  const [unidadTiempo, setUnidadTiempo] = useState<UnidadTiempo>("hora");
-  const [descripcion, setDescripcion] = useState("");
-  const [capacidad, setCapacidad] = useState("1");
-  const [precioPorHora, setPrecioPorHora] = useState("");
-  const [precioPorDia, setPrecioPorDia] = useState("");
-  const [requiereAprobacion, setRequiereAprobacion] = useState(true);
-  const [deposito, setDeposito] = useState("");
-  const [porDia, setPorDia] =
-    useState<Record<number, DiaHorarioEstado>>(defaultPorDiaLaboral);
+  const updateZona = useMutation(api.reservas.updateZona);
+  const editando = zona != null;
+  const [nombre, setNombre] = useState(zona?.nombre ?? "");
+  const [tipo, setTipo] = useState<TipoZona>(
+    (zona?.tipo as TipoZona) ?? "salon_social",
+  );
+  const [unidadTiempo, setUnidadTiempo] = useState<UnidadTiempo>(
+    (zona?.unidadTiempo as UnidadTiempo) ?? "hora",
+  );
+  const [descripcion, setDescripcion] = useState(zona?.descripcion ?? "");
+  const [capacidad, setCapacidad] = useState(String(zona?.capacidad ?? 1));
+  const [precioPorHora, setPrecioPorHora] = useState(
+    zona?.precioPorHora != null ? String(zona.precioPorHora) : "",
+  );
+  const [precioPorDia, setPrecioPorDia] = useState(
+    zona?.precioPorDia != null ? String(zona.precioPorDia) : "",
+  );
+  const [requiereAprobacion, setRequiereAprobacion] = useState(
+    zona?.requiereAprobacion ?? true,
+  );
+  const [deposito, setDeposito] = useState(
+    zona?.depositoRequerido != null ? String(zona.depositoRequerido) : "",
+  );
+  const [porDia, setPorDia] = useState<Record<number, DiaHorarioEstado>>(() =>
+    /* Al editar se parte del horario que la zona ya tiene; si no, el
+       formulario propondría lunes-viernes y borraría lo configurado en cuanto
+       alguien entrara solo a corregir el precio. */
+    zona?.horariosPorDia?.length
+      ? horariosToPorDiaState(zona.horariosPorDia)
+      : defaultPorDiaLaboral(),
+  );
   const [horariosError, setHorariosError] = useState<string | undefined>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -102,8 +148,7 @@ export function CrearEspacioModal({
     setBusy(true);
     setError(null);
     try {
-      await createZona({
-        condominioId,
+      const campos = {
         nombre: nombre.trim(),
         tipo,
         unidadTiempo,
@@ -116,7 +161,9 @@ export function CrearEspacioModal({
         depositoRequerido: deposito.trim() && !Number.isNaN(Number(deposito))
           ? Number(deposito)
           : undefined,
-      });
+      };
+      if (zona) await updateZona({ id: zona._id, ...campos });
+      else await createZona({ condominioId, ...campos });
       onClose();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error al crear el espacio.");
@@ -128,7 +175,7 @@ export function CrearEspacioModal({
     <Modal
       open
       onClose={() => !busy && onClose()}
-      title="Crear nuevo espacio común"
+      title={editando ? `Editar ${zona.nombre}` : "Crear nuevo espacio común"}
       description="Define tipo de reserva (hora, día o mes) y horarios distintos por día de la semana (ej. Lun–Vie 8:00–22:00 y sábado 10:00–22:00)."
       className="max-w-2xl"
       footer={
@@ -143,7 +190,7 @@ export function CrearEspacioModal({
           </Button>
           <Button size="sm" onClick={save} disabled={busy}>
             {busy && <Loader2 className="h-4 w-4 animate-spin" />}
-            Crear espacio
+            {editando ? "Guardar cambios" : "Crear espacio"}
           </Button>
         </>
       }

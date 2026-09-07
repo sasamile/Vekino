@@ -161,6 +161,10 @@ export const updateZona = mutation({
     depositoRequerido: v.optional(v.number()),
     capacidad: v.optional(v.number()),
     descripcion: v.optional(v.string()),
+    /* Faltaba, y era justo lo que la administración necesitaba corregir: un
+     * horario mal puesto solo se podía arreglar borrando la zona y volviéndola
+     * a crear, lo que se lleva por delante su historial de reservas. */
+    horariosPorDia: v.optional(v.array(horarioDiaValidator)),
   },
   handler: async (ctx, args) => {
     const zona = await ctx.db.get(args.id);
@@ -172,6 +176,8 @@ export const updateZona = mutation({
     if (campos.nombre !== undefined && !nombre) {
       throw new Error("El nombre no puede quedar vacio.");
     }
+
+    if (args.horariosPorDia) assertHorarios(args.horariosPorDia);
 
     /* Solo se tocan los campos que vinieron. `undefined` significa "no lo
      * cambies", no "borralo": pasar el objeto entero borraria el precio de

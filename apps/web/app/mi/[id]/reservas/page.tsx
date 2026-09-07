@@ -139,7 +139,7 @@ export default function Reservas() {
         <ReservaForm
           condominioId={condominioId}
           unidades={unidades}
-          zonas={zonasActivas.map((z) => ({ _id: z._id, nombre: z.nombre }))}
+          zonas={zonasActivas}
           onClose={() => setFormOpen(false)}
         />
       )}
@@ -155,7 +155,10 @@ function ReservaForm({
 }: {
   condominioId: Id<"condominios">;
   unidades: { _id: string; numero: string }[];
-  zonas: { _id: Id<"zonasComunes">; nombre: string }[];
+  /* La zona entera, no solo el nombre: sin los precios el residente llenaba
+     el formulario sin ver un peso y se enteraba del valor cuando se lo
+     cobraban. */
+  zonas: ({ _id: Id<"zonasComunes">; nombre: string } & Tarifa)[];
   onClose: () => void;
 }) {
   const create = useMutation(api.reservas.createMia);
@@ -168,6 +171,9 @@ function ReservaForm({
   const [observaciones, setObservaciones] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const zona = zonas.find((z) => z._id === zonaId);
+  const costo = zona ? calcularCosto(zona, horaInicio, horaFin) : null;
 
   async function guardar(e: React.FormEvent) {
     e.preventDefault();
@@ -263,6 +269,57 @@ function ReservaForm({
             />
           </Field>
 
+          {/* El valor, antes de confirmar y no despues de que se lo cobren. */}
+          {costo && (
+            <div className="rounded-xl border border-border bg-muted/40 p-3.5 text-sm">
+              {costo.sinTarifa && costo.deposito === 0 ? (
+                <p className="text-muted-foreground">
+                  Este espacio no tiene tarifa configurada. Confirma el valor
+                  con la administración.
+                </p>
+              ) : (
+                <>
+                  {costo.alquiler > 0 && (
+                    <div className="flex items-baseline justify-between gap-3">
+                      <span className="text-muted-foreground">
+                        Uso del espacio
+                        {costo.detalle ? (
+                          <span className="ml-1 text-xs">({costo.detalle})</span>
+                        ) : null}
+                      </span>
+                      <span className="font-medium text-foreground">
+                        {enPesos(costo.alquiler)}
+                      </span>
+                    </div>
+                  )}
+                  {costo.deposito > 0 && (
+                    <div className="mt-1.5 flex items-baseline justify-between gap-3">
+                      <span className="text-muted-foreground">
+                        Depósito
+                        {/* Se aclara que vuelve: si no, la reserva parece el
+                            doble de cara y el residente desiste. */}
+                        <span className="ml-1 text-xs">(se devuelve)</span>
+                      </span>
+                      <span className="font-medium text-foreground">
+                        {enPesos(costo.deposito)}
+                      </span>
+                    </div>
+                  )}
+                  <div className="mt-2.5 flex items-baseline justify-between gap-3 border-t border-border pt-2.5">
+                    <span className="font-medium text-foreground">Total</span>
+                    <span className="text-base font-semibold text-foreground">
+                      {enPesos(costo.totalAPagar)}
+                    </span>
+                  </div>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    El pago se realiza con la administración una vez aprueben tu
+                    reserva.
+                  </p>
+                </>
+              )}
+            </div>
+          )}
+
           {error && <p className="text-sm text-red-600">{error}</p>}
 
           <div className="flex justify-end gap-2 pt-2">
@@ -289,6 +346,7 @@ function ReservaForm({
 }
 
 import { cn } from "@/lib/utils";
+import { calcularCosto, enPesos, type Tarifa } from "@vekino/backend/costoReserva";
 
 const inputCls =
   "h-10 w-full rounded-lg border border-input bg-card px-3 text-sm text-foreground outline-none transition-colors focus:border-brand focus:ring-2 focus:ring-brand/20";

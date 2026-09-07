@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useParams } from "next/navigation";
 import { usePaginatedQuery, useQuery, useMutation } from "convex/react";
 import {
-  CalendarCheck, Plus, Trash2, Loader2, CheckCircle, XCircle,
+  CalendarCheck, Plus, Pencil, Trash2, Loader2, CheckCircle, XCircle,
   Settings, MapPin, Clock, FileSpreadsheet,
 } from "lucide-react";
 import { api } from "@vekino/backend/api";
@@ -22,7 +22,10 @@ import { Modal } from "@/components/ui/modal";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn, cop } from "@/lib/utils";
-import { CrearEspacioModal } from "@/components/reservas/crear-espacio-modal";
+import {
+  CrearEspacioModal,
+  type ZonaEditable,
+} from "@/components/reservas/crear-espacio-modal";
 import { ReporteReservasModal } from "@/components/reservas/reporte-reservas";
 
 const PAGE_SIZE = 30;
@@ -419,6 +422,7 @@ function ZonasModal({ condominioId, zonas, onClose }: { condominioId: Id<"condom
   const toggleZona = useMutation(api.reservas.toggleZona);
   const removeZona = useMutation(api.reservas.removeZona);
   const [crearOpen, setCrearOpen] = useState(false);
+  const [editando, setEditando] = useState<ZonaEditable | null>(null);
 
   const UNIDAD_LABEL: Record<string, string> = {
     hora: "Por hora",
@@ -502,6 +506,17 @@ function ZonasModal({ condominioId, zonas, onClose }: { condominioId: Id<"condom
                   >
                     {z.activa ? "Activa" : "Inactiva"}
                   </button>
+                  {/* Editar antes que eliminar: hasta ahora, corregir un
+                      horario obligaba a borrar la zona —y con ella su
+                      historial de reservas— para volverla a crear. */}
+                  <button
+                    type="button"
+                    onClick={() => setEditando(z as ZonaEditable)}
+                    className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                    aria-label="Editar"
+                  >
+                    <Pencil className="h-4 w-4" />
+                  </button>
                   <button
                     type="button"
                     onClick={() => removeZona({ id: z._id })}
@@ -520,6 +535,13 @@ function ZonasModal({ condominioId, zonas, onClose }: { condominioId: Id<"condom
         <CrearEspacioModal
           condominioId={condominioId}
           onClose={() => setCrearOpen(false)}
+        />
+      )}
+      {editando && (
+        <CrearEspacioModal
+          condominioId={condominioId}
+          zona={editando}
+          onClose={() => setEditando(null)}
         />
       )}
     </>

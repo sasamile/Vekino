@@ -50,3 +50,21 @@ export function porDiaStateToHorarios(
     }))
     .sort((a, b) => a.dia - b.dia);
 }
+
+/**
+ * El camino de vuelta: de lo guardado al estado del formulario.
+ *
+ * Hace falta para poder EDITAR una zona. Sin esto, abrir el formulario de una
+ * zona existente proponia lunes-viernes 09:00-22:00 y borraba el horario real
+ * en cuanto alguien entraba solo a corregirle el precio.
+ */
+export function horariosToPorDiaState(
+  horarios: HorarioDisponibilidad[],
+): Record<number, DiaHorarioEstado> {
+  const s = createEmptyPorDiaState();
+  for (const h of horarios) {
+    if (h.dia < 0 || h.dia > 6) continue;
+    s[h.dia] = { activo: true, horaInicio: h.horaInicio, horaFin: h.horaFin };
+  }
+  return s;
+}
