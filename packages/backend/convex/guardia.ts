@@ -8,7 +8,7 @@ import {
   getMembership,
   hasPlatformRole,
 } from "./model/authz";
-import { resolverAcceso } from "./model/acceso";
+import { exigirAcceso, resolverAcceso } from "./model/acceso";
 import { asignacionVigente } from "./model/asignacion";
 import { logMinuta, rondaEnCurso, turnoAbierto } from "./model/minuta";
 import { esVisitanteVigente, ventanaHoyBogota } from "./model/visitantes";
@@ -325,7 +325,7 @@ export const cerrarTurno = mutation({
 export const listTurnos = query({
   args: { condominioId: v.id("condominios") },
   handler: async (ctx, args) => {
-    await requireCondominioRole(ctx, args.condominioId, [...GUARD_ROLES]);
+    await exigirAcceso(ctx, args.condominioId, "porteria.ver");
     const turnos = await ctx.db
       .query("guardiaTurnos")
       .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
@@ -349,7 +349,12 @@ export const getTurno = query({
   handler: async (ctx, args) => {
     const turno = await ctx.db.get(args.turnoId);
     if (!turno) return null;
-    await requireCondominioRole(ctx, turno.condominioId, [...GUARD_ROLES]);
+
+    /* Igual que `rondas.detalle`: sin acceso se responde lo mismo que si no
+     * existiera, para que el id de un turno ajeno no sirva de sonda. El
+     * conjunto sale del turno, no de la petición. */
+    const acceso = await resolverAcceso(ctx, turno.condominioId);
+    if (!acceso || !acceso.capacidades.has("porteria.ver")) return null;
 
     const rondasRaw = await ctx.db
       .query("guardiaRondas")
@@ -507,7 +512,7 @@ export const removeChecklistTemplate = mutation({
 export const listRondaZonas = query({
   args: { condominioId: v.id("condominios") },
   handler: async (ctx, args) => {
-    await requireCondominioRole(ctx, args.condominioId, [...GUARD_ROLES]);
+    await exigirAcceso(ctx, args.condominioId, "porteria.ver");
     const zonas = await ctx.db
       .query("guardiaRondaZonas")
       .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
@@ -574,14 +579,47 @@ export const removeRondaZona = mutation({
 
 /** Eventos de la minuta (más recientes primero). */
 export const listMinuta = query({
-  args: { condominioId: v.id("condominios"), limit: v.optional(v.number()) },
+  args: {
+    condominioId: v.id("condominios"),
+    limit: v.optional(v.number()),
+    /**
+     * Solo lo que registró esta persona.
+     *
+     * La minuta está modelada por CONJUNTO —es la bitácora de la portería, no
+     * el diario de nadie—, así que lo del guarda es el subconjunto de eventos
+     * cuyo actor es él. `actorUserId` es opcional: los eventos que no lo
+     * llevan no se atribuyen a nadie y por eso no salen al filtrar.
+     */
+    actorUserId: v.optional(v.id("users")),
+  },
   handler: async (ctx, args) => {
-    await requireCondominioRole(ctx, args.condominioId, [...GUARD_ROLES]);
-    return await ctx.db
+    /* Leer la minuta es supervisión, no operación: la puede leer quien tenga
+     * `porteria.ver` —los mismos de siempre más el supervisor asignado—.
+     * Escribir en ella sigue exigiendo turno abierto y rol de portería. */
+    await exigirAcceso(ctx, args.condominioId, "porteria.ver");
+    const limit = Math.min(args.limit ?? 150, 300);
+
+    if (!args.actorUserId) {
+      return await ctx.db
+        .query("minutaEventos")
+        .withIndex("by_condominio", (q) =>
+          q.eq("condominioId", args.condominioId),
+        )
+        .order("desc")
+        .take(limit);
+    }
+
+    const actorUserId = args.actorUserId;
+    const salida: Doc<"minutaEventos">[] = [];
+    for await (const e of ctx.db
       .query("minutaEventos")
       .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
-      .order("desc")
-      .take(Math.min(args.limit ?? 150, 300));
+      .order("desc")) {
+      if (e.actorUserId !== actorUserId) continue;
+      salida.push(e);
+      if (salida.length >= limit) break;
+    }
+    return salida;
   },
 });
 

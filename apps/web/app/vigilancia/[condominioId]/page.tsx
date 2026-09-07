@@ -1,0 +1,310 @@
+"use client";
+
+import { use, useState } from "react";
+import Link from "next/link";
+import { useQuery } from "convex/react";
+import {
+  ArrowLeft,
+  Footprints,
+  BookOpenCheck,
+  Users,
+  ShieldAlert,
+} from "lucide-react";
+import { api } from "@vekino/backend/api";
+import type { Id } from "@vekino/backend/dataModel";
+import { PageContainer } from "@/components/layout/page-container";
+import { PageHeader } from "@/components/layout/page-header";
+import { Card } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Select } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
+import { EmptyState } from "@/components/ui/empty-state";
+import { cn } from "@/lib/utils";
+
+function fechaHora(ms: number): string {
+  return new Date(ms).toLocaleString("es-CO", {
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+const TONO_RONDA = {
+  en_curso: "brand",
+  finalizada: "success",
+} as const;
+
+/**
+ * SUPERVISIÓN DE UN CONJUNTO.
+ *
+ * El conjunto seleccionado es el contexto: viene en la URL y va en cada
+ * consulta. Que venga del cliente no autoriza nada —el servidor comprueba en
+ * cada llamada que quien pregunta tiene `porteria.ver` sobre ESE conjunto, y
+ * el supervisor solo la tiene donde hay una asignación vigente suya—. Cambiar
+ * el id a mano lleva a un conjunto que responde vacío o rechaza.
+ *
+ * No es la app de portería: `/guardia/:id` es donde el guarda abre turno y
+ * cierra rondas, y sigue siendo suya. Aquí solo se mira.
+ */
+export default function SupervisionConjuntoPage({
+  params,
+}: {
+  params: Promise<{ condominioId: string }>;
+}) {
+  const { condominioId: raw } = use(params);
+  const condominioId = raw as Id<"condominios">;
+
+  /* De `miEquipo` y no de una consulta por id: así la pantalla solo puede
+   * hablar de conjuntos que el servidor ya reconoció como suyos, y el nombre
+   * del conjunto no se pide por separado. */
+  const equipo = useQuery(api.asignaciones.miEquipo);
+  const conjunto = equipo?.find((c) => c.condominioId === condominioId);
+
+  const [guardaId, setGuardaId] = useState<string>("");
+  const [tab, setTab] = useState<"rondas" | "minuta">("rondas");
+
+  const filtro = guardaId ? (guardaId as Id<"users">) : undefined;
+  const rondas = useQuery(
+    api.rondas.listar,
+    conjunto ? { condominioId, guardiaUserId: filtro, limite: 50 } : "skip",
+  );
+  const minuta = useQuery(
+    api.guardia.listMinuta,
+    conjunto ? { condominioId, actorUserId: filtro, limit: 100 } : "skip",
+  );
+
+  if (equipo === undefined) {
+    return (
+      <PageContainer>
+        <div className="space-y-3">
+          <Skeleton className="h-20 rounded-2xl" />
+          <Skeleton className="h-64 rounded-2xl" />
+        </div>
+      </PageContainer>
+    );
+  }
+
+  /* Un conjunto que no supervisa se ve igual que uno que no existe. */
+  if (!conjunto) {
+    return (
+      <PageContainer>
+        <EmptyState
+          icon={ShieldAlert}
+          title="Ese conjunto no está entre los tuyos"
+          description="Solo puedes supervisar los conjuntos que la compañía te tiene asignados hoy."
+          action={
+            <Link href="/vigilancia" className="text-sm text-brand hover:underline">
+              Volver a mis conjuntos
+            </Link>
+          }
+        />
+      </PageContainer>
+    );
+  }
+
+  const guarda = conjunto.guardas.find((g) => g.userId === guardaId);
+
+  return (
+    <PageContainer>
+      <div className="space-y-6">
+        <Link
+          href="/vigilancia"
+          className="inline-flex items-center gap-1.5 text-[13px] text-muted-foreground hover:text-foreground"
+        >
+          <ArrowLeft className="h-3.5 w-3.5" aria-hidden />
+          Mis conjuntos
+        </Link>
+
+        <PageHeader
+          title={conjunto.condominioNombre}
+          description={`${conjunto.companiaNombre} · ${conjunto.guardas.length} guarda${conjunto.guardas.length === 1 ? "" : "s"} a tu cargo`}
+        />
+
+        <Card className="flex flex-wrap items-end gap-4">
+          <label className="flex-1 min-w-[220px] space-y-1.5">
+            <span className="flex items-center gap-1.5 text-[12.5px] font-medium text-foreground">
+              <Users className="h-3.5 w-3.5 text-brand" aria-hidden />
+              Guarda
+            </span>
+            <Select
+              value={guardaId}
+              onChange={(e) => setGuardaId(e.target.value)}
+            >
+              <option value="">Toda la portería</option>
+              {conjunto.guardas.map((g) => (
+                <option key={g.userId} value={g.userId}>
+                  {g.nombre}
+                </option>
+              ))}
+            </Select>
+          </label>
+          <p className="flex-1 min-w-[220px] pb-2 text-[11.5px] text-muted-foreground">
+            {guarda
+              ? `Rondas y minuta registradas por ${guarda.nombre} en este conjunto.`
+              : "Toda la operación del conjunto, sin importar quién la registró."}
+          </p>
+        </Card>
+
+        <div className="flex gap-1 border-b border-border">
+          <Tab
+            activo={tab === "rondas"}
+            onClick={() => setTab("rondas")}
+            icon={Footprints}
+            label="Rondas"
+            n={rondas?.length}
+          />
+          <Tab
+            activo={tab === "minuta"}
+            onClick={() => setTab("minuta")}
+            icon={BookOpenCheck}
+            label="Minuta"
+            n={minuta?.length}
+          />
+        </div>
+
+        {tab === "rondas" ? (
+          rondas === undefined ? (
+            <Skeleton className="h-64 rounded-2xl" />
+          ) : rondas.length === 0 ? (
+            <EmptyState
+              icon={Footprints}
+              title="Sin rondas registradas"
+              description={
+                guarda
+                  ? `${guarda.nombre} todavía no tiene rondas en este conjunto.`
+                  : "Cuando la portería haga su primera ronda aparecerá aquí."
+              }
+            />
+          ) : (
+            <Card className="overflow-hidden p-0">
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[720px] text-sm">
+                  <thead>
+                    <tr className="border-b border-border text-left text-xs text-muted-foreground">
+                      <th className="px-5 py-3 font-medium">#</th>
+                      <th className="px-5 py-3 font-medium">Zona</th>
+                      <th className="px-5 py-3 font-medium">Guarda</th>
+                      <th className="px-5 py-3 font-medium">Inicio</th>
+                      <th className="px-5 py-3 font-medium">Duración</th>
+                      <th className="px-5 py-3 font-medium">Registros</th>
+                      <th className="px-5 py-3 font-medium">Estado</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border/60">
+                    {rondas.map((r) => (
+                      <tr key={r._id}>
+                        <td className="px-5 py-3 tabular-nums text-muted-foreground">
+                          {r.numero ?? "—"}
+                        </td>
+                        <td className="px-5 py-3 text-foreground">{r.zona}</td>
+                        <td className="px-5 py-3 text-muted-foreground">
+                          {r.guardiaNombre ?? "—"}
+                        </td>
+                        <td className="px-5 py-3 text-muted-foreground">
+                          {fechaHora(r.fechaInicio)}
+                        </td>
+                        <td className="px-5 py-3 text-muted-foreground">
+                          {r.duracion}
+                        </td>
+                        <td className="px-5 py-3 text-muted-foreground">
+                          {r.totales.eventos} evento
+                          {r.totales.eventos === 1 ? "" : "s"}
+                          {r.totales.vehiculos > 0 &&
+                            ` · ${r.totales.vehiculos} vehículo${r.totales.vehiculos === 1 ? "" : "s"}`}
+                          {r.totales.novedades > 0 && (
+                            <span className="ml-1.5 text-destructive">
+                              · {r.totales.novedades} novedad
+                              {r.totales.novedades === 1 ? "" : "es"}
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-5 py-3">
+                          <Badge tone={TONO_RONDA[r.estado]}>{r.estado}</Badge>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          )
+        ) : minuta === undefined ? (
+          <Skeleton className="h-64 rounded-2xl" />
+        ) : minuta.length === 0 ? (
+          <EmptyState
+            icon={BookOpenCheck}
+            title="Minuta vacía"
+            description={
+              guarda
+                ? `${guarda.nombre} no ha registrado eventos en este conjunto.`
+                : "Todavía no hay eventos registrados en esta portería."
+            }
+          />
+        ) : (
+          <Card className="p-0">
+            <ul className="divide-y divide-border/60">
+              {minuta.map((e) => (
+                <li key={e._id} className="flex gap-3 px-5 py-3">
+                  <span className="w-28 shrink-0 text-[11.5px] text-muted-foreground">
+                    {fechaHora(e.createdAt)}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="flex flex-wrap items-center gap-2">
+                      <span className="text-[13.5px] text-foreground">
+                        {e.tipo}
+                      </span>
+                      <Badge tone="neutral">{e.modulo}</Badge>
+                      <span className="text-[11.5px] text-muted-foreground">
+                        {e.unidad}
+                      </span>
+                    </span>
+                    <span className="mt-0.5 block text-[12.5px] text-muted-foreground">
+                      {e.resumen}
+                    </span>
+                  </span>
+                  <span className="w-32 shrink-0 truncate text-right text-[11.5px] text-muted-foreground">
+                    {e.actorNombre}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </Card>
+        )}
+      </div>
+    </PageContainer>
+  );
+}
+
+function Tab({
+  activo,
+  onClick,
+  icon: Icon,
+  label,
+  n,
+}: {
+  activo: boolean;
+  onClick: () => void;
+  icon: React.ComponentType<{ className?: string }>;
+  label: string;
+  n?: number;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "-mb-px flex items-center gap-1.5 border-b-2 px-3 py-2 text-[13px] transition-colors",
+        activo
+          ? "border-brand text-foreground"
+          : "border-transparent text-muted-foreground hover:text-foreground",
+      )}
+    >
+      <Icon className="h-3.5 w-3.5" />
+      {label}
+      {n !== undefined && (
+        <span className="text-[11.5px] text-muted-foreground">({n})</span>
+      )}
+    </button>
+  );
+}

@@ -441,3 +441,293 @@ describe("nada de esto cambia para quien ya funcionaba", () => {
     expect(deHernan.map((c) => c._id)).toEqual([e.norte]);
   });
 });
+
+/**
+ * Deja operacion real en un conjunto: turno abierto, una ronda cerrada y una
+ * anotacion en la minuta. Se hace por la API del guarda y no insertando filas,
+ * asi lo que despues lee el supervisor es lo mismo que produce la porteria.
+ */
+async function operar(
+  e: Escenario,
+  quien: "gabriel" | "sandra" | "ramiro" | "hernan",
+  condominioId: Id<"condominios">,
+  zona: string,
+) {
+  const guarda = e.como(quien);
+  await guarda.mutation(api.guardia.iniciarTurno, {
+    condominioId,
+    checklist: [
+      {
+        item: "Radio",
+        obligatorio: true,
+        cantidadEsperada: 1,
+        cantidadEncontrada: 1,
+        estadoOk: true,
+      },
+    ],
+  });
+  const { rondaId } = await guarda.mutation(api.rondas.iniciar, {
+    condominioId,
+    zona,
+  });
+  await guarda.mutation(api.guardia.registrarEventoMinuta, {
+    condominioId,
+    tipo: "Anotacion",
+    resumen: `Novedad de ${zona}`,
+  });
+  await guarda.mutation(api.rondas.finalizar, {
+    rondaId,
+    observaciones: "Sin novedad",
+  });
+  return rondaId;
+}
+
+describe("el supervisor consulta rondas y minuta de su conjunto", () => {
+  let e: Escenario;
+  let rondaNorte: Id<"guardiaRondas">;
+
+  beforeEach(async () => {
+    e = await montar();
+    rondaNorte = await operar(e, "gabriel", e.norte, "Zona A");
+    await operar(e, "sandra", e.sur, "Zona B");
+  });
+
+  test("ve las rondas del conjunto que supervisa, con su detalle", async () => {
+    const rondas = await e
+      .como("sofia")
+      .query(api.rondas.listar, { condominioId: e.norte });
+    expect(rondas).toHaveLength(1);
+    expect(rondas[0]!.zona).toBe("Zona A");
+    expect(rondas[0]!.guardiaNombre).toBe("Gabriel Guarda");
+    expect(rondas[0]!.estado).toBe("finalizada");
+
+    /* El detalle es lo que se supervisa de verdad: quien, cuando, cuanto duro
+     * y que paso durante el recorrido. */
+    const detalle = await e
+      .como("sofia")
+      .query(api.rondas.detalle, { rondaId: rondaNorte });
+    expect(detalle!.zona).toBe("Zona A");
+    expect(detalle!.observacionesCierre).toBe("Sin novedad");
+    expect(detalle!.lineaDeTiempo.length).toBeGreaterThan(0);
+  });
+
+  test("ve la minuta del conjunto que supervisa, y solo la de ese", async () => {
+    const minuta = await e
+      .como("sofia")
+      .query(api.guardia.listMinuta, { condominioId: e.norte });
+    expect(minuta.some((m) => m.resumen === "Novedad de Zona A")).toBe(true);
+    expect(minuta.some((m) => m.resumen === "Novedad de Zona B")).toBe(false);
+  });
+
+  test("puede acotar rondas y minuta a un guarda concreto", async () => {
+    const gabrielId = (
+      await e.como("sofia").query(api.asignaciones.miEquipo, {})
+    )[0]!.guardas[0]!.userId;
+
+    const rondas = await e.como("sofia").query(api.rondas.listar, {
+      condominioId: e.norte,
+      guardiaUserId: gabrielId,
+    });
+    expect(rondas.map((r) => r.zona)).toEqual(["Zona A"]);
+
+    const minuta = await e.como("sofia").query(api.guardia.listMinuta, {
+      condominioId: e.norte,
+      actorUserId: gabrielId,
+    });
+    expect(minuta.every((m) => m.actorUserId === gabrielId)).toBe(true);
+    expect(minuta.some((m) => m.resumen === "Novedad de Zona A")).toBe(true);
+  });
+
+  test("tambien ve turnos y zonas, que es el resto del contexto", async () => {
+    const turnos = await e
+      .como("sofia")
+      .query(api.guardia.listTurnos, { condominioId: e.norte });
+    expect(turnos).toHaveLength(1);
+    expect(turnos[0]!.guardiaNombre).toBe("Gabriel Guarda");
+
+    const detalle = await e
+      .como("sofia")
+      .query(api.guardia.getTurno, { turnoId: turnos[0]!._id });
+    expect(detalle!.rondas).toHaveLength(1);
+
+    await expect(
+      e.como("sofia").query(api.guardia.listRondaZonas, {
+        condominioId: e.norte,
+      }),
+    ).resolves.toEqual([]);
+  });
+
+  test("cambiar de conjunto cambia el contexto, y nada mas", async () => {
+    // Antes de asignarselo, Sur le esta cerrado.
+    await expect(
+      e.como("sofia").query(api.rondas.listar, { condominioId: e.sur }),
+    ).rejects.toThrow();
+
+    const contratos = await e.plataforma.query(
+      api.companias.contratosDeCondominio,
+      { condominioId: e.sur },
+    );
+    const andina = await e.plataforma.query(api.companias.detail, {
+      companiaId: e.andina.companiaId,
+    });
+    const sofiaMiembro = andina!.personal.find(
+      (p) => p.nombre === "Sofia Supervisora",
+    )!;
+    await e.plataforma.mutation(api.asignaciones.crear, {
+      contratoId: contratos[0]!._id,
+      companiaMiembroId: sofiaMiembro._id,
+      rol: "supervisor",
+      vigenciaDesde: Date.now() - DIA,
+    });
+
+    const equipo = await e.como("sofia").query(api.asignaciones.miEquipo, {});
+    expect(equipo.map((c) => c.condominioNombre)).toEqual([
+      "Conjunto Norte",
+      "Conjunto Sur",
+    ]);
+
+    const rondas = await e
+      .como("sofia")
+      .query(api.rondas.listar, { condominioId: e.sur });
+    expect(rondas.map((r) => r.zona)).toEqual(["Zona B"]);
+  });
+});
+
+describe("multi-tenant: el supervisor no alcanza lo que no supervisa", () => {
+  let e: Escenario;
+  let rondaSur: Id<"guardiaRondas">;
+  let rondaOriente: Id<"guardiaRondas">;
+
+  beforeEach(async () => {
+    e = await montar();
+    await operar(e, "gabriel", e.norte, "Zona A");
+    rondaSur = await operar(e, "sandra", e.sur, "Zona B");
+    rondaOriente = await operar(e, "ramiro", e.oriente, "Zona C");
+  });
+
+  test("cambiar el conjunto en la peticion no abre nada", async () => {
+    /* El conjunto lo pone el cliente en cada llamada; lo que NO pone es el
+     * permiso. Sur es de su propia compania y Oriente de otra: las dos rebotan
+     * por el mismo sitio. */
+    for (const condominioId of [e.sur, e.oriente]) {
+      await expect(
+        e.como("sofia").query(api.rondas.listar, { condominioId }),
+      ).rejects.toThrow(/porteria\.ver/);
+      await expect(
+        e.como("sofia").query(api.guardia.listMinuta, { condominioId }),
+      ).rejects.toThrow(/porteria\.ver/);
+      await expect(
+        e.como("sofia").query(api.guardia.listTurnos, { condominioId }),
+      ).rejects.toThrow(/porteria\.ver/);
+    }
+  });
+
+  test("el id de una ronda ajena no confirma ni que existe", async () => {
+    /* Responde lo mismo que si no existiera: un "no tienes permiso" ya seria
+     * decir que ahi hay algo. */
+    expect(
+      await e.como("sofia").query(api.rondas.detalle, { rondaId: rondaSur }),
+    ).toBeNull();
+    expect(
+      await e
+        .como("sofia")
+        .query(api.rondas.detalle, { rondaId: rondaOriente }),
+    ).toBeNull();
+  });
+
+  test("filtrar por un guarda ajeno no trae nada suyo", async () => {
+    const sandraId = await e.t.run(async (ctx) => {
+      const u = await ctx.db
+        .query("users")
+        .withIndex("by_email", (q) => q.eq("email", "sandra@andina.test"))
+        .unique();
+      return u!._id;
+    });
+
+    /* Pedir a Sandra DENTRO del conjunto que si supervisa devuelve vacio: el
+     * conjunto manda, y ella no opera ahi. Lo que nunca ocurre es que el
+     * filtro sirva de puente hacia el otro conjunto. */
+    const rondas = await e.como("sofia").query(api.rondas.listar, {
+      condominioId: e.norte,
+      guardiaUserId: sandraId,
+    });
+    expect(rondas).toEqual([]);
+  });
+
+  test("un guarda tampoco se pasa al conjunto de al lado", async () => {
+    await expect(
+      e.como("gabriel").query(api.rondas.listar, { condominioId: e.sur }),
+    ).rejects.toThrow();
+    await expect(
+      e.como("ramiro").query(api.guardia.listMinuta, { condominioId: e.norte }),
+    ).rejects.toThrow();
+  });
+});
+
+describe("la porteria del guarda no cambia", () => {
+  let e: Escenario;
+  beforeEach(async () => {
+    e = await montar();
+  });
+
+  test("el guarda sigue operando su turno y sus rondas", async () => {
+    const rondaId = await operar(e, "gabriel", e.norte, "Zona A");
+    const detalle = await e
+      .como("gabriel")
+      .query(api.rondas.detalle, { rondaId });
+    expect(detalle!.estado).toBe("finalizada");
+    expect(
+      await e
+        .como("gabriel")
+        .query(api.rondas.activa, { condominioId: e.norte }),
+    ).toBeNull();
+
+    // Y el guarda propio del conjunto, el de siempre, igual.
+    const turnos = await e
+      .como("gabriel")
+      .query(api.guardia.listTurnos, { condominioId: e.norte });
+    await e.como("gabriel").mutation(api.guardia.cerrarTurno, {
+      turnoId: turnos[0]!._id,
+      consignas: "Nada pendiente",
+      recibe: "Hernan",
+    });
+    const rondaDeHernan = await operar(e, "hernan", e.norte, "Zona D");
+    expect(
+      (await e
+        .como("hernan")
+        .query(api.rondas.detalle, { rondaId: rondaDeHernan }))!.zona,
+    ).toBe("Zona D");
+  });
+
+  test("el supervisor mira pero no opera", async () => {
+    await expect(
+      e.como("sofia").mutation(api.guardia.iniciarTurno, {
+        condominioId: e.norte,
+        checklist: [
+          {
+            item: "Radio",
+            obligatorio: true,
+            cantidadEsperada: 1,
+            cantidadEncontrada: 1,
+            estadoOk: true,
+          },
+        ],
+      }),
+    ).rejects.toThrow();
+
+    await operar(e, "gabriel", e.norte, "Zona A");
+    await expect(
+      e.como("sofia").mutation(api.guardia.registrarEventoMinuta, {
+        condominioId: e.norte,
+        tipo: "Anotacion",
+        resumen: "No deberia poder",
+      }),
+    ).rejects.toThrow();
+    await expect(
+      e.como("sofia").mutation(api.rondas.iniciar, {
+        condominioId: e.norte,
+        zona: "Zona X",
+      }),
+    ).rejects.toThrow();
+  });
+});

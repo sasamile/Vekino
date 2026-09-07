@@ -85,13 +85,15 @@ export default function VigilanciaHome() {
                       {c.guardas.length} guarda
                       {c.guardas.length === 1 ? "" : "s"}
                     </Badge>
-                    {/* La portería es de lectura para el supervisor: puede ver
-                        quién cubre y qué pasó, no operar el turno. */}
+                    {/* Al panel de supervisión del conjunto, NO a la app de
+                        portería: `/guardia/:id` es donde el guarda opera su
+                        turno y sigue siendo suya. El supervisor mira desde su
+                        propio lado. */}
                     <Link
-                      href={`/guardia/${c.condominioId}/rondas`}
+                      href={`/vigilancia/${c.condominioId}`}
                       className="inline-flex items-center gap-1 text-[12.5px] text-brand hover:underline"
                     >
-                      Rondas
+                      Supervisar
                       <ArrowUpRight className="h-3.5 w-3.5" aria-hidden />
                     </Link>
                   </div>

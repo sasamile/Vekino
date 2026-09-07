@@ -3,6 +3,7 @@ import { mutation, query } from "./_generated/server";
 import type { QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { requireCondominioRole } from "./model/authz";
+import { exigirAcceso, resolverAcceso } from "./model/acceso";
 import { logMinuta, rondaEnCurso, turnoAbierto } from "./model/minuta";
 import {
   contar,
@@ -26,6 +27,22 @@ import {
  */
 
 const GUARD_ROLES = ["guardia", "administrador", "junta_directiva"] as const;
+
+/**
+ * OPERAR NO ES LO MISMO QUE MIRAR.
+ *
+ * `GUARD_ROLES` decía las dos cosas a la vez: quién abre una ronda y quién
+ * puede leerla después. Mientras el único que miraba era el propio guarda
+ * daba igual; con el supervisor deja de darlo, porque supervisa la operación
+ * de sus conjuntos sin operarla —no releva, no abre turnos, no cierra rondas.
+ *
+ * La distinción ya estaba declarada en `lib/vigilancia.ts` desde el principio
+ * (`porteria.operar` frente a `porteria.ver`) y solo faltaba usarla aquí. No
+ * hace falta un permiso nuevo: `porteria.ver` la tienen hoy exactamente los
+ * mismos que `GUARD_ROLES` —administrador, junta_directiva, guardia y la
+ * plataforma— más el supervisor con asignación vigente. Escribir sigue
+ * pasando por `requireCondominioRole`, intacto.
+ */
 
 /** Solo una ronda abierta a la vez por condominio. */
 async function exigirSinRondaAbierta(
@@ -170,7 +187,7 @@ export const finalizar = mutation({
 export const activa = query({
   args: { condominioId: v.id("condominios") },
   handler: async (ctx, args) => {
-    await requireCondominioRole(ctx, args.condominioId, [...GUARD_ROLES]);
+    await exigirAcceso(ctx, args.condominioId, "porteria.ver");
     const r = await rondaEnCurso(ctx, args.condominioId);
     if (!r) return null;
     return {
@@ -251,7 +268,13 @@ export const detalle = query({
   handler: async (ctx, args) => {
     const ronda = await ctx.db.get(args.rondaId);
     if (!ronda) return null;
-    await requireCondominioRole(ctx, ronda.condominioId, [...GUARD_ROLES]);
+
+    /* Sin acceso se responde lo mismo que si no existiera. El id de una ronda
+     * ajena no debe poder usarse para averiguar que existe: "no tienes
+     * permiso" ya confirma que hay algo ahí. El conjunto sale del documento,
+     * nunca de un argumento del cliente. */
+    const acceso = await resolverAcceso(ctx, ronda.condominioId);
+    if (!acceso || !acceso.capacidades.has("porteria.ver")) return null;
 
     const hitos = await hitosDeRonda(ctx, ronda);
     const inicio = ronda.fechaInicio ?? ronda.createdAt;
@@ -277,14 +300,48 @@ export const listar = query({
   args: {
     condominioId: v.id("condominios"),
     limite: v.optional(v.number()),
+    /**
+     * Solo las de este guarda. Es lo que mira el supervisor cuando quiere
+     * revisar a una persona y no la portería entera.
+     *
+     * Va como filtro de la MISMA consulta y no en una función aparte: la
+     * autorización es idéntica —el conjunto manda— y separarla obligaría a
+     * mantener dos veces la misma comprobación. `guardiaUserId` es opcional
+     * en el esquema porque las rondas viejas no lo tenían; esas no salen al
+     * filtrar, que es lo correcto: no consta quién las hizo.
+     */
+    guardiaUserId: v.optional(v.id("users")),
   },
   handler: async (ctx, args) => {
-    await requireCondominioRole(ctx, args.condominioId, [...GUARD_ROLES]);
-    const rondas = await ctx.db
-      .query("guardiaRondas")
-      .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
-      .order("desc")
-      .take(Math.min(args.limite ?? 50, 200));
+    await exigirAcceso(ctx, args.condominioId, "porteria.ver");
+    const limite = Math.min(args.limite ?? 50, 200);
+
+    let rondas: Doc<"guardiaRondas">[];
+    if (args.guardiaUserId) {
+      /* Se recorre el índice de la más nueva a la más vieja y se corta al
+       * llegar al límite. Sin `.collect()`: en una portería con años de
+       * histórico eso sería leer la tabla entera para mostrar veinte filas. */
+      rondas = [];
+      const guardiaUserId = args.guardiaUserId;
+      for await (const r of ctx.db
+        .query("guardiaRondas")
+        .withIndex("by_condominio", (q) =>
+          q.eq("condominioId", args.condominioId),
+        )
+        .order("desc")) {
+        if (r.guardiaUserId !== guardiaUserId) continue;
+        rondas.push(r);
+        if (rondas.length >= limite) break;
+      }
+    } else {
+      rondas = await ctx.db
+        .query("guardiaRondas")
+        .withIndex("by_condominio", (q) =>
+          q.eq("condominioId", args.condominioId),
+        )
+        .order("desc")
+        .take(limite);
+    }
 
     /* Los contadores se calculan aquí y no se guardan en la ronda: un contador
      * denormalizado se desincroniza en cuanto alguien borra un reporte, y el
