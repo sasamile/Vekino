@@ -8,6 +8,9 @@ import {
   subscriptionPlanValidator,
   tipoUnidadValidator,
   estadoUnidadValidator,
+  companiaRoleValidator,
+  estadoCompaniaValidator,
+  rolAsignacionValidator,
 } from "./model/roles";
 
 /**
@@ -2281,4 +2284,163 @@ export default defineSchema({
     .index("by_condominio", ["condominioId"])
     .index("by_condominio_estado", ["condominioId", "estado"])
     .index("by_factura", ["facturaId"]),
+
+  // ─────────────────────────────────────────────────────────────
+  // VIGILANCIA — compañías de seguridad, personal, contratos y asignaciones
+  //
+  // Segundo eje de pertenencia. Hoy el sistema solo sabe que una persona
+  // pertenece a un conjunto (`memberships`); aquí se añade que pertenece a
+  // una compañía, y el contrato que conecta ambos ejes.
+  //
+  // La identidad NO se bifurca: un guarda sigue siendo un `users` con su
+  // credencial de Better Auth. Una tabla `guardias` propia rompería el login,
+  // el avatar, las notificaciones push y todo el histórico ya atribuido a
+  // `userId`.
+  //
+  // Sigue habiendo una segunda vía legítima de ser guarda —
+  // `memberships.roles ∋ "guardia"`, el vigilante propio del conjunto— y por
+  // eso nada de esto es obligatorio: un conjunto que no contrate compañía no
+  // ve la diferencia.
+  // ─────────────────────────────────────────────────────────────
+
+  /** La empresa de vigilancia. Tenant de servicio, hermano de `condominios`. */
+  companiasSeguridad: defineTable({
+    nombre: v.string(),
+    /**
+     * Único de hecho. Convex no tiene UNIQUE: la unicidad se comprueba en
+     * código leyendo por `by_nit` antes de insertar, igual que se hace hoy
+     * con `users.email`.
+     */
+    nit: v.optional(v.string()),
+
+    contactoEmail: v.optional(v.string()),
+    contactoTelefono: v.optional(v.string()),
+
+    // Marca, para que el panel de compañía se vea como el del conjunto.
+    logo: v.optional(v.string()),
+    primaryColor: v.optional(v.string()),
+
+    estado: estadoCompaniaValidator,
+
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_estado", ["estado"])
+    .index("by_nit", ["nit"]),
+
+  /**
+   * Persona ↔ compañía. Espejo exacto de `memberships` en el otro eje.
+   *
+   * Aquí es donde irían los datos laborales (código de empleado, ARL,
+   * vigencia del contrato laboral) si alguna vez hacen falta. No están porque
+   * la jerarquía no los necesita y `users` ya carga con demasiadas
+   * responsabilidades.
+   */
+  companiaMiembros: defineTable({
+    userId: v.id("users"),
+    companiaId: v.id("companiasSeguridad"),
+
+    /**
+     * Multi-rol, por el mismo motivo que `memberships.roles`: un supervisor
+     * puede además cubrir turnos, y quien administra una compañía pequeña
+     * suele ser también quien supervisa.
+     */
+    roles: v.array(companiaRoleValidator),
+
+    /** Texto libre para el organigrama real ("Supervisor zona norte"). */
+    cargo: v.optional(v.string()),
+
+    isActive: v.boolean(),
+
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_user", ["userId"])
+    .index("by_compania", ["companiaId"])
+    .index("by_compania_user", ["companiaId", "userId"]),
+
+  /**
+   * El contrato entre una compañía y un conjunto. Es lo que autoriza.
+   *
+   * No lleva enum de estado: la vigencia son fechas y el estado se deriva al
+   * leer. Un enum exigiría que algo lo actualizara al vencer —un cron, que se
+   * puede caer, atrasar o no haber corrido— y el día que eso pasara habría
+   * personal de una compañía sin contrato entrando a un conjunto.
+   *
+   * Cambiar de compañía es cerrar este contrato y abrir otro. No se edita ni
+   * se borra nada más, así que el histórico queda íntegro.
+   */
+  companiaContratos: defineTable({
+    companiaId: v.id("companiasSeguridad"),
+    condominioId: v.id("condominios"),
+
+    vigenciaDesde: v.number(),
+    /** Ausente = indefinido, igual que en `usuarioUnidad`. */
+    vigenciaHasta: v.optional(v.number()),
+
+    /** Referencia del contrato comercial. No autoriza nada. */
+    notas: v.optional(v.string()),
+
+    creadoPorUserId: v.id("users"),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_compania", ["companiaId"])
+    .index("by_condominio", ["condominioId"])
+    .index("by_condominio_compania", ["condominioId", "companiaId"]),
+
+  /**
+   * Quién opera en qué conjunto, desde cuándo y hasta cuándo.
+   *
+   * Cuelga del CONTRATO y no del conjunto. Es la decisión estructural del
+   * modelo: terminar un contrato corta el acceso de todo su personal sin
+   * escribir una sola fila más — sin cascada que ejecutar, sin cron que se
+   * pueda caer y sin asignaciones huérfanas que sigan dando acceso porque
+   * alguien olvidó desactivarlas.
+   *
+   * Es el mismo criterio con el que `usuarioUnidad` cuelga de `membershipId`
+   * y no de `userId`.
+   *
+   * Nunca se borra: se le pone `vigenciaHasta`. Así se puede responder dónde
+   * estaba asignada una persona en una fecha dada.
+   */
+  asignaciones: defineTable({
+    contratoId: v.id("companiaContratos"),
+    /**
+     * Colgar del miembro y no del usuario: dar de baja al miembro invalida
+     * sus asignaciones sin tener que tocarlas una por una.
+     */
+    companiaMiembroId: v.id("companiaMiembros"),
+
+    /**
+     * Denormalizados. `userId` responde la pregunta del arranque de sesión
+     * ("¿dónde trabajo?") sin escanear `companiaMiembros`; `condominioId`
+     * sigue la convención del proyecto de que toda tabla de negocio pueda
+     * indexarse por tenant sin saltar por una tabla intermedia.
+     */
+    userId: v.id("users"),
+    condominioId: v.id("condominios"),
+    companiaId: v.id("companiasSeguridad"),
+
+    /**
+     * Valor único, no array: en un conjunto concreto se es una cosa. Va en la
+     * asignación y no en la persona para que un supervisor pueda cubrir un
+     * turno como guarda en otro conjunto.
+     */
+    rol: rolAsignacionValidator,
+
+    vigenciaDesde: v.number(),
+    vigenciaHasta: v.optional(v.number()),
+
+    creadoPorUserId: v.id("users"),
+    /** Sin `updatedAt`: una asignación se termina, no se reescribe. */
+    createdAt: v.number(),
+  })
+    .index("by_contrato", ["contratoId"])
+    .index("by_miembro", ["companiaMiembroId"])
+    .index("by_user", ["userId"])
+    // La ruta caliente de la autorización: "¿puede esta persona operar aquí?"
+    .index("by_user_condominio", ["userId", "condominioId"])
+    .index("by_condominio_rol", ["condominioId", "rol"])
+    .index("by_compania", ["companiaId"]),
 });

@@ -6,6 +6,7 @@ import {
   LifeBuoy,
   MessagesSquare,
   ChartNoAxesColumn,
+  ShieldCheck,
   type LucideIcon,
 } from "lucide-react";
 
@@ -38,6 +39,24 @@ export const PLATFORM_NAV: PlatformNavItem[] = [
     segment: "administradores",
     icon: UsersRound,
     keywords: ["staff", "superadmin", "roles", "usuarios", "equipo"],
+  },
+  {
+    label: "Vigilancia",
+    href: "/dashboard/companias",
+    segment: "companias",
+    icon: ShieldCheck,
+    keywords: [
+      "companias",
+      "compañias",
+      "seguridad",
+      "guardas",
+      "guardias",
+      "supervisores",
+      "porteria",
+      "asignaciones",
+      "contratos",
+      "empresa",
+    ],
   },
   {
     label: "Automatizaciones",
