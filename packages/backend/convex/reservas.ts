@@ -731,3 +731,108 @@ export const createFromBot = internalMutation({
     return { reservaId, estado: "pendiente" as const };
   },
 });
+
+
+/**
+ * Carga varios espacios comunes de una vez, desde la terminal.
+ *
+ * La administracion manda la lista por WhatsApp —"salon social, 80 personas,
+ * 150 mil el dia, viernes y sabado hasta las 2 a. m."— y meterlos uno por uno
+ * por la interfaz son veinte minutos de formulario y una errata garantizada
+ * en los horarios.
+ *
+ * Los horarios se escriben por GRUPO de dias, que es como los dicta la gente:
+ * "lunes a jueves hasta las 10, viernes y sabado hasta las 2". Aqui se
+ * expanden a un registro por dia, que es como los guarda el sistema.
+ *
+ * Es idempotente por nombre: volver a correrla no duplica lo ya cargado, solo
+ * agrega lo que falte. Asi se puede ir completando la lista a medida que la
+ * administracion la va mandando.
+ */
+export const crearZonasEnLote = internalMutation({
+  args: {
+    condominioId: v.id("condominios"),
+    zonas: v.array(
+      v.object({
+        nombre: v.string(),
+        tipo: v.optional(tipoZonaValidator),
+        unidadTiempo: v.optional(unidadTiempoValidator),
+        capacidad: v.optional(v.number()),
+        descripcion: v.optional(v.string()),
+        precioPorHora: v.optional(v.number()),
+        precioPorDia: v.optional(v.number()),
+        precioPorMes: v.optional(v.number()),
+        requiereAprobacion: v.optional(v.boolean()),
+        depositoRequerido: v.optional(v.number()),
+        /** 0=domingo … 6=sabado. "09:00" a "02:00" cierra al dia siguiente. */
+        horarios: v.optional(
+          v.array(
+            v.object({
+              dias: v.array(v.number()),
+              horaInicio: v.string(),
+              horaFin: v.string(),
+            }),
+          ),
+        ),
+      }),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const condominio = await ctx.db.get(args.condominioId);
+    if (!condominio) throw new Error("Condominio no encontrado.");
+
+    const existentes = await ctx.db
+      .query("zonasComunes")
+      .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
+      .collect();
+    const yaEstan = new Set(
+      existentes.map((z) => z.nombre.trim().toLowerCase()),
+    );
+
+    const creadas: string[] = [];
+    const omitidas: string[] = [];
+
+    for (const z of args.zonas) {
+      const nombre = z.nombre.trim();
+      if (!nombre) continue;
+      if (yaEstan.has(nombre.toLowerCase())) {
+        omitidas.push(nombre);
+        continue;
+      }
+
+      const horariosPorDia = (z.horarios ?? []).flatMap((h) =>
+        h.dias.map((dia) => ({
+          dia,
+          horaInicio: h.horaInicio,
+          horaFin: h.horaFin,
+        })),
+      );
+      /* Se valida ANTES de insertar nada: media lista cargada y media no es
+       * peor que ninguna, porque no se ve cual falto. */
+      if (horariosPorDia.length > 0) assertHorarios(horariosPorDia);
+
+      const ahora = Date.now();
+      await ctx.db.insert("zonasComunes", {
+        condominioId: args.condominioId,
+        nombre,
+        tipo: z.tipo ?? "otro",
+        unidadTiempo: z.unidadTiempo ?? "dia",
+        capacidad: z.capacidad ?? 1,
+        descripcion: z.descripcion?.trim() || undefined,
+        precioPorHora: z.precioPorHora,
+        precioPorDia: z.precioPorDia,
+        precioPorMes: z.precioPorMes,
+        horariosPorDia: horariosPorDia.length ? horariosPorDia : undefined,
+        requiereAprobacion: z.requiereAprobacion ?? true,
+        depositoRequerido: z.depositoRequerido,
+        activa: true,
+        createdAt: ahora,
+        updatedAt: ahora,
+      });
+      yaEstan.add(nombre.toLowerCase());
+      creadas.push(nombre);
+    }
+
+    return { condominio: condominio.name, creadas, omitidas };
+  },
+});
