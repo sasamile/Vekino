@@ -3,7 +3,16 @@ import type { MutationCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
-import { requireCondominioRole } from "./model/authz";
+import { requireCondominioRole, requireAppUser } from "./model/authz";
+
+/**
+ * Quien puede ver la cartera del conjunto.
+ *
+ * La factura dice nombre, apartamento y cuanto debe cada residente. No es
+ * dato de vecino: es de la administracion y de quien lleva las cuentas.
+ * El residente ve LA SUYA por `listMia`, que filtra por sus unidades.
+ */
+const CARTERA_ROLES = ["administrador", "contadora", "junta_directiva"] as const;
 
 const MESES_ES = [
   "enero",
@@ -109,7 +118,19 @@ async function conciliarCadenaUnidad(
 /**
  * Inserta una factura extraída del PDF. Idempotente por (condominioId, unidadId, periodo).
  */
-export const upsertFactura = mutation({
+/**
+ * Alta/actualización de una factura desde los scripts de importación.
+ *
+ * Es `internalMutation` y no `mutation`: en Convex toda función exportada
+ * como `mutation` es API pública, invocable por cualquiera que conozca la URL
+ * del deployment —y esa URL viaja en el bundle del navegador—. Esta no tiene
+ * ningún llamador de cliente; sus únicos usuarios son los scripts de
+ * migración vía `convex run`, que también pueden invocar funciones internas.
+ *
+ * La alta manual desde la aplicación es `createManual`, que sí comprueba
+ * permisos.
+ */
+export const upsertFactura = internalMutation({
   args: {
     condominioId: v.id("condominios"),
     unidadId: v.id("unidades"),
@@ -221,6 +242,7 @@ export const listByPeriodo = query({
     periodo: v.string(),
   },
   handler: async (ctx, args) => {
+    await requireCondominioRole(ctx, args.condominioId, [...CARTERA_ROLES]);
     return await ctx.db
       .query("facturas")
       .withIndex("by_condominio_periodo", (q) =>
@@ -239,6 +261,7 @@ export const listRecentByPeriodo = query({
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
+    await requireCondominioRole(ctx, args.condominioId, [...CARTERA_ROLES]);
     const limit = Math.min(Math.max(args.limit ?? 5, 1), 20);
     const rows = await ctx.db
       .query("facturas")
@@ -272,6 +295,7 @@ export const listPage = query({
     ),
   },
   handler: async (ctx, args) => {
+    await requireCondominioRole(ctx, args.condominioId, [...CARTERA_ROLES]);
     const needle = args.q?.trim().toLowerCase() ?? "";
     const estado = args.estado;
 
@@ -320,6 +344,7 @@ export const resumenPeriodo = query({
     periodo: v.string(),
   },
   handler: async (ctx, args) => {
+    await requireCondominioRole(ctx, args.condominioId, [...CARTERA_ROLES]);
     const rows = await ctx.db
       .query("facturas")
       .withIndex("by_condominio_periodo", (q) =>
@@ -357,6 +382,7 @@ export const resumenPeriodo = query({
 export const listPeriodos = query({
   args: { condominioId: v.id("condominios") },
   handler: async (ctx, args) => {
+    await requireCondominioRole(ctx, args.condominioId, [...CARTERA_ROLES]);
     const rows = await ctx.db
       .query("facturas")
       .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
@@ -373,6 +399,7 @@ export const listPeriodos = query({
 export const serie = query({
   args: { condominioId: v.id("condominios") },
   handler: async (ctx, args) => {
+    await requireCondominioRole(ctx, args.condominioId, [...CARTERA_ROLES]);
     const rows = await ctx.db
       .query("facturas")
       .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
@@ -434,6 +461,7 @@ export const countByPeriodo = query({
     periodo: v.string(),
   },
   handler: async (ctx, args) => {
+    await requireCondominioRole(ctx, args.condominioId, [...CARTERA_ROLES]);
     const rows = await ctx.db
       .query("facturas")
       .withIndex("by_condominio_periodo", (q) =>
@@ -483,6 +511,24 @@ export const bulkUpsert = mutation({
     skipExisting: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
+    /* Sesión primero. Sin esto, un lote VACÍO no pasaba por ninguna
+     * comprobación —el bucle de abajo no itera— y una mutación pública
+     * respondía correctamente a quien no había iniciado sesión. No escribía
+     * nada, pero una escritura que no exige identidad no debe existir. */
+    await requireAppUser(ctx);
+
+    /* El lote no trae un `condominioId` propio: cada factura lleva el suyo.
+     * Así que se comprueba el permiso sobre CADA conjunto presente en el
+     * payload, no sobre el primero. Sin esto, quien administra un conjunto
+     * podría colar en el mismo lote facturas de otro. */
+    const conjuntos = new Set(args.facturas.map((f) => f.condominioId));
+    for (const condominioId of conjuntos) {
+      await requireCondominioRole(ctx, condominioId, [
+        "administrador",
+        "contadora",
+      ]);
+    }
+
     const now = Date.now();
     let inserted = 0;
     let updated = 0;

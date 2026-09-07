@@ -68,7 +68,12 @@ export default function AdministradoresPage() {
               </thead>
               <tbody className="divide-y divide-border/60">
                 {staff.map((u) => (
-                  <StaffRow key={u._id} u={u} />
+                  <StaffRow
+                    key={u._id}
+                    u={u}
+                    puedeCambiar={me?.isSuperadmin === true}
+                    esYo={u._id === me?.id}
+                  />
                 ))}
               </tbody>
             </table>
@@ -76,27 +81,45 @@ export default function AdministradoresPage() {
         </Card>
       </div>
 
-      {showAdd && <AddAdminDialog onClose={() => setShowAdd(false)} />}
+      {/* Promover a alguien es repartir poderes de plataforma: solo el
+          superadmin. El backend lo exige; esto solo evita ofrecerlo. */}
+      {showAdd && me?.isSuperadmin && (
+        <AddAdminDialog onClose={() => setShowAdd(false)} />
+      )}
     </PageContainer>
   );
 }
 
 function StaffRow({
   u,
+  puedeCambiar,
+  esYo,
 }: {
   u: { _id: string; name: string; email: string; platformRole: PlatformRole };
+  /** Repartir poderes de plataforma es solo del superadmin. */
+  puedeCambiar: boolean;
+  esYo: boolean;
 }) {
   const setPlatformRole = useMutation(api.memberships.setPlatformRole);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  /* El backend rechaza que alguien se retire a sí mismo el control maestro,
+   * y que un admin de plataforma reparta roles. Se refleja aquí para no
+   * ofrecer una acción que va a fallar — pero la regla vive allí. */
+  const bloqueado = !puedeCambiar || esYo;
 
   async function change(role: PlatformRole) {
     if (role === u.platformRole) return;
     setBusy(true);
+    setError(null);
     try {
       await setPlatformRole({
         userId: u._id as never,
         platformRole: role ?? undefined,
       });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudo cambiar.");
     } finally {
       setBusy(false);
     }
@@ -110,9 +133,17 @@ function StaffRow({
         <RoleBadge role={u.platformRole} />
       </td>
       <td className="px-5 py-3.5 text-right">
+        {error && (
+          <p className="mb-1 text-xs text-destructive">{error}</p>
+        )}
+        {bloqueado && (
+          <p className="mb-1 text-[11px] text-muted-foreground">
+            {esYo ? "No puedes cambiarte a ti mismo" : "Solo el superadmin"}
+          </p>
+        )}
         <select
           value={u.platformRole ?? "none"}
-          disabled={busy}
+          disabled={busy || bloqueado}
           onChange={(e) =>
             change(
               e.target.value === "none"

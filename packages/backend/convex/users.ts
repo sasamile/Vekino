@@ -15,6 +15,7 @@ import {
   requireAppUser,
   requirePlatformStaff,
   requireCondominioRole,
+  getMembership,
 } from "./model/authz";
 import { tipoDocumentoValidator } from "./model/roles";
 import { evaluarPassword } from "./lib/passwordFuerte";
@@ -432,6 +433,26 @@ export const assertCanEditMember = query({
     const user = await ctx.db.get(args.userId);
     if (!user) throw new Error("Usuario no encontrado.");
     if (!user.email) throw new Error("El usuario no tiene correo.");
+
+    /* ESCALADA DE PRIVILEGIOS: sin esta comprobación bastaba con ser
+     * administrador de UN conjunto para fijarle la contraseña a cualquier
+     * cuenta cuyo id se conociera —incluida la de un superadmin—, porque
+     * `setMemberPassword` y `setMemberEmail` cuelgan de aquí y solo se
+     * verificaba quién llamaba, no a quién se tocaba. */
+    const membership = await getMembership(ctx, args.userId, args.condominioId);
+    if (!membership || !membership.isActive) {
+      throw new Error("Esa persona no es miembro de este conjunto.");
+    }
+
+    /* Un administrador de conjunto tampoco puede tomar una cuenta de la
+     * plataforma que además sea miembro del conjunto. Eso lo hace el propio
+     * staff desde el panel maestro. */
+    if (user.platformRole) {
+      throw new Error(
+        "Esa cuenta es de la plataforma. Debe gestionarse desde el panel maestro.",
+      );
+    }
+
     return { email: user.email, name: user.name };
   },
 });

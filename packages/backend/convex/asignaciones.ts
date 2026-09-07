@@ -4,9 +4,10 @@ import type { QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { getCurrentAppUser, requireAppUser } from "./model/authz";
 import {
-  exigirAccesoCompania,
+  exigirAccesoContrato,
   resolverAcceso,
   getCompaniaMiembro,
+  condominiosSupervisados,
 } from "./model/acceso";
 import { rolAsignacionValidator } from "./model/roles";
 import {
@@ -30,13 +31,19 @@ import { displayNameFromUser } from "./model/displayName";
  * año.
  */
 
-/** Quién puede tocar las asignaciones de un contrato. */
+/**
+ * Quién puede tocar las asignaciones de un contrato.
+ *
+ * El conjunto y la compañía salen SIEMPRE del documento del contrato, nunca
+ * de un argumento del cliente. Manipular el `contratoId` de la petición no
+ * abre nada: lleva a otro contrato, cuya compañía se vuelve a comprobar.
+ */
 async function exigirGestionDeContrato(
   ctx: QueryCtx,
   contrato: Doc<"companiaContratos">,
   capacidad: Capacidad = "seguridad.asignar",
 ) {
-  return await exigirAccesoCompania(ctx, contrato.companiaId, capacidad);
+  return await exigirAccesoContrato(ctx, contrato, capacidad);
 }
 
 async function hidratar(ctx: QueryCtx, a: Doc<"asignaciones">) {
@@ -330,7 +337,19 @@ export const porCondominio = query({
       ? filas
       : filas.filter((a) => estadoVigencia(a) !== "terminada");
     const salida = await Promise.all(visibles.map((a) => hidratar(ctx, a)));
-    return salida.sort((a, b) => b.vigenciaDesde - a.vigenciaDesde);
+
+    /* Un guarda puede ver quién más cubre SU portería —es su relevo— pero no
+     * los datos de contacto de sus compañeros. El correo solo lo ve quien
+     * administra: el conjunto o la compañía. */
+    const puedeVerContacto =
+      acceso.esPlataforma ||
+      acceso.capacidades.has("porteria.configurar") ||
+      acceso.asignacion?.rol === "supervisor";
+
+    const ordenada = salida.sort((a, b) => b.vigenciaDesde - a.vigenciaDesde);
+    return puedeVerContacto
+      ? ordenada
+      : ordenada.map((a) => ({ ...a, email: null }));
   },
 });
 
@@ -395,6 +414,11 @@ export const historialDePersona = query({
       solicitante.platformRole === "superadmin" ||
       solicitante.platformRole === "admin";
 
+    const filas = await ctx.db
+      .query("asignaciones")
+      .withIndex("by_user", (q) => q.eq("userId", args.userId))
+      .collect();
+
     if (!esPlataforma && solicitante._id !== args.userId) {
       /* Solo su propia compañía puede ver su historial. Un administrador de
        * conjunto ve quién cubre SU portería (`porCondominio`), no la carrera
@@ -402,20 +426,23 @@ export const historialDePersona = query({
       const objetivo = await getCompaniaMiembro(ctx, args.userId);
       const yo = await getCompaniaMiembro(ctx, solicitante._id);
       const mismaCompania =
-        !!objetivo && !!yo && objetivo.companiaId === yo.companiaId;
-      const mandaEnElla =
-        !!yo &&
-        yo.isActive &&
-        yo.roles.some((r) => ["admin_compania", "supervisor"].includes(r));
-      if (!mismaCompania || !mandaEnElla) {
+        !!objetivo && !!yo && yo.isActive && objetivo.companiaId === yo.companiaId;
+      if (!mismaCompania) {
         throw new Error("No tiene acceso al historial de esa persona.");
       }
-    }
 
-    const filas = await ctx.db
-      .query("asignaciones")
-      .withIndex("by_user", (q) => q.eq("userId", args.userId))
-      .collect();
+      const esAdminCompania = yo!.roles.includes("admin_compania");
+      if (!esAdminCompania) {
+        /* El supervisor solo alcanza a quien pisa alguno de SUS conjuntos.
+         * Pertenecer a la misma empresa no basta: un supervisor de la zona
+         * norte no tiene por qué ver la carrera del personal de la sur. */
+        const supervisa = await condominiosSupervisados(ctx, solicitante._id);
+        const seCruzan = filas.some((a) => supervisa.has(a.condominioId));
+        if (supervisa.size === 0 || !seCruzan) {
+          throw new Error("No tiene acceso al historial de esa persona.");
+        }
+      }
+    }
 
     const enFecha = args.en;
     const filtradas =

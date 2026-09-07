@@ -231,3 +231,90 @@ export async function exigirAccesoCompania(
   }
   return { user, esPlataforma, miembro, compania, capacidades };
 }
+
+/**
+ * Conjuntos donde esta persona supervisa hoy.
+ *
+ * El ámbito del supervisor NO es su compañía entera: es el conjunto de sitios
+ * donde tiene asignación vigente con rol `supervisor`. Un supervisor de zona
+ * norte no manda sobre la zona sur de la misma empresa.
+ */
+export async function condominiosSupervisados(
+  ctx: Ctx,
+  userId: Id<"users">,
+  ahora: number = Date.now(),
+): Promise<Set<Id<"condominios">>> {
+  const filas = await ctx.db
+    .query("asignaciones")
+    .withIndex("by_user", (q) => q.eq("userId", userId))
+    .collect();
+
+  const out = new Set<Id<"condominios">>();
+  for (const a of filas) {
+    if (a.rol !== "supervisor") continue;
+    if (!estaVigente(a, ahora)) continue;
+    const contrato = await ctx.db.get(a.contratoId);
+    if (!contrato || !estaVigente(contrato, ahora)) continue;
+    out.add(a.condominioId);
+  }
+  return out;
+}
+
+/**
+ * Quién puede obrar sobre un contrato concreto.
+ *
+ * Tres vías, y ninguna acepta la compañía como argumento del cliente: sale
+ * del documento del contrato.
+ *
+ *   - plataforma,
+ *   - `admin_compania` de ESA compañía,
+ *   - `supervisor` de esa compañía CON asignación vigente en ESE conjunto.
+ *
+ * La tercera es la que `exigirAccesoCompania` no puede expresar: las
+ * capacidades de compañía son globales a la empresa y el supervisor está
+ * acotado por conjunto. Sin esto, o el supervisor no podía hacer nada, o
+ * podía tocar los conjuntos de sus colegas.
+ */
+export async function exigirAccesoContrato(
+  ctx: Ctx,
+  contrato: Doc<"companiaContratos">,
+  capacidad: Capacidad,
+): Promise<{
+  user: Doc<"users">;
+  esPlataforma: boolean;
+  /** true si obra como supervisor acotado, no como admin de la compañía. */
+  comoSupervisor: boolean;
+}> {
+  const user = await getCurrentAppUser(ctx);
+  if (!user || !user.active) {
+    throw new Error("No autenticado o perfil inexistente.");
+  }
+  if (hasPlatformRole(user, "superadmin", "admin")) {
+    return { user, esPlataforma: true, comoSupervisor: false };
+  }
+
+  const miembro = await getCompaniaMiembro(ctx, user._id);
+  if (!miembro || miembro.companiaId !== contrato.companiaId) {
+    throw new Error("Ese contrato no pertenece a su compañía.");
+  }
+  const compania = await ctx.db.get(contrato.companiaId);
+  if (!compania || compania.estado !== "activa") {
+    throw new Error("La compañía no está activa.");
+  }
+
+  if (capacidadesDeRolesCompania(miembro.roles).has(capacidad)) {
+    return { user, esPlataforma: false, comoSupervisor: false };
+  }
+
+  if (miembro.roles.includes("supervisor")) {
+    const supervisa = await condominiosSupervisados(ctx, user._id);
+    if (
+      supervisa.has(contrato.condominioId) &&
+      capacidadesDeRolAsignacion("supervisor").has(capacidad)
+    ) {
+      return { user, esPlataforma: false, comoSupervisor: true };
+    }
+  }
+
+  throw new Error(`No tiene permiso para esta operación (${capacidad}).`);
+}

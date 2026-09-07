@@ -8,8 +8,10 @@ import {
   requireAppUser,
   requirePlatformStaff,
   requireSuperadmin,
+  requireCondominioRole,
   hasPlatformRole,
 } from "./model/authz";
+import { resolverAcceso } from "./model/acceso";
 import { subscriptionPlanValidator } from "./model/roles";
 import { displayNameFromUser } from "./model/displayName";
 import { resolveUserImage } from "./model/userImage";
@@ -166,7 +168,21 @@ export const listAll = query({
 export const get = query({
   args: { condominioId: v.id("condominios") },
   handler: async (ctx, args) => {
-    await requireAppUser(ctx);
+    /* Antes bastaba con tener sesión: cualquier residente de cualquier
+     * conjunto podía leer los datos institucionales de todos los demás
+     * cambiando el id de la petición. Ahora hay que pertenecer.
+     *
+     * Se acepta la vía de compañía además de la membresía: un guarda
+     * contratado no tiene membresía en el conjunto y aun así necesita la
+     * marca para pintar su pantalla de portería. */
+    const acceso = await resolverAcceso(ctx, args.condominioId);
+    if (!acceso) throw new Error("No autenticado o perfil inexistente.");
+    const pertenece =
+      acceso.esPlataforma ||
+      !!acceso.membership?.isActive ||
+      !!acceso.asignacion;
+    if (!pertenece) throw new Error("No tiene acceso a este conjunto.");
+
     return await ctx.db.get(args.condominioId);
   },
 });
@@ -175,7 +191,13 @@ export const get = query({
 export const detail = query({
   args: { condominioId: v.id("condominios") },
   handler: async (ctx, args) => {
-    await requireAppUser(ctx);
+    /* Devuelve la lista de administradores con sus datos de contacto, así que
+     * exige rol de gestión y no solo pertenencia. */
+    await requireCondominioRole(ctx, args.condominioId, [
+      "administrador",
+      "contadora",
+      "junta_directiva",
+    ]);
     const condominio = await ctx.db.get(args.condominioId);
     if (!condominio) return null;
 

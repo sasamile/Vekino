@@ -11,6 +11,7 @@ import type { Id } from "./_generated/dataModel";
 import {
   requireCondominioRole,
   requirePlatformStaff,
+  requireSuperadmin,
   getMembership,
 } from "./model/authz";
 import {
@@ -229,6 +230,15 @@ export const updateMember = mutation({
 
     const user = await ctx.db.get(args.userId);
     if (!user) throw new Error("Usuario no encontrado.");
+
+    /* `name` y `telefono` viven en el perfil GLOBAL de `users`, compartido
+     * entre todos los conjuntos. Sin esta comprobación, quien administra un
+     * conjunto podía reescribir el perfil de cualquier persona de la
+     * plataforma pasando su id. */
+    const existente = await getMembership(ctx, args.userId, args.condominioId);
+    if (!existente || !existente.isActive) {
+      throw new Error("Esa persona no es miembro de este conjunto.");
+    }
 
     const now = Date.now();
     const profilePatch: {
@@ -531,7 +541,17 @@ export const setPlatformRole = mutation({
     ),
   },
   handler: async (ctx, args) => {
-    await requirePlatformStaff(ctx);
+    /* Solo el superadmin reparte poderes de plataforma. Con
+     * `requirePlatformStaff` un `admin` podía ascenderse a sí mismo a
+     * `superadmin`, con lo que la frontera entre las dos capas no existía. */
+    const yo = await requireSuperadmin(ctx);
+
+    /* Y nadie se quita a sí mismo el control maestro: dejaría la plataforma
+     * sin dueño si es el único, y siempre es un accidente. */
+    if (yo._id === args.userId && args.platformRole !== "superadmin") {
+      throw new Error("No puedes retirarte a ti mismo el rol de superadmin.");
+    }
+
     await ctx.db.patch(args.userId, {
       platformRole: args.platformRole,
       updatedAt: Date.now(),

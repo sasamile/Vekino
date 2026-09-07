@@ -32,7 +32,16 @@ export const feed = query({
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    await requireCondominioRole(ctx, args.condominioId, []);
+    /* La lista vacía significaba "cualquier miembro activo": un arrendatario
+     * veía las PQRS de sus vecinos, sus reservas y las novedades del
+     * conjunto, con nombre de autor y detalle. El propio frontend ya trataba
+     * esta pantalla como de administración (`adminOnly` en el menú del
+     * móvil); el backend no lo hacía cumplir. */
+    await requireCondominioRole(ctx, args.condominioId, [
+      "administrador",
+      "contadora",
+      "junta_directiva",
+    ]);
     const cid = args.condominioId;
     const take = args.limit ?? 60;
 

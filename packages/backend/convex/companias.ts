@@ -9,7 +9,11 @@ import {
   requireAppUser,
   requirePlatformStaff,
 } from "./model/authz";
-import { exigirAccesoCompania, getCompaniaMiembro } from "./model/acceso";
+import {
+  exigirAccesoCompania,
+  getCompaniaMiembro,
+  condominiosSupervisados,
+} from "./model/acceso";
 import {
   companiaRoleValidator,
   estadoCompaniaValidator,
@@ -93,21 +97,52 @@ async function hidratarMiembro(ctx: QueryCtx, m: Doc<"companiaMiembros">) {
   };
 }
 
-/** Detalle: compañía + personal + contratos. */
+/** Deja solo a quienes tienen alguna asignación en los conjuntos indicados. */
+async function filtrarPorCondominios(
+  ctx: QueryCtx,
+  miembros: Doc<"companiaMiembros">[],
+  condominios: Set<Id<"condominios">>,
+): Promise<Doc<"companiaMiembros">[]> {
+  const out: Doc<"companiaMiembros">[] = [];
+  for (const m of miembros) {
+    const asigs = await ctx.db
+      .query("asignaciones")
+      .withIndex("by_miembro", (q) => q.eq("companiaMiembroId", m._id))
+      .collect();
+    if (asigs.some((a) => condominios.has(a.condominioId))) out.push(m);
+  }
+  return out;
+}
+
+/** Detalle: compañía + personal + contratos, acotado al ámbito de quien lee. */
 export const detail = query({
   args: { companiaId: v.id("companiasSeguridad") },
   handler: async (ctx, args) => {
-    // Ver el detalle exige plataforma o pertenecer a la compañía.
     const user = await requireAppUser(ctx);
     const compania = await ctx.db.get(args.companiaId);
     if (!compania) return null;
 
     const esPlataforma =
       user.platformRole === "superadmin" || user.platformRole === "admin";
+
+    /* Ámbito de lectura: la plataforma lo ve todo; el admin de la compañía ve
+     * su empresa entera; el supervisor solo los conjuntos que supervisa. Un
+     * guarda no ve el directorio de la empresa por el hecho de trabajar en
+     * ella. */
+    let soloCondominios: Set<Id<"condominios">> | null = null;
     if (!esPlataforma) {
       const miembro = await getCompaniaMiembro(ctx, user._id);
       if (!miembro || miembro.companiaId !== args.companiaId) {
         throw new Error("No pertenece a esta compañía.");
+      }
+      if (!miembro.roles.includes("admin_compania")) {
+        if (!miembro.roles.includes("supervisor")) {
+          throw new Error("No tiene permiso para ver el detalle de la compañía.");
+        }
+        soloCondominios = await condominiosSupervisados(ctx, user._id);
+        if (soloCondominios.size === 0) {
+          return { compania, personal: [], contratos: [] };
+        }
       }
     }
 
@@ -115,14 +150,22 @@ export const detail = query({
       .query("companiaMiembros")
       .withIndex("by_compania", (q) => q.eq("companiaId", args.companiaId))
       .collect();
+    /* Para el supervisor, "personal" es quien pisa alguno de sus conjuntos,
+     * no la nómina entera de la empresa. */
+    const miembrosVisibles = soloCondominios
+      ? await filtrarPorCondominios(ctx, miembrosRaw, soloCondominios)
+      : miembrosRaw;
     const personal = await Promise.all(
-      miembrosRaw.map((m) => hidratarMiembro(ctx, m)),
+      miembrosVisibles.map((m) => hidratarMiembro(ctx, m)),
     );
 
-    const contratosRaw = await ctx.db
-      .query("companiaContratos")
-      .withIndex("by_compania", (q) => q.eq("companiaId", args.companiaId))
-      .collect();
+    const contratosRaw = (
+      await ctx.db
+        .query("companiaContratos")
+        .withIndex("by_compania", (q) => q.eq("companiaId", args.companiaId))
+        .collect()
+    ).filter((k) => !soloCondominios || soloCondominios.has(k.condominioId));
+
     const contratos = await Promise.all(
       contratosRaw.map(async (k) => {
         const condo = await ctx.db.get(k.condominioId);
