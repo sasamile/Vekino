@@ -42,9 +42,28 @@ function sanitizeFileName(name: string) {
     .slice(0, 120);
 }
 
+/**
+ * Sanea la carpeta destino.
+ *
+ * `folder` llega del cliente y va directo a la clave del objeto. Sin limpiarla,
+ * cualquier usuario autenticado pod\u00eda escribir bajo cualquier prefijo del
+ * bucket \u2014incluido el de otro conjunto\u2014 y, con `..`, salirse de la carpeta
+ * que dijo estar usando.
+ */
+function sanitizeFolder(folderArg: string): string {
+  const limpio = folderArg
+    .split("/")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0 && s !== "." && s !== "..")
+    .map((s) => s.replace(/[^a-zA-Z0-9._-]+/g, "-"))
+    .slice(0, 6)
+    .join("/");
+  return limpio || "uploads";
+}
+
 /** Key \u00fanico en el bucket: `{folder}/{timestamp}-{uuid corto}-{nombre saneado}`. */
 function buildObjectKey(folderArg: string, fileNameArg?: string) {
-  const folder = folderArg.replace(/^\/+|\/+$/g, "") || "uploads";
+  const folder = sanitizeFolder(folderArg);
   const rawName = fileNameArg?.trim() || "file";
   const safe = sanitizeFileName(rawName);
   return `${folder}/${Date.now()}-${randomUUID().slice(0, 8)}-${safe}`;

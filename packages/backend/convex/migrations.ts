@@ -709,3 +709,159 @@ export const backfillTelefonoE164 = internalMutation({
     return { procesados: page.page.length, actualizados, continua: !page.isDone };
   },
 });
+
+// ─────────────────────────────────────────────────────────────
+// VIGILANCIA — pasar los guardas existentes al eje de compañía
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Vincula a los guardas actuales de un conjunto con una compañía.
+ *
+ * NO les quita el rol `guardia` de `memberships`. Es deliberado: mientras lo
+ * conserven tienen acceso por las DOS vías, así que un fallo en la nueva no
+ * deja a nadie fuera de su puesto a mitad de turno. Retirar el rol viejo es
+ * una decisión posterior, cuando la vía nueva lleve tiempo funcionando.
+ *
+ * Idempotente: se puede correr las veces que haga falta. A quien ya tenga una
+ * asignación vigente en ese conjunto se le salta.
+ *
+ *   bunx convex run migrations:migrarGuardiasACompania '{
+ *     "condominioId": "…", "companiaId": "…", "contratoId": "…"
+ *   }'
+ *
+ * OJO con la cuenta compartida de portería: si el conjunto opera con un solo
+ * usuario para todos los turnos, esto crea UNA asignación para esa cuenta y
+ * el modelo queda formalmente correcto pero operativamente vacío —los
+ * indicadores seguirían midiendo la caseta y no a las personas—. En ese caso
+ * lo correcto es dar de alta a cada guarda real con `companias:crearMiembro`
+ * y tratar la cuenta compartida como un dato a retirar, no a portar.
+ */
+export const migrarGuardiasACompania = internalMutation({
+  args: {
+    condominioId: v.id("condominios"),
+    companiaId: v.id("companiasSeguridad"),
+    contratoId: v.id("companiaContratos"),
+    /** Por defecto, el inicio del contrato. */
+    vigenciaDesde: v.optional(v.number()),
+    /** Sin escribir nada, para revisar antes de ejecutar. */
+    simular: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const contrato = await ctx.db.get(args.contratoId);
+    if (!contrato) throw new Error("Contrato no encontrado.");
+    if (contrato.companiaId !== args.companiaId) {
+      throw new Error("Ese contrato no es de esa compañía.");
+    }
+    if (contrato.condominioId !== args.condominioId) {
+      throw new Error("Ese contrato no es de ese conjunto.");
+    }
+
+    const desde = args.vigenciaDesde ?? contrato.vigenciaDesde;
+    if (desde < contrato.vigenciaDesde) {
+      throw new Error("La fecha de inicio queda fuera del contrato.");
+    }
+
+    const memberships = await ctx.db
+      .query("memberships")
+      .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
+      .collect();
+    const guardias = memberships.filter(
+      (m) => m.isActive && m.roles.includes("guardia"),
+    );
+
+    const now = Date.now();
+    const creados: string[] = [];
+    const yaEstaban: string[] = [];
+    const omitidos: string[] = [];
+
+    for (const m of guardias) {
+      const u = await ctx.db.get(m.userId);
+      if (!u || !u.active) {
+        omitidos.push(String(m.userId));
+        continue;
+      }
+
+      /* Pertenecer a dos compañías a la vez no es un caso real, y la
+       * migración no debe forzarlo: si ya es personal de otra empresa, se
+       * informa y se deja como está. */
+      const enOtra = (
+        await ctx.db
+          .query("companiaMiembros")
+          .withIndex("by_user", (q) => q.eq("userId", m.userId))
+          .collect()
+      ).find((x) => x.isActive && x.companiaId !== args.companiaId);
+      if (enOtra) {
+        omitidos.push(u.email);
+        continue;
+      }
+
+      const yaAsignado = (
+        await ctx.db
+          .query("asignaciones")
+          .withIndex("by_user_condominio", (q) =>
+            q.eq("userId", m.userId).eq("condominioId", args.condominioId),
+          )
+          .collect()
+      ).some((a) => a.vigenciaHasta == null || a.vigenciaHasta >= now);
+      if (yaAsignado) {
+        yaEstaban.push(u.email);
+        continue;
+      }
+
+      if (args.simular) {
+        creados.push(u.email);
+        continue;
+      }
+
+      let miembro = await ctx.db
+        .query("companiaMiembros")
+        .withIndex("by_compania_user", (q) =>
+          q.eq("companiaId", args.companiaId).eq("userId", m.userId),
+        )
+        .unique();
+
+      let miembroId;
+      if (miembro) {
+        miembroId = miembro._id;
+        if (!miembro.isActive || !miembro.roles.includes("guardia")) {
+          await ctx.db.patch(miembro._id, {
+            roles: [...new Set([...miembro.roles, "guardia" as const])],
+            isActive: true,
+            updatedAt: now,
+          });
+        }
+      } else {
+        miembroId = await ctx.db.insert("companiaMiembros", {
+          userId: m.userId,
+          companiaId: args.companiaId,
+          roles: ["guardia"],
+          isActive: true,
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
+
+      await ctx.db.insert("asignaciones", {
+        contratoId: args.contratoId,
+        companiaMiembroId: miembroId,
+        userId: m.userId,
+        condominioId: args.condominioId,
+        companiaId: args.companiaId,
+        rol: "guardia",
+        vigenciaDesde: desde,
+        vigenciaHasta: contrato.vigenciaHasta,
+        creadoPorUserId: m.userId,
+        createdAt: now,
+      });
+      creados.push(u.email);
+    }
+
+    return {
+      simulado: args.simular === true,
+      guardiasEncontrados: guardias.length,
+      creados,
+      yaEstaban,
+      omitidos,
+    };
+  },
+});

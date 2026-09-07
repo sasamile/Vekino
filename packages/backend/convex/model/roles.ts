@@ -85,3 +85,60 @@ export const estadoUnidadValidator = v.union(
   v.literal("en_mora"),
   v.literal("inactiva"),
 );
+
+// ─────────────────────────────────────────────────────────────
+// EJE DE SEGURIDAD (compañías de vigilancia)
+//
+// Segundo eje de pertenencia, hermano del conjunto y no hijo suyo: una
+// persona pertenece a una compañía, que existe antes de tener conjuntos y
+// sobrevive a perderlos. Vive en `companiaMiembros`, espejo de `memberships`.
+//
+// El literal "guardia" se repite a propósito en los dos ejes. Nombrar
+// "guarda" al de la compañía los haría distinguibles por una letra, que es
+// una fábrica de errores silenciosos; como viven en tablas distintas y con
+// validadores distintos, la ambigüedad real es nula.
+// ─────────────────────────────────────────────────────────────
+
+export const COMPANIA_ROLES = [
+  "admin_compania", // gestiona el personal y las asignaciones de su compañía
+  "supervisor", // supervisa la operación en los conjuntos donde se le asigne
+  "guardia", // opera la portería en los conjuntos donde se le asigne
+] as const;
+
+export type CompaniaRole = (typeof COMPANIA_ROLES)[number];
+
+export const companiaRoleValidator = v.union(
+  v.literal("admin_compania"),
+  v.literal("supervisor"),
+  v.literal("guardia"),
+);
+
+/**
+ * Estado de la compañía. El único enum nuevo del modelo.
+ *
+ * `suspendida` existe porque un booleano no puede expresar "bloqueada pero
+ * todavía contratada": la plataforma necesita cortar la operación de una
+ * compañía —impago, incidente— sin terminar sus contratos, porque terminarlos
+ * invalidaría todas sus asignaciones y perdería la relación comercial.
+ */
+export const estadoCompaniaValidator = v.union(
+  v.literal("activa"),
+  v.literal("suspendida"),
+  v.literal("inactiva"),
+);
+
+export type EstadoCompania = "activa" | "suspendida" | "inactiva";
+
+/**
+ * Rol con el que alguien queda asignado a un conjunto concreto.
+ *
+ * Valor único y no array: en un conjunto se es una cosa. Va en la asignación
+ * y no en la persona para que un supervisor pueda cubrir un turno como guarda
+ * en otro conjunto sin cambiar quién es.
+ */
+export const rolAsignacionValidator = v.union(
+  v.literal("supervisor"),
+  v.literal("guardia"),
+);
+
+export type RolAsignacion = "supervisor" | "guardia";

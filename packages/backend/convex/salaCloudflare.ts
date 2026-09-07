@@ -6,6 +6,7 @@ import {
   getCurrentAppUser,
   getMembership,
   hasPlatformRole,
+  requireCondominioRole,
 } from "./model/authz";
 import { WRITE_ROLES } from "./asambleaSala";
 import {
@@ -81,6 +82,13 @@ export const motor = query({
 export const pistas = query({
   args: { asambleaId: v.id("asambleas") },
   handler: async (ctx, args) => {
+    /* Devuelve nombres y userIds de los conectados. Sin esta comprobación,
+     * cualquiera con el id de una asamblea obtenía el listado de quién estaba
+     * dentro. El conjunto sale de la asamblea, no del cliente. */
+    const asamblea = await ctx.db.get(args.asambleaId);
+    if (!asamblea) return [];
+    await requireCondominioRole(ctx, asamblea.condominioId, []);
+
     const filas = await ctx.db
       .query("salaPistasCf")
       .withIndex("by_asamblea", (q) => q.eq("asambleaId", args.asambleaId))
