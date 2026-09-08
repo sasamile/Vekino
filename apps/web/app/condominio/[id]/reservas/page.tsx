@@ -5,7 +5,7 @@ import { useParams } from "next/navigation";
 import { usePaginatedQuery, useQuery, useMutation } from "convex/react";
 import {
   CalendarCheck, Plus, Pencil, Trash2, Loader2, CheckCircle, XCircle,
-  Settings, MapPin, Clock, FileSpreadsheet,
+  Settings, MapPin, Clock, FileSpreadsheet, ChevronRight,
 } from "lucide-react";
 import type { FunctionReturnType } from "convex/server";
 import { api } from "@vekino/backend/api";
@@ -28,6 +28,7 @@ import {
   type ZonaEditable,
 } from "@/components/reservas/crear-espacio-modal";
 import { ReporteReservasModal } from "@/components/reservas/reporte-reservas";
+import { EstadoCuentaModal } from "@/components/reservas/estado-cuenta-modal";
 
 const PAGE_SIZE = 30;
 
@@ -113,6 +114,11 @@ export default function ReservasPage() {
   const [formOpen, setFormOpen] = useState(false);
   const [zonasOpen, setZonasOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Id<"reservas"> | null>(null);
+  /* Sólo el id y el número: el detalle lo pide el modal al montarse, no esta
+   * página. La tabla se queda con el resumen. */
+  const [cuentaAbierta, setCuentaAbierta] = useState<
+    { unidadId: Id<"unidades">; unidadNumero: string } | null
+  >(null);
   const updateEstado = useMutation(api.reservas.updateEstado);
 
   const { results, status, loadMore } = usePaginatedQuery(
@@ -287,6 +293,12 @@ export default function ReservasPage() {
                       <CeldasCartera
                         cartera={carteraMap.get(r.unidadId)}
                         cargando={cartera === undefined}
+                        onVerDetalle={() =>
+                          setCuentaAbierta({
+                            unidadId: r.unidadId,
+                            unidadNumero: r.unidadNumero,
+                          })
+                        }
                       />
                       <TD>
                         <div className="flex items-center justify-end gap-1">
@@ -360,6 +372,14 @@ export default function ReservasPage() {
       {reporteAbierto && (
         <ReporteReservasModal condominioId={condominioId} onClose={() => setReporteAbierto(false)} />
       )}
+      {cuentaAbierta && (
+        <EstadoCuentaModal
+          condominioId={condominioId}
+          unidadId={cuentaAbierta.unidadId}
+          unidadNumero={cuentaAbierta.unidadNumero}
+          onClose={() => setCuentaAbierta(null)}
+        />
+      )}
     </PageContainer>
   );
 }
@@ -371,6 +391,10 @@ export default function ReservasPage() {
  * buscando el número grande, y un "En mora — 78 días" metido en la misma
  * celda que el resto obliga a leer frase por frase.
  *
+ * El estado es un botón: el resumen dice CUÁNTO debe la casa, y lo siguiente
+ * que se pregunta siempre es POR QUÉ. Se abre el estado de cuenta sin salir
+ * de reservas ni perder la solicitud que se estaba mirando.
+ *
  * Nada de esto bloquea la reserva. Una casa puede deber y tener un acuerdo de
  * pago; otra puede llevar dos meses y el conjunto decidir que no reserva.
  * Quien decide es quien administra, aquí solo se le dice lo que hay.
@@ -378,9 +402,11 @@ export default function ReservasPage() {
 function CeldasCartera({
   cartera,
   cargando,
+  onVerDetalle,
 }: {
   cartera?: CarteraFila;
   cargando: boolean;
+  onVerDetalle: () => void;
 }) {
   if (!cartera) {
     /* Sin fila hay dos motivos distintos y no se pueden pintar igual: que la
@@ -413,14 +439,25 @@ function CeldasCartera({
   return (
     <>
       <TD>
-        <Badge tone={CARTERA_TONE[estado]} title={CARTERA_HINT[estado]}>
-          {CARTERA_LABEL[estado]}
-        </Badge>
-        {pendientes > 0 && (
-          <p className="mt-0.5 text-[11px] text-muted-foreground">
-            {pendientes} factura{pendientes === 1 ? "" : "s"} sin pagar
-          </p>
-        )}
+        <button
+          type="button"
+          onClick={onVerDetalle}
+          title={`${CARTERA_HINT[estado]} Ver el estado de cuenta.`}
+          className="group -m-1 flex flex-col items-start rounded-lg p-1 text-left transition-colors hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand"
+        >
+          <span className="flex items-center gap-1">
+            <Badge tone={CARTERA_TONE[estado]}>{CARTERA_LABEL[estado]}</Badge>
+            <ChevronRight
+              className="h-3.5 w-3.5 text-muted-foreground transition-transform group-hover:translate-x-0.5"
+              aria-hidden
+            />
+          </span>
+          <span className="mt-0.5 text-[11px] text-muted-foreground">
+            {pendientes > 0
+              ? `${pendientes} factura${pendientes === 1 ? "" : "s"} sin pagar`
+              : "Ver estado de cuenta"}
+          </span>
+        </button>
       </TD>
       <TD className="text-right">
         {estado === "en_mora" ? (

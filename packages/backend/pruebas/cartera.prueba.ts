@@ -2,8 +2,12 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   carteraDeUnidad,
+  conceptoPrincipal,
   diasDesde,
+  estadoCuentaDeCadena,
+  saldoAnteriorDe,
   sinPagar,
+  type FacturaCadena,
   type FacturaCartera,
 } from "../convex/lib/cartera.ts";
 
@@ -141,4 +145,131 @@ test("sin fecha en una, pero con fecha en otra: manda la que si la tiene", () =>
 test("los dias son completos, no fracciones", () => {
   assert.equal(diasDesde(AHORA - 3 * DIA - 5 * 60 * 60 * 1000, AHORA), 3);
   assert.equal(diasDesde(AHORA + DIA, AHORA), -1);
+});
+
+// ─────────────────────────────────────────────────────────────
+// Estado de cuenta
+// ─────────────────────────────────────────────────────────────
+
+/** Una factura de la cadena: total del mes y lo que arrastra del anterior. */
+function enCadena(
+  periodo: string,
+  estado: FacturaCadena["estado"],
+  totalAPagar: number,
+  saldoAnterior: number,
+  diasDesdeVencimiento = 30,
+): FacturaCadena {
+  return {
+    periodo,
+    periodoLabel: `01-${periodo}`,
+    estado,
+    totalAPagar,
+    fechaVencimiento: AHORA - diasDesdeVencimiento * DIA,
+    lineas: [
+      { codigo: 2, concepto: `Administración de ${periodo}`, saldoAnterior, actual: 300000, total: totalAPagar },
+    ],
+  };
+}
+
+test("el saldo anterior es la suma de lo que arrastran las lineas", () => {
+  assert.equal(
+    saldoAnteriorDe({
+      lineas: [
+        { codigo: 2, concepto: "Admón", saldoAnterior: 100000, actual: 300000, total: 400000 },
+        { codigo: 3, concepto: "Intereses mora", saldoAnterior: 5000, actual: 0, total: 5000 },
+      ],
+    }),
+    105000,
+  );
+});
+
+test("el abono sale del saldo que declara la factura SIGUIENTE", () => {
+  /* Enero se pago entero (febrero no arrastra nada). De febrero quedaron
+   * debiendo 100.000 (marzo los arrastra): abono 200.000 de 300.000. */
+  const filas = estadoCuentaDeCadena(
+    [
+      enCadena("2026-01", "pagada", 300000, 0, 90),
+      enCadena("2026-02", "abonada", 300000, 0, 60),
+      enCadena("2026-03", "pendiente", 400000, 100000, 30),
+    ],
+    AHORA,
+  );
+
+  assert.equal(filas[0]!.saldoPendiente, 0, "enero quedo saldado");
+  assert.equal(filas[0]!.abonado, 300000);
+
+  assert.equal(filas[1]!.saldoPendiente, 100000, "febrero quedo debiendo 100.000");
+  assert.equal(filas[1]!.abonado, 200000);
+});
+
+test("la ultima de la cadena no dice cero: dice que no se sabe", () => {
+  /* Todavia no existe la factura siguiente que la juzgue. Un cero afirmaria
+   * que esta pagada. */
+  const filas = estadoCuentaDeCadena(
+    [enCadena("2026-01", "pagada", 300000, 0), enCadena("2026-02", "pendiente", 300000, 0)],
+    AHORA,
+  );
+  assert.equal(filas[1]!.saldoPendiente, null);
+  assert.equal(filas[1]!.abonado, null);
+});
+
+test("con intereses lo arrastrado supera el mes, y el abono no se va a negativo", () => {
+  const filas = estadoCuentaDeCadena(
+    [
+      enCadena("2026-01", "vencida", 300000, 0, 90),
+      enCadena("2026-02", "pendiente", 620000, 320000, 30),
+    ],
+    AHORA,
+  );
+  assert.equal(filas[0]!.saldoPendiente, 320000, "se muestra la deuda real, no recortada");
+  assert.equal(filas[0]!.abonado, 0);
+});
+
+test("los dias de vencida los manda el estado, no la fecha", () => {
+  /* La de enero vencio hace mas de un ano, pero esta pagada: no lleva un solo
+   * dia de mora. La de febrero si. */
+  const filas = estadoCuentaDeCadena(
+    [enCadena("2026-01", "pagada", 300000, 0, 400), enCadena("2026-02", "vencida", 300000, 0, 40)],
+    AHORA,
+  );
+  assert.equal(filas[0]!.diasVencida, null);
+  assert.equal(filas[1]!.diasVencida, 40);
+});
+
+test("una vencida en medio de la cadena si cuenta sus dias", () => {
+  const filas = estadoCuentaDeCadena(
+    [
+      enCadena("2026-01", "vencida", 300000, 0, 90),
+      enCadena("2026-02", "pendiente", 600000, 300000, 30),
+    ],
+    AHORA,
+  );
+  assert.equal(filas[0]!.diasVencida, 90);
+});
+
+test("el concepto es la linea que mas pesa, venga del codigo que venga", () => {
+  /* El importador de PDF pone la administracion en el 2 y el alta manual en
+   * el 1. Mirar el monto acierta con las dos. */
+  assert.equal(
+    conceptoPrincipal(
+      [
+        { codigo: 3, concepto: "Intereses mora", saldoAnterior: 0, actual: 12000, total: 12000 },
+        { codigo: 2, concepto: "Administración de marzo", saldoAnterior: 0, actual: 300000, total: 300000 },
+      ],
+      "01-marzo-2026",
+    ),
+    "Administración de marzo",
+  );
+  assert.equal(
+    conceptoPrincipal(
+      [{ codigo: 1, concepto: "Administración de abril", saldoAnterior: 0, actual: 274000, total: 274000 }],
+      "01-abril-2026",
+    ),
+    "Administración de abril",
+  );
+});
+
+test("sin lineas, el concepto cae al periodo en vez de inventarse uno", () => {
+  /* Las facturas migradas llegaron sin lineas. */
+  assert.equal(conceptoPrincipal([], "01-marzo-2026"), "01-marzo-2026");
 });

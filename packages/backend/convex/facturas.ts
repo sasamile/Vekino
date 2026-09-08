@@ -4,7 +4,11 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
 import { requireCondominioRole, requireAppUser } from "./model/authz";
-import { carteraDeUnidad } from "./lib/cartera";
+import {
+  carteraDeUnidad,
+  estadoCuentaDeCadena,
+  saldoAnteriorDe,
+} from "./lib/cartera";
 
 /**
  * Quien puede ver la cartera del conjunto.
@@ -66,11 +70,6 @@ const lineValidator = v.object({
 
 /** Tolerancia en pesos para considerar una deuda como saldada (redondeos). */
 const TOLERANCIA_PAGO = 1;
-
-/** Deuda que la factura declara arrastrar del período anterior. */
-function saldoAnteriorDe(f: Doc<"facturas">): number {
-  return f.lineas.reduce((s, l) => s + l.saldoAnterior, 0);
-}
 
 /**
  * Recorre la cadena de facturas de una unidad (orden ascendente por período)
@@ -935,5 +934,70 @@ export const carteraPorUnidad = query({
     );
 
     return filas.filter((f) => f !== null);
+  },
+});
+
+/**
+ * Estado de cuenta de UNA unidad: sus facturas, una por una.
+ *
+ * Es el detalle detrás del resumen que `carteraPorUnidad` pone en la tabla de
+ * reservas, y se pide sólo cuando la administración abre el modal de una
+ * casa. Por eso son dos consultas y no una: cargar el detalle de las treinta
+ * casas de la página para que se mire una sería traer treinta veces más de lo
+ * que se va a leer.
+ *
+ * No calcula nada nuevo. El estado de cada factura lo puso la conciliación,
+ * el abono sale del saldo anterior de la factura siguiente —el mismo número
+ * con el que la conciliación decide— y la mora sale del vencimiento. Aquí
+ * sólo se ordena la cadena y se traduce.
+ *
+ * Devuelve `null` si la unidad no es de este condominio, en vez de lanzar:
+ * quien pregunta ya demostró que administra ESTE conjunto, y un id que no
+ * corresponde es una pantalla desincronizada, no un intento de intrusión. Lo
+ * que no hace nunca es responder con datos de otro conjunto.
+ */
+export const estadoCuentaUnidad = query({
+  args: {
+    condominioId: v.id("condominios"),
+    unidadId: v.id("unidades"),
+  },
+  handler: async (ctx, args) => {
+    await requireCondominioRole(ctx, args.condominioId, [...CARTERA_ROLES]);
+
+    const unidad = await ctx.db.get(args.unidadId);
+    if (!unidad || unidad.condominioId !== args.condominioId) return null;
+
+    const cadena = (
+      await ctx.db
+        .query("facturas")
+        .withIndex("by_unidad", (q) => q.eq("unidadId", args.unidadId))
+        .take(MAX_FACTURAS_UNIDAD)
+    )
+      .filter((f) => f.condominioId === args.condominioId)
+      /* Del más viejo al más nuevo: cada factura se juzga con la siguiente,
+       * igual que en la conciliación. */
+      .sort((a, b) => a.periodo.localeCompare(b.periodo));
+
+    const ahora = Date.now();
+    const filas = estadoCuentaDeCadena(cadena, ahora).map((fila, i) => ({
+      ...fila,
+      _id: cadena[i]!._id,
+      numeroFactura: cadena[i]!.numeroFactura,
+      fechaEmision: cadena[i]!.fechaEmision,
+      pdfUrl: cadena[i]!.pdfUrl ?? null,
+    }));
+
+    return {
+      unidad: {
+        _id: unidad._id,
+        numero: unidad.numero,
+        torre: unidad.torre ?? null,
+        residenteNombre: cadena[cadena.length - 1]?.residenteNombre ?? null,
+      },
+      cartera: carteraDeUnidad(cadena, ahora),
+      /* De la más reciente hacia atrás: es el orden en el que se lee un
+       * estado de cuenta. */
+      facturas: filas.reverse(),
+    };
   },
 });

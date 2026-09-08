@@ -102,6 +102,50 @@ async function escenario(t: ReturnType<typeof convexTest>) {
         updatedAt: ahora,
       });
 
+    /** Como `factura`, pero con líneas: el abono se lee de ellas. */
+    const facturaConLineas = async (
+      unidadId: Id<"unidades">,
+      periodo: string,
+      mes: string,
+      estado: "pendiente" | "pagada" | "vencida" | "abonada",
+      totalAPagar: number,
+      saldoAnterior: number,
+      diasDesdeVencimiento: number,
+    ) =>
+      await ctx.db.insert("facturas", {
+        condominioId: condoA,
+        unidadId,
+        numeroFactura: `F-${periodo}`,
+        numeroInterno: periodo,
+        periodo,
+        periodoLabel: `01-${mes}-2026`,
+        residenteNombre: "María López",
+        vrAdmon: 300000,
+        lineas: [
+          {
+            codigo: 3,
+            concepto: "Intereses mora",
+            saldoAnterior: 0,
+            actual: 12000,
+            total: 12000,
+          },
+          {
+            codigo: 2,
+            concepto: `Administración de ${mes}`,
+            saldoAnterior,
+            actual: 300000,
+            total: totalAPagar,
+          },
+        ],
+        saldoAFavor: 0,
+        totalAPagar,
+        estado,
+        fechaEmision: ahora - (diasDesdeVencimiento + 45) * DIA,
+        fechaVencimiento: ahora - diasDesdeVencimiento * DIA,
+        createdAt: ahora,
+        updatedAt: ahora,
+      });
+
     const condoA = await condo("Conjunto A");
     const condoB = await condo("Conjunto B");
 
@@ -128,6 +172,14 @@ async function escenario(t: ReturnType<typeof convexTest>) {
     await factura(condoA, porVencer, "2026-08", "pendiente", -7);
 
     const sinFacturas = await unidad(condoA, "404");
+
+    /* Cadena completa para el estado de cuenta: enero pagada, febrero abonada
+     * a medias y marzo todavía sin juzgar. El saldo de cada una lo declara la
+     * siguiente, igual que en la conciliación. */
+    const cadena = await unidad(condoA, "505");
+    await facturaConLineas(cadena, "2026-01", "enero", "pagada", 300000, 0, 90);
+    await facturaConLineas(cadena, "2026-02", "febrero", "abonada", 300000, 0, 60);
+    await facturaConLineas(cadena, "2026-03", "marzo", "pendiente", 400000, 100000, 30);
 
     const ajena = await unidad(condoB, "101");
     await factura(condoB, ajena, "2026-05", "vencida", 120);
@@ -163,7 +215,7 @@ async function escenario(t: ReturnType<typeof convexTest>) {
 
     return {
       condoA, condoB, zona,
-      alDia, enMora, porVencer, sinFacturas, ajena,
+      alDia, enMora, porVencer, sinFacturas, ajena, cadena,
       reservaMorosa,
     };
   });
@@ -265,6 +317,26 @@ describe("estado de pago de la unidad", () => {
     expect(filas.length).toBe(3);
     expect(new Set(filas.map((f) => f.unidadId)).size).toBe(3);
   });
+
+  test("el resumen NO trae las facturas: eso se pide al abrir el modal", async () => {
+    /* Es el corazón de la carga bajo demanda. Si algún día alguien mete las
+     * facturas en esta respuesta "ya que estamos", la tabla de reservas pasa
+     * a cargar la cartera entera del conjunto para enseñar cuatro badges. */
+    const t = convexTest(schema, modules);
+    const s = await escenario(t);
+    const [fila] = await como(t, "adminA").query(api.facturas.carteraPorUnidad, {
+      condominioId: s.condoA,
+      unidadIds: [s.cadena],
+    });
+    expect(Object.keys(fila).sort()).toEqual([
+      "diasMora",
+      "estado",
+      "facturasPendientes",
+      "periodoMasAntiguo",
+      "unidadId",
+      "vencimientoMasAntiguo",
+    ]);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────
@@ -362,5 +434,121 @@ describe("la mora informa, no bloquea", () => {
      * miembro del conjunto y la plata del vecino no es dato de vecino. */
     expect(page.page[0]).not.toHaveProperty("estadoCartera");
     expect(page.page[0]).not.toHaveProperty("diasMora");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+describe("estado de cuenta bajo demanda", () => {
+  test("trae las facturas de ESA unidad, de la más reciente hacia atrás", async () => {
+    const t = convexTest(schema, modules);
+    const s = await escenario(t);
+    const cuenta = await como(t, "adminA").query(api.facturas.estadoCuentaUnidad, {
+      condominioId: s.condoA,
+      unidadId: s.enMora,
+    });
+    expect(cuenta).not.toBeNull();
+    expect(cuenta!.unidad.numero).toBe("202");
+    expect(cuenta!.facturas.map((f) => f.periodo)).toEqual([
+      "2026-07",
+      "2026-06",
+      "2026-05",
+    ]);
+    /* El resumen del modal tiene que cuadrar con el de la tabla. */
+    expect(cuenta!.cartera.estado).toBe("en_mora");
+    expect(cuenta!.cartera.diasMora).toBe(78);
+  });
+
+  test("distingue pagada, abonada y pendiente con el saldo de la siguiente", async () => {
+    const t = convexTest(schema, modules);
+    const s = await escenario(t);
+    const cuenta = await como(t, "adminA").query(api.facturas.estadoCuentaUnidad, {
+      condominioId: s.condoA,
+      unidadId: s.cadena,
+    });
+    const porPeriodo = new Map(cuenta!.facturas.map((f) => [f.periodo, f]));
+
+    const enero = porPeriodo.get("2026-01")!;
+    expect(enero.estado).toBe("pagada");
+    expect(enero.saldoPendiente).toBe(0);
+    expect(enero.abonado).toBe(300000);
+
+    /* De febrero quedaron debiendo 100.000: marzo los arrastra. */
+    const febrero = porPeriodo.get("2026-02")!;
+    expect(febrero.estado).toBe("abonada");
+    expect(febrero.saldoPendiente).toBe(100000);
+    expect(febrero.abonado).toBe(200000);
+
+    /* Marzo es la última: nadie la ha juzgado todavía. */
+    const marzo = porPeriodo.get("2026-03")!;
+    expect(marzo.estado).toBe("pendiente");
+    expect(marzo.saldoPendiente).toBeNull();
+    expect(marzo.abonado).toBeNull();
+  });
+
+  test("el concepto sale de la factura, no de un texto inventado", async () => {
+    const t = convexTest(schema, modules);
+    const s = await escenario(t);
+    const cuenta = await como(t, "adminA").query(api.facturas.estadoCuentaUnidad, {
+      condominioId: s.condoA,
+      unidadId: s.cadena,
+    });
+    const enero = cuenta!.facturas.find((f) => f.periodo === "2026-01")!;
+    expect(enero.concepto).toBe("Administración de enero");
+    expect(enero.numeroFactura).toBe("F-2026-01");
+  });
+
+  test("una unidad sin facturas responde vacío, no error", async () => {
+    const t = convexTest(schema, modules);
+    const s = await escenario(t);
+    const cuenta = await como(t, "adminA").query(api.facturas.estadoCuentaUnidad, {
+      condominioId: s.condoA,
+      unidadId: s.sinFacturas,
+    });
+    expect(cuenta!.facturas).toEqual([]);
+    expect(cuenta!.cartera.estado).toBe("sin_facturas");
+  });
+
+  test("una unidad de otro conjunto no devuelve nada", async () => {
+    const t = convexTest(schema, modules);
+    const s = await escenario(t);
+    const cuenta = await como(t, "adminA").query(api.facturas.estadoCuentaUnidad, {
+      condominioId: s.condoA,
+      unidadId: s.ajena,
+    });
+    expect(cuenta).toBeNull();
+  });
+
+  test("el admin de B no puede pedir el estado de cuenta del conjunto A", async () => {
+    const t = convexTest(schema, modules);
+    const s = await escenario(t);
+    await expect(
+      como(t, "adminB").query(api.facturas.estadoCuentaUnidad, {
+        condominioId: s.condoA,
+        unidadId: s.enMora,
+      }),
+    ).rejects.toThrow(/no pertenece a este condominio/i);
+  });
+
+  test("pasar el condominio propio con una unidad ajena no abre la puerta", async () => {
+    /* El intento evidente: soy admin de B, pido con MI condominio pero el id
+     * de una casa de A. El backend no se fía del id. */
+    const t = convexTest(schema, modules);
+    const s = await escenario(t);
+    const cuenta = await como(t, "adminB").query(api.facturas.estadoCuentaUnidad, {
+      condominioId: s.condoB,
+      unidadId: s.enMora,
+    });
+    expect(cuenta).toBeNull();
+  });
+
+  test("un residente no abre el estado de cuenta de sus vecinos", async () => {
+    const t = convexTest(schema, modules);
+    const s = await escenario(t);
+    await expect(
+      como(t, "residenteA").query(api.facturas.estadoCuentaUnidad, {
+        condominioId: s.condoA,
+        unidadId: s.enMora,
+      }),
+    ).rejects.toThrow(/no tiene el rol requerido/i);
   });
 });

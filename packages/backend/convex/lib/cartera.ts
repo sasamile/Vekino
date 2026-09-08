@@ -122,3 +122,120 @@ export function carteraDeUnidad(
     vencimientoMasAntiguo: masAntigua.fechaVencimiento,
   };
 }
+
+// ─────────────────────────────────────────────────────────────
+// Estado de cuenta: la misma cadena, factura por factura
+// ─────────────────────────────────────────────────────────────
+
+export type LineaFactura = {
+  codigo: number;
+  concepto: string;
+  saldoAnterior: number;
+  actual: number;
+  total: number;
+};
+
+/**
+ * Deuda que la factura declara arrastrar del periodo anterior.
+ *
+ * Vive aqui y no en `facturas.ts` porque ahora la usan dos: la conciliacion,
+ * que con ella decide el estado, y el estado de cuenta, que con ella dice
+ * cuanto quedo debiendo cada mes. Es la misma cuenta; tenerla dos veces era
+ * la manera de que un dia dejaran de coincidir.
+ */
+export function saldoAnteriorDe(f: { lineas: readonly LineaFactura[] }): number {
+  return f.lineas.reduce((s, l) => s + l.saldoAnterior, 0);
+}
+
+/**
+ * El concepto que resume la factura.
+ *
+ * Se elige la linea que mas pesa en el mes y no un codigo fijo, porque el
+ * codigo no significa lo mismo segun de donde venga la factura: el importador
+ * de PDF pone la administracion en el 2 y el alta manual la pone en el 1.
+ * Mirar el monto acierta con las dos, y con las que vengan.
+ */
+export function conceptoPrincipal(
+  lineas: readonly LineaFactura[],
+  periodoLabel: string,
+): string {
+  let mejor: LineaFactura | null = null;
+  for (const l of lineas) {
+    if (l.actual <= 0) continue;
+    if (!mejor || l.actual > mejor.actual) mejor = l;
+  }
+  /* Las facturas migradas llegaron sin lineas. El periodo no es un concepto,
+   * pero es cierto, que es mas de lo que seria inventarse uno. */
+  return mejor?.concepto ?? periodoLabel;
+}
+
+export type FacturaCadena = FacturaCartera & {
+  periodoLabel: string;
+  totalAPagar: number;
+  lineas: readonly LineaFactura[];
+};
+
+export type FilaEstadoCuenta = {
+  periodo: string;
+  periodoLabel: string;
+  concepto: string;
+  estado: EstadoFactura;
+  fechaVencimiento: number;
+  totalAPagar: number;
+  /** Lo que quedo debiendo. `null` en la ultima: nadie la ha juzgado aun. */
+  saldoPendiente: number | null;
+  /** Lo que alcanzo a pagar. `null` por lo mismo. */
+  abonado: number | null;
+  /** Dias vencida, si lo esta. */
+  diasVencida: number | null;
+};
+
+/**
+ * Cuanto pago y cuanto quedo debiendo cada factura de una unidad.
+ *
+ * ── De donde sale el abono ───────────────────────────────────────────────
+ * No hay un campo "abonado" en la base, y no hace falta inventarlo: la
+ * factura del mes siguiente ya lo dice. Su saldo anterior ES lo que quedo
+ * debiendo la anterior, y es exactamente el numero con el que la conciliacion
+ * decide si aquella quedo pagada, abonada o vencida. Lo que se paga sale de
+ * restar: total menos lo que sigue debiendo.
+ *
+ * ── La ultima no se sabe ─────────────────────────────────────────────────
+ * La ultima de la cadena todavia no tiene una factura siguiente que la juzgue,
+ * asi que su saldo es desconocido, no cero. Se devuelve `null` para que la
+ * pantalla ponga un guion en vez de afirmar algo que nadie ha comprobado.
+ *
+ * `cadena` debe venir ordenada del periodo mas viejo al mas nuevo.
+ */
+export function estadoCuentaDeCadena(
+  cadena: readonly FacturaCadena[],
+  ahora: number,
+): FilaEstadoCuenta[] {
+  return cadena.map((f, i) => {
+    const siguiente = cadena[i + 1];
+    const saldoPendiente = siguiente ? saldoAnteriorDe(siguiente) : null;
+
+    /* Sin tope por arriba a proposito: con intereses, lo que se arrastra
+     * puede superar el total del mes, y la conciliacion ya cuenta con ello.
+     * Recortarlo mostraria una deuda menor que la real. */
+    const abonado =
+      saldoPendiente == null ? null : Math.max(0, f.totalAPagar - saldoPendiente);
+
+    const dias =
+      sinPagar(f.estado) && f.fechaVencimiento > 0
+        ? diasDesde(f.fechaVencimiento, ahora)
+        : 0;
+
+    return {
+      periodo: f.periodo,
+      periodoLabel: f.periodoLabel,
+      concepto: conceptoPrincipal(f.lineas, f.periodoLabel),
+      estado: f.estado,
+      fechaVencimiento: f.fechaVencimiento,
+      totalAPagar: f.totalAPagar,
+      saldoPendiente,
+      abonado,
+      diasVencida: dias >= 1 ? dias : null,
+    };
+  });
+}
