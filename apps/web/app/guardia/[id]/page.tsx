@@ -21,6 +21,7 @@ import { PageHeader } from "@/components/layout/page-header";
 import { StatCard } from "@/components/layout/stat-card";
 import { cn } from "@/lib/utils";
 import { useUploadToS3 } from "@/hooks/use-upload-s3";
+import Link from "next/link";
 
 type Modulo = Doc<"minutaEventos">["modulo"];
 
@@ -88,8 +89,13 @@ export default function GuardiaMinutaHome() {
                 <Button variant="outline" size="sm" onClick={() => setModal("nota")}>
                   <PenLine className="h-4 w-4" /> Anotación
                 </Button>
-                <Button variant="outline" size="sm" onClick={() => setModal("ronda")}>
-                  <Footprints className="h-4 w-4" /> Ronda
+                {/* Al módulo de rondas, no al modal viejo: ese creaba un
+                    apunte sin principio ni fin, y quien lo abría buscando
+                    dónde registrar dentro de la ronda no lo encontraba. */}
+                <Button variant="outline" size="sm" asChild>
+                  <Link href={`/guardia/${condominioId}/rondas`}>
+                    <Footprints className="h-4 w-4" /> Rondas
+                  </Link>
                 </Button>
                 <Button size="sm" variant="destructive" onClick={() => setModal("cerrar")}>
                   <StopCircle className="h-4 w-4" /> Cerrar turno
@@ -165,7 +171,6 @@ export default function GuardiaMinutaHome() {
       {modal === "cerrar" && turno && (
         <CerrarTurnoModal turno={turno} stats={stats} onClose={() => setModal(null)} />
       )}
-      {modal === "ronda" && <RondaModal condominioId={condominioId} onClose={() => setModal(null)} />}
       {modal === "nota" && <NotaModal condominioId={condominioId} onClose={() => setModal(null)} />}
       </div>
     </PageContainer>
@@ -173,7 +178,11 @@ export default function GuardiaMinutaHome() {
 }
 
 /* ───────── Tabla de minuta con filtros ───────── */
-function MinutaTable({ minuta }: { minuta: Doc<"minutaEventos">[] | undefined }) {
+/* El evento de minuta más el número de ronda que le calcula la consulta: el
+   documento crudo no lo trae, porque la ronda se resuelve al leer. */
+type EventoMinuta = Doc<"minutaEventos"> & { rondaNumero?: number | null };
+
+function MinutaTable({ minuta }: { minuta: EventoMinuta[] | undefined }) {
   const [moduloFiltro, setModuloFiltro] = useState<"" | Modulo>("");
   const [unidadFiltro, setUnidadFiltro] = useState("");
   const [buscar, setBuscar] = useState("");
@@ -225,6 +234,14 @@ function MinutaTable({ minuta }: { minuta: Doc<"minutaEventos">[] | undefined })
                     <span className="text-xs font-medium text-foreground">{e.tipo}</span>
                     {e.unidad && e.unidad !== "—" && (
                       <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">{e.unidad}</span>
+                    )}
+                    {/* Durante qué recorrido pasó. Se guardaba pero no se
+                        veía, y sin eso tener rondas no sirve de nada. */}
+                    {e.rondaNumero != null && (
+                      <span className="inline-flex items-center gap-1 rounded bg-brand/10 px-1.5 py-0.5 text-[11px] font-medium text-brand">
+                        <Footprints className="h-3 w-3" />
+                        Ronda #{e.rondaNumero}
+                      </span>
                     )}
                     <span className={cn(
                       "ml-auto rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase",

@@ -2,12 +2,14 @@
 
 import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
-import { Loader2, Square } from "lucide-react";
+import { AlertTriangle, Car, Loader2, Square } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/input";
 import { LineaDeTiempo } from "./linea-de-tiempo";
+import { NovedadModal } from "./novedad-modal";
+import { NovedadVehiculoModal } from "./novedad-vehiculo";
 
 /** "1 h 03 m" contando desde el inicio, refrescado cada 30 s. */
 function useTranscurrido(desde: number) {
@@ -24,6 +26,7 @@ function useTranscurrido(desde: number) {
 }
 
 export function RondaActiva({
+  condominioId,
   rondaId,
   numero,
   zona,
@@ -31,6 +34,7 @@ export function RondaActiva({
   observaciones,
   onObservaciones,
 }: {
+  condominioId: Id<"condominios">;
   rondaId: Id<"guardiaRondas">;
   numero: number | null;
   zona: string;
@@ -42,6 +46,7 @@ export function RondaActiva({
   const finalizar = useMutation(api.rondas.finalizar);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [modal, setModal] = useState<null | "novedad" | "vehiculo">(null);
   const transcurrido = useTranscurrido(fechaInicio);
 
   async function cerrar() {
@@ -90,6 +95,19 @@ export function RondaActiva({
         </div>
       </div>
 
+      {/* Registrar SIN salirse de la ronda.
+          Faltaba, y era el hueco de fondo: el guarda tenia la ronda abierta y
+          no encontraba donde reportar, asi que se iba a la pagina de Novedades
+          sin saber si lo que registraba quedaba ligado al recorrido. */}
+      <div className="grid grid-cols-2 gap-2">
+        <Button variant="outline" size="sm" onClick={() => setModal("novedad")}>
+          <AlertTriangle className="h-4 w-4" /> Reportar novedad
+        </Button>
+        <Button variant="outline" size="sm" onClick={() => setModal("vehiculo")}>
+          <Car className="h-4 w-4" /> Reportar vehículo
+        </Button>
+      </div>
+
       {detalle && detalle.lineaDeTiempo.length > 0 && (
         <LineaDeTiempo hitos={detalle.lineaDeTiempo} />
       )}
@@ -107,6 +125,16 @@ export function RondaActiva({
         </Button>
         {error && <p className="text-[13px] text-destructive">{error}</p>}
       </div>
+
+      {modal === "novedad" && (
+        <NovedadModal condominioId={condominioId} onClose={() => setModal(null)} />
+      )}
+      {modal === "vehiculo" && (
+        <NovedadVehiculoModal
+          condominioId={condominioId}
+          onClose={() => setModal(null)}
+        />
+      )}
     </div>
   );
 }

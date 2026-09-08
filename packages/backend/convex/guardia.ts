@@ -599,27 +599,45 @@ export const listMinuta = query({
     await exigirAcceso(ctx, args.condominioId, "porteria.ver");
     const limit = Math.min(args.limit ?? 150, 300);
 
+    let eventos: Doc<"minutaEventos">[];
     if (!args.actorUserId) {
-      return await ctx.db
+      eventos = await ctx.db
         .query("minutaEventos")
         .withIndex("by_condominio", (q) =>
           q.eq("condominioId", args.condominioId),
         )
         .order("desc")
         .take(limit);
+    } else {
+      const actorUserId = args.actorUserId;
+      eventos = [];
+      for await (const e of ctx.db
+        .query("minutaEventos")
+        .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
+        .order("desc")) {
+        if (e.actorUserId !== actorUserId) continue;
+        eventos.push(e);
+        if (eventos.length >= limit) break;
+      }
     }
 
-    const actorUserId = args.actorUserId;
-    const salida: Doc<"minutaEventos">[] = [];
-    for await (const e of ctx.db
-      .query("minutaEventos")
-      .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
-      .order("desc")) {
-      if (e.actorUserId !== actorUserId) continue;
-      salida.push(e);
-      if (salida.length >= limit) break;
+    /* La ronda se guardaba pero no se veía: la administración leía la minuta
+     * sin poder saber durante qué recorrido pasó cada cosa, que es justo lo
+     * que hace útil tener rondas.
+     *
+     * Se resuelve el número por ronda distinta, no por evento: una minuta de
+     * 300 líneas de un mismo turno son dos o tres rondas, no 300 lecturas. */
+    const numeroPorRonda = new Map<string, number | null>();
+    for (const e of eventos) {
+      if (!e.rondaId || numeroPorRonda.has(e.rondaId)) continue;
+      const r = await ctx.db.get(e.rondaId);
+      numeroPorRonda.set(e.rondaId, r?.numero ?? null);
     }
-    return salida;
+
+    return eventos.map((e) => ({
+      ...e,
+      rondaNumero: e.rondaId ? (numeroPorRonda.get(e.rondaId) ?? null) : null,
+    }));
   },
 });
 

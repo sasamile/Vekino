@@ -64,6 +64,7 @@ export default function RondasPage({
         </div>
       ) : activa ? (
         <RondaActiva
+          condominioId={condominioId}
           rondaId={activa._id}
           numero={activa.numero}
           zona={activa.zona}
