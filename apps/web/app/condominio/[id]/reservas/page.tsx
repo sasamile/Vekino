@@ -48,9 +48,9 @@ const ESTADO_LABEL: Record<Estado, string> = {
  * cargado la cartera, decir que la casa está al día sería afirmar algo que
  * nadie ha comprobado.
  *
- * "Con saldo" tampoco es ninguno de los dos: la casa debe de meses viejos
- * pero cubrió el último período que venció. Ponerle "Al día" escondería la
- * deuda; ponerle "En mora" negaría que está pagando.
+ * "Pendiente" es "debe, pero no está incumpliendo": o la obligación vigente
+ * no ha vencido, o el último período vencido quedó cubierto. Debajo va el
+ * saldo, que es lo que de verdad se quiere saber.
  *
  * Es información, no una decisión: aprobar o rechazar sigue siendo de quien
  * administra, que es el único que sabe si hay un acuerdo de pago de por medio.
@@ -62,21 +62,18 @@ const CARTERA_TONE: Record<EstadoCartera, React.ComponentProps<typeof Badge>["to
   sin_facturas: "neutral",
   al_dia: "success",
   pendiente: "warning",
-  con_saldo: "info",
   en_mora: "destructive",
 };
 const CARTERA_LABEL: Record<EstadoCartera, string> = {
   sin_facturas: "Sin facturas",
   al_dia: "Al día",
-  pendiente: "Por vencer",
-  con_saldo: "Con saldo anterior",
+  pendiente: "Pendiente",
   en_mora: "En mora",
 };
 const CARTERA_HINT: Record<EstadoCartera, string> = {
   sin_facturas: "La unidad no tiene facturas cargadas.",
-  al_dia: "Sin facturas pendientes.",
-  pendiente: "Debe, pero la factura aún no se vence.",
-  con_saldo: "Arrastra deuda de meses anteriores, pero cubrió el último período vencido.",
+  al_dia: "Sin saldo pendiente.",
+  pendiente: "Debe, pero no está incumpliendo: la obligación vigente no ha vencido o el último período vencido quedó cubierto.",
   en_mora: "El último período vencido sigue sin pago ni abono.",
 };
 
@@ -447,7 +444,7 @@ function CeldasCartera({
     );
   }
 
-  const { estado, diasMora, facturasPendientes: pendientes } = cartera;
+  const { estado, diasMora, saldoActual } = cartera;
 
   return (
     <>
@@ -465,10 +462,11 @@ function CeldasCartera({
               aria-hidden
             />
           </span>
+          {/* El saldo VIGENTE, no un conteo de facturas: en este modelo cada
+              factura absorbe lo que quedó debiendo la anterior, así que
+              contarlas mide cuántas veces se arrastró la misma deuda. */}
           <span className="mt-0.5 text-[11px] text-muted-foreground">
-            {pendientes > 0
-              ? `${pendientes} factura${pendientes === 1 ? "" : "s"} sin pagar`
-              : "Ver estado de cuenta"}
+            {saldoActual > 0 ? cop(saldoActual) : "Ver estado de cuenta"}
           </span>
         </button>
       </TD>

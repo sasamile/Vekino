@@ -35,43 +35,74 @@ export type EstadoFactura =
   | "abonada"
   | "saldo_a_favor";
 
-/** Lo minimo de una factura que hace falta para juzgar la cartera. */
+export type LineaFactura = {
+  codigo: number;
+  concepto: string;
+  /** Lo que esta linea arrastra del periodo anterior. */
+  saldoAnterior: number;
+  /** El cargo nuevo del mes. */
+  actual: number;
+  /** `saldoAnterior + actual`. */
+  total: number;
+};
+
+/**
+ * Lo que hace falta de una factura para juzgar la cartera.
+ *
+ * `totalAPagar` NO es la cuota del mes: es la deuda acumulada a esa fecha,
+ * arrastre incluido. Sin ese dato no se puede responder cuanto debe hoy la
+ * unidad, y por eso entra aqui.
+ */
 export type FacturaCartera = {
   periodo: string;
   estado: EstadoFactura;
   /** Timestamp. Dia 15 del mes siguiente al periodo (ver el schema). */
   fechaVencimiento: number;
+  /** La deuda acumulada que reclama esta factura. */
+  totalAPagar: number;
+  lineas: readonly LineaFactura[];
 };
 
 /**
- * Cada estado dice una cosa distinta, y ninguno sobra.
+ * Deuda que la factura declara arrastrar del periodo anterior.
+ *
+ * Vive aqui y no en `facturas.ts` porque la usan tres: la conciliacion, que
+ * con ella decide el estado; el estado de cuenta, que con ella dice cuanto
+ * quedo debiendo cada mes; y el saldo vigente. Es la misma cuenta; tenerla
+ * repetida era la manera de que un dia dejaran de coincidir.
+ */
+export function saldoAnteriorDe(f: { lineas: readonly LineaFactura[] }): number {
+  return f.lineas.reduce((s, l) => s + l.saldoAnterior, 0);
+}
+
+/**
+ * Tres estados, y cada uno responde algo distinto.
  *
  * `sin_facturas` no es `al_dia`: en un conjunto al que no le han cargado la
  * cartera, decir "al dia" seria afirmar algo que nadie ha comprobado.
  *
- * `con_saldo` no es ninguno de los dos: la casa debe plata de meses viejos
- * pero cubrio el ultimo periodo que vencio. Llamarla "al dia" esconderia un
- * millon de pesos; llamarla "en mora" seria negar que esta pagando.
+ * `pendiente` es "debe, pero no esta incumpliendo": o la obligacion vigente
+ * todavia no vence, o el ultimo periodo que vencio quedo cubierto.
+ *
+ * Hubo un cuarto, `con_saldo`, para "arrastra deuda vieja pero esta pagando".
+ * Se quito: nombraba un saldo anterior que YA esta dentro del saldo vigente,
+ * porque cada factura absorbe lo que quedo debiendo la anterior. Era contar
+ * dos veces con palabras.
  */
-export type EstadoCartera =
-  | "sin_facturas"
-  | "al_dia"
-  | "pendiente"
-  | "con_saldo"
-  | "en_mora";
+export type EstadoCartera = "sin_facturas" | "al_dia" | "pendiente" | "en_mora";
 
 export type CarteraUnidad = {
   estado: EstadoCartera;
+  /** Lo que la unidad debe HOY. No la suma de saldos historicos. */
+  saldoActual: number;
+  /** El periodo de la obligacion vigente. */
+  periodoActual: string | null;
   /** Dias de la mora ACTUAL. 0 cuando no la hay, por vieja que sea la deuda. */
   diasMora: number;
-  /** Facturas sin pagar, vencidas o no. Es la deuda historica, no la mora. */
-  facturasPendientes: number;
   /** El periodo que provoca la mora actual. */
   periodoEnMora: string | null;
   /** Su vencimiento. */
   vencimientoEnMora: number | null;
-  /** El ultimo periodo que ya vencio, sea cual sea su estado. */
-  ultimoPeriodoVencido: string | null;
 };
 
 const DIA = 24 * 60 * 60 * 1000;
@@ -103,43 +134,60 @@ export function conEvidenciaDePago(estado: EstadoFactura): boolean {
   return estado === "pagada" || estado === "abonada" || estado === "saldo_a_favor";
 }
 
+/**
+ * Si la factura quedo saldada del todo. Para el dinero, no para la mora.
+ *
+ * `abonada` NO entra: dejo saldo. Es la contraparte de `conEvidenciaDePago`,
+ * donde si entra, y esa asimetria es la regla: abonar prueba que la casa
+ * responde, pero no borra lo que falta.
+ */
+export function conEvidenciaTotalDePago(estado: EstadoFactura): boolean {
+  return estado === "pagada" || estado === "saldo_a_favor";
+}
+
 /** Dias completos entre el vencimiento y hoy. Negativo si aun no vence. */
 export function diasDesde(vencimiento: number, ahora: number): number {
   return Math.floor((ahora - vencimiento) / DIA);
 }
 
 /**
- * Deuda historica y mora actual son dos preguntas, no una.
+ * Cuanto debe HOY la unidad, y si esta incumpliendo.
  *
- * ── Por que se mira el ULTIMO periodo vencido y no el mas antiguo ────────
- * Antes se tomaba la factura sin pagar mas vieja ya vencida. Respondia
- * "cuanto lleva debiendo", que es una pregunta legitima, pero no la que la
- * administracion hace frente a una solicitud de reserva: esa es "esta
- * cumpliendo ahora".
+ * ── Las facturas no son deudas sumables ──────────────────────────────────
+ * Cada factura ABSORBE lo que quedo debiendo la anterior: su `totalAPagar`
+ * no es la cuota del mes, es la deuda acumulada a esa fecha. Sumar los
+ * saldos de las facturas viejas para saber cuanto debe una casa no es contar
+ * dos veces: es resucitar deuda que ya se pago.
  *
- * El caso que lo destapo: una casa con la cuota de abril vencida desde hace
- * 116 dias, pero que en julio pago completo y que en agosto ya lleva 300.000
- * abonados antes siquiera de vencer. El sistema la marcaba con 116 dias de
- * mora. Es falso: arrastra deuda, pero esta pagando.
+ * El caso que lo destapo, una unidad real:
  *
- * Asi que la mora la decide el ultimo periodo que YA vencio. Si ese quedo
- * cubierto —pagado o abonado—, no hay mora actual por mucho saldo viejo que
- * quede; ese saldo sigue contandose aparte, en `facturasPendientes` y en el
- * estado de cuenta.
+ *   abril   deja 400.800 debiendo
+ *     -> mayo los absorbe:  837.800 = 437.000 nuevos + 400.800 arrastrados
+ *   mayo    deja 264.600
+ *     -> junio los absorbe: 638.600 = 374.000 nuevos + 264.600 arrastrados
+ *   junio   se paga COMPLETO -> saldo 0
  *
- * ── Que cuenta como cubierto ─────────────────────────────────────────────
- * `pagada`, `abonada` y `saldo_a_favor`. Abonar cuenta a proposito: un pago
- * parcial sobre el ultimo periodo es justo la evidencia de que la casa esta
- * respondiendo.
+ * Sumando saldos salian 1.083.400. Lo cierto es que abril y mayo se pagaron
+ * en junio y no se deben; lo vigente son los 380.000 de septiembre, que ya
+ * llevan dentro los 38.000 que quedaron de agosto.
  *
- * `vencida` no, evidentemente. Y `pendiente` tampoco: no es un estado de
- * pago, es la ultima de la cadena, a la que todavia ninguna factura
- * posterior ha juzgado. Es ausencia de veredicto, no constancia de pago. Si
- * contara como cubierta, un conjunto que dejara de cargar facturas se veria
+ * ── De donde sale entonces el saldo vigente ──────────────────────────────
+ * De la ultima factura de la cadena, porque el modelo garantiza que arrastra
+ * todo lo anterior. Cuanto queda de ella lo diria la factura siguiente —su
+ * saldo anterior—, pero esa todavia no existe, asi que lo dice su estado:
+ * saldada si esta `pagada` o en `saldo_a_favor`, y el total entero si no.
+ *
+ * ── La mora es otra pregunta ─────────────────────────────────────────────
+ * La decide el ultimo periodo que YA vencio, no el mas antiguo sin pagar.
+ * Una casa que arrastra deuda pero cubrio —pago o abono— el ultimo periodo
+ * vencido no esta incumpliendo hoy: debe plata y esta respondiendo, y las
+ * dos cosas son ciertas al tiempo.
+ *
+ * `vencida` no cuenta como cubierta, evidentemente. Y `pendiente` tampoco:
+ * no es un estado de pago, es la ultima de la cadena, a la que todavia
+ * ninguna factura posterior ha juzgado. Ausencia de veredicto, no constancia
+ * de pago. Si contara, un conjunto que dejara de cargar facturas se veria
  * entero al dia mientras la deuda corre.
- *
- * Por eso `conEvidenciaDePago` no es la negacion de `sinPagar`: una abonada
- * cuenta en los dos lados, y ahi esta toda la regla.
  */
 export function carteraDeUnidad(
   facturas: readonly FacturaCartera[],
@@ -147,19 +195,34 @@ export function carteraDeUnidad(
 ): CarteraUnidad {
   const vacia: CarteraUnidad = {
     estado: "sin_facturas",
+    saldoActual: 0,
+    periodoActual: null,
     diasMora: 0,
-    facturasPendientes: 0,
     periodoEnMora: null,
     vencimientoEnMora: null,
-    ultimoPeriodoVencido: null,
   };
 
   if (facturas.length === 0) return vacia;
 
-  const pendientes = facturas.filter((f) => sinPagar(f.estado));
-  if (pendientes.length === 0) return { ...vacia, estado: "al_dia" };
+  /* La cadena de facturacion, en el mismo orden que usa la conciliacion: por
+   * periodo. Es el orden en el que el saldo va pasando de una a otra. */
+  const cadena = [...facturas].sort((a, b) => a.periodo.localeCompare(b.periodo));
+  const vigente = cadena[cadena.length - 1]!;
 
-  const base = { ...vacia, facturasPendientes: pendientes.length };
+  /* Si la vigente estuviera `abonada` no se sabria cuanto se abono —eso lo
+   * diria la siguiente, que no existe—, asi que se reporta el total. Preferir
+   * pasarse a quedarse corto: una deuda subestimada en pantalla es peor que
+   * una que el detalle matiza. */
+  const saldoActual = conEvidenciaTotalDePago(vigente.estado)
+    ? 0
+    : Math.max(0, vigente.totalAPagar);
+
+  const base: CarteraUnidad = {
+    ...vacia,
+    saldoActual,
+    periodoActual: vigente.periodo,
+    estado: saldoActual > 0 ? "pendiente" : "al_dia",
+  };
 
   /* Los periodos que ya vencieron, del mas viejo al mas nuevo. Se ordena por
    * vencimiento y no por el orden en que entraron a la base: lo que define
@@ -167,8 +230,7 @@ export function carteraDeUnidad(
    * periodo desempata para que dos vencimientos iguales no bailen.
    *
    * Las migradas con `fechaVencimiento` en 0 (`backfillFechas` las arregla)
-   * quedan fuera: sin fecha no se puede decir si vencieron ni cuando. Siguen
-   * contando como deuda, que es lo que son. */
+   * quedan fuera: sin fecha no se puede decir si vencieron ni cuando. */
   const yaVencidas = facturas
     .filter((f) => f.fechaVencimiento > 0 && diasDesde(f.fechaVencimiento, ahora) >= 1)
     .sort(
@@ -176,53 +238,24 @@ export function carteraDeUnidad(
         a.fechaVencimiento - b.fechaVencimiento || a.periodo.localeCompare(b.periodo),
     );
 
-  /* Todo lo que ya vencio esta cubierto: lo unico que debe es de plazo
-   * abierto. No es mora ni es saldo arrastrado —no hay nada "anterior"
-   * pendiente—, es una cuenta corriente al dia. */
-  const deudaYaVencida = yaVencidas.filter((f) => sinPagar(f.estado));
-  if (deudaYaVencida.length === 0) return { ...base, estado: "pendiente" };
+  const ultimoVencido = yaVencidas[yaVencidas.length - 1];
 
-  /* Hay deuda de periodos que ya vencieron. Que sea mora ACTUAL o saldo
-   * arrastrado lo decide el ultimo periodo vencido, no el primero. */
-  const ultimo = yaVencidas[yaVencidas.length - 1]!;
-
-  if (conEvidenciaDePago(ultimo.estado)) {
-    return { ...base, estado: "con_saldo", ultimoPeriodoVencido: ultimo.periodo };
-  }
+  /* Nada ha vencido todavia, o lo que vencio quedo cubierto. Debe, pero
+   * dentro de plazo: llamarlo mora seria cobrarle un atraso que no tiene. */
+  if (!ultimoVencido || conEvidenciaDePago(ultimoVencido.estado)) return base;
 
   return {
     ...base,
     estado: "en_mora",
-    diasMora: diasDesde(ultimo.fechaVencimiento, ahora),
-    periodoEnMora: ultimo.periodo,
-    vencimientoEnMora: ultimo.fechaVencimiento,
-    ultimoPeriodoVencido: ultimo.periodo,
+    diasMora: diasDesde(ultimoVencido.fechaVencimiento, ahora),
+    periodoEnMora: ultimoVencido.periodo,
+    vencimientoEnMora: ultimoVencido.fechaVencimiento,
   };
 }
 
 // ─────────────────────────────────────────────────────────────
 // Estado de cuenta: la misma cadena, factura por factura
 // ─────────────────────────────────────────────────────────────
-
-export type LineaFactura = {
-  codigo: number;
-  concepto: string;
-  saldoAnterior: number;
-  actual: number;
-  total: number;
-};
-
-/**
- * Deuda que la factura declara arrastrar del periodo anterior.
- *
- * Vive aqui y no en `facturas.ts` porque ahora la usan dos: la conciliacion,
- * que con ella decide el estado, y el estado de cuenta, que con ella dice
- * cuanto quedo debiendo cada mes. Es la misma cuenta; tenerla dos veces era
- * la manera de que un dia dejaran de coincidir.
- */
-export function saldoAnteriorDe(f: { lineas: readonly LineaFactura[] }): number {
-  return f.lineas.reduce((s, l) => s + l.saldoAnterior, 0);
-}
 
 /**
  * El concepto que resume la factura.
@@ -246,11 +279,7 @@ export function conceptoPrincipal(
   return mejor?.concepto ?? periodoLabel;
 }
 
-export type FacturaCadena = FacturaCartera & {
-  periodoLabel: string;
-  totalAPagar: number;
-  lineas: readonly LineaFactura[];
-};
+export type FacturaCadena = FacturaCartera & { periodoLabel: string };
 
 export type FilaEstadoCuenta = {
   periodo: string;
@@ -263,8 +292,6 @@ export type FilaEstadoCuenta = {
   saldoPendiente: number | null;
   /** Lo que alcanzo a pagar. `null` por lo mismo. */
   abonado: number | null;
-  /** Dias vencida, si lo esta. */
-  diasVencida: number | null;
 };
 
 /**
@@ -282,11 +309,20 @@ export type FilaEstadoCuenta = {
  * asi que su saldo es desconocido, no cero. Se devuelve `null` para que la
  * pantalla ponga un guion en vez de afirmar algo que nadie ha comprobado.
  *
+ * ── Esto es historial, no deuda ──────────────────────────────────────────
+ * Estos saldos NO se suman: el de cada factura ya lo absorbio la siguiente.
+ * Sirven para auditar como se llego hasta aqui. Cuanto se debe hoy lo dice
+ * `carteraDeUnidad`, y sale de una sola factura: la vigente.
+ *
+ * Por lo mismo no se devuelven dias de vencida por factura. Ver "116 dias"
+ * en abril y "85" en mayo invita a leerlos como dos moras que se acumulan,
+ * cuando son la misma deuda contada dos veces. La mora es una y esta en
+ * `carteraDeUnidad`.
+ *
  * `cadena` debe venir ordenada del periodo mas viejo al mas nuevo.
  */
 export function estadoCuentaDeCadena(
   cadena: readonly FacturaCadena[],
-  ahora: number,
 ): FilaEstadoCuenta[] {
   return cadena.map((f, i) => {
     const siguiente = cadena[i + 1];
@@ -298,11 +334,6 @@ export function estadoCuentaDeCadena(
     const abonado =
       saldoPendiente == null ? null : Math.max(0, f.totalAPagar - saldoPendiente);
 
-    const dias =
-      sinPagar(f.estado) && f.fechaVencimiento > 0
-        ? diasDesde(f.fechaVencimiento, ahora)
-        : 0;
-
     return {
       periodo: f.periodo,
       periodoLabel: f.periodoLabel,
@@ -312,7 +343,6 @@ export function estadoCuentaDeCadena(
       totalAPagar: f.totalAPagar,
       saldoPendiente,
       abonado,
-      diasVencida: dias >= 1 ? dias : null,
     };
   });
 }

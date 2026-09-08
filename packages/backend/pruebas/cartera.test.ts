@@ -239,7 +239,7 @@ describe("estado de pago de la unidad", () => {
     });
     expect(fila.estado).toBe("al_dia");
     expect(fila.diasMora).toBe(0);
-    expect(fila.facturasPendientes).toBe(0);
+    expect(fila.saldoActual).toBe(0);
   });
 
   test("caso 2 y 3 — con varias vencidas seguidas, manda la ÚLTIMA", async () => {
@@ -251,8 +251,9 @@ describe("estado de pago de la unidad", () => {
     });
     expect(fila.estado).toBe("en_mora");
     expect(fila.diasMora).toBe(17);
-    expect(fila.facturasPendientes).toBe(3);
     expect(fila.periodoEnMora).toBe("2026-07");
+    /* La deuda vigente es la de la última factura, no la suma de las tres. */
+    expect(fila.saldoActual).toBe(274000);
   });
 
   test("deuda vieja con el último período abonado: deuda sí, mora no", async () => {
@@ -264,9 +265,10 @@ describe("estado de pago de la unidad", () => {
       condominioId: s.condoA,
       unidadIds: [s.pagando],
     });
-    expect(fila.estado).toBe("con_saldo");
+    expect(fila.estado).toBe("pendiente");
     expect(fila.diasMora).toBe(0);
-    expect(fila.facturasPendientes).toBe(3);
+    /* Debe lo mismo que la 202 —la última factura— pero no está incumpliendo. */
+    expect(fila.saldoActual).toBe(274000);
   });
 
   test("una factura que aún no se vence no es mora", async () => {
@@ -278,7 +280,7 @@ describe("estado de pago de la unidad", () => {
     });
     expect(fila.estado).toBe("pendiente");
     expect(fila.diasMora).toBe(0);
-    expect(fila.facturasPendientes).toBe(1);
+    expect(fila.saldoActual).toBe(274000);
   });
 
   test("una unidad sin facturas cargadas no se declara al día", async () => {
@@ -350,9 +352,9 @@ describe("estado de pago de la unidad", () => {
     expect(Object.keys(fila).sort()).toEqual([
       "diasMora",
       "estado",
-      "facturasPendientes",
+      "periodoActual",
       "periodoEnMora",
-      "ultimoPeriodoVencido",
+      "saldoActual",
       "unidadId",
       "vencimientoEnMora",
     ]);
@@ -630,39 +632,36 @@ describe("regresión: la casa de los 116 días", () => {
     return { s, unidadId: u };
   }
 
-  test("ya no dice 116 días de mora: dice deuda con el último período cubierto", async () => {
+  test("debe 380.000, no 1.083.400, y no está en mora", async () => {
     const t = convexTest(schema, modules);
     const { s, unidadId } = await casoReportado(t);
     const [fila] = await como(t, "adminA").query(api.facturas.carteraPorUnidad, {
       condominioId: s.condoA,
       unidadIds: [unidadId],
     });
-    expect(fila.estado).toBe("con_saldo");
+    /* Lo vigente es la de septiembre, que ya lleva dentro los 38.000 de
+     * agosto. Lo de abril y mayo se pagó en junio. */
+    expect(fila.saldoActual).toBe(380000);
+    expect(fila.saldoActual).not.toBe(1083400);
+    expect(fila.periodoActual).toBe("2026-09");
+    expect(fila.estado).toBe("pendiente");
     expect(fila.diasMora).toBe(0);
-    /* El último período YA vencido es el de junio (venció el 15 de julio);
-     * el de agosto vence dentro de una semana. */
-    expect(fila.ultimoPeriodoVencido).toBe("2026-06");
   });
 
-  test("la deuda histórica sigue intacta: 4 sin pagar", async () => {
-    /* Criterio 8: no se toca el saldo para arreglar la clasificación. */
+  test("caso 7 — el historial sigue completo, sin días de mora por fila", async () => {
     const t = convexTest(schema, modules);
     const { s, unidadId } = await casoReportado(t);
-    const [fila] = await como(t, "adminA").query(api.facturas.carteraPorUnidad, {
-      condominioId: s.condoA,
-      unidadIds: [unidadId],
-    });
-    expect(fila.facturasPendientes).toBe(4);
-
     const cuenta = await como(t, "adminA").query(api.facturas.estadoCuentaUnidad, {
       condominioId: s.condoA,
       unidadId,
     });
-    /* La de abril sigue mostrando sus 116 días DE ESA FACTURA: el dato no
-     * desaparece, deja de ser el titular. */
+    /* Las seis siguen ahí para auditar: no se borra información histórica. */
+    expect(cuenta!.facturas.length).toBe(6);
     const abril = cuenta!.facturas.find((f) => f.periodo === "2026-04")!;
     expect(abril.estado).toBe("vencida");
-    expect(abril.diasVencida).toBe(116);
+    expect(abril.totalAPagar).toBe(400800);
+    /* Pero sin "116 días" en la fila: se leía como una mora aparte. */
+    expect(abril).not.toHaveProperty("diasVencida");
   });
 
   test("si deja de pagar, la mora aparece sola y con los días correctos", async () => {

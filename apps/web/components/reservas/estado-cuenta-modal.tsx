@@ -139,26 +139,16 @@ function Contenido({
   }
 
   const { cartera } = data;
-  const pendientes = data.facturas.filter(
-    (f) => f.estado !== "pagada" && f.estado !== "saldo_a_favor",
-  );
-  const saldoTotal = pendientes.reduce(
-    (s, f) => s + (f.saldoPendiente ?? f.totalAPagar),
-    0,
-  );
 
   return (
     <div className="space-y-4">
-      {/* Resumen: lo mismo que dice la fila de la tabla, para que cuadren.
-          Deuda y mora van SIEMPRE las dos, y separadas: son preguntas
-          distintas y confundirlas es lo que hacía que una casa que arrastra
-          un millón pero está pagando cada mes saliera con 116 días de mora. */}
-      <div className="flex flex-wrap items-center gap-x-6 gap-y-2 rounded-xl border border-border bg-muted/40 px-4 py-3">
-        <Dato
-          etiqueta="Facturas sin pagar"
-          valor={`${cartera.facturasPendientes} de ${data.facturas.length}`}
-        />
-        <Dato etiqueta="Saldo pendiente" valor={cop(saldoTotal)} />
+      {/* Dos datos, y ninguno se calcula aquí.
+          El saldo sale de la factura vigente, que ya arrastra todo lo
+          anterior. Sumar los saldos del historial —que es lo que hacía esta
+          pantalla— no contaba dos veces: resucitaba deuda ya pagada, porque
+          cada factura absorbe el saldo de la anterior. */}
+      <div className="flex flex-wrap items-center gap-x-8 gap-y-2 rounded-xl border border-border bg-muted/40 px-4 py-3">
+        <Dato etiqueta="Saldo pendiente actual" valor={cop(cartera.saldoActual)} />
         <Dato
           etiqueta="Mora actual"
           valor={
@@ -170,12 +160,9 @@ function Contenido({
         />
       </div>
 
-      {cartera.estado === "con_saldo" && (
-        <p className="rounded-xl border border-sky-500/25 bg-sky-500/[0.07] px-4 py-2.5 text-xs text-foreground">
-          Arrastra deuda de meses anteriores, pero cubrió el último período que
-          venció. Tiene saldo pendiente; no está incumpliendo ahora.
-        </p>
-      )}
+      <p className="pt-1 text-[11px] font-medium uppercase tracking-[0.04em] text-muted-foreground">
+        Historial de facturas
+      </p>
 
       <div className="overflow-x-auto rounded-xl border border-border">
         <table className="w-full text-sm">
@@ -213,15 +200,8 @@ function Contenido({
                   </p>
                 </td>
                 <td className="px-3 py-2 text-foreground">{f.concepto}</td>
-                <td className="hidden px-3 py-2 sm:table-cell">
-                  <span className="tabular-nums text-foreground">
-                    {fmtFecha(f.fechaVencimiento)}
-                  </span>
-                  {f.diasVencida != null && (
-                    <p className="text-[11px] text-red-600 dark:text-red-400">
-                      {f.diasVencida} {f.diasVencida === 1 ? "día" : "días"}
-                    </p>
-                  )}
+                <td className="hidden px-3 py-2 tabular-nums text-foreground sm:table-cell">
+                  {fmtFecha(f.fechaVencimiento)}
                 </td>
                 <td className="px-3 py-2 text-right font-medium tabular-nums text-foreground">
                   {cop(f.totalAPagar)}
@@ -261,10 +241,12 @@ function Contenido({
       </div>
 
       <p className="text-[11px] text-muted-foreground">
-        Lo abonado sale del saldo que declara la factura del mes siguiente, que
-        es el mismo criterio con el que Finanzas concilia la cartera. La mora
-        actual la marca el último período ya vencido, no la factura vencida más
-        antigua.
+        Estos saldos <strong className="font-medium">no se suman</strong>: cada
+        factura absorbe lo que quedó debiendo la anterior, así que el saldo de
+        una factura vieja ya está dentro de las siguientes. Sirven para ver
+        cómo se llegó hasta aquí. Lo que se debe hoy es el saldo pendiente
+        actual. Lo abonado sale del saldo que declara la factura del mes
+        siguiente, el mismo criterio con el que Finanzas concilia.
       </p>
     </div>
   );

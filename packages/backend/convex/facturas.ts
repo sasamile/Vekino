@@ -979,7 +979,7 @@ export const estadoCuentaUnidad = query({
       .sort((a, b) => a.periodo.localeCompare(b.periodo));
 
     const ahora = Date.now();
-    const filas = estadoCuentaDeCadena(cadena, ahora).map((fila, i) => ({
+    const filas = estadoCuentaDeCadena(cadena).map((fila, i) => ({
       ...fila,
       _id: cadena[i]!._id,
       numeroFactura: cadena[i]!.numeroFactura,
