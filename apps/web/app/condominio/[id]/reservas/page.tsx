@@ -1,12 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { usePaginatedQuery, useQuery, useMutation } from "convex/react";
 import {
   CalendarCheck, Plus, Pencil, Trash2, Loader2, CheckCircle, XCircle,
   Settings, MapPin, Clock, FileSpreadsheet,
 } from "lucide-react";
+import type { FunctionReturnType } from "convex/server";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
 import { PageContainer } from "@/components/layout/page-container";
@@ -39,6 +40,32 @@ const ESTADO_LABEL: Record<Estado, string> = {
   pendiente: "Pendiente", aprobada: "Aprobada", rechazada: "Rechazada", cancelada: "Cancelada",
 };
 
+/**
+ * Cómo se lee la cartera de la unidad en esta tabla.
+ *
+ * "Sin facturas" no es "Al día": en un conjunto al que todavía no le han
+ * cargado la cartera, decir que la casa está al día sería afirmar algo que
+ * nadie ha comprobado.
+ *
+ * Es información, no una decisión: aprobar o rechazar sigue siendo de quien
+ * administra, que es el único que sabe si hay un acuerdo de pago de por medio.
+ */
+type CarteraFila = FunctionReturnType<typeof api.facturas.carteraPorUnidad>[number];
+type EstadoCartera = CarteraFila["estado"];
+
+const CARTERA_TONE: Record<EstadoCartera, React.ComponentProps<typeof Badge>["tone"]> = {
+  sin_facturas: "neutral", al_dia: "success", pendiente: "warning", en_mora: "destructive",
+};
+const CARTERA_LABEL: Record<EstadoCartera, string> = {
+  sin_facturas: "Sin facturas", al_dia: "Al día", pendiente: "Por vencer", en_mora: "En mora",
+};
+const CARTERA_HINT: Record<EstadoCartera, string> = {
+  sin_facturas: "La unidad no tiene facturas cargadas.",
+  al_dia: "Sin facturas pendientes.",
+  pendiente: "Debe, pero la factura aún no se vence.",
+  en_mora: "Tiene facturas vencidas sin pagar.",
+};
+
 function fmtFecha(s: string) {
   const parts = s.split("-");
   const y = Number(parts[0] ?? 2026);
@@ -50,6 +77,7 @@ function fmtFecha(s: string) {
 type ReservaRow = {
   _id: Id<"reservas">;
   zonaId: Id<"zonasComunes">;
+  unidadId: Id<"unidades">;
   zonaNombre: string;
   unidadNumero: string;
   solicitanteNombre: string;
@@ -103,6 +131,22 @@ export default function ReservasPage() {
   const loadingMore = status === "LoadingMore";
   const reservas = results as ReservaRow[];
   const hasFilters = Boolean(estadoFiltro || zonaFiltro);
+
+  /* La cartera se pide UNA vez para todas las unidades de la página, no una
+   * por fila: treinta reservas suelen ser doce casas, y preguntar por cada
+   * fila serían treinta consultas para doce respuestas. */
+  const unidadIds = useMemo(
+    () => [...new Set(reservas.map((r) => r.unidadId))],
+    [reservas],
+  );
+  const cartera = useQuery(
+    api.facturas.carteraPorUnidad,
+    unidadIds.length > 0 ? { condominioId, unidadIds } : "skip",
+  );
+  const carteraMap = useMemo(
+    () => new Map((cartera ?? []).map((c) => [c.unidadId, c])),
+    [cartera],
+  );
 
   async function cambiarEstado(id: Id<"reservas">, estado: Estado) {
     await updateEstado({ id, estado });
@@ -207,6 +251,8 @@ export default function ReservasPage() {
                     <TH>Unidad</TH>
                     <TH>Solicitante</TH>
                     <TH>Estado</TH>
+                    <TH>Estado de pago</TH>
+                    <TH className="text-right">Días de mora</TH>
                     <TH></TH>
                   </TR>
                 </THead>
@@ -238,6 +284,10 @@ export default function ReservasPage() {
                           {ESTADO_LABEL[r.estado as Estado]}
                         </Badge>
                       </TD>
+                      <CeldasCartera
+                        cartera={carteraMap.get(r.unidadId)}
+                        cargando={cartera === undefined}
+                      />
                       <TD>
                         <div className="flex items-center justify-end gap-1">
                           {r.estado === "pendiente" && (
@@ -311,6 +361,79 @@ export default function ReservasPage() {
         <ReporteReservasModal condominioId={condominioId} onClose={() => setReporteAbierto(false)} />
       )}
     </PageContainer>
+  );
+}
+
+/**
+ * Estado de pago de la unidad y, si debe, desde cuándo.
+ *
+ * Dos celdas y no una: la administración lee la columna de días en diagonal
+ * buscando el número grande, y un "En mora — 78 días" metido en la misma
+ * celda que el resto obliga a leer frase por frase.
+ *
+ * Nada de esto bloquea la reserva. Una casa puede deber y tener un acuerdo de
+ * pago; otra puede llevar dos meses y el conjunto decidir que no reserva.
+ * Quien decide es quien administra, aquí solo se le dice lo que hay.
+ */
+function CeldasCartera({
+  cartera,
+  cargando,
+}: {
+  cartera?: CarteraFila;
+  cargando: boolean;
+}) {
+  if (!cartera) {
+    /* Sin fila hay dos motivos distintos y no se pueden pintar igual: que la
+     * consulta siga en camino, o que la unidad se saliera del tope de la
+     * consulta al cargar muchas páginas. Lo segundo no va a llegar nunca, y
+     * si llegara, un esqueleto girando para siempre le diría a la
+     * administración que espere algo que no viene. */
+    if (!cargando) {
+      return (
+        <>
+          <TD>
+            <span className="text-sm text-muted-foreground" title="No se consultó la cartera de esta unidad.">
+              Sin consultar
+            </span>
+          </TD>
+          <TD className="text-right"><span className="text-sm text-muted-foreground">—</span></TD>
+        </>
+      );
+    }
+    return (
+      <>
+        <TD><Skeleton className="h-4 w-20" /></TD>
+        <TD className="text-right"><Skeleton className="ml-auto h-4 w-10" /></TD>
+      </>
+    );
+  }
+
+  const { estado, diasMora, facturasPendientes: pendientes } = cartera;
+
+  return (
+    <>
+      <TD>
+        <Badge tone={CARTERA_TONE[estado]} title={CARTERA_HINT[estado]}>
+          {CARTERA_LABEL[estado]}
+        </Badge>
+        {pendientes > 0 && (
+          <p className="mt-0.5 text-[11px] text-muted-foreground">
+            {pendientes} factura{pendientes === 1 ? "" : "s"} sin pagar
+          </p>
+        )}
+      </TD>
+      <TD className="text-right">
+        {estado === "en_mora" ? (
+          <span className="text-sm font-medium text-red-600 dark:text-red-400">
+            {diasMora} {diasMora === 1 ? "día" : "días"}
+          </span>
+        ) : (
+          /* Una casa al día no lleva "0 días de mora": no lleva ninguno. El
+             guion se lee de un vistazo, el cero invita a compararlo. */
+          <span className="text-sm text-muted-foreground">—</span>
+        )}
+      </TD>
+    </>
   );
 }
 
