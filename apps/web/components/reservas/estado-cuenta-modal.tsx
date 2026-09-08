@@ -149,21 +149,33 @@ function Contenido({
 
   return (
     <div className="space-y-4">
-      {/* Resumen: lo mismo que dice la fila de la tabla, para que cuadren. */}
+      {/* Resumen: lo mismo que dice la fila de la tabla, para que cuadren.
+          Deuda y mora van SIEMPRE las dos, y separadas: son preguntas
+          distintas y confundirlas es lo que hacía que una casa que arrastra
+          un millón pero está pagando cada mes saliera con 116 días de mora. */}
       <div className="flex flex-wrap items-center gap-x-6 gap-y-2 rounded-xl border border-border bg-muted/40 px-4 py-3">
         <Dato
           etiqueta="Facturas sin pagar"
           valor={`${cartera.facturasPendientes} de ${data.facturas.length}`}
         />
         <Dato etiqueta="Saldo pendiente" valor={cop(saldoTotal)} />
-        {cartera.estado === "en_mora" && (
-          <Dato
-            etiqueta="Mora"
-            valor={`${cartera.diasMora} ${cartera.diasMora === 1 ? "día" : "días"}`}
-            tono="mora"
-          />
-        )}
+        <Dato
+          etiqueta="Mora actual"
+          valor={
+            cartera.estado === "en_mora"
+              ? `${cartera.diasMora} ${cartera.diasMora === 1 ? "día" : "días"}`
+              : "Sin mora"
+          }
+          tono={cartera.estado === "en_mora" ? "mora" : undefined}
+        />
       </div>
+
+      {cartera.estado === "con_saldo" && (
+        <p className="rounded-xl border border-sky-500/25 bg-sky-500/[0.07] px-4 py-2.5 text-xs text-foreground">
+          Arrastra deuda de meses anteriores, pero cubrió el último período que
+          venció. Tiene saldo pendiente; no está incumpliendo ahora.
+        </p>
+      )}
 
       <div className="overflow-x-auto rounded-xl border border-border">
         <table className="w-full text-sm">
@@ -250,7 +262,9 @@ function Contenido({
 
       <p className="text-[11px] text-muted-foreground">
         Lo abonado sale del saldo que declara la factura del mes siguiente, que
-        es el mismo criterio con el que Finanzas concilia la cartera.
+        es el mismo criterio con el que Finanzas concilia la cartera. La mora
+        actual la marca el último período ya vencido, no la factura vencida más
+        antigua.
       </p>
     </div>
   );

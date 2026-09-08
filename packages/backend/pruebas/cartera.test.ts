@@ -162,10 +162,17 @@ async function escenario(t: ReturnType<typeof convexTest>) {
     await factura(condoA, alDia, "2026-06", "pagada", 80);
     await factura(condoA, alDia, "2026-07", "pagada", 50);
 
+    /* Tres periodos vencidos seguidos: la mora la marca el ULTIMO. */
     const enMora = await unidad(condoA, "202");
     await factura(condoA, enMora, "2026-05", "vencida", 78);
     await factura(condoA, enMora, "2026-06", "vencida", 48);
-    await factura(condoA, enMora, "2026-07", "abonada", 17);
+    await factura(condoA, enMora, "2026-07", "vencida", 17);
+
+    /* Misma deuda vieja, pero el ultimo periodo vencido quedo abonado. */
+    const pagando = await unidad(condoA, "606");
+    await factura(condoA, pagando, "2026-05", "vencida", 78);
+    await factura(condoA, pagando, "2026-06", "vencida", 48);
+    await factura(condoA, pagando, "2026-07", "abonada", 17);
 
     const porVencer = await unidad(condoA, "303");
     await factura(condoA, porVencer, "2026-07", "pagada", 30);
@@ -215,7 +222,7 @@ async function escenario(t: ReturnType<typeof convexTest>) {
 
     return {
       condoA, condoB, zona,
-      alDia, enMora, porVencer, sinFacturas, ajena, cadena,
+      alDia, enMora, pagando, porVencer, sinFacturas, ajena, cadena,
       reservaMorosa,
     };
   });
@@ -235,7 +242,7 @@ describe("estado de pago de la unidad", () => {
     expect(fila.facturasPendientes).toBe(0);
   });
 
-  test("caso 2 y 3 — con varias vencidas, los días salen de la más antigua", async () => {
+  test("caso 2 y 3 — con varias vencidas seguidas, manda la ÚLTIMA", async () => {
     const t = convexTest(schema, modules);
     const s = await escenario(t);
     const [fila] = await como(t, "adminA").query(api.facturas.carteraPorUnidad, {
@@ -243,11 +250,23 @@ describe("estado de pago de la unidad", () => {
       unidadIds: [s.enMora],
     });
     expect(fila.estado).toBe("en_mora");
-    expect(fila.diasMora).toBe(78);
-    /* Las tres cuentan como deuda; la abonada también, porque abonar no es
-     * pagar. */
+    expect(fila.diasMora).toBe(17);
     expect(fila.facturasPendientes).toBe(3);
-    expect(fila.periodoMasAntiguo).toBe("2026-05");
+    expect(fila.periodoEnMora).toBe("2026-07");
+  });
+
+  test("deuda vieja con el último período abonado: deuda sí, mora no", async () => {
+    /* La misma deuda que la 202, pero abonó el último período. Es la
+     * diferencia entre arrastrar deuda y estar incumpliendo. */
+    const t = convexTest(schema, modules);
+    const s = await escenario(t);
+    const [fila] = await como(t, "adminA").query(api.facturas.carteraPorUnidad, {
+      condominioId: s.condoA,
+      unidadIds: [s.pagando],
+    });
+    expect(fila.estado).toBe("con_saldo");
+    expect(fila.diasMora).toBe(0);
+    expect(fila.facturasPendientes).toBe(3);
   });
 
   test("una factura que aún no se vence no es mora", async () => {
@@ -332,9 +351,10 @@ describe("estado de pago de la unidad", () => {
       "diasMora",
       "estado",
       "facturasPendientes",
-      "periodoMasAntiguo",
+      "periodoEnMora",
+      "ultimoPeriodoVencido",
       "unidadId",
-      "vencimientoMasAntiguo",
+      "vencimientoEnMora",
     ]);
   });
 });
@@ -455,7 +475,7 @@ describe("estado de cuenta bajo demanda", () => {
     ]);
     /* El resumen del modal tiene que cuadrar con el de la tabla. */
     expect(cuenta!.cartera.estado).toBe("en_mora");
-    expect(cuenta!.cartera.diasMora).toBe(78);
+    expect(cuenta!.cartera.diasMora).toBe(17);
   });
 
   test("distingue pagada, abonada y pendiente con el saldo de la siguiente", async () => {
@@ -550,5 +570,144 @@ describe("estado de cuenta bajo demanda", () => {
         unidadId: s.enMora,
       }),
     ).rejects.toThrow(/no tiene el rol requerido/i);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+describe("regresión: la casa de los 116 días", () => {
+  /**
+   * El caso que destapó la regla, con su forma real: cuota de abril vencida
+   * desde hace 116 días, pero pagó completo en julio y de la de agosto —que
+   * ni siquiera ha vencido— ya lleva abonado. El sistema la marcaba con 116
+   * días de mora, que describe a alguien que no ha pagado en cuatro meses.
+   * No es esta persona.
+   */
+  async function casoReportado(t: ReturnType<typeof convexTest>) {
+    const s = await escenario(t);
+    const u = await t.run(async (ctx) => {
+      const unidadId = await ctx.db.insert("unidades", {
+        condominioId: s.condoA,
+        tipo: "casa",
+        estado: "ocupada",
+        numero: "25",
+        createdAt: AHORA,
+        updatedAt: AHORA,
+      });
+      const f = async (
+        periodo: string,
+        estado: "pendiente" | "pagada" | "vencida" | "abonada",
+        total: number,
+        diasDesdeVencimiento: number,
+      ) =>
+        await ctx.db.insert("facturas", {
+          condominioId: s.condoA,
+          unidadId,
+          numeroFactura: `FAC-${periodo}-0100`,
+          numeroInterno: periodo,
+          periodo,
+          periodoLabel: periodo,
+          residenteNombre: "Quien sea",
+          vrAdmon: total,
+          lineas: [],
+          saldoAFavor: 0,
+          totalAPagar: total,
+          estado,
+          fechaEmision: AHORA - (diasDesdeVencimiento + 45) * DIA,
+          fechaVencimiento: AHORA - diasDesdeVencimiento * DIA,
+          createdAt: AHORA,
+          updatedAt: AHORA,
+        });
+
+      await f("2026-03", "pagada", 321200, 146);
+      await f("2026-04", "vencida", 400800, 116);
+      await f("2026-05", "abonada", 837800, 85);
+      await f("2026-06", "pagada", 638600, 55);
+      /* Las dos últimas todavía no vencen. */
+      await f("2026-08", "abonada", 338000, -7);
+      await f("2026-09", "pendiente", 380000, -37);
+      return unidadId;
+    });
+    return { s, unidadId: u };
+  }
+
+  test("ya no dice 116 días de mora: dice deuda con el último período cubierto", async () => {
+    const t = convexTest(schema, modules);
+    const { s, unidadId } = await casoReportado(t);
+    const [fila] = await como(t, "adminA").query(api.facturas.carteraPorUnidad, {
+      condominioId: s.condoA,
+      unidadIds: [unidadId],
+    });
+    expect(fila.estado).toBe("con_saldo");
+    expect(fila.diasMora).toBe(0);
+    /* El último período YA vencido es el de junio (venció el 15 de julio);
+     * el de agosto vence dentro de una semana. */
+    expect(fila.ultimoPeriodoVencido).toBe("2026-06");
+  });
+
+  test("la deuda histórica sigue intacta: 4 sin pagar", async () => {
+    /* Criterio 8: no se toca el saldo para arreglar la clasificación. */
+    const t = convexTest(schema, modules);
+    const { s, unidadId } = await casoReportado(t);
+    const [fila] = await como(t, "adminA").query(api.facturas.carteraPorUnidad, {
+      condominioId: s.condoA,
+      unidadIds: [unidadId],
+    });
+    expect(fila.facturasPendientes).toBe(4);
+
+    const cuenta = await como(t, "adminA").query(api.facturas.estadoCuentaUnidad, {
+      condominioId: s.condoA,
+      unidadId,
+    });
+    /* La de abril sigue mostrando sus 116 días DE ESA FACTURA: el dato no
+     * desaparece, deja de ser el titular. */
+    const abril = cuenta!.facturas.find((f) => f.periodo === "2026-04")!;
+    expect(abril.estado).toBe("vencida");
+    expect(abril.diasVencida).toBe(116);
+  });
+
+  test("si deja de pagar, la mora aparece sola y con los días correctos", async () => {
+    const t = convexTest(schema, modules);
+    const { s, unidadId } = await casoReportado(t);
+    /* La de agosto vence y nadie la abona. */
+    await t.run(async (ctx) => {
+      const f = (
+        await ctx.db
+          .query("facturas")
+          .withIndex("by_unidad", (q) => q.eq("unidadId", unidadId))
+          .collect()
+      ).find((x) => x.periodo === "2026-08")!;
+      await ctx.db.patch(f._id, {
+        estado: "vencida",
+        fechaVencimiento: AHORA - 23 * DIA,
+      });
+    });
+
+    const [fila] = await como(t, "adminA").query(api.facturas.carteraPorUnidad, {
+      condominioId: s.condoA,
+      unidadIds: [unidadId],
+    });
+    expect(fila.estado).toBe("en_mora");
+    expect(fila.diasMora).toBe(23);
+    expect(fila.periodoEnMora).toBe("2026-08");
+  });
+
+  test("la reserva de esa casa se sigue gestionando igual", async () => {
+    /* Criterio 9: nada de esto bloquea nada. */
+    const t = convexTest(schema, modules);
+    const { s, unidadId } = await casoReportado(t);
+    const id = await como(t, "adminA").mutation(api.reservas.create, {
+      condominioId: s.condoA,
+      unidadId,
+      zonaId: s.zona,
+      fecha: "2026-12-31",
+      horaInicio: "18:00",
+      horaFin: "23:00",
+    });
+    await como(t, "adminA").mutation(api.reservas.updateEstado, {
+      id,
+      estado: "aprobada",
+    });
+    const r = await t.run(async (ctx) => await ctx.db.get(id));
+    expect(r?.estado).toBe("aprobada");
   });
 });

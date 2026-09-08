@@ -48,6 +48,10 @@ const ESTADO_LABEL: Record<Estado, string> = {
  * cargado la cartera, decir que la casa está al día sería afirmar algo que
  * nadie ha comprobado.
  *
+ * "Con saldo" tampoco es ninguno de los dos: la casa debe de meses viejos
+ * pero cubrió el último período que venció. Ponerle "Al día" escondería la
+ * deuda; ponerle "En mora" negaría que está pagando.
+ *
  * Es información, no una decisión: aprobar o rechazar sigue siendo de quien
  * administra, que es el único que sabe si hay un acuerdo de pago de por medio.
  */
@@ -55,16 +59,25 @@ type CarteraFila = FunctionReturnType<typeof api.facturas.carteraPorUnidad>[numb
 type EstadoCartera = CarteraFila["estado"];
 
 const CARTERA_TONE: Record<EstadoCartera, React.ComponentProps<typeof Badge>["tone"]> = {
-  sin_facturas: "neutral", al_dia: "success", pendiente: "warning", en_mora: "destructive",
+  sin_facturas: "neutral",
+  al_dia: "success",
+  pendiente: "warning",
+  con_saldo: "info",
+  en_mora: "destructive",
 };
 const CARTERA_LABEL: Record<EstadoCartera, string> = {
-  sin_facturas: "Sin facturas", al_dia: "Al día", pendiente: "Por vencer", en_mora: "En mora",
+  sin_facturas: "Sin facturas",
+  al_dia: "Al día",
+  pendiente: "Por vencer",
+  con_saldo: "Con saldo anterior",
+  en_mora: "En mora",
 };
 const CARTERA_HINT: Record<EstadoCartera, string> = {
   sin_facturas: "La unidad no tiene facturas cargadas.",
   al_dia: "Sin facturas pendientes.",
   pendiente: "Debe, pero la factura aún no se vence.",
-  en_mora: "Tiene facturas vencidas sin pagar.",
+  con_saldo: "Arrastra deuda de meses anteriores, pero cubrió el último período vencido.",
+  en_mora: "El último período vencido sigue sin pago ni abono.",
 };
 
 function fmtFecha(s: string) {

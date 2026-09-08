@@ -57,38 +57,101 @@ test("un saldo a favor tambien esta saldado", () => {
   assert.equal(c.estado, "al_dia");
 });
 
-test("caso 2 — una factura vencida: en mora, con los dias del vencimiento", () => {
+test("caso 2 — el ultimo periodo vencido esta vencido: en mora", () => {
   const c = carteraDeUnidad([factura("vencida", 35, "2026-07")], AHORA);
   assert.equal(c.estado, "en_mora");
   assert.equal(c.diasMora, 35);
   assert.equal(c.facturasPendientes, 1);
-  assert.equal(c.periodoMasAntiguo, "2026-07");
+  assert.equal(c.periodoEnMora, "2026-07");
 });
 
-test("caso 3 — varias pendientes: manda la MAS ANTIGUA ya vencida", () => {
-  /* Es la que responde "cuanto lleva debiendo". Contar desde la mas reciente
-   * dejaria a una casa con setenta y ocho dias de atraso mostrando quince. */
+test("caso 3 — periodos vencidos consecutivos: manda el ULTIMO, no el primero", () => {
+  /* Antes se tomaba el mas antiguo y salian 78 dias. La mora actual es la del
+   * periodo que acaba de incumplirse, no la del primero que se incumplio. */
   const c = carteraDeUnidad(
     [
       factura("vencida", 78, "2026-05"),
       factura("vencida", 48, "2026-06"),
-      factura("pendiente", 17, "2026-07"),
+      factura("vencida", 17, "2026-07"),
     ],
     AHORA,
   );
   assert.equal(c.estado, "en_mora");
-  assert.equal(c.diasMora, 78);
-  assert.equal(c.facturasPendientes, 3);
-  assert.equal(c.periodoMasAntiguo, "2026-05");
+  assert.equal(c.diasMora, 17);
+  assert.equal(c.facturasPendientes, 3, "la deuda historica sigue siendo de tres");
+  assert.equal(c.periodoEnMora, "2026-07");
 });
 
-test("una abonada vieja pesa mas que una pendiente reciente", () => {
+test("caso 5 — vencidas viejas pero el ultimo periodo ABONADO: no esta en mora", () => {
+  /* Abonar el ultimo periodo es la evidencia de que la casa esta respondiendo.
+   * Tiene deuda, no tiene mora. */
   const c = carteraDeUnidad(
-    [factura("abonada", 90, "2026-05"), factura("pendiente", 10, "2026-08")],
+    [
+      factura("vencida", 78, "2026-05"),
+      factura("vencida", 48, "2026-06"),
+      factura("abonada", 17, "2026-07"),
+    ],
     AHORA,
   );
-  assert.equal(c.diasMora, 90);
-  assert.equal(c.periodoMasAntiguo, "2026-05");
+  assert.equal(c.estado, "con_saldo");
+  assert.equal(c.diasMora, 0);
+  assert.equal(c.facturasPendientes, 3, "la deuda sigue ahi, solo que no es mora");
+  assert.equal(c.ultimoPeriodoVencido, "2026-07");
+});
+
+test("caso 6 — vencidas viejas pero el ultimo periodo PAGADO: no esta en mora", () => {
+  const c = carteraDeUnidad(
+    [
+      factura("vencida", 78, "2026-05"),
+      factura("vencida", 48, "2026-06"),
+      factura("pagada", 17, "2026-07"),
+    ],
+    AHORA,
+  );
+  assert.equal(c.estado, "con_saldo");
+  assert.equal(c.diasMora, 0);
+  assert.equal(c.facturasPendientes, 2);
+});
+
+test("caso 4 — un solo periodo vencido despues de meses pagando: en mora", () => {
+  const c = carteraDeUnidad(
+    [
+      factura("pagada", 78, "2026-05"),
+      factura("pagada", 48, "2026-06"),
+      factura("vencida", 17, "2026-07"),
+    ],
+    AHORA,
+  );
+  assert.equal(c.estado, "en_mora");
+  assert.equal(c.diasMora, 17);
+});
+
+test("caso 10 — el saldo historico por si solo no clasifica la mora", () => {
+  /* Marzo, abril y mayo con saldo; junio pagado; julio y agosto abonados. Seis
+   * facturas, cinco sin pagar, cero dias de mora. */
+  const c = carteraDeUnidad(
+    [
+      factura("vencida", 170, "2026-03"),
+      factura("abonada", 140, "2026-04"),
+      factura("abonada", 110, "2026-05"),
+      factura("pagada", 80, "2026-06"),
+      factura("abonada", 50, "2026-07"),
+      factura("abonada", 20, "2026-08"),
+    ],
+    AHORA,
+  );
+  assert.equal(c.estado, "con_saldo");
+  assert.equal(c.diasMora, 0);
+  assert.equal(c.facturasPendientes, 5);
+});
+
+test("una abonada vieja ya no arrastra mora si el ultimo periodo esta cubierto", () => {
+  const c = carteraDeUnidad(
+    [factura("abonada", 90, "2026-05"), factura("pagada", 10, "2026-08")],
+    AHORA,
+  );
+  assert.equal(c.estado, "con_saldo");
+  assert.equal(c.diasMora, 0);
 });
 
 test("las pagadas no arrastran mora aunque sean viejisimas", () => {
@@ -106,7 +169,7 @@ test("debe pero aun no se vence: 'por vencer', no mora", () => {
   assert.equal(c.estado, "pendiente");
   assert.equal(c.diasMora, 0);
   assert.equal(c.facturasPendientes, 1);
-  assert.equal(c.periodoMasAntiguo, null);
+  assert.equal(c.periodoEnMora, null);
 });
 
 test("el mismo dia del vencimiento todavia no es mora", () => {
@@ -272,4 +335,53 @@ test("el concepto es la linea que mas pesa, venga del codigo que venga", () => {
 test("sin lineas, el concepto cae al periodo en vez de inventarse uno", () => {
   /* Las facturas migradas llegaron sin lineas. */
   assert.equal(conceptoPrincipal([], "01-marzo-2026"), "01-marzo-2026");
+});
+
+// ─────────────────────────────────────────────────────────────
+// Regresion: el caso de los 116 dias
+// ─────────────────────────────────────────────────────────────
+
+test("regresion — la casa de los 116 dias no esta en mora, arrastra deuda", () => {
+  /* Datos reales del reporte, con hoy = 8 de septiembre de 2026.
+   *
+   * La cuota de abril vencio el 15 de mayo y sigue sin pagarse: 116 dias
+   * justos. Pero el 15 de julio pago completo, y de la de agosto —que ni
+   * siquiera ha vencido— ya lleva 300.000 abonados. Marcarla con 116 dias de
+   * mora describia a alguien que no ha pagado en cuatro meses, que no es esta
+   * persona. */
+  const c = carteraDeUnidad(
+    [
+      { periodo: "2026-03", estado: "pagada", fechaVencimiento: Date.UTC(2026, 3, 15, 12) },
+      { periodo: "2026-04", estado: "vencida", fechaVencimiento: Date.UTC(2026, 4, 15, 12) },
+      { periodo: "2026-05", estado: "abonada", fechaVencimiento: Date.UTC(2026, 5, 15, 12) },
+      { periodo: "2026-06", estado: "pagada", fechaVencimiento: Date.UTC(2026, 6, 15, 12) },
+      { periodo: "2026-08", estado: "abonada", fechaVencimiento: Date.UTC(2026, 8, 15, 12) },
+      { periodo: "2026-09", estado: "pendiente", fechaVencimiento: Date.UTC(2026, 9, 15, 12) },
+    ],
+    Date.UTC(2026, 8, 8, 12),
+  );
+
+  assert.equal(c.estado, "con_saldo");
+  assert.equal(c.diasMora, 0, "116 dias era la deuda mas vieja, no la mora de hoy");
+  /* El ultimo periodo YA vencido es el de junio (vencio el 15 de julio); el de
+   * agosto vence el 15 de septiembre, todavia no. */
+  assert.equal(c.ultimoPeriodoVencido, "2026-06");
+  /* Y la deuda sigue contandose entera: cuatro facturas sin pagar. */
+  assert.equal(c.facturasPendientes, 4);
+});
+
+test("regresion — si esa misma casa deja de pagar, la mora aparece sola", () => {
+  /* Mismo historial, pero la de agosto vencio sin abono. La mora es la de
+   * agosto, no la de abril. */
+  const c = carteraDeUnidad(
+    [
+      { periodo: "2026-04", estado: "vencida", fechaVencimiento: Date.UTC(2026, 4, 15, 12) },
+      { periodo: "2026-06", estado: "pagada", fechaVencimiento: Date.UTC(2026, 6, 15, 12) },
+      { periodo: "2026-08", estado: "vencida", fechaVencimiento: Date.UTC(2026, 8, 15, 12) },
+    ],
+    Date.UTC(2026, 9, 8, 12), // 8 de octubre
+  );
+  assert.equal(c.estado, "en_mora");
+  assert.equal(c.diasMora, 23, "del 15 de septiembre al 8 de octubre");
+  assert.equal(c.periodoEnMora, "2026-08");
 });
