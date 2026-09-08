@@ -185,22 +185,39 @@ export const crear = mutation({
 export const terminar = mutation({
   args: {
     asignacionId: v.id("asignaciones"),
-    vigenciaHasta: v.number(),
+    /** Último día asignado. Ausente = sacarlo del conjunto ahora. */
+    vigenciaHasta: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const asignacion = await ctx.db.get(args.asignacionId);
     if (!asignacion) throw new Error("Asignación no encontrada.");
     const contrato = await ctx.db.get(asignacion.contratoId);
     if (!contrato) throw new Error("Contrato no encontrado.");
-    await exigirGestionDeContrato(ctx, contrato);
+    const { user } = await exigirGestionDeContrato(ctx, contrato);
 
-    if (args.vigenciaHasta < asignacion.vigenciaDesde) {
-      throw new Error("La fecha de fin no puede ser anterior a la de inicio.");
+    const ahora = Date.now();
+    /* Repetir la petición no reescribe quién lo sacó ni corre la fecha. */
+    if (estadoVigencia(asignacion, ahora) === "terminada") {
+      return { ok: true as const, yaEstaba: true as const };
     }
-    await ctx.db.patch(args.asignacionId, {
-      vigenciaHasta: args.vigenciaHasta,
-    });
-    return { ok: true as const };
+
+    if (args.vigenciaHasta != null) {
+      if (args.vigenciaHasta < asignacion.vigenciaDesde) {
+        throw new Error("La fecha de fin no puede ser anterior a la de inicio.");
+      }
+      await ctx.db.patch(args.asignacionId, {
+        vigenciaHasta: args.vigenciaHasta,
+      });
+    } else {
+      /* Mismo motivo que en el contrato: `vigenciaHasta` es una fecha y le
+       * sobra el día entero, así que "sacarlo ahora" lo dejaba operando la
+       * portería hasta mañana. */
+      await ctx.db.patch(args.asignacionId, {
+        terminadoEn: ahora,
+        terminadoPorUserId: user._id,
+      });
+    }
+    return { ok: true as const, yaEstaba: false as const };
   },
 });
 
@@ -305,10 +322,24 @@ export const porContrato = query({
       .query("asignaciones")
       .withIndex("by_contrato", (q) => q.eq("contratoId", args.contratoId))
       .collect();
+
+    /* Una asignación no puede seguir "vigente" bajo un contrato terminado:
+     * ya no autoriza nada —`asignacionVigente` comprueba el contrato— y
+     * mostrarla en verde dentro de un conjunto archivado era decir que
+     * alguien puede entrar donde no puede. El fin del contrato manda. */
+    const finContrato = estadoVigencia(contrato) === "terminada";
+    const estadoDe = (a: Doc<"asignaciones">) =>
+      finContrato ? ("terminada" as const) : estadoVigencia(a);
+
     const visibles = args.incluirTerminadas
       ? filas
-      : filas.filter((a) => estadoVigencia(a) !== "terminada");
-    const salida = await Promise.all(visibles.map((a) => hidratar(ctx, a)));
+      : filas.filter((a) => estadoDe(a) !== "terminada");
+    const salida = await Promise.all(
+      visibles.map(async (a) => ({
+        ...(await hidratar(ctx, a)),
+        estado: estadoDe(a),
+      })),
+    );
     return salida.sort((a, b) => b.vigenciaDesde - a.vigenciaDesde);
   },
 });

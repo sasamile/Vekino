@@ -16,6 +16,7 @@ import {
 } from "./model/authz";
 import {
   exigirAccesoCompania,
+  exigirAccesoContrato,
   getCompaniaMiembro,
   condominiosSupervisados,
   miCompaniaDe,
@@ -45,15 +46,24 @@ import { displayNameFromUser } from "./model/displayName";
 // Lectura
 // ─────────────────────────────────────────────────────────────
 
-/** Compañías con sus conteos. Solo plataforma. */
+/**
+ * Compañías con sus conteos. Solo plataforma.
+ *
+ * `archivo` separa las dos vistas EN EL SERVIDOR y no en la pantalla: que una
+ * compañía dada de baja no aparezca entre las activas es una regla del
+ * modelo, no una decisión de pintado. Por omisión, las que no están
+ * archivadas —incluidas las suspendidas, que siguen siendo una situación
+ * temporal y no el final del camino—.
+ */
 export const listAll = query({
-  args: { soloActivas: v.optional(v.boolean()) },
+  args: { archivo: v.optional(v.union(v.literal("activas"), v.literal("archivadas"))) },
   handler: async (ctx, args) => {
     await requirePlatformStaff(ctx);
     const todas = await ctx.db.query("companiasSeguridad").order("desc").collect();
-    const filtradas = args.soloActivas
-      ? todas.filter((c) => c.estado === "activa")
-      : todas;
+    const archivadas = args.archivo === "archivadas";
+    const filtradas = todas.filter((c) =>
+      archivadas ? c.estado === "inactiva" : c.estado !== "inactiva",
+    );
 
     return await Promise.all(
       filtradas.map(async (c) => {
@@ -66,6 +76,9 @@ export const listAll = query({
           .withIndex("by_compania", (q) => q.eq("companiaId", c._id))
           .collect();
         const activos = miembros.filter((m) => m.isActive);
+        const archivadaPor = c.archivadaPorUserId
+          ? await ctx.db.get(c.archivadaPorUserId)
+          : null;
         return {
           ...c,
           personalCount: activos.length,
@@ -73,6 +86,12 @@ export const listAll = query({
             .length,
           guardiaCount: activos.filter((m) => m.roles.includes("guardia")).length,
           contratosVigentes: contratos.filter((k) => estaVigente(k)).length,
+          /* El histórico entero sigue ahí: se dice cuánto hay, no se borra. */
+          contratosTotales: contratos.length,
+          archivadaEn: c.archivadaEn ?? null,
+          archivadaPorNombre: archivadaPor
+            ? displayNameFromUser(archivadaPor)
+            : null,
         };
       }),
     );
@@ -179,15 +198,42 @@ export const detail = query({
           .query("asignaciones")
           .withIndex("by_contrato", (q) => q.eq("contratoId", k._id))
           .collect();
+        const estado = estadoVigencia(k);
+        /* Dos motivos lo archivan: contrato terminado, o compañía dada de
+         * baja —sus contratos ya no autorizan nada aunque las fechas digan
+         * otra cosa, porque `resolverAcceso` mira el estado de la empresa—.
+         * Suspender no: es temporal. */
+        const archivado = estado === "terminada" || compania.estado === "inactiva";
+        const terminadoPor = k.terminadoPorUserId
+          ? await ctx.db.get(k.terminadoPorUserId)
+          : null;
         return {
           _id: k._id,
           condominioId: k.condominioId,
           condominioNombre: condo?.name ?? "(conjunto eliminado)",
           vigenciaDesde: k.vigenciaDesde,
           vigenciaHasta: k.vigenciaHasta ?? null,
-          estado: estadoVigencia(k),
+          estado,
+          /** Si va en Activos o en Archivados. Lo decide el SERVIDOR. */
+          archivado,
+          /* Quién lo cortó y cuándo. `terminadoEn` solo existe si se terminó a
+           * mano; los que vencieron por fecha lo dicen con `vigenciaHasta`. */
+          terminadoEn: k.terminadoEn ?? null,
+          terminadoPorNombre: terminadoPor
+            ? displayNameFromUser(terminadoPor)
+            : null,
           notas: k.notas ?? null,
-          asignacionesVigentes: asigs.filter((a) => estaVigente(a)).length,
+          /* Bajo un contrato archivado NO queda nadie vigente, digan lo que
+           * digan las fechas de la asignación: `asignacionVigente` comprueba
+           * el contrato antes que nada, así que contarlas por su cuenta haría
+           * que un conjunto archivado siguiera diciendo "2 asignados" — gente
+           * que ya no puede entrar. Es la misma regla que aplica
+           * `asignaciones.porContrato`. */
+          asignacionesVigentes: archivado
+            ? 0
+            : asigs.filter((a) => estaVigente(a)).length,
+          /* El histórico no se va a ninguna parte al archivar. */
+          asignacionesTotales: asigs.length,
           createdAt: k.createdAt,
         };
       }),
@@ -504,12 +550,24 @@ export const update = mutation({
 });
 
 /**
- * Activa, suspende o da de baja una compañía. Solo plataforma.
+ * Activa, suspende o ARCHIVA una compañía. Solo plataforma.
  *
- * Suspender corta la operación de TODO su personal en TODOS sus contratos a
- * la vez: `asignacionVigente` deja de resolver en cuanto el estado no es
- * "activa". Los contratos y las asignaciones quedan intactos, que es
- * exactamente la diferencia entre suspender y terminar.
+ * `inactiva` es el archivado: el estado ya existía y no hacía falta inventar
+ * otro. Suspender es temporal y archivar es el final del camino, pero los dos
+ * cortan igual de rápido la operación de TODO su personal en TODOS sus
+ * contratos: `asignacionVigente` y `resolverAcceso` dejan de resolver en
+ * cuanto el estado no es "activa".
+ *
+ * SIN CASCADA, a propósito. No se toca ni un contrato ni una asignación: ya
+ * dejan de autorizar por sí solos al comprobar el estado de la empresa, y
+ * reescribirlos convertiría una decisión reversible en una pérdida de
+ * histórico. Reactivar una compañía archivada la devuelve exactamente como
+ * estaba; una cascada no tiene vuelta.
+ *
+ * Sus conjuntos, usuarios, minutas, rondas y eventos no se tocan siquiera de
+ * lejos: cuelgan del CONJUNTO, no de la compañía.
+ *
+ * IDEMPOTENTE: reponer el mismo estado no mueve el sello de quién archivó.
  */
 export const setEstado = mutation({
   args: {
@@ -517,14 +575,22 @@ export const setEstado = mutation({
     estado: estadoCompaniaValidator,
   },
   handler: async (ctx, args) => {
-    await requirePlatformStaff(ctx);
+    const user = await requirePlatformStaff(ctx);
     const compania = await ctx.db.get(args.companiaId);
     if (!compania) throw new Error("Compañía no encontrada.");
 
-    await ctx.db.patch(args.companiaId, {
-      estado: args.estado,
-      updatedAt: Date.now(),
-    });
+    const ahora = Date.now();
+    if (compania.estado !== args.estado) {
+      await ctx.db.patch(args.companiaId, {
+        estado: args.estado,
+        /* El rastro del archivado. Se pone al archivar y se limpia al
+         * sacarla del archivo, para que la ficha nunca diga "archivada por
+         * Fulano" de una compañía que hoy opera. */
+        archivadaEn: args.estado === "inactiva" ? ahora : undefined,
+        archivadaPorUserId: args.estado === "inactiva" ? user._id : undefined,
+        updatedAt: ahora,
+      });
+    }
 
     // Para que la interfaz pueda decir a cuánta gente y cuántos conjuntos afecta.
     const contratos = await ctx.db
@@ -893,41 +959,93 @@ export const crearContrato = mutation({
 });
 
 /**
- * Termina un contrato poniéndole fecha de fin.
+ * TERMINA UN CONTRATO. Sin `vigenciaHasta`, el corte es AHORA.
+ *
+ * Los dos casos son reales y distintos:
+ *
+ *  - Sin fecha: "se acabó, hoy". Escribe `terminadoEn` con el instante, y el
+ *    conjunto sale de los listados activos en la siguiente lectura. Es lo que
+ *    hace el botón, y lo que antes no funcionaba: mandaba `vigenciaHasta =
+ *    ahora`, y como `finDe` regala el día entero el contrato seguía vigente
+ *    24 horas más. Nada cambiaba en pantalla, ni el personal perdía el acceso.
+ *
+ *  - Con fecha: "termina el 31". Programado, como estaba. Solo la plataforma:
+ *    es una condición del contrato comercial.
  *
  * No borra nada ni recorre sus asignaciones: dejan de resolver solas porque
  * `asignacionVigente` comprueba el contrato. Ése es el motivo de que la
- * asignación cuelgue del contrato y no del conjunto.
+ * asignación cuelgue del contrato y no del conjunto — y por eso terminar no
+ * pierde una sola ronda, minuta ni evento: todo eso cuelga del CONJUNTO, que
+ * sigue intacto. Terminar el contrato no da de baja al conjunto.
+ *
+ * IDEMPOTENTE: sobre un contrato ya terminado no reescribe nada —conservar
+ * quién y cuándo lo cortó importa más que registrar el segundo clic— y avisa
+ * con `yaEstaba`.
  */
 export const terminarContrato = mutation({
   args: {
     contratoId: v.id("companiaContratos"),
-    vigenciaHasta: v.number(),
+    /** Último día pactado. Ausente = terminar ahora. */
+    vigenciaHasta: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    await requirePlatformStaff(ctx);
     const contrato = await ctx.db.get(args.contratoId);
     if (!contrato) throw new Error("Contrato no encontrado.");
-    if (args.vigenciaHasta < contrato.vigenciaDesde) {
-      throw new Error("La fecha de fin no puede ser anterior a la de inicio.");
+
+    /* La compañía y el conjunto salen del DOCUMENTO del contrato, nunca de un
+     * argumento: cambiar el id lleva a otro contrato, cuya compañía se vuelve
+     * a comprobar. Pasan la plataforma y el `admin_compania` de ESA empresa;
+     * el supervisor no, porque `seguridad.terminar` no está entre lo que da
+     * su rol de asignación. */
+    const { user, esPlataforma } = await exigirAccesoContrato(
+      ctx,
+      contrato,
+      "seguridad.terminar",
+    );
+
+    const ahora = Date.now();
+
+    /* Ya terminado: no se toca. Repetir la petición —doble clic, reintento de
+     * red— no puede reescribir quién lo cortó ni correr la fecha. */
+    if (estadoVigencia(contrato, ahora) === "terminada") {
+      return { ok: true as const, yaEstaba: true as const, personasAfectadas: 0 };
     }
 
-    await ctx.db.patch(args.contratoId, {
-      vigenciaHasta: args.vigenciaHasta,
-      updatedAt: Date.now(),
-    });
+    if (args.vigenciaHasta != null) {
+      /* Programar el fin es una condición del contrato comercial, y ésas las
+       * pone Vekino. La compañía puede renunciar hoy, no reescribir el pacto. */
+      if (!esPlataforma) {
+        throw new Error(
+          "Solo Vekino puede programar la fecha de fin de un contrato. Puedes terminarlo ahora.",
+        );
+      }
+      if (args.vigenciaHasta < contrato.vigenciaDesde) {
+        throw new Error("La fecha de fin no puede ser anterior a la de inicio.");
+      }
+      await ctx.db.patch(args.contratoId, {
+        vigenciaHasta: args.vigenciaHasta,
+        updatedAt: ahora,
+      });
+    } else {
+      await ctx.db.patch(args.contratoId, {
+        terminadoEn: ahora,
+        terminadoPorUserId: user._id,
+        updatedAt: ahora,
+      });
+    }
 
+    const corte = args.vigenciaHasta ?? ahora;
     const asignaciones = await ctx.db
       .query("asignaciones")
       .withIndex("by_contrato", (q) => q.eq("contratoId", args.contratoId))
       .collect();
     return {
       ok: true as const,
-      /* Para que la interfaz pueda decir a cuánta gente deja sin acceso
-       * cuando llegue la fecha. */
+      yaEstaba: false as const,
+      /* Para que la interfaz pueda decir a cuánta gente deja sin acceso. */
       personasAfectadas: new Set(
         asignaciones
-          .filter((a) => a.vigenciaHasta == null || a.vigenciaHasta > args.vigenciaHasta)
+          .filter((a) => a.vigenciaHasta == null || a.vigenciaHasta > corte)
           .map((a) => a.userId),
       ).size,
     };

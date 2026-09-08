@@ -4,7 +4,13 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useQuery, useAction } from "convex/react";
-import { ShieldCheck, ChevronRight, Building2, Users } from "lucide-react";
+import {
+  ShieldCheck,
+  ChevronRight,
+  Building2,
+  Users,
+  Archive,
+} from "lucide-react";
 import { api } from "@vekino/backend/api";
 import { PageContainer } from "@/components/layout/page-container";
 import { PageHeader } from "@/components/layout/page-header";
@@ -44,7 +50,13 @@ export default function CompaniasPage() {
   const me = useQuery(api.users.me);
   const isPlatform =
     me?.platformRole === "superadmin" || me?.platformRole === "admin";
-  const companias = useQuery(api.companias.listAll, isPlatform ? {} : "skip");
+  const [archivo, setArchivo] = useState(false);
+  /* El filtro va al SERVIDOR: que una compañía dada de baja no salga entre
+   * las activas es una regla del modelo, no un `filter` de esta pantalla. */
+  const companias = useQuery(
+    api.companias.listAll,
+    isPlatform ? { archivo: archivo ? ("archivadas" as const) : ("activas" as const) } : "skip",
+  );
 
   const [showCreate, setShowCreate] = useState(false);
   useNuevoQuery(() => setShowCreate(true));
@@ -80,19 +92,48 @@ export default function CompaniasPage() {
           title="Compañías de vigilancia"
           description="Las empresas que prestan el servicio de seguridad. Contratarlas con un conjunto es lo que autoriza a su personal a operar la portería."
           action={
-            <Button onClick={() => setShowCreate(true)}>Nueva compañía</Button>
+            !archivo ? (
+              <Button onClick={() => setShowCreate(true)}>Nueva compañía</Button>
+            ) : undefined
           }
         />
+
+        <div className="flex gap-1 rounded-xl border border-border bg-card p-1">
+          <FiltroTab
+            activo={!archivo}
+            onClick={() => setArchivo(false)}
+            icon={ShieldCheck}
+            label="Activas"
+          />
+          <FiltroTab
+            activo={archivo}
+            onClick={() => setArchivo(true)}
+            icon={Archive}
+            label="Archivadas"
+          />
+        </div>
 
         {companias === undefined ? (
           <p className="text-sm text-muted-foreground">Cargando…</p>
         ) : companias.length === 0 ? (
           <EmptyState
-            icon={ShieldCheck}
-            title="Todavía no hay compañías"
-            description="Crea la primera para poder contratarla con un conjunto y asignarle guardas."
+            icon={archivo ? Archive : ShieldCheck}
+            title={
+              archivo
+                ? "Ninguna compañía archivada"
+                : "Todavía no hay compañías"
+            }
+            description={
+              archivo
+                ? "Al dar de baja una compañía pasa aquí. No se borra: sus contratos, su personal y todo lo que registró en las porterías siguen guardados."
+                : "Crea la primera para poder contratarla con un conjunto y asignarle guardas."
+            }
             action={
-              <Button onClick={() => setShowCreate(true)}>Nueva compañía</Button>
+              !archivo ? (
+                <Button onClick={() => setShowCreate(true)}>
+                  Nueva compañía
+                </Button>
+              ) : undefined
             }
           />
         ) : (
@@ -115,6 +156,18 @@ export default function CompaniasPage() {
                       {c.nit ? `NIT ${c.nit}` : "Sin NIT registrado"}
                       {c.contactoEmail ? ` · ${c.contactoEmail}` : ""}
                     </p>
+                    {/* Quién la archivó y cuándo: el rastro de la decisión. */}
+                    {c.archivadaEn != null && (
+                      <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                        Archivada el{" "}
+                        {new Date(c.archivadaEn).toLocaleDateString("es-CO", {
+                          day: "numeric",
+                          month: "short",
+                          year: "numeric",
+                        })}
+                        {c.archivadaPorNombre && ` por ${c.archivadaPorNombre}`}
+                      </p>
+                    )}
                   </div>
 
                   <div className="hidden items-center gap-6 text-right sm:flex">
@@ -126,8 +179,9 @@ export default function CompaniasPage() {
                     />
                     <Metric
                       icon={Building2}
-                      valor={c.contratosVigentes}
+                      valor={archivo ? c.contratosTotales : c.contratosVigentes}
                       label="conjuntos"
+                      detalle={archivo ? "conjuntos (histórico)" : undefined}
                     />
                   </div>
 
@@ -147,6 +201,34 @@ export default function CompaniasPage() {
         onClose={() => setShowCreate(false)}
       />
     </PageContainer>
+  );
+}
+
+function FiltroTab({
+  activo,
+  onClick,
+  icon: Icon,
+  label,
+}: {
+  activo: boolean;
+  onClick: () => void;
+  icon: typeof Users;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={
+        "flex flex-1 items-center justify-center gap-2 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors " +
+        (activo
+          ? "bg-brand text-brand-foreground"
+          : "text-muted-foreground hover:bg-accent")
+      }
+    >
+      <Icon className="h-4 w-4" aria-hidden />
+      {label}
+    </button>
   );
 }
 

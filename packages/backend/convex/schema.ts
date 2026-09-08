@@ -2321,6 +2321,14 @@ export default defineSchema({
     primaryColor: v.optional(v.string()),
 
     estado: estadoCompaniaValidator,
+    /**
+     * Quién la archivó y cuándo. Archivar es `estado: "inactiva"` —el estado
+     * ya existía— y esto es solo su rastro: sin él la ficha decía que estaba
+     * dada de baja pero no desde cuándo ni por orden de quién, que es lo
+     * primero que se pregunta meses después. Se limpian al reactivarla.
+     */
+    archivadaEn: v.optional(v.number()),
+    archivadaPorUserId: v.optional(v.id("users")),
 
     createdAt: v.number(),
     updatedAt: v.number(),
@@ -2378,6 +2386,18 @@ export default defineSchema({
     /** Ausente = indefinido, igual que en `usuarioUnidad`. */
     vigenciaHasta: v.optional(v.number()),
 
+    /**
+     * Instante del corte a mano, y quién lo ordenó.
+     *
+     * `vigenciaHasta` es la fecha PACTADA y `lib/vigilancia` le regala el día
+     * entero; terminar "ahora" no cabía ahí y por eso el botón no cambiaba
+     * nada durante 24 horas. `finDe` toma el menor de los dos, así que basta
+     * con esto para que el corte sea exacto: ninguna asignación hay que
+     * tocar, que es la razón de que cuelguen del contrato.
+     */
+    terminadoEn: v.optional(v.number()),
+    terminadoPorUserId: v.optional(v.id("users")),
+
     /** Referencia del contrato comercial. No autoriza nada. */
     notas: v.optional(v.string()),
 
@@ -2431,6 +2451,10 @@ export default defineSchema({
 
     vigenciaDesde: v.number(),
     vigenciaHasta: v.optional(v.number()),
+
+    /** El corte a mano, igual que en el contrato y por el mismo motivo. */
+    terminadoEn: v.optional(v.number()),
+    terminadoPorUserId: v.optional(v.id("users")),
 
     creadoPorUserId: v.id("users"),
     /** Sin `updatedAt`: una asignación se termina, no se reescribe. */

@@ -470,6 +470,349 @@ describe("el administrador ve la minuta del equipo de cada conjunto", () => {
   });
 });
 
+
+/**
+ * TERMINAR CONTRATO Y ARCHIVAR.
+ *
+ * El boton no hacia nada por dos motivos distintos y los dos reales:
+ *
+ *  1. A la compania la rechazaba `requirePlatformStaff`, y el frontend se
+ *     tragaba el error. Ni cambio ni aviso.
+ *  2. A la plataforma SI le escribia, pero mandaba `vigenciaHasta = hoy` y
+ *     `finDe` regala el dia entero: el contrato seguia vigente 24 horas.
+ *     Escribia, y aun asi no cambiaba nada.
+ *
+ * El archivado no estrena estado: un conjunto archivado es un contrato con
+ * `estadoVigencia === "terminada"`, y una compania archivada es la que ya
+ * tenia `estado: "inactiva"`.
+ */
+describe("terminar el contrato de un conjunto lo archiva", () => {
+  let e: Escenario;
+  beforeEach(async () => {
+    e = await montar();
+  });
+
+  const contratoDe = async (
+    quien: "alicia" | "ramon",
+    condominioId: Id<"condominios">,
+    companiaId: Id<"companiasSeguridad">,
+  ) => {
+    const detalle = await e
+      .como(quien)
+      .query(api.companias.detail, { companiaId });
+    return detalle!.contratos.find((k) => k.condominioId === condominioId)!;
+  };
+
+  /** CASO 1 - plataforma: activo -> archivado, en el acto. */
+  test("1. el superadmin lo termina y pasa de activos a archivados", async () => {
+    const antes = await contratoDe("alicia", e.norte, e.andina.companiaId);
+    expect(antes.estado).toBe("vigente");
+    expect(antes.archivado).toBe(false);
+
+    const r = await e.plataforma.mutation(api.companias.terminarContrato, {
+      contratoId: antes._id,
+    });
+    expect(r.ok).toBe(true);
+    expect(r.yaEstaba).toBe(false);
+    /* Deja sin porteria a los dos que cubrian Norte. */
+    expect(r.personasAfectadas).toBe(2);
+
+    const despues = await contratoDe("alicia", e.norte, e.andina.companiaId);
+    expect(despues.estado).toBe("terminada");
+    expect(despues.archivado).toBe(true);
+    expect(despues.terminadoEn).not.toBeNull();
+
+    /* Y de verdad: el corte es AHORA, no manana. Es la mitad que fallaba. */
+    const acceso = await e
+      .como("alicia")
+      .query(api.asignaciones.miAcceso, { condominioId: e.norte });
+    expect(acceso!.capacidades).toEqual([]);
+    expect(
+      (await e.como("gabriel").query(api.guardia.home, { condominioId: e.norte }))
+        .allowed,
+    ).toBe(false);
+  });
+
+  /** CASO 2 - el administrador de la compania puede terminar el suyo. */
+  test("2. el administrador de compania termina su conjunto", async () => {
+    const k = await contratoDe("alicia", e.sur, e.andina.companiaId);
+    const r = await e
+      .como("alicia")
+      .mutation(api.companias.terminarContrato, { contratoId: k._id });
+    expect(r.ok).toBe(true);
+
+    const despues = await contratoDe("alicia", e.sur, e.andina.companiaId);
+    expect(despues.archivado).toBe(true);
+    /* AUDITORIA: queda quien lo termino, no solo que se termino. */
+    expect(despues.terminadoPorNombre).toBe("Alicia Admin");
+
+    // Sale de sus conjuntos activos; Norte, intacto.
+    const equipo = await e.como("alicia").query(api.asignaciones.miEquipo, {});
+    expect(equipo.map((c) => c.condominioNombre)).toEqual(["Conjunto Norte"]);
+  });
+
+  /** CASO 3 - cambiar el id no abre el contrato de otra empresa. */
+  test("3. no puede terminar el contrato de otra compania", async () => {
+    const ajeno = await e.plataforma.query(api.companias.contratosDeCondominio, {
+      condominioId: e.oriente,
+    });
+    await expect(
+      e
+        .como("alicia")
+        .mutation(api.companias.terminarContrato, { contratoId: ajeno[0]!._id }),
+    ).rejects.toThrow(/no pertenece a su compa/i);
+
+    // Y el contrato ajeno sigue en pie.
+    const ramon = await contratoDe("ramon", e.oriente, e.rival.companiaId);
+    expect(ramon.archivado).toBe(false);
+  });
+
+  test("3b. el supervisor no termina contratos: supervisa turnos", async () => {
+    const k = await contratoDe("alicia", e.norte, e.andina.companiaId);
+    await expect(
+      e
+        .como("sofia")
+        .mutation(api.companias.terminarContrato, { contratoId: k._id }),
+    ).rejects.toThrow(/seguridad\.terminar/);
+  });
+
+  test("3c. la compania puede renunciar hoy, no reescribir el pacto", async () => {
+    /* Programar la fecha de fin es una condicion comercial y sigue siendo de
+     * Vekino. Sin esta linea, darle `seguridad.terminar` al administrador le
+     * habria dejado mover a mano la vigencia de su propio contrato. */
+    const k = await contratoDe("alicia", e.norte, e.andina.companiaId);
+    await expect(
+      e.como("alicia").mutation(api.companias.terminarContrato, {
+        contratoId: k._id,
+        vigenciaHasta: Date.now() + 90 * DIA,
+      }),
+    ).rejects.toThrow(/solo vekino/i);
+  });
+
+  /** CASO 4 - idempotencia. */
+  test("4. terminarlo dos veces no corrompe nada", async () => {
+    const k = await contratoDe("alicia", e.norte, e.andina.companiaId);
+    await e
+      .como("alicia")
+      .mutation(api.companias.terminarContrato, { contratoId: k._id });
+    const primero = await contratoDe("alicia", e.norte, e.andina.companiaId);
+
+    const segundo = await e
+      .como("alicia")
+      .mutation(api.companias.terminarContrato, { contratoId: k._id });
+    expect(segundo.yaEstaba).toBe(true);
+
+    /* El sello del PRIMER corte se conserva: quien lo termino de verdad. */
+    const despues = await contratoDe("alicia", e.norte, e.andina.companiaId);
+    expect(despues.terminadoEn).toBe(primero.terminadoEn);
+    expect(despues.terminadoPorNombre).toBe(primero.terminadoPorNombre);
+    expect(despues.archivado).toBe(true);
+  });
+
+  test("archivar no borra: el historico del conjunto sigue entero", async () => {
+    const rondaId = await operar(e, "gabriel", e.norte, "Zona A");
+    const k = await contratoDe("alicia", e.norte, e.andina.companiaId);
+    await e
+      .como("alicia")
+      .mutation(api.companias.terminarContrato, { contratoId: k._id });
+
+    const archivado = await contratoDe("alicia", e.norte, e.andina.companiaId);
+    // Las asignaciones no se borran: se dejan de contar como vigentes.
+    expect(archivado.asignacionesVigentes).toBe(0);
+    expect(archivado.asignacionesTotales).toBe(2);
+
+    /* Y la operacion registrada sigue existiendo. La lee la plataforma: la
+     * compania ya no tiene contrato y por eso ya no alcanza esa porteria,
+     * que es justo lo que se pidio. */
+    const minuta = await e.plataforma.query(api.guardia.listMinuta, {
+      condominioId: e.norte,
+    });
+    expect(minuta.some((m) => m.resumen === "Novedad de Zona A")).toBe(true);
+    const ronda = await e.plataforma.query(api.rondas.detalle, { rondaId });
+    expect(ronda!.zona).toBe("Zona A");
+
+    // El CONJUNTO no se da de baja: terminar el contrato no es eso.
+    const conjunto = await e.plataforma.query(api.condominios.get, {
+      condominioId: e.norte,
+    });
+    expect(conjunto!.isActive).toBe(true);
+  });
+
+  test("el personal terminado sale del contrato sin borrarse", async () => {
+    const k = await contratoDe("alicia", e.norte, e.andina.companiaId);
+    const asigs = await e
+      .como("alicia")
+      .query(api.asignaciones.porContrato, { contratoId: k._id });
+    const gabriel = asigs.find((a) => a.nombre === "Gabriel Guarda")!;
+
+    const r = await e
+      .como("alicia")
+      .mutation(api.asignaciones.terminar, { asignacionId: gabriel._id });
+    expect(r.yaEstaba).toBe(false);
+
+    /* Sale HOY, no manana: mismo bug, misma correccion. */
+    expect(
+      (await e.como("gabriel").query(api.guardia.home, { condominioId: e.norte }))
+        .allowed,
+    ).toBe(false);
+
+    const vigentes = await e
+      .como("alicia")
+      .query(api.asignaciones.porContrato, { contratoId: k._id });
+    expect(vigentes.map((a) => a.nombre)).toEqual(["Sofia Supervisora"]);
+
+    // Pero sigue en el historico del contrato.
+    const todas = await e.como("alicia").query(api.asignaciones.porContrato, {
+      contratoId: k._id,
+      incluirTerminadas: true,
+    });
+    expect(todas.map((a) => a.nombre).sort()).toEqual([
+      "Gabriel Guarda",
+      "Sofia Supervisora",
+    ]);
+
+    // Repetir la peticion no rompe nada.
+    expect(
+      (
+        await e
+          .como("alicia")
+          .mutation(api.asignaciones.terminar, { asignacionId: gabriel._id })
+      ).yaEstaba,
+    ).toBe(true);
+  });
+});
+
+describe("archivar una compania", () => {
+  let e: Escenario;
+  beforeEach(async () => {
+    e = await montar();
+  });
+
+  /** CASO 5 - sale de activas, entra en archivadas. */
+  test("5. el superadmin la archiva y cambia de listado", async () => {
+    const activasAntes = await e.plataforma.query(api.companias.listAll, {
+      archivo: "activas",
+    });
+    expect(activasAntes.map((c) => c.nombre).sort()).toEqual([
+      "Seguridad Andina",
+      "Seguridad Rival",
+    ]);
+
+    await e.plataforma.mutation(api.companias.setEstado, {
+      companiaId: e.andina.companiaId,
+      estado: "inactiva",
+    });
+
+    const activas = await e.plataforma.query(api.companias.listAll, {
+      archivo: "activas",
+    });
+    expect(activas.map((c) => c.nombre)).toEqual(["Seguridad Rival"]);
+
+    const archivadas = await e.plataforma.query(api.companias.listAll, {
+      archivo: "archivadas",
+    });
+    expect(archivadas.map((c) => c.nombre)).toEqual(["Seguridad Andina"]);
+    // AUDITORIA: quien la archivo y cuando.
+    expect(archivadas[0]!.archivadaEn).not.toBeNull();
+    expect(archivadas[0]!.archivadaPorNombre).toBe("Super");
+  });
+
+  /** CASO 6 - la compania no se archiva a si misma. */
+  test("6. el administrador de compania no puede archivar", async () => {
+    await expect(
+      e.como("alicia").mutation(api.companias.setEstado, {
+        companiaId: e.andina.companiaId,
+        estado: "inactiva",
+      }),
+    ).rejects.toThrow();
+    // Ni la de al lado, por si acaso.
+    await expect(
+      e.como("alicia").mutation(api.companias.setEstado, {
+        companiaId: e.rival.companiaId,
+        estado: "inactiva",
+      }),
+    ).rejects.toThrow();
+  });
+
+  /** CASO 7 - nada se pierde, y se puede deshacer. */
+  test("7. archivar conserva el historico y es reversible", async () => {
+    const rondaId = await operar(e, "gabriel", e.norte, "Zona A");
+    await e.plataforma.mutation(api.companias.setEstado, {
+      companiaId: e.andina.companiaId,
+      estado: "inactiva",
+    });
+
+    /* Sin cascada: los contratos y las asignaciones NO se reescriben. Dejan
+     * de autorizar solos porque el estado de la empresa se comprueba al leer,
+     * y por eso archivar tiene vuelta atras. */
+    const detalle = await e.plataforma.query(api.companias.detail, {
+      companiaId: e.andina.companiaId,
+    });
+    expect(detalle!.contratos.map((k) => k.condominioNombre).sort()).toEqual([
+      "Conjunto Norte",
+      "Conjunto Sur",
+    ]);
+    /* Pero en la interfaz van a Archivados: los contratos de una compania
+     * dada de baja no son operacion activa de nadie. */
+    expect(detalle!.contratos.every((k) => k.archivado)).toBe(true);
+    expect(detalle!.personal.map((p) => p.nombre).sort()).toEqual([
+      "Alicia Admin",
+      "Gabriel Guarda",
+      "Sofia Supervisora",
+    ]);
+
+    // El acceso se corta en el acto.
+    expect(
+      (await e.como("gabriel").query(api.guardia.home, { condominioId: e.norte }))
+        .allowed,
+    ).toBe(false);
+
+    // La operacion registrada en el conjunto no se toca.
+    const ronda = await e.plataforma.query(api.rondas.detalle, { rondaId });
+    expect(ronda!.zona).toBe("Zona A");
+    const minuta = await e.plataforma.query(api.guardia.listMinuta, {
+      condominioId: e.norte,
+    });
+    expect(minuta.some((m) => m.resumen === "Novedad de Zona A")).toBe(true);
+
+    // Y se puede sacar del archivo: todo vuelve a funcionar.
+    await e.plataforma.mutation(api.companias.setEstado, {
+      companiaId: e.andina.companiaId,
+      estado: "activa",
+    });
+    expect(
+      (await e.como("gabriel").query(api.guardia.home, { condominioId: e.norte }))
+        .allowed,
+    ).toBe(true);
+    const reactivada = await e.plataforma.query(api.companias.listAll, {
+      archivo: "activas",
+    });
+    expect(
+      reactivada.find((c) => c.nombre === "Seguridad Andina")!.archivadaEn,
+    ).toBeNull();
+  });
+
+  test("suspender no es archivar: sigue entre las activas", async () => {
+    await e.plataforma.mutation(api.companias.setEstado, {
+      companiaId: e.andina.companiaId,
+      estado: "suspendida",
+    });
+    const activas = await e.plataforma.query(api.companias.listAll, {
+      archivo: "activas",
+    });
+    expect(activas.map((c) => c.nombre).sort()).toEqual([
+      "Seguridad Andina",
+      "Seguridad Rival",
+    ]);
+  });
+
+  test("el directorio de companias sigue siendo de la plataforma", async () => {
+    await expect(
+      e.como("alicia").query(api.companias.listAll, {}),
+    ).rejects.toThrow();
+  });
+});
+
 describe("multi-tenant: cada compania ve solo lo suyo", () => {
   let e: Escenario;
   beforeEach(async () => {
