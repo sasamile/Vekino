@@ -13,6 +13,7 @@ import {
   Plus,
   UserMinus,
   CalendarOff,
+  BookOpenCheck,
 } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
@@ -693,6 +694,7 @@ function PanelContratos({
               key={k._id}
               contrato={k}
               personal={personal}
+              esPlataforma={esPlataforma}
               abierto={abierto === k._id}
               onToggle={() => setAbierto(abierto === k._id ? null : k._id)}
             />
@@ -712,11 +714,13 @@ function PanelContratos({
 function FilaContrato({
   contrato,
   personal,
+  esPlataforma,
   abierto,
   onToggle,
 }: {
   contrato: Contrato;
   personal: Persona[];
+  esPlataforma: boolean;
   abierto: boolean;
   onToggle: () => void;
 }) {
@@ -753,6 +757,26 @@ function FilaContrato({
           <p className="text-[11px] text-muted-foreground">asignados</p>
         </div>
       </button>
+
+      {/* La operación del conjunto: rondas y minuta del equipo que lo cubre.
+          Es la misma pantalla que ya usa el supervisor —no una copia— y el
+          servidor vuelve a resolver el permiso por contrato en cada consulta.
+          Solo en los contratos que siguen en pie: en uno terminado la
+          portería rebota, y ofrecer el enlace sería prometer lo que no hay.
+          Y solo al personal de la compañía: el staff de plataforma no entra
+          por ese shell —no es de ninguna empresa— y tiene la minuta del
+          conjunto en su propio panel de control de guardia. */}
+      {contrato.estado !== "terminada" && !esPlataforma && (
+        <div className="border-t border-border px-4 py-2.5">
+          <Link
+            href={`/vigilancia/${contrato.condominioId}`}
+            className="inline-flex items-center gap-1.5 text-[12.5px] text-brand hover:underline"
+          >
+            <BookOpenCheck className="h-3.5 w-3.5" aria-hidden />
+            Ver minuta y rondas del conjunto
+          </Link>
+        </div>
+      )}
 
       {abierto && (
         <div className="border-t border-border bg-muted/30 p-4">

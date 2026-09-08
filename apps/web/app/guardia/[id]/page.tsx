@@ -20,6 +20,7 @@ import { PageContainer } from "@/components/layout/page-container";
 import { PageHeader } from "@/components/layout/page-header";
 import { StatCard } from "@/components/layout/stat-card";
 import { cn } from "@/lib/utils";
+import { EtiquetaRonda } from "@/components/guardia/etiqueta-ronda";
 import { useUploadToS3 } from "@/hooks/use-upload-s3";
 import Link from "next/link";
 
@@ -237,12 +238,7 @@ function MinutaTable({ minuta }: { minuta: EventoMinuta[] | undefined }) {
                     )}
                     {/* Durante qué recorrido pasó. Se guardaba pero no se
                         veía, y sin eso tener rondas no sirve de nada. */}
-                    {e.rondaNumero != null && (
-                      <span className="inline-flex items-center gap-1 rounded bg-brand/10 px-1.5 py-0.5 text-[11px] font-medium text-brand">
-                        <Footprints className="h-3 w-3" />
-                        Ronda #{e.rondaNumero}
-                      </span>
-                    )}
+                    <EtiquetaRonda numero={e.rondaNumero} />
                     <span className={cn(
                       "ml-auto rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase",
                       e.estado === "abierto" ? "bg-emerald-500/10 text-emerald-600" : "bg-muted text-muted-foreground",

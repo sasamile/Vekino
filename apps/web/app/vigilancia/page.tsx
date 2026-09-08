@@ -21,16 +21,20 @@ function fmt(ms: number | null): string {
 }
 
 /**
- * Panel del supervisor: sus conjuntos y, dentro de cada uno, sus guardas.
+ * Los conjuntos a cargo de quien mira, y dentro de cada uno sus guardas.
  *
  * Todo lo que se ve aquí sale de UNA consulta —`asignaciones.miEquipo`— que
- * ya resuelve el alcance en el servidor: los conjuntos donde tiene asignación
- * vigente con rol supervisor, y en cada uno solo el personal de su propia
+ * ya resuelve el alcance en el servidor: al supervisor, los conjuntos donde
+ * tiene asignación vigente; al administrador de la compañía, los que su
+ * empresa atiende por contrato. En los dos casos solo el personal de su propia
  * compañía que cubre hoy. La pantalla no filtra nada; si filtrara, el filtro
  * sería la seguridad y viviría en el cliente.
  */
 export default function VigilanciaHome() {
   const equipo = useQuery(api.asignaciones.miEquipo);
+  const compania = useQuery(api.companias.miCompania);
+  /* Solo para redactar: el alcance ya vino resuelto del servidor. */
+  const administra = compania?.roles.includes("admin_compania") ?? false;
 
   const totalGuardas = (equipo ?? []).reduce(
     (n, c) => n + c.guardas.length,
@@ -45,7 +49,7 @@ export default function VigilanciaHome() {
           description={
             equipo === undefined
               ? "Cargando tu operación…"
-              : `${equipo.length} conjunto${equipo.length === 1 ? "" : "s"} a tu cargo · ${totalGuardas} guarda${totalGuardas === 1 ? "" : "s"}`
+              : `${equipo.length} conjunto${equipo.length === 1 ? "" : "s"} ${administra ? "con contrato vigente" : "a tu cargo"} · ${totalGuardas} guarda${totalGuardas === 1 ? "" : "s"}`
           }
         />
 
@@ -57,13 +61,17 @@ export default function VigilanciaHome() {
         ) : equipo.length === 0 ? (
           <EmptyState
             icon={ShieldCheck}
-            title="Todavía no supervisas ningún conjunto"
-            description="Cuando la compañía te asigne a un conjunto aparecerá aquí con su personal. Si crees que ya deberías tener uno, pídeselo al administrador de tu compañía."
+            title="Todavía no tienes conjuntos a tu cargo"
+            description={
+              administra
+                ? "Aquí aparecerán los conjuntos que tu empresa atiende. Sin un contrato vigente no hay portería que mirar: pídeselo a Vekino."
+                : "Cuando la compañía te asigne a un conjunto aparecerá aquí con su personal. Si crees que ya deberías tener uno, pídeselo al administrador de tu compañía."
+            }
           />
         ) : (
           <div className="space-y-4">
             {equipo.map((c) => (
-              <Card key={c.asignacionId} className="overflow-hidden p-0">
+              <Card key={c.condominioId} className="overflow-hidden p-0">
                 <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-4">
                   <div className="flex items-center gap-3">
                     <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-brand/10 text-brand">
@@ -74,8 +82,9 @@ export default function VigilanciaHome() {
                         {c.condominioNombre}
                       </p>
                       <p className="text-[11.5px] text-muted-foreground">
-                        {c.companiaNombre} · vigencia hasta{" "}
-                        {fmt(c.vigenciaHasta)}
+                        {c.companiaNombre} ·{" "}
+                        {c.via === "supervisor" ? "supervisas" : "contrato"}{" "}
+                        hasta {fmt(c.vigenciaHasta)}
                       </p>
                     </div>
                   </div>
@@ -87,7 +96,7 @@ export default function VigilanciaHome() {
                     </Badge>
                     {/* Al panel de supervisión del conjunto, NO a la app de
                         portería: `/guardia/:id` es donde el guarda opera su
-                        turno y sigue siendo suya. El supervisor mira desde su
+                        turno y sigue siendo suya. La compañía mira desde su
                         propio lado. */}
                     <Link
                       href={`/vigilancia/${c.condominioId}`}

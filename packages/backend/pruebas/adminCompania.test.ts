@@ -154,6 +154,46 @@ async function montar() {
   };
 }
 
+/**
+ * Deja operacion real en un conjunto: turno abierto, una ronda y una anotacion
+ * dentro de ella. Por la API del guarda y no insertando filas, para que lo que
+ * despues lee la compania sea lo mismo que produce la porteria.
+ */
+async function operar(
+  e: Escenario,
+  quien: "gabriel",
+  condominioId: Id<"condominios">,
+  zona: string,
+) {
+  const guarda = e.como(quien);
+  await guarda.mutation(api.guardia.iniciarTurno, {
+    condominioId,
+    checklist: [
+      {
+        item: "Radio",
+        obligatorio: true,
+        cantidadEsperada: 1,
+        cantidadEncontrada: 1,
+        estadoOk: true,
+      },
+    ],
+  });
+  const { rondaId } = await guarda.mutation(api.rondas.iniciar, {
+    condominioId,
+    zona,
+  });
+  await guarda.mutation(api.guardia.registrarEventoMinuta, {
+    condominioId,
+    tipo: "Anotacion",
+    resumen: `Novedad de ${zona}`,
+  });
+  await guarda.mutation(api.rondas.finalizar, {
+    rondaId,
+    observaciones: "Sin novedad",
+  });
+  return rondaId;
+}
+
 async function iniciarSesion(e: Escenario, email: string) {
   return await e.t.run(async (ctx) => {
     const auth = createAuth(ctx as never);
@@ -313,6 +353,120 @@ describe("el administrador de compania ve los conjuntos de su empresa", () => {
       .como("alicia")
       .query(api.asignaciones.miAcceso, { condominioId: e.norte });
     expect(acceso!.capacidades).toEqual([]);
+  });
+});
+
+/**
+ * LA MINUTA GENERAL DEL EQUIPO, CONJUNTO POR CONJUNTO.
+ *
+ * El permiso ya estaba —`resolverAcceso` le da `porteria.ver` por el
+ * contrato— y las consultas ya respondian. Lo que no existia era el ambito:
+ * `miEquipo` solo resolvia la via del supervisor, asi que el administrador no
+ * tenia ni un conjunto donde entrar. Sus propios supervisores veian la
+ * operacion de un conjunto y el no.
+ */
+describe("el administrador ve la minuta del equipo de cada conjunto", () => {
+  let e: Escenario;
+  let rondaNorte: Id<"guardiaRondas">;
+
+  beforeEach(async () => {
+    e = await montar();
+    rondaNorte = await operar(e, "gabriel", e.norte, "Zona A");
+  });
+
+  test("sus conjuntos contratados, cada uno con su equipo", async () => {
+    const equipo = await e.como("alicia").query(api.asignaciones.miEquipo, {});
+    expect(equipo.map((c) => c.condominioNombre)).toEqual([
+      "Conjunto Norte",
+      "Conjunto Sur",
+    ]);
+    /* Por contrato, no por asignacion: el administrador no cubre turnos. */
+    expect(equipo.every((c) => c.via === "admin_compania")).toBe(true);
+    expect(equipo.every((c) => c.asignacionId === null)).toBe(true);
+
+    const norte = equipo.find((c) => c.condominioId === e.norte)!;
+    expect(norte.guardas.map((g) => g.nombre)).toEqual(["Gabriel Guarda"]);
+    expect(norte.companiaNombre).toBe("Seguridad Andina");
+  });
+
+  test("selecciona un conjunto y ve SU minuta, con la ronda de cada evento", async () => {
+    const minuta = await e
+      .como("alicia")
+      .query(api.guardia.listMinuta, { condominioId: e.norte });
+
+    const evento = minuta.find((m) => m.resumen === "Novedad de Zona A")!;
+    expect(evento.actorNombre).toBe("Gabriel Guarda");
+    expect(evento.rondaId).toBe(rondaNorte);
+    expect(evento.rondaNumero).toBe(1);
+    expect(evento.rondaZona).toBe("Zona A");
+  });
+
+  test("cambia de conjunto y la minuta cambia con el", async () => {
+    /* Sur esta contratado pero sin operacion: responde vacio, no responde lo
+     * de Norte. Es la mitad que se rompe cuando el conjunto seleccionado no
+     * llega hasta la consulta. */
+    await expect(
+      e.como("alicia").query(api.guardia.listMinuta, { condominioId: e.sur }),
+    ).resolves.toEqual([]);
+
+    const norte = await e
+      .como("alicia")
+      .query(api.guardia.listMinuta, { condominioId: e.norte });
+    expect(norte.some((m) => m.resumen === "Novedad de Zona A")).toBe(true);
+  });
+
+  test("el conjunto sale del contrato: al terminarlo desaparece del panel", async () => {
+    const contratos = await e.plataforma.query(
+      api.companias.contratosDeCondominio,
+      { condominioId: e.norte },
+    );
+    await e.plataforma.mutation(api.companias.terminarContrato, {
+      contratoId: contratos[0]!._id,
+      vigenciaHasta: Date.now() - 2 * DIA,
+    });
+
+    const equipo = await e.como("alicia").query(api.asignaciones.miEquipo, {});
+    expect(equipo.map((c) => c.condominioNombre)).toEqual(["Conjunto Sur"]);
+    /* Y no es solo que no se liste: la minuta tampoco se deja leer. */
+    await expect(
+      e.como("alicia").query(api.guardia.listMinuta, { condominioId: e.norte }),
+    ).rejects.toThrow(/porteria\.ver/);
+  });
+
+  test("suspender la compania lo deja sin panel", async () => {
+    await e.plataforma.mutation(api.companias.setEstado, {
+      companiaId: e.andina.companiaId,
+      estado: "suspendida",
+    });
+    expect(await e.como("alicia").query(api.asignaciones.miEquipo, {})).toEqual(
+      [],
+    );
+  });
+
+  test("el administrador de la otra compania no alcanza estos conjuntos", async () => {
+    const equipo = await e.como("ramon").query(api.asignaciones.miEquipo, {});
+    expect(equipo.map((c) => c.condominioId)).toEqual([e.oriente]);
+    expect(equipo.flatMap((c) => c.guardas.map((g) => g.nombre))).toEqual([]);
+  });
+
+  test("mirar la minuta no es escribirla", async () => {
+    await expect(
+      e.como("alicia").mutation(api.guardia.registrarEventoMinuta, {
+        condominioId: e.norte,
+        tipo: "Anotacion",
+        resumen: "No deberia poder",
+      }),
+    ).rejects.toThrow();
+  });
+
+  test("el supervisor sigue viendo su conjunto igual que antes", async () => {
+    /* La via del supervisor no se toco: `miEquipo` la resuelve primero y la
+     * del contrato solo anade los que faltan. */
+    const equipo = await e.como("sofia").query(api.asignaciones.miEquipo, {});
+    expect(equipo.map((c) => c.condominioNombre)).toEqual(["Conjunto Norte"]);
+    expect(equipo[0]!.via).toBe("supervisor");
+    expect(equipo[0]!.asignacionId).not.toBeNull();
+    expect(equipo[0]!.guardas.map((g) => g.nombre)).toEqual(["Gabriel Guarda"]);
   });
 });
 

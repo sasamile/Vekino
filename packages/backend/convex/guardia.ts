@@ -625,19 +625,34 @@ export const listMinuta = query({
      * sin poder saber durante qué recorrido pasó cada cosa, que es justo lo
      * que hace útil tener rondas.
      *
-     * Se resuelve el número por ronda distinta, no por evento: una minuta de
-     * 300 líneas de un mismo turno son dos o tres rondas, no 300 lecturas. */
-    const numeroPorRonda = new Map<string, number | null>();
+     * Se resuelve la ronda distinta, no por evento: una minuta de 300 líneas
+     * de un mismo turno son dos o tres rondas, no 300 lecturas.
+     *
+     * Va el número Y la zona porque "Ronda #2" no dice nada a quien supervisa
+     * varios conjuntos: lo que identifica el recorrido es "Ronda #2 ·
+     * Perimetral". Ambos salen del mismo documento ya leído, así que nombrarla
+     * entera no cuesta una lectura más. */
+    const rondaPorId = new Map<
+      string,
+      { numero: number | null; zona: string | null }
+    >();
     for (const e of eventos) {
-      if (!e.rondaId || numeroPorRonda.has(e.rondaId)) continue;
+      if (!e.rondaId || rondaPorId.has(e.rondaId)) continue;
       const r = await ctx.db.get(e.rondaId);
-      numeroPorRonda.set(e.rondaId, r?.numero ?? null);
+      rondaPorId.set(e.rondaId, {
+        numero: r?.numero ?? null,
+        zona: r?.zona ?? null,
+      });
     }
 
-    return eventos.map((e) => ({
-      ...e,
-      rondaNumero: e.rondaId ? (numeroPorRonda.get(e.rondaId) ?? null) : null,
-    }));
+    return eventos.map((e) => {
+      const ronda = e.rondaId ? rondaPorId.get(e.rondaId) : undefined;
+      return {
+        ...e,
+        rondaNumero: ronda?.numero ?? null,
+        rondaZona: ronda?.zona ?? null,
+      };
+    });
   },
 });
 

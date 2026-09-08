@@ -519,6 +519,52 @@ describe("el supervisor consulta rondas y minuta de su conjunto", () => {
     expect(minuta.some((m) => m.resumen === "Novedad de Zona B")).toBe(false);
   });
 
+  /**
+   * CADA EVENTO DICE EN QUE RONDA OCURRIO.
+   *
+   * `logMinuta` engancha la ronda en curso sola, y `listMinuta` la resuelve al
+   * leer. Es el mismo dato que la porteria ya pintaba y la supervision no: lo
+   * que faltaba estaba en la pantalla, no en la consulta. Se fija aqui para
+   * que siga viniendo.
+   */
+  test("cada evento de la minuta dice en que ronda ocurrio", async () => {
+    const minuta = await e
+      .como("sofia")
+      .query(api.guardia.listMinuta, { condominioId: e.norte });
+
+    const evento = minuta.find((m) => m.resumen === "Novedad de Zona A")!;
+    expect(evento.rondaId).toBe(rondaNorte);
+    expect(evento.rondaNumero).toBe(1);
+    expect(evento.rondaZona).toBe("Zona A");
+
+    /* Y corresponde de verdad a esa ronda: el detalle del recorrido lo
+     * contiene, asi que las dos vistas cuentan lo mismo. */
+    const detalle = await e
+      .como("sofia")
+      .query(api.rondas.detalle, { rondaId: rondaNorte });
+    expect(
+      detalle!.lineaDeTiempo.some((h) => h.detalle === "Novedad de Zona A"),
+    ).toBe(true);
+  });
+
+  test("un evento fuera de ronda no rompe nada: viene sin ronda", async () => {
+    /* La mayoria de la porteria ocurre fuera de un recorrido. La ronda es
+     * opcional en el esquema y tiene que serlo tambien al leer. */
+    await e.como("gabriel").mutation(api.guardia.registrarEventoMinuta, {
+      condominioId: e.norte,
+      tipo: "Anotacion",
+      resumen: "Sin ronda en curso",
+    });
+
+    const minuta = await e
+      .como("sofia")
+      .query(api.guardia.listMinuta, { condominioId: e.norte });
+    const suelto = minuta.find((m) => m.resumen === "Sin ronda en curso")!;
+    expect(suelto.rondaId).toBeUndefined();
+    expect(suelto.rondaNumero).toBeNull();
+    expect(suelto.rondaZona).toBeNull();
+  });
+
   test("puede acotar rondas y minuta a un guarda concreto", async () => {
     const gabrielId = (
       await e.como("sofia").query(api.asignaciones.miEquipo, {})

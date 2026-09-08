@@ -19,6 +19,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
+import { EtiquetaRonda } from "@/components/guardia/etiqueta-ronda";
 import { cn } from "@/lib/utils";
 
 function fechaHora(ms: number): string {
@@ -38,11 +39,16 @@ const TONO_RONDA = {
 /**
  * SUPERVISIÓN DE UN CONJUNTO.
  *
+ * La misma pantalla para el supervisor y para el administrador de la compañía:
+ * los dos miran la operación de un conjunto que su empresa cubre, y lo que
+ * cambia entre ellos —cuáles— ya viene resuelto del servidor.
+ *
  * El conjunto seleccionado es el contexto: viene en la URL y va en cada
  * consulta. Que venga del cliente no autoriza nada —el servidor comprueba en
- * cada llamada que quien pregunta tiene `porteria.ver` sobre ESE conjunto, y
- * el supervisor solo la tiene donde hay una asignación vigente suya—. Cambiar
- * el id a mano lleva a un conjunto que responde vacío o rechaza.
+ * cada llamada que quien pregunta tiene `porteria.ver` sobre ESE conjunto: el
+ * supervisor solo la tiene donde hay una asignación vigente suya, y el
+ * administrador solo donde su empresa tiene contrato en vigor—. Cambiar el id
+ * a mano lleva a un conjunto que responde vacío o rechaza.
  *
  * No es la app de portería: `/guardia/:id` es donde el guarda abre turno y
  * cierra rondas, y sigue siendo suya. Aquí solo se mira.
@@ -85,14 +91,14 @@ export default function SupervisionConjuntoPage({
     );
   }
 
-  /* Un conjunto que no supervisa se ve igual que uno que no existe. */
+  /* Un conjunto que no tiene a su cargo se ve igual que uno que no existe. */
   if (!conjunto) {
     return (
       <PageContainer>
         <EmptyState
           icon={ShieldAlert}
           title="Ese conjunto no está entre los tuyos"
-          description="Solo puedes supervisar los conjuntos que la compañía te tiene asignados hoy."
+          description="Solo alcanzas los conjuntos que tu compañía atiende hoy y que te corresponden. Si el contrato o tu asignación terminaron, el conjunto deja de estar aquí."
           action={
             <Link href="/vigilancia" className="text-sm text-brand hover:underline">
               Volver a mis conjuntos
@@ -258,6 +264,11 @@ export default function SupervisionConjuntoPage({
                       <span className="text-[11.5px] text-muted-foreground">
                         {e.unidad}
                       </span>
+                      {/* En qué recorrido ocurrió. Lo mismo que ya muestra la
+                          minuta de portería, con la misma etiqueta y el mismo
+                          dato de `listMinuta`: aquí faltaba, y sin eso el
+                          supervisor no podía situar el evento en su ronda. */}
+                      <EtiquetaRonda numero={e.rondaNumero} zona={e.rondaZona} />
                     </span>
                     <span className="mt-0.5 block text-[12.5px] text-muted-foreground">
                       {e.resumen}
