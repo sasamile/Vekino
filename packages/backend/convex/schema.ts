@@ -558,6 +558,19 @@ export default defineSchema({
      * `guardiaReservaDepositos`; esto es lo que se esperaba recibir.
      */
     depositoRequerido: v.optional(v.number()),
+    /**
+     * Lo que cuesta usar el espacio, congelado al crear la reserva.
+     *
+     * Se guarda por el mismo motivo que el deposito: la tarifa de la zona
+     * cambia, y una reserva de febrero no puede empezar a valer lo que la
+     * administracion cobre en marzo. Sin este campo el valor solo existia en
+     * la pantalla del residente mientras llenaba el formulario, y la
+     * administracion no podia verlo despues en ninguna parte.
+     *
+     * `undefined` cuando la zona no tiene tarifa configurada: no es gratis,
+     * es que nadie le puso precio, y un cero diria lo primero.
+     */
+    valorReserva: v.optional(v.number()),
     // Control operativo en portería (guardia).
     ingresoValidadoAt: v.optional(v.number()),
     salidaValidadaAt: v.optional(v.number()),

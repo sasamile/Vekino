@@ -28,6 +28,7 @@ import {
   type ZonaEditable,
 } from "@/components/reservas/crear-espacio-modal";
 import { ReporteReservasModal } from "@/components/reservas/reporte-reservas";
+import { ResumenCosto } from "@/components/reservas/resumen-costo";
 import { EstadoCuentaModal } from "@/components/reservas/estado-cuenta-modal";
 
 const PAGE_SIZE = 30;
@@ -96,15 +97,27 @@ type ReservaRow = {
   horaInicio: string;
   horaFin: string;
   estado: string;
+  /* Lo pactado al crear la reserva, no la tarifa de hoy. `null` cuando la
+     zona nunca tuvo precio configurado. */
+  valorReserva?: number | null;
+  depositoRequerido?: number | null;
+  /* La reserva es anterior a que se guardara el valor: lo que se muestra sale
+     de la tarifa actual de la zona. */
+  valoresEstimados?: boolean;
 };
 
+/* Los precios y el depósito estaban fuera de este tipo, y ese recorte era
+   justo lo que dejaba ciego al formulario de la administración: `listZonas`
+   devuelve la zona entera, pero aquí se le quitaba lo que costaba. */
 type ZonaRow = {
   _id: Id<"zonasComunes">;
   nombre: string;
   tipo?: string;
-  unidadTiempo?: string;
+  unidadTiempo?: "hora" | "dia" | "mes";
   precioPorHora?: number;
   precioPorDia?: number;
+  precioPorMes?: number;
+  depositoRequerido?: number;
   capacidad?: number;
   descripcion?: string;
   horariosPorDia?: { dia: number; horaInicio: string; horaFin: string }[];
@@ -266,8 +279,13 @@ export default function ReservasPage() {
                     <TH>Fecha / Horario</TH>
                     <TH>Unidad</TH>
                     <TH>Solicitante</TH>
+                    <TH>Valores</TH>
                     <TH>Estado</TH>
-                    <TH>Estado de pago</TH>
+                    {/* "Estado de pago" se leía como si fuera el pago de la
+                        reserva, y no lo es: es la cartera de administración de
+                        la unidad. La columna de al lado —los valores— es lo
+                        que cuesta la reserva. */}
+                    <TH>Estado de administración</TH>
                     <TH className="text-right">Días de mora</TH>
                     <TH></TH>
                   </TR>
@@ -295,6 +313,7 @@ export default function ReservasPage() {
                       <TD>
                         <span className="text-sm text-foreground">{r.solicitanteNombre}</span>
                       </TD>
+                      <CeldaValores reserva={r} />
                       <TD>
                         <Badge tone={ESTADO_TONE[r.estado as Estado] ?? "neutral"}>
                           {ESTADO_LABEL[r.estado as Estado]}
@@ -395,7 +414,71 @@ export default function ReservasPage() {
 }
 
 /**
- * Estado de pago de la unidad y, si debe, desde cuándo.
+ * Lo que cuesta la reserva y lo que se deja en garantía.
+ *
+ * Es lo que la administración ya cobraba pero no podía ver: el valor sólo
+ * existía en la pantalla del residente mientras llenaba el formulario, y
+ * después no aparecía en ninguna parte.
+ *
+ * Dos líneas y no una cifra sumada: el depósito se devuelve y el alquiler no.
+ * Juntarlos daría un número que no es ni lo que se cobra ni lo que entra a
+ * caja.
+ *
+ * Los números vienen de la reserva, no se calculan aquí. Cuando la reserva es
+ * anterior a que se guardara el valor, el backend lo estima con la tarifa
+ * actual de la zona y lo marca —y aquí se dice, porque un estimado presentado
+ * como pactado es peor que no mostrarlo.
+ */
+function CeldaValores({ reserva }: { reserva: ReservaRow }) {
+  const { valorReserva, depositoRequerido, valoresEstimados } = reserva;
+  const sinNada = valorReserva == null && !depositoRequerido;
+
+  if (sinNada) {
+    return (
+      <TD>
+        <span
+          className="text-sm text-muted-foreground"
+          title="La zona no tiene tarifa ni depósito configurados."
+        >
+          —
+        </span>
+      </TD>
+    );
+  }
+
+  return (
+    <TD>
+      <div
+        className="leading-tight"
+        title={
+          valoresEstimados
+            ? "Calculado con la tarifa actual de la zona: esta reserva es anterior a que el valor quedara pactado."
+            : undefined
+        }
+      >
+        <p className="text-sm font-medium text-foreground">
+          Reserva: {valorReserva != null ? cop(valorReserva) : "—"}
+          {valoresEstimados && (
+            <span className="ml-1 text-[11px] font-normal text-muted-foreground">
+              (est.)
+            </span>
+          )}
+        </p>
+        <p className="text-xs text-muted-foreground">
+          Depósito: {depositoRequerido ? cop(depositoRequerido) : "—"}
+        </p>
+      </div>
+    </TD>
+  );
+}
+
+/**
+ * Estado de administración de la unidad y, si debe, desde cuándo.
+ *
+ * Es la cartera de la CUOTA DE ADMINISTRACIÓN, no el pago de la reserva. Se
+ * llamaba "Estado de pago" y en una tabla de reservas eso se lee como si la
+ * casa hubiera pagado —o no— el salón que está pidiendo. Lo que cuesta la
+ * reserva vive en la columna de valores.
  *
  * Dos celdas y no una: la administración lee la columna de días en diagonal
  * buscando el número grande, y un "En mora — 78 días" metido en la misma
@@ -507,6 +590,7 @@ function ReservaForm({
 
   const valid = zonaId.length > 0 && unidadId.length > 0 && fecha.length > 0;
   const unidadesOrdenadas = [...unidades].sort((a, b) => a.numero.localeCompare(b.numero, "es", { numeric: true }));
+  const zona = zonas.find((z) => z._id === zonaId);
 
   async function save() {
     if (!valid) return;
@@ -583,6 +667,15 @@ function ReservaForm({
           <label className="block text-xs font-medium text-foreground">Observaciones <span className="text-muted-foreground">(opcional)</span></label>
           <Textarea value={observaciones} onChange={(e) => setObservaciones(e.target.value)} placeholder="Motivo o detalles…" rows={2} />
         </div>
+        {/* El mismo bloque que ve el residente antes de confirmar. Hasta ahora
+            este formulario no mostraba un peso: quien administra creaba la
+            reserva sin ver la tarifa ni el depósito que después iba a cobrar. */}
+        <ResumenCosto
+          zona={zona}
+          horaInicio={horaInicio}
+          horaFin={horaFin}
+          nota="Estos son los valores que quedan pactados en la reserva. El cobro se gestiona con la administración."
+        />
         {error && <p className="text-sm text-destructive">{error}</p>}
       </div>
     </Modal>
