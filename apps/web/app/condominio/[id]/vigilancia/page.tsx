@@ -38,6 +38,30 @@ function fmtFechaHora(ts?: number) {
   return new Date(ts).toLocaleString("es-CO", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 }
 
+/**
+ * LA CONFIGURACIÓN DE PORTERÍA, APAGADA A PROPÓSITO.
+ *
+ * Checklist de inicio de turno, zonas de ronda y motivos de vehículo están
+ * implementados de punta a punta y funcionan —el guarda los consume al abrir
+ * turno, al iniciar una ronda y al reportar un vehículo—, pero no se pidieron
+ * para esta entrega y hoy no se muestran.
+ *
+ * Se apaga la PUERTA, no la funcionalidad: `ConfigTab` y sus tres paneles
+ * siguen enteros justo debajo, y las mutaciones del backend siguen ahí y
+ * siguen exigiendo rol de administración. Borrarlos habría obligado a
+ * reescribirlos el día que se decida mostrarlos; esto es una palabra.
+ *
+ * Mientras esté en `false`, los conjuntos usan los valores por defecto: el
+ * checklist básico de tres ítems, "Recorrido general" como zona y los cinco
+ * motivos de vehículo que trae el backend. Ninguna pantalla del guarda se
+ * queda vacía por esto.
+ *
+ * El tipo es `boolean` explícito y no el literal `false` para que el resto del
+ * archivo compile igual con el interruptor en cualquiera de las dos
+ * posiciones.
+ */
+const MOSTRAR_CONFIGURACION: boolean = false;
+
 const TABS = [
   { key: "personal", label: "Personal", icon: Users },
   { key: "rondas", label: "Rondas", icon: Footprints },
@@ -47,6 +71,11 @@ const TABS = [
   { key: "config", label: "Configuración", icon: Settings2 },
 ] as const;
 type TabKey = (typeof TABS)[number]["key"];
+
+/** Lo que se pinta hoy. `TABS` sigue completo para no perder el tipo. */
+const TABS_VISIBLES = TABS.filter(
+  (t) => t.key !== "config" || MOSTRAR_CONFIGURACION,
+);
 
 /**
  * VIGILANCIA DEL CONJUNTO.
@@ -108,7 +137,7 @@ export default function VigilanciaConjuntoPage() {
         </div>
 
         <nav className="flex items-center gap-1 overflow-x-auto rounded-xl border border-border bg-card p-1">
-          {TABS.map((t) => {
+          {TABS_VISIBLES.map((t) => {
             const Icon = t.icon;
             const active = tab === t.key;
             return (
@@ -131,7 +160,9 @@ export default function VigilanciaConjuntoPage() {
         {tab === "minuta" && <MinutaTab minuta={minuta} />}
         {tab === "turnos" && <TurnosTab condominioId={condominioId} />}
         {tab === "novedades" && <NovedadesTab condominioId={condominioId} />}
-        {tab === "config" && <ConfigTab condominioId={condominioId} />}
+        {tab === "config" && MOSTRAR_CONFIGURACION && (
+          <ConfigTab condominioId={condominioId} />
+        )}
       </div>
     </PageContainer>
   );
