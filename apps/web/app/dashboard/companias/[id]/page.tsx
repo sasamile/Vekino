@@ -463,32 +463,15 @@ function PanelPersonal({
 }
 
 function FilaPersona({ p }: { p: Persona }) {
-  const setRoles = useMutation(api.companias.setRolesMiembro);
   const desactivar = useMutation(api.companias.desactivarMiembro);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [editando, setEditando] = useState(false);
 
   /* `[0]` y no un `find`: el backend garantiza que solo hay uno. Se lee así
-   * para que, si alguna vez llegara una fila vieja sin normalizar, la pantalla
+   * para que, si alguna vez llegara una fila vieja sin normalizar, la fila
    * muestre el primero en vez de reventar. */
   const rolActual = p.roles[0] as RolCompania | undefined;
-
-  /* Una persona de compañía tiene UN rol. Elegir otro lo REEMPLAZA: se manda
-   * el nuevo y nada más, así que no hay forma de acumular ni desde aquí ni
-   * desde una petición fabricada a mano —el backend aplica la misma regla—. */
-  async function cambiarRol(rol: RolCompania) {
-    if (rolActual === rol) return;
-    setError(null);
-    setBusy(true);
-    try {
-      await setRoles({ miembroId: p._id, roles: [rol] });
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "No se pudo cambiar.");
-    } finally {
-      setBusy(false);
-    }
-  }
 
   return (
     <tr className="align-top">
@@ -501,36 +484,15 @@ function FilaPersona({ p }: { p: Persona }) {
         {error && <p className="mt-1 text-xs text-destructive">{error}</p>}
       </td>
       <td className="px-5 py-3.5">
-        {/* Selección única: `radiogroup` y no una lista de botones sueltos,
-            para que un lector de pantalla anuncie la exclusividad igual que la
-            anuncia el relleno del que está puesto. */}
-        <div
-          role="radiogroup"
-          aria-label="Rol en la compañía"
-          className="flex flex-wrap gap-1.5"
-        >
-          {(Object.keys(ETIQUETA_ROL) as RolCompania[]).map((rol) => {
-            const puesto = rolActual === rol;
-            return (
-              <button
-                key={rol}
-                type="button"
-                role="radio"
-                aria-checked={puesto}
-                disabled={busy || puesto}
-                onClick={() => cambiarRol(rol)}
-                className={cn(
-                  "rounded-full border px-2.5 py-0.5 text-[11.5px] transition-colors",
-                  puesto
-                    ? "border-brand bg-brand/10 text-brand"
-                    : "border-border text-muted-foreground hover:bg-accent disabled:opacity-50",
-                )}
-              >
-                {ETIQUETA_ROL[rol]}
-              </button>
-            );
-          })}
-        </div>
+        {/* Solo lectura. La tabla dice QUÉ es cada persona; cambiarlo es una
+            decisión, y las decisiones se toman en "Editar" —donde además se
+            ve a quién se le está cambiando—. Con el control aquí, un clic
+            despistado al recorrer la lista le cambiaba el rol a alguien. */}
+        {rolActual ? (
+          <Badge tone="brand">{ETIQUETA_ROL[rolActual]}</Badge>
+        ) : (
+          <span className="text-xs text-muted-foreground">—</span>
+        )}
       </td>
       <td className="px-5 py-3.5 tabular-nums text-muted-foreground">
         {p.asignacionesVigentes}
@@ -551,9 +513,16 @@ function FilaPersona({ p }: { p: Persona }) {
             variant="ghost"
             disabled={busy}
             onClick={async () => {
+              setError(null);
               setBusy(true);
               try {
                 await desactivar({ miembroId: p._id });
+              } catch (e) {
+                /* El hueco de error de la fila lo alimentaba el control de
+                 * rol, que ya no está aquí. Darlo de baja puede fallar
+                 * —perfil sin correo, permisos— y hasta ahora ese fallo se
+                 * perdía en silencio. */
+                setError(e instanceof Error ? e.message : "No se pudo dar de baja.");
               } finally {
                 setBusy(false);
               }
@@ -568,6 +537,10 @@ function FilaPersona({ p }: { p: Persona }) {
         {editando && (
           <EditarPersonaDialog
             miembroId={p._id}
+            /* El rol viaja como prop y no lo vuelve a pedir el modal:
+             * `detalleMiembro` no lo devuelve, y la fila ya lo tiene. Así el
+             * cambio se queda en el frontend. */
+            rolActual={rolActual}
             onClose={() => setEditando(false)}
           />
         )}

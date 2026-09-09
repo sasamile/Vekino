@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useAction, useMutation, useQuery } from "convex/react";
-import { KeyRound, Loader2, ShieldCheck } from "lucide-react";
+import { KeyRound, Loader2, ShieldCheck, UserCog } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
 import { evaluarPassword } from "@vekino/backend/passwordFuerte";
@@ -28,11 +28,23 @@ import { Skeleton } from "@/components/ui/skeleton";
 const DOCUMENTOS = ["CC", "CE", "NIT", "PASAPORTE", "TI", "PEP"] as const;
 type TipoDocumento = (typeof DOCUMENTOS)[number];
 
+type RolCompania = "admin_compania" | "supervisor" | "guardia";
+
+/** Las mismas etiquetas que pinta la tabla. */
+const ETIQUETA_ROL: Record<RolCompania, string> = {
+  admin_compania: "Administrador",
+  supervisor: "Supervisor",
+  guardia: "Guarda",
+};
+
 export function EditarPersonaDialog({
   miembroId,
+  rolActual,
   onClose,
 }: {
   miembroId: Id<"companiaMiembros">;
+  /** El que tiene hoy. Lo pasa la fila, que ya lo tiene cargado. */
+  rolActual: RolCompania | undefined;
   onClose: () => void;
 }) {
   return (
@@ -49,7 +61,11 @@ export function EditarPersonaDialog({
           <ErrorMessage title="No se puede editar" detail={e.message} />
         )}
       >
-        <Contenido miembroId={miembroId} onClose={onClose} />
+        <Contenido
+          miembroId={miembroId}
+          rolActual={rolActual}
+          onClose={onClose}
+        />
       </ErrorBoundary>
     </Modal>
   );
@@ -57,9 +73,11 @@ export function EditarPersonaDialog({
 
 function Contenido({
   miembroId,
+  rolActual,
   onClose,
 }: {
   miembroId: Id<"companiaMiembros">;
+  rolActual: RolCompania | undefined;
   onClose: () => void;
 }) {
   const datos = useQuery(api.companias.detalleMiembro, { miembroId });
@@ -75,6 +93,9 @@ function Contenido({
   return (
     <div className="space-y-6">
       <DatosPersonales datos={datos} onClose={onClose} />
+      <div className="border-t border-border pt-5">
+        <RolEnLaCompania miembroId={miembroId} rolActual={rolActual} />
+      </div>
       <div className="border-t border-border pt-5">
         <Credencial miembroId={miembroId} email={datos.email} nombre={datos.nombre} />
       </div>
@@ -224,6 +245,106 @@ function DatosPersonales({
         <Button type="submit" size="sm" disabled={busy}>
           {busy && <Loader2 className="h-4 w-4 animate-spin" aria-hidden />}
           Guardar cambios
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+/**
+ * El rol de la persona dentro de la compañía.
+ *
+ * Sección propia con su propio botón, como las otras dos y por el mismo
+ * motivo: en el backend son mutaciones distintas —`setRolesMiembro` frente a
+ * `actualizarMiembro`— y meter el rol en el formulario de datos personales
+ * haría que corregir un apellido pudiera, de paso, cambiar quién opera qué
+ * portería. Es justo lo que evita `actualizarMiembro` al no aceptar el rol.
+ *
+ * Un `Select` y no tres píldoras: una persona de compañía tiene UN rol —lo
+ * garantiza el backend en todos sus puntos de escritura— y un desplegable no
+ * deja ni la duda de si se pueden marcar varios.
+ */
+function RolEnLaCompania({
+  miembroId,
+  rolActual,
+}: {
+  miembroId: Id<"companiaMiembros">;
+  rolActual: RolCompania | undefined;
+}) {
+  const setRoles = useMutation(api.companias.setRolesMiembro);
+  const [rol, setRol] = useState<RolCompania>(rolActual ?? "guardia");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [ok, setOk] = useState(false);
+
+  /* Al cambiar de persona el desplegable vuelve a decir la verdad. */
+  useEffect(() => {
+    setRol(rolActual ?? "guardia");
+    setError(null);
+    setOk(false);
+  }, [miembroId, rolActual]);
+
+  const cambio = rol !== rolActual;
+
+  async function guardar(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setOk(false);
+    setBusy(true);
+    try {
+      /* Se manda SOLO el rol nuevo: reemplaza al anterior, nunca se suma.
+       * `cargo` no viaja a propósito —lo edita la sección de arriba— y la
+       * mutación lo respeta si no se lo mandan. */
+      await setRoles({ miembroId, roles: [rol] });
+      setOk(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "No se pudo cambiar el rol.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form onSubmit={guardar} className="space-y-3.5">
+      <p className="text-[11px] font-medium uppercase tracking-[0.04em] text-muted-foreground">
+        Rol en la compañía
+      </p>
+      <p className="text-xs text-muted-foreground">
+        Una persona tiene un único rol. El que elijas reemplaza al anterior.
+      </p>
+
+      <Campo label="Rol" requerido>
+        <Select
+          value={rol}
+          onChange={(e) => {
+            setRol(e.target.value as RolCompania);
+            setOk(false);
+          }}
+        >
+          {(Object.keys(ETIQUETA_ROL) as RolCompania[]).map((r) => (
+            <option key={r} value={r}>
+              {ETIQUETA_ROL[r]}
+            </option>
+          ))}
+        </Select>
+      </Campo>
+
+      {error && <p className="text-sm text-destructive">{error}</p>}
+      {ok && (
+        <p className="flex items-center gap-1.5 text-sm text-emerald-600 dark:text-emerald-400">
+          <ShieldCheck className="h-4 w-4" aria-hidden />
+          Rol actualizado.
+        </p>
+      )}
+
+      <div className="flex justify-end">
+        <Button type="submit" size="sm" variant="outline" disabled={!cambio || busy}>
+          {busy ? (
+            <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+          ) : (
+            <UserCog className="h-4 w-4" aria-hidden />
+          )}
+          Cambiar rol
         </Button>
       </div>
     </form>
