@@ -813,6 +813,162 @@ describe("archivar una compania", () => {
   });
 });
 
+/**
+ * LA VIGILANCIA VISTA DESDE EL CONJUNTO.
+ *
+ * El administrador del conjunto no veia quien cubria su propia porteria. No
+ * era un problema de permisos —`administrador` tiene `porteria.ver` desde
+ * siempre, y `asignaciones.porCondominio` existe justo para responder "quien
+ * esta autorizado a entrar a mi porteria"—: era que ninguna pantalla se lo
+ * preguntaba.
+ *
+ * Estas pruebas fijan las dos mitades del aislamiento: alcanza SU conjunto por
+ * el rol, y cambiar el id no le abre el de al lado. Es el mismo `porteria.ver`
+ * que ya usa la compania, resuelto por otra via.
+ */
+describe("el administrador del conjunto ve la vigilancia de SU conjunto", () => {
+  let e: Escenario;
+  let rondaNorte: Id<"guardiaRondas">;
+
+  beforeEach(async () => {
+    e = await montar();
+    rondaNorte = await operar(e, "gabriel", e.norte, "Zona A");
+  });
+
+  test("ve a los guardas y supervisores asignados a su porteria", async () => {
+    const personal = await e
+      .como("hernan")
+      .query(api.asignaciones.porCondominio, { condominioId: e.norte });
+
+    expect(
+      personal.map((p) => [p.nombre, p.rol]).sort((a, b) => a[0]!.localeCompare(b[0]!)),
+    ).toEqual([
+      ["Gabriel Guarda", "guardia"],
+      ["Sofia Supervisora", "supervisor"],
+    ]);
+    // Sabe por que empresa entran y hasta cuando.
+    expect(personal.every((p) => p.companiaNombre === "Seguridad Andina")).toBe(true);
+    expect(personal.every((p) => p.estado === "vigente")).toBe(true);
+    /* Administra el conjunto, asi que si ve el contacto: es quien tiene que
+     * poder llamar al supervisor cuando pasa algo en su porteria. */
+    expect(personal.every((p) => p.email !== null)).toBe(true);
+  });
+
+  test("consulta la minuta y las rondas de su conjunto", async () => {
+    const rondas = await e
+      .como("hernan")
+      .query(api.rondas.listar, { condominioId: e.norte });
+    expect(rondas.map((r) => r.zona)).toEqual(["Zona A"]);
+    expect(rondas[0]!.guardiaNombre).toBe("Gabriel Guarda");
+
+    const minuta = await e
+      .como("hernan")
+      .query(api.guardia.listMinuta, { condominioId: e.norte });
+    const evento = minuta.find((m) => m.resumen === "Novedad de Zona A")!;
+    expect(evento.rondaId).toBe(rondaNorte);
+    expect(evento.rondaNumero).toBe(1);
+    expect(evento.rondaZona).toBe("Zona A");
+
+    // Y el resto del contexto de porteria, que ya tenia.
+    const turnos = await e
+      .como("hernan")
+      .query(api.guardia.listTurnos, { condominioId: e.norte });
+    expect(turnos).toHaveLength(1);
+  });
+
+  test("cambiar el id no le abre el conjunto de al lado", async () => {
+    /* Sur y Oriente existen y tienen operacion; lo que no tiene Hernan es
+     * membresia en ellos. El id viaja desde el cliente y no autoriza nada. */
+    for (const condominioId of [e.sur, e.oriente]) {
+      await expect(
+        e
+          .como("hernan")
+          .query(api.asignaciones.porCondominio, { condominioId }),
+      ).rejects.toThrow(/no tiene acceso/i);
+      await expect(
+        e.como("hernan").query(api.rondas.listar, { condominioId }),
+      ).rejects.toThrow(/porteria\.ver/);
+      await expect(
+        e.como("hernan").query(api.guardia.listMinuta, { condominioId }),
+      ).rejects.toThrow(/porteria\.ver/);
+    }
+  });
+
+  test("la plataforma ve lo mismo en el conjunto que abrio", async () => {
+    const personal = await e.plataforma.query(api.asignaciones.porCondominio, {
+      condominioId: e.norte,
+    });
+    expect(personal.map((p) => p.nombre).sort()).toEqual([
+      "Gabriel Guarda",
+      "Sofia Supervisora",
+    ]);
+    const rondas = await e.plataforma.query(api.rondas.listar, {
+      condominioId: e.norte,
+    });
+    expect(rondas.map((r) => r.zona)).toEqual(["Zona A"]);
+  });
+
+  test("mirar la porteria no es operarla: sigue sin escribir en la minuta", async () => {
+    /* El administrador del conjunto SI puede operar la porteria por rol
+     * (`porteria.operar`), pero no sin turno abierto: la regla de la minuta
+     * no cambia porque ahora exista la pantalla. */
+    await expect(
+      e.como("hernan").mutation(api.guardia.registrarEventoMinuta, {
+        condominioId: e.sur,
+        tipo: "Anotacion",
+        resumen: "En un conjunto que no es suyo",
+      }),
+    ).rejects.toThrow();
+  });
+
+  test("al terminar el contrato deja de ver personal, no historico", async () => {
+    const contratos = await e.plataforma.query(
+      api.companias.contratosDeCondominio,
+      { condominioId: e.norte },
+    );
+    await e.plataforma.mutation(api.companias.terminarContrato, {
+      contratoId: contratos[0]!._id,
+    });
+
+    /* Ya no hay nadie autorizado a entrar: es la respuesta correcta, y la
+     * misma regla que aplica la compania. */
+    const personal = await e
+      .como("hernan")
+      .query(api.asignaciones.porCondominio, { condominioId: e.norte });
+    expect(personal).toEqual([]);
+
+    /* Pero el conjunto es SUYO: lo que quedo registrado en su porteria sigue
+     * siendo suyo aunque la empresa se haya ido. Es justo lo contrario de lo
+     * que le pasa a la compania, que pierde el acceso con el contrato. */
+    const minuta = await e
+      .como("hernan")
+      .query(api.guardia.listMinuta, { condominioId: e.norte });
+    expect(minuta.some((m) => m.resumen === "Novedad de Zona A")).toBe(true);
+    const rondas = await e
+      .como("hernan")
+      .query(api.rondas.listar, { condominioId: e.norte });
+    expect(rondas.map((r) => r.zona)).toEqual(["Zona A"]);
+  });
+
+  test("la compania sigue viendo lo suyo exactamente igual", async () => {
+    // Regresion: la via del contrato no se toco.
+    const equipo = await e.como("alicia").query(api.asignaciones.miEquipo, {});
+    expect(equipo.map((c) => c.condominioNombre)).toEqual([
+      "Conjunto Norte",
+      "Conjunto Sur",
+    ]);
+    const minuta = await e
+      .como("alicia")
+      .query(api.guardia.listMinuta, { condominioId: e.norte });
+    expect(minuta.some((m) => m.resumen === "Novedad de Zona A")).toBe(true);
+
+    const delSupervisor = await e
+      .como("sofia")
+      .query(api.rondas.listar, { condominioId: e.norte });
+    expect(delSupervisor.map((r) => r.zona)).toEqual(["Zona A"]);
+  });
+});
+
 describe("multi-tenant: cada compania ve solo lo suyo", () => {
   let e: Escenario;
   beforeEach(async () => {

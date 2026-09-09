@@ -20,6 +20,7 @@ import { Select } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { EtiquetaRonda } from "@/components/guardia/etiqueta-ronda";
+import { TablaRondas } from "@/components/vigilancia/tabla-rondas";
 import { cn } from "@/lib/utils";
 
 function fechaHora(ms: number): string {
@@ -30,11 +31,6 @@ function fechaHora(ms: number): string {
     minute: "2-digit",
   });
 }
-
-const TONO_RONDA = {
-  en_curso: "brand",
-  finalizada: "success",
-} as const;
 
 /**
  * SUPERVISIÓN DE UN CONJUNTO.
@@ -170,71 +166,14 @@ export default function SupervisionConjuntoPage({
         </div>
 
         {tab === "rondas" ? (
-          rondas === undefined ? (
-            <Skeleton className="h-64 rounded-2xl" />
-          ) : rondas.length === 0 ? (
-            <EmptyState
-              icon={Footprints}
-              title="Sin rondas registradas"
-              description={
-                guarda
-                  ? `${guarda.nombre} todavía no tiene rondas en este conjunto.`
-                  : "Cuando la portería haga su primera ronda aparecerá aquí."
-              }
-            />
-          ) : (
-            <Card className="overflow-hidden p-0">
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[720px] text-sm">
-                  <thead>
-                    <tr className="border-b border-border text-left text-xs text-muted-foreground">
-                      <th className="px-5 py-3 font-medium">#</th>
-                      <th className="px-5 py-3 font-medium">Zona</th>
-                      <th className="px-5 py-3 font-medium">Guarda</th>
-                      <th className="px-5 py-3 font-medium">Inicio</th>
-                      <th className="px-5 py-3 font-medium">Duración</th>
-                      <th className="px-5 py-3 font-medium">Registros</th>
-                      <th className="px-5 py-3 font-medium">Estado</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border/60">
-                    {rondas.map((r) => (
-                      <tr key={r._id}>
-                        <td className="px-5 py-3 tabular-nums text-muted-foreground">
-                          {r.numero ?? "—"}
-                        </td>
-                        <td className="px-5 py-3 text-foreground">{r.zona}</td>
-                        <td className="px-5 py-3 text-muted-foreground">
-                          {r.guardiaNombre ?? "—"}
-                        </td>
-                        <td className="px-5 py-3 text-muted-foreground">
-                          {fechaHora(r.fechaInicio)}
-                        </td>
-                        <td className="px-5 py-3 text-muted-foreground">
-                          {r.duracion}
-                        </td>
-                        <td className="px-5 py-3 text-muted-foreground">
-                          {r.totales.eventos} evento
-                          {r.totales.eventos === 1 ? "" : "s"}
-                          {r.totales.vehiculos > 0 &&
-                            ` · ${r.totales.vehiculos} vehículo${r.totales.vehiculos === 1 ? "" : "s"}`}
-                          {r.totales.novedades > 0 && (
-                            <span className="ml-1.5 text-destructive">
-                              · {r.totales.novedades} novedad
-                              {r.totales.novedades === 1 ? "" : "es"}
-                            </span>
-                          )}
-                        </td>
-                        <td className="px-5 py-3">
-                          <Badge tone={TONO_RONDA[r.estado]}>{r.estado}</Badge>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </Card>
-          )
+          <TablaRondas
+            rondas={rondas}
+            vacio={
+              guarda
+                ? `${guarda.nombre} todavía no tiene rondas en este conjunto.`
+                : undefined
+            }
+          />
         ) : minuta === undefined ? (
           <Skeleton className="h-64 rounded-2xl" />
         ) : minuta.length === 0 ? (
