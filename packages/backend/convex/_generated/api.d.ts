@@ -65,6 +65,7 @@ import type * as migrations from "../migrations.js";
 import type * as model_acceso from "../model/acceso.js";
 import type * as model_asignacion from "../model/asignacion.js";
 import type * as model_authz from "../model/authz.js";
+import type * as model_credencial from "../model/credencial.js";
 import type * as model_displayName from "../model/displayName.js";
 import type * as model_files from "../model/files.js";
 import type * as model_latidos from "../model/latidos.js";
@@ -171,6 +172,7 @@ declare const fullApi: ApiFromModules<{
   "model/acceso": typeof model_acceso;
   "model/asignacion": typeof model_asignacion;
   "model/authz": typeof model_authz;
+  "model/credencial": typeof model_credencial;
   "model/displayName": typeof model_displayName;
   "model/files": typeof model_files;
   "model/latidos": typeof model_latidos;

@@ -24,10 +24,13 @@ import {
 import {
   companiaRoleValidator,
   estadoCompaniaValidator,
+  tipoDocumentoValidator,
 } from "./model/roles";
 import { estadoVigencia, haySolape, estaVigente } from "./lib/vigilancia";
 import { normalizarTelefonoE164 } from "./lib/telefono";
+import { evaluarPassword } from "./lib/passwordFuerte";
 import { displayNameFromUser } from "./model/displayName";
+import { fijarPasswordDeCuenta } from "./model/credencial";
 
 /**
  * Compañías de vigilancia: la empresa, su personal y sus contratos.
@@ -749,9 +752,14 @@ export const crearMiembro = action({
     existed: boolean;
   }> => {
     const password = args.password.trim();
-    if (password.length < 8) {
-      throw new Error("La contraseña debe tener al menos 8 caracteres.");
-    }
+    /* La política completa la aplica `fijarPasswordDeCuenta` más abajo, pero
+     * el perfil se crea ANTES que la credencial: sin este corte temprano, una
+     * clave rechazada dejaría a la persona dada de alta y sin poder entrar. */
+    const fuerza = evaluarPassword(password, {
+      email: args.email,
+      nombre: args.name,
+    });
+    if (!fuerza.ok) throw new Error(fuerza.problemas[0]!);
 
     const perfil: {
       userId: Id<"users">;
@@ -768,41 +776,18 @@ export const crearMiembro = action({
       cargo: args.cargo,
     });
 
-    const auth = createAuth(ctx);
-    const authCtx = await auth.$context;
-    const ia = authCtx.internalAdapter;
-    const hashed = await authCtx.password.hash(password);
+    /* La credencial la escribe el helper compartido: la misma secuencia que
+     * usa el restablecimiento, en un solo sitio. */
+    await fijarPasswordDeCuenta(ctx, {
+      email: perfil.email,
+      name: perfil.name,
+      password,
+    });
 
+    const ia = (await createAuth(ctx).$context).internalAdapter;
     const found = await ia.findUserByEmail(perfil.email);
-    let authUserId: string;
-    if (!found) {
-      const created = await ia.createUser({
-        email: perfil.email,
-        name: perfil.name,
-        emailVerified: false,
-      });
-      authUserId = created.id;
-      await ia.createAccount({
-        userId: created.id,
-        providerId: "credential",
-        accountId: created.id,
-        password: hashed,
-      });
-    } else {
-      authUserId = found.user.id;
-      const accounts = await ia.findAccounts(found.user.id);
-      const credential = accounts.find((a) => a.providerId === "credential");
-      if (!credential) {
-        await ia.createAccount({
-          userId: found.user.id,
-          providerId: "credential",
-          accountId: found.user.id,
-          password: hashed,
-        });
-      } else {
-        await ia.updatePassword(found.user.id, hashed);
-      }
-    }
+    if (!found) throw new Error("No se pudo crear la cuenta de acceso.");
+    const authUserId = found.user.id;
 
     await ctx.runMutation(internal.users.linkAuthId, {
       userId: perfil.userId,
@@ -1048,6 +1033,348 @@ export const terminarContrato = mutation({
           .filter((a) => a.vigenciaHasta == null || a.vigenciaHasta > corte)
           .map((a) => a.userId),
       ).size,
+    };
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// Editar a una persona de la compañía
+//
+// El administrador de la compañía ya podía darla de alta, cambiarle los roles
+// y darla de baja. Lo que faltaba era corregir lo que se escribió mal el día
+// del alta —un apellido, un documento, un teléfono— y volverle a poner la
+// clave cuando la pierde, que en una empresa de vigilancia con rotación pasa
+// todas las semanas. Sin esto había que darla de baja y volverla a crear.
+// ─────────────────────────────────────────────────────────────
+
+/** Roles de conjunto cuya cuenta NO puede tomar el administrador de una compañía. */
+const ROLES_DE_MANDO_EN_CONJUNTO = [
+  "administrador",
+  "contadora",
+  "junta_directiva",
+] as const;
+
+/**
+ * Autoriza tocar a una persona de una compañía, y devuelve lo justo.
+ *
+ * ── De dónde sale la compañía ────────────────────────────────────────────
+ * Del DOCUMENTO del miembro, nunca de un argumento. No hay `companiaId` que
+ * mandar desde el cliente: se envía el id del miembro, se lee su compañía y
+ * es ÉSA la que se comprueba contra la identidad de quien llama. Cambiar el
+ * id lleva a otro miembro, cuya compañía se vuelve a comprobar, así que no
+ * queda nada que manipular.
+ *
+ * ── Escalada de privilegios ──────────────────────────────────────────────
+ * Dos puertas cerradas, y ninguna es teórica: una misma persona tiene un solo
+ * `users` —el alta reutiliza la fila por correo— y puede estar a la vez en
+ * una compañía y en un conjunto.
+ *
+ *  1. Cuentas de plataforma. Igual que en `users.assertCanEditMember`: quien
+ *     administra una empresa no le fija la contraseña a un superadmin porque
+ *     lo tenga apuntado como guarda.
+ *
+ *  2. Cuentas con mando en algún conjunto. Sin esto, dar de alta como guarda
+ *     a la administradora de un conjunto —cosa que nadie impide— y acto
+ *     seguido cambiarle la clave entregaba ese conjunto entero. Es el salto
+ *     entre los dos ejes del modelo, y es el que había que cerrar.
+ *
+ * Devuelve solo correo y nombre. Nada de credenciales: el hash no sale de
+ * Better Auth ni siquiera hacia el servidor que lo pide.
+ */
+export const assertPuedeEditarMiembro = query({
+  args: { miembroId: v.id("companiaMiembros") },
+  handler: async (ctx, args) => {
+    const miembro = await ctx.db.get(args.miembroId);
+    if (!miembro) throw new Error("Miembro no encontrado.");
+
+    await exigirAccesoCompania(ctx, miembro.companiaId, "seguridad.personal");
+
+    const user = await ctx.db.get(miembro.userId);
+    if (!user) throw new Error("Perfil no encontrado.");
+    if (!user.email) throw new Error("Esa persona no tiene correo.");
+
+    if (user.platformRole) {
+      throw new Error(
+        "Esa cuenta es de la plataforma. Debe gestionarse desde el panel maestro.",
+      );
+    }
+
+    const membresias = await ctx.db
+      .query("memberships")
+      .withIndex("by_user", (q) => q.eq("userId", miembro.userId))
+      .collect();
+    const mandaEnUnConjunto = membresias.some(
+      (m) =>
+        m.isActive &&
+        m.roles.some((r) =>
+          (ROLES_DE_MANDO_EN_CONJUNTO as readonly string[]).includes(r),
+        ),
+    );
+    if (mandaEnUnConjunto) {
+      throw new Error(
+        "Esa persona administra un conjunto. Sus credenciales se gestionan desde el conjunto, no desde la compañía.",
+      );
+    }
+
+    return {
+      userId: miembro.userId,
+      companiaId: miembro.companiaId,
+      email: user.email,
+      name: user.name,
+    };
+  },
+});
+
+/**
+ * Corrige los datos personales de alguien de la compañía.
+ *
+ * Solo lo que vive en la PERSONA. El rol es de `setRolesMiembro`, la baja de
+ * `desactivarMiembro`, el correo de `setEmailMiembro` —porque además toca la
+ * credencial— y dónde trabaja es de `asignaciones`. Meterlo todo en un mismo
+ * formulario haría que corregir un apellido pudiera, de paso, cambiar quién
+ * entra a qué portería.
+ */
+export const actualizarMiembro = mutation({
+  args: {
+    miembroId: v.id("companiaMiembros"),
+    name: v.string(),
+    firstName: v.optional(v.string()),
+    lastName: v.optional(v.string()),
+    tipoDocumento: v.optional(tipoDocumentoValidator),
+    numeroDocumento: v.optional(v.string()),
+    telefono: v.optional(v.string()),
+    cargo: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const miembro = await ctx.db.get(args.miembroId);
+    if (!miembro) throw new Error("Miembro no encontrado.");
+    const { user: quienEdita } = await exigirAccesoCompania(
+      ctx,
+      miembro.companiaId,
+      "seguridad.personal",
+    );
+    /* Las mismas dos puertas contra la escalada. Se reusa la query en vez de
+     * repetir el criterio: dos copias es como acaban divergiendo. */
+    await ctx.runQuery(api.companias.assertPuedeEditarMiembro, {
+      miembroId: args.miembroId,
+    });
+
+    const name = args.name.trim();
+    if (!name) throw new Error("El nombre es obligatorio.");
+    if (name.length > 120) throw new Error("El nombre es demasiado largo.");
+
+    const numeroDocumento = args.numeroDocumento?.trim() || undefined;
+    if (numeroDocumento && !/^[A-Za-z0-9.-]{4,20}$/.test(numeroDocumento)) {
+      throw new Error("El número de documento no parece válido.");
+    }
+
+    const telefono = args.telefono?.trim() || undefined;
+    if (telefono && !normalizarTelefonoE164(telefono)) {
+      throw new Error("El teléfono no parece válido.");
+    }
+
+    const ahora = Date.now();
+    await ctx.db.patch(miembro.userId, {
+      name,
+      firstName: args.firstName?.trim() || undefined,
+      lastName: args.lastName?.trim() || undefined,
+      tipoDocumento: args.tipoDocumento,
+      numeroDocumento,
+      telefono,
+      telefonoE164: normalizarTelefonoE164(telefono) ?? undefined,
+      updatedAt: ahora,
+    });
+
+    /* Rastro de quién lo tocó, en la propia fila afectada. Es como el resto
+     * del modelo registra lo sensible —`terminadoPorUserId`,
+     * `archivadaPorUserId`, `creadoPorUserId`— y no hay tabla de auditoría
+     * que alimentar ni conviene inventar una para esto. */
+    await ctx.db.patch(args.miembroId, {
+      cargo: args.cargo?.trim() || undefined,
+      actualizadoPorUserId: quienEdita._id,
+      updatedAt: ahora,
+    });
+
+    return { ok: true as const };
+  },
+});
+
+/**
+ * Le pone una contraseña nueva a alguien de la compañía.
+ *
+ * Aparte de `actualizarMiembro` a propósito: corregir un apellido y reescribir
+ * una credencial no son la misma clase de acto, y mezclarlos haría que cada
+ * corrección de un teléfono pasara por el código que toca contraseñas.
+ *
+ * La clave entra, se valida contra la política del proyecto y se va a Better
+ * Auth. No se guarda en `users`, no queda en ningún registro y no vuelve en la
+ * respuesta.
+ */
+export const setPasswordMiembro = action({
+  args: {
+    miembroId: v.id("companiaMiembros"),
+    password: v.string(),
+  },
+  handler: async (ctx, args): Promise<{ ok: true; cuentaCreada: boolean }> => {
+    const objetivo: {
+      userId: Id<"users">;
+      companiaId: Id<"companiasSeguridad">;
+      email: string;
+      name: string;
+    } = await ctx.runQuery(api.companias.assertPuedeEditarMiembro, {
+      miembroId: args.miembroId,
+    });
+
+    const r = await fijarPasswordDeCuenta(ctx, {
+      email: objetivo.email,
+      name: objetivo.name,
+      password: args.password,
+    });
+
+    await ctx.runMutation(internal.companias.marcarPasswordFijada, {
+      miembroId: args.miembroId,
+    });
+
+    /* Solo si hubo que crear la cuenta. Ni la clave ni nada derivado de ella. */
+    return { ok: true as const, cuentaCreada: r.cuentaCreada };
+  },
+});
+
+/** Deja constancia de cuándo y por orden de quién se reescribió la clave. */
+export const marcarPasswordFijada = internalMutation({
+  args: { miembroId: v.id("companiaMiembros") },
+  handler: async (ctx, args) => {
+    const quien = await getCurrentAppUser(ctx);
+    await ctx.db.patch(args.miembroId, {
+      passwordFijadaEn: Date.now(),
+      passwordFijadaPorUserId: quien?._id,
+      updatedAt: Date.now(),
+    });
+  },
+});
+
+/**
+ * Cambia el correo de alguien de la compañía.
+ *
+ * Va aparte porque el correo NO es un dato personal más: es con lo que se
+ * entra. Hay que moverlo en los dos sitios —el perfil de aplicación y Better
+ * Auth— o el login seguiría pidiendo el viejo. Es exactamente lo que hace
+ * `users.setMemberEmail` en el eje del conjunto.
+ *
+ * Las sesiones abiertas siguen abiertas: Better Auth las guarda contra el id
+ * del usuario, no contra su correo. Cambiarlo no echa a nadie, y el
+ * restablecimiento por correo pasa a usar el nuevo.
+ */
+export const setEmailMiembro = action({
+  args: {
+    miembroId: v.id("companiaMiembros"),
+    email: v.string(),
+  },
+  handler: async (ctx, args): Promise<{ ok: true; changed: boolean }> => {
+    const email = args.email.trim().toLowerCase();
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      throw new Error("Correo inválido.");
+    }
+
+    const objetivo: {
+      userId: Id<"users">;
+      companiaId: Id<"companiasSeguridad">;
+      email: string;
+      name: string;
+    } = await ctx.runQuery(api.companias.assertPuedeEditarMiembro, {
+      miembroId: args.miembroId,
+    });
+
+    const actual = objetivo.email.trim().toLowerCase();
+    if (actual === email) return { ok: true as const, changed: false };
+
+    /* Único global: `users` se indexa por correo con `.unique()` y el alta
+     * reutiliza la fila que encuentre. Dos cuentas con el mismo correo
+     * romperían esa lectura, así que se comprueba en los dos lados. */
+    const ocupado = await ctx.runQuery(internal.users.emailEnUso, {
+      email,
+      exceptUserId: objetivo.userId,
+    });
+    if (ocupado) throw new Error("Ese correo ya está en uso por otra cuenta.");
+
+    const ia = (await createAuth(ctx).$context).internalAdapter;
+    if (await ia.findUserByEmail(email)) {
+      throw new Error("Ese correo ya está en uso por otra cuenta.");
+    }
+
+    const found = await ia.findUserByEmail(actual);
+    if (found) {
+      await ia.updateUser(found.user.id, { email, emailVerified: false });
+    }
+    await ctx.runMutation(internal.users.patchMemberEmail, {
+      userId: objetivo.userId,
+      email,
+    });
+
+    return { ok: true as const, changed: true };
+  },
+});
+
+/**
+ * Los datos de una persona, para el formulario de edición.
+ *
+ * Aparte de `detail` y no dentro: el documento y el teléfono de cada guarda no
+ * tienen por qué viajar en el listado de la compañía entera para que alguien
+ * abra una ficha. Se piden al abrirla.
+ *
+ * Pasa por la misma puerta que las escrituras, así que una ficha que no se
+ * puede editar tampoco se puede leer desde aquí, y el motivo lo dice el mismo
+ * mensaje.
+ *
+ * NO devuelve nada de la credencial. No hay campo que devolver: el hash vive
+ * en Better Auth y esta consulta ni lo mira.
+ */
+export const detalleMiembro = query({
+  args: { miembroId: v.id("companiaMiembros") },
+  handler: async (ctx, args) => {
+    const miembro = await ctx.db.get(args.miembroId);
+    if (!miembro) throw new Error("Miembro no encontrado.");
+    await exigirAccesoCompania(ctx, miembro.companiaId, "seguridad.personal");
+
+    const user = await ctx.db.get(miembro.userId);
+    if (!user) throw new Error("Perfil no encontrado.");
+
+    if (user.platformRole) {
+      throw new Error(
+        "Esa cuenta es de la plataforma. Debe gestionarse desde el panel maestro.",
+      );
+    }
+    const membresias = await ctx.db
+      .query("memberships")
+      .withIndex("by_user", (q) => q.eq("userId", miembro.userId))
+      .collect();
+    if (
+      membresias.some(
+        (m) =>
+          m.isActive &&
+          m.roles.some((r) =>
+            (ROLES_DE_MANDO_EN_CONJUNTO as readonly string[]).includes(r),
+          ),
+      )
+    ) {
+      throw new Error(
+        "Esa persona administra un conjunto. Sus credenciales se gestionan desde el conjunto, no desde la compañía.",
+      );
+    }
+
+    return {
+      miembroId: miembro._id,
+      nombre: user.name,
+      email: user.email,
+      firstName: user.firstName ?? null,
+      lastName: user.lastName ?? null,
+      tipoDocumento: user.tipoDocumento ?? null,
+      numeroDocumento: user.numeroDocumento ?? null,
+      telefono: user.telefono ?? null,
+      cargo: miembro.cargo ?? null,
+      /* Cuándo se le fijó la clave por última vez. El hecho, no el secreto:
+       * es lo que responde "¿ya le pusieron una nueva?". */
+      passwordFijadaEn: miembro.passwordFijadaEn ?? null,
     };
   },
 });

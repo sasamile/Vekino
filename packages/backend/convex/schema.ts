@@ -2360,6 +2360,23 @@ export default defineSchema({
 
     isActive: v.boolean(),
 
+    /**
+     * Rastro de las operaciones sensibles sobre esta persona.
+     *
+     * No hay tabla de auditoría en el proyecto y no se inventa una aquí: el
+     * modelo deja constancia en la propia fila afectada —`terminadoPorUserId`
+     * en contratos y asignaciones, `archivadaPorUserId` en la compañía— y
+     * esto sigue ese mismo camino. Responde "quién le cambió los datos" y
+     * "quién le reescribió la clave, y cuándo", que es lo que se pregunta
+     * cuando alguien dice que no puede entrar.
+     *
+     * Lo que NUNCA se guarda aquí es la clave, su hash ni nada derivado: solo
+     * el hecho de que se fijó.
+     */
+    actualizadoPorUserId: v.optional(v.id("users")),
+    passwordFijadaEn: v.optional(v.number()),
+    passwordFijadaPorUserId: v.optional(v.id("users")),
+
     createdAt: v.number(),
     updatedAt: v.number(),
   })

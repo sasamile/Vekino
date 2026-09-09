@@ -16,6 +16,7 @@ import {
   BookOpenCheck,
   Archive,
   ArchiveRestore,
+  Pencil,
 } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
@@ -28,6 +29,7 @@ import { Input, Select } from "@/components/ui/input";
 import { EmptyState } from "@/components/ui/empty-state";
 import { cn } from "@/lib/utils";
 import { EstadoBadge, Campo } from "../page";
+import { EditarPersonaDialog } from "@/components/companias/editar-persona-dialog";
 
 type Estado = "activa" | "suspendida" | "inactiva";
 type RolCompania = "admin_compania" | "supervisor" | "guardia";
@@ -465,6 +467,7 @@ function FilaPersona({ p }: { p: Persona }) {
   const desactivar = useMutation(api.companias.desactivarMiembro);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [editando, setEditando] = useState(false);
 
   async function alternar(rol: RolCompania) {
     const nuevos = p.roles.includes(rol)
@@ -519,22 +522,41 @@ function FilaPersona({ p }: { p: Persona }) {
         {p.asignacionesVigentes}
       </td>
       <td className="px-5 py-3.5 text-right">
-        <Button
-          size="sm"
-          variant="ghost"
-          disabled={busy}
-          onClick={async () => {
-            setBusy(true);
-            try {
-              await desactivar({ miembroId: p._id });
-            } finally {
-              setBusy(false);
-            }
-          }}
-        >
-          <UserMinus className="h-3.5 w-3.5" aria-hidden />
-          Dar de baja
-        </Button>
+        <div className="flex items-center justify-end gap-1">
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={busy}
+            onClick={() => setEditando(true)}
+          >
+            <Pencil className="h-3.5 w-3.5" aria-hidden />
+            Editar
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true);
+              try {
+                await desactivar({ miembroId: p._id });
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            <UserMinus className="h-3.5 w-3.5" aria-hidden />
+            Dar de baja
+          </Button>
+        </div>
+        {/* La ficha se monta al pulsar: los datos personales no viajan en el
+            listado de toda la compañía. */}
+        {editando && (
+          <EditarPersonaDialog
+            miembroId={p._id}
+            onClose={() => setEditando(false)}
+          />
+        )}
       </td>
     </tr>
   );

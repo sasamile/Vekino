@@ -19,6 +19,7 @@ import {
 } from "./model/authz";
 import { tipoDocumentoValidator } from "./model/roles";
 import { evaluarPassword } from "./lib/passwordFuerte";
+import { fijarPasswordDeCuenta } from "./model/credencial";
 import { resolveUserImage } from "./model/userImage";
 import { misAsignacionesVigentes } from "./model/asignacion";
 import { miCompaniaDe } from "./model/acceso";
@@ -480,6 +481,12 @@ export const assertCanEditMember = query({
 /**
  * Establece / actualiza la contraseña de un miembro del condominio.
  * No elimina la cuenta: solo cambia la credencial.
+ *
+ * La mecánica está en `model/credencial.ts`, compartida con la ruta de la
+ * compañía. Estaba escrita aquí a mano, y esa copia solo comprobaba que la
+ * clave tuviera ocho caracteres mientras `cambiarMiPassword` —a un archivo de
+ * distancia— aplicaba la política entera. Es decir: quien elegía su propia
+ * clave estaba mejor protegido que aquel a quien se la ponían.
  */
 export const setMemberPassword = action({
   args: {
@@ -487,52 +494,18 @@ export const setMemberPassword = action({
     userId: v.id("users"),
     password: v.string(),
   },
-  handler: async (ctx, args) => {
-    const password = args.password.trim();
-    if (password.length < 8) {
-      throw new Error("La contraseña debe tener al menos 8 caracteres.");
-    }
-
+  handler: async (ctx, args): Promise<{ ok: true; created: boolean }> => {
     const member = await ctx.runQuery(api.users.assertCanEditMember, {
       condominioId: args.condominioId,
       userId: args.userId,
     });
 
-    const auth = createAuth(ctx);
-    const authCtx = await auth.$context;
-    const ia = authCtx.internalAdapter;
-    const hashed = await authCtx.password.hash(password);
-
-    const found = await ia.findUserByEmail(member.email);
-    if (!found) {
-      const created = await ia.createUser({
-        email: member.email,
-        name: member.name,
-        emailVerified: false,
-      });
-      await ia.createAccount({
-        userId: created.id,
-        providerId: "credential",
-        accountId: created.id,
-        password: hashed,
-      });
-      return { ok: true as const, created: true };
-    }
-
-    const accounts = await ia.findAccounts(found.user.id);
-    const credential = accounts.find((a) => a.providerId === "credential");
-    if (!credential) {
-      await ia.createAccount({
-        userId: found.user.id,
-        providerId: "credential",
-        accountId: found.user.id,
-        password: hashed,
-      });
-    } else {
-      await ia.updatePassword(found.user.id, hashed);
-    }
-
-    return { ok: true as const, created: false };
+    const r = await fijarPasswordDeCuenta(ctx, {
+      email: member.email,
+      name: member.name,
+      password: args.password,
+    });
+    return { ok: true as const, created: r.cuentaCreada };
   },
 });
 
