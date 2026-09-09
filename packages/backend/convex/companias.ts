@@ -24,6 +24,8 @@ import {
 import {
   companiaRoleValidator,
   estadoCompaniaValidator,
+  exigirRolUnicoCompania,
+  rolPrincipalDeCompania,
   tipoDocumentoValidator,
 } from "./model/roles";
 import { estadoVigencia, haySolape, estaVigente } from "./lib/vigilancia";
@@ -635,12 +637,18 @@ export const upsertMiembroProfile = mutation({
     cargo: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await exigirAccesoCompania(ctx, args.companiaId, "seguridad.personal");
+    const { user: quienDaDeAlta } = await exigirAccesoCompania(
+      ctx,
+      args.companiaId,
+      "seguridad.personal",
+    );
 
     const email = args.email.trim().toLowerCase();
     const name = args.name.trim();
     if (!email || !name) throw new Error("Nombre y correo son obligatorios.");
-    if (args.roles.length === 0) throw new Error("Selecciona al menos un rol.");
+    /* Un solo rol de compañía. Se comprueba aquí, en la mutación, y no solo
+     * en la action que la llama: ésta es la puerta que toca la base. */
+    exigirRolUnicoCompania(args.roles);
 
     const now = Date.now();
     const telefono = args.telefono?.trim() || undefined;
@@ -702,11 +710,23 @@ export const upsertMiembroProfile = mutation({
     let miembroId: Id<"companiaMiembros">;
     if (previo) {
       miembroId = previo._id;
+      /* Volver a dar de alta a alguien puede cambiarle el rol —se da de baja
+       * a un guarda y se le vuelve a subir como supervisor—, así que deja el
+       * mismo rastro que `setRolesMiembro`. */
+      const anterior = rolPrincipalDeCompania(previo.roles);
+      const nuevo = exigirRolUnicoCompania(args.roles);
       await ctx.db.patch(previo._id, {
-        roles: args.roles,
+        roles: [nuevo],
         cargo: args.cargo?.trim() || undefined,
         isActive: true,
         updatedAt: now,
+        ...(anterior !== nuevo
+          ? {
+              rolAnterior: anterior ?? undefined,
+              rolCambiadoEn: now,
+              rolCambiadoPorUserId: quienDaDeAlta._id,
+            }
+          : {}),
       });
     } else {
       miembroId = await ctx.db.insert("companiaMiembros", {
@@ -761,6 +781,12 @@ export const crearMiembro = action({
     });
     if (!fuerza.ok) throw new Error(fuerza.problemas[0]!);
 
+    /* El rol, por la misma razón que la clave: `upsertMiembroProfile` lo
+     * vuelve a comprobar —es la puerta de verdad— pero rechazarlo aquí evita
+     * gastar una escritura y una llamada a Better Auth en un alta que iba a
+     * fallar de todos modos. */
+    exigirRolUnicoCompania(args.roles);
+
     const perfil: {
       userId: Id<"users">;
       miembroId: Id<"companiaMiembros">;
@@ -812,9 +838,17 @@ export const setRolesMiembro = mutation({
   handler: async (ctx, args) => {
     const miembro = await ctx.db.get(args.miembroId);
     if (!miembro) throw new Error("Miembro no encontrado.");
-    await exigirAccesoCompania(ctx, miembro.companiaId, "seguridad.personal");
+    const { user: quienCambia } = await exigirAccesoCompania(
+      ctx,
+      miembro.companiaId,
+      "seguridad.personal",
+    );
 
-    if (args.roles.length === 0) throw new Error("Selecciona al menos un rol.");
+    /* La regla, en el sitio donde se cambia el rol. Cambiar de GUARDA a
+     * SUPERVISOR REEMPLAZA: llega un array de uno y se guarda tal cual, así
+     * que no hay forma de acumular. */
+    const nuevo = exigirRolUnicoCompania(args.roles);
+    const anterior = rolPrincipalDeCompania(miembro.roles);
 
     /* Quitarle un rol a alguien que está asignado con ese rol dejaría una
      * asignación que ya no puede ejercerse. Se avisa en vez de romperla en
@@ -832,10 +866,29 @@ export const setRolesMiembro = mutation({
       );
     }
 
+    const ahora = Date.now();
     await ctx.db.patch(args.miembroId, {
-      roles: args.roles,
-      cargo: args.cargo?.trim() || undefined,
-      updatedAt: Date.now(),
+      roles: [nuevo],
+      updatedAt: ahora,
+      /* Patch condicional, como en `upsertMiembroProfile`: en Convex, patch
+       * con undefined BORRA el campo. La pantalla cambia el rol sin mandar el
+       * cargo —son dos acciones distintas—, así que escribirlo siempre le
+       * borraba a la persona su "Supervisor zona norte" cada vez que alguien
+       * le tocaba el rol. */
+      ...(args.cargo !== undefined
+        ? { cargo: args.cargo.trim() || undefined }
+        : {}),
+      /* Rastro del cambio de rol, en la propia fila afectada —como
+       * `passwordFijadaPorUserId` justo al lado—. Solo si el rol cambió de
+       * verdad: dejarlo también al corregir el cargo diría que hubo un cambio
+       * de rol donde no lo hubo. */
+      ...(anterior !== nuevo
+        ? {
+            rolAnterior: anterior ?? undefined,
+            rolCambiadoEn: ahora,
+            rolCambiadoPorUserId: quienCambia._id,
+          }
+        : {}),
     });
     return args.miembroId;
   },

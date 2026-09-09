@@ -423,7 +423,7 @@ function PanelPersonal({
             <thead>
               <tr className="border-b border-border text-left text-xs text-muted-foreground">
                 <th className="px-5 py-3 font-medium">Persona</th>
-                <th className="px-5 py-3 font-medium">Roles</th>
+                <th className="px-5 py-3 font-medium">Rol</th>
                 <th className="px-5 py-3 font-medium">Conjuntos</th>
                 <th className="px-5 py-3 text-right font-medium">Acciones</th>
               </tr>
@@ -469,15 +469,20 @@ function FilaPersona({ p }: { p: Persona }) {
   const [busy, setBusy] = useState(false);
   const [editando, setEditando] = useState(false);
 
-  async function alternar(rol: RolCompania) {
-    const nuevos = p.roles.includes(rol)
-      ? p.roles.filter((r) => r !== rol)
-      : [...p.roles, rol];
-    if (nuevos.length === 0) return;
+  /* `[0]` y no un `find`: el backend garantiza que solo hay uno. Se lee así
+   * para que, si alguna vez llegara una fila vieja sin normalizar, la pantalla
+   * muestre el primero en vez de reventar. */
+  const rolActual = p.roles[0] as RolCompania | undefined;
+
+  /* Una persona de compañía tiene UN rol. Elegir otro lo REEMPLAZA: se manda
+   * el nuevo y nada más, así que no hay forma de acumular ni desde aquí ni
+   * desde una petición fabricada a mano —el backend aplica la misma regla—. */
+  async function cambiarRol(rol: RolCompania) {
+    if (rolActual === rol) return;
     setError(null);
     setBusy(true);
     try {
-      await setRoles({ miembroId: p._id, roles: nuevos as RolCompania[] });
+      await setRoles({ miembroId: p._id, roles: [rol] });
     } catch (e) {
       setError(e instanceof Error ? e.message : "No se pudo cambiar.");
     } finally {
@@ -496,20 +501,29 @@ function FilaPersona({ p }: { p: Persona }) {
         {error && <p className="mt-1 text-xs text-destructive">{error}</p>}
       </td>
       <td className="px-5 py-3.5">
-        <div className="flex flex-wrap gap-1.5">
+        {/* Selección única: `radiogroup` y no una lista de botones sueltos,
+            para que un lector de pantalla anuncie la exclusividad igual que la
+            anuncia el relleno del que está puesto. */}
+        <div
+          role="radiogroup"
+          aria-label="Rol en la compañía"
+          className="flex flex-wrap gap-1.5"
+        >
           {(Object.keys(ETIQUETA_ROL) as RolCompania[]).map((rol) => {
-            const puesto = p.roles.includes(rol);
+            const puesto = rolActual === rol;
             return (
               <button
                 key={rol}
                 type="button"
-                disabled={busy}
-                onClick={() => alternar(rol)}
+                role="radio"
+                aria-checked={puesto}
+                disabled={busy || puesto}
+                onClick={() => cambiarRol(rol)}
                 className={cn(
-                  "rounded-full border px-2.5 py-0.5 text-[11.5px] transition-colors disabled:opacity-50",
+                  "rounded-full border px-2.5 py-0.5 text-[11.5px] transition-colors",
                   puesto
                     ? "border-brand bg-brand/10 text-brand"
-                    : "border-border text-muted-foreground hover:bg-accent",
+                    : "border-border text-muted-foreground hover:bg-accent disabled:opacity-50",
                 )}
               >
                 {ETIQUETA_ROL[rol]}
@@ -577,7 +591,7 @@ function AgregarPersonaDialog({
   const [password, setPassword] = useState("");
   const [telefono, setTelefono] = useState("");
   const [cargo, setCargo] = useState("");
-  const [roles, setRoles] = useState<RolCompania[]>(["guardia"]);
+  const [rol, setRol] = useState<RolCompania>("guardia");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -587,7 +601,7 @@ function AgregarPersonaDialog({
     setPassword("");
     setTelefono("");
     setCargo("");
-    setRoles(["guardia"]);
+    setRol("guardia");
     setError(null);
     onClose();
   }
@@ -604,7 +618,7 @@ function AgregarPersonaDialog({
         password,
         telefono: telefono || undefined,
         cargo: cargo || undefined,
-        roles,
+        roles: [rol],
       });
       cerrar();
     } catch (err) {
@@ -662,33 +676,23 @@ function AgregarPersonaDialog({
           />
         </Campo>
 
-        <Campo label="Roles en la compañía" requerido>
-          <div className="flex flex-wrap gap-1.5">
-            {(Object.keys(ETIQUETA_ROL) as RolCompania[]).map((rol) => {
-              const puesto = roles.includes(rol);
-              return (
-                <button
-                  key={rol}
-                  type="button"
-                  onClick={() =>
-                    setRoles(
-                      puesto
-                        ? roles.filter((r) => r !== rol)
-                        : [...roles, rol],
-                    )
-                  }
-                  className={cn(
-                    "rounded-full border px-3 py-1 text-[12.5px] transition-colors",
-                    puesto
-                      ? "border-brand bg-brand/10 text-brand"
-                      : "border-border text-muted-foreground hover:bg-accent",
-                  )}
-                >
-                  {ETIQUETA_ROL[rol]}
-                </button>
-              );
-            })}
-          </div>
+        {/* Un solo rol. Mismo `Select` que el diálogo de asignación de abajo:
+            no hay dos maneras de elegir un rol en esta pantalla. */}
+        <Campo
+          label="Rol en la compañía"
+          requerido
+          ayuda="Una persona tiene un único rol. Se puede cambiar después."
+        >
+          <Select
+            value={rol}
+            onChange={(e) => setRol(e.target.value as RolCompania)}
+          >
+            {(Object.keys(ETIQUETA_ROL) as RolCompania[]).map((r) => (
+              <option key={r} value={r}>
+                {ETIQUETA_ROL[r]}
+              </option>
+            ))}
+          </Select>
         </Campo>
 
         {error && <p className="text-sm text-destructive">{error}</p>}
@@ -699,7 +703,7 @@ function AgregarPersonaDialog({
           </Button>
           <Button
             type="submit"
-            disabled={busy || roles.length === 0 || password.length < 8}
+            disabled={busy || password.length < 8}
           >
             {busy ? "Agregando…" : "Agregar"}
           </Button>

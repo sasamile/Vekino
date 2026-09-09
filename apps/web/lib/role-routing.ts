@@ -40,3 +40,26 @@ export function homeHrefForAsignacion(
 ): string {
   return rol === "supervisor" ? "/vigilancia" : `/guardia/${condominioId}`;
 }
+
+/**
+ * Destino de quien pertenece a una COMPAÑÍA de vigilancia, por su rol en ella.
+ *
+ * El tercer eje: ni membresía en un conjunto ni asignación a una portería,
+ * sino pertenecer a la empresa. Un usuario de compañía tiene un solo rol —lo
+ * garantiza `exigirRolUnicoCompania` en el backend—, así que aquí no hay nada
+ * que desempatar: un rol, un destino.
+ *
+ * `null` para el guarda a propósito. Su experiencia es la portería de un
+ * conjunto concreto, y sin asignación no hay conjunto al que llevarlo; su
+ * destino sale de `homeHrefForAsignacion`, no de aquí. Devolver "/vigilancia"
+ * lo mandaría a un panel que su rol no abre, y el shell lo rebotaría a
+ * /dashboard en un bucle.
+ */
+export function homeHrefForCompania(
+  rol: string | undefined,
+  companiaId: string,
+): string | null {
+  if (rol === "admin_compania") return `/dashboard/companias/${companiaId}`;
+  if (rol === "supervisor") return "/vigilancia";
+  return null;
+}

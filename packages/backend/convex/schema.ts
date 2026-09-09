@@ -2349,9 +2349,17 @@ export default defineSchema({
     companiaId: v.id("companiasSeguridad"),
 
     /**
-     * Multi-rol, por el mismo motivo que `memberships.roles`: un supervisor
-     * puede además cubrir turnos, y quien administra una compañía pequeña
-     * suele ser también quien supervisa.
+     * UN SOLO ROL. Sigue siendo un array —la forma de la tabla no cambia y
+     * `roles.includes(...)` se lee igual en los ciento y pico sitios que ya
+     * preguntan— pero la única longitud válida es 1, y eso lo impone
+     * `exigirRolUnicoCompania` en todos los puntos de escritura.
+     *
+     * Nació multi-rol pensando en el supervisor que además cubre turnos. El
+     * caso existe, pero se paga en el sitio equivocado: tras el login hay que
+     * decidir a qué experiencia entra la persona, y con guarda Y supervisor a
+     * la vez no hay respuesta. Cubrir un turno siendo supervisor ya tiene su
+     * sitio propio y mejor —`asignaciones.rol`, que es por conjunto—, así que
+     * el array no compraba nada que el modelo no diera ya.
      */
     roles: v.array(companiaRoleValidator),
 
@@ -2376,6 +2384,23 @@ export default defineSchema({
     actualizadoPorUserId: v.optional(v.id("users")),
     passwordFijadaEn: v.optional(v.number()),
     passwordFijadaPorUserId: v.optional(v.id("users")),
+
+    /**
+     * El último cambio de rol: cuál era, cuándo se cambió y quién lo ordenó.
+     *
+     * Mismo mecanismo que las tres líneas de arriba y por el mismo motivo: el
+     * rol decide a qué experiencia entra la persona y qué puede hacer en la
+     * portería, así que "quién le cambió el rol" es exactamente la clase de
+     * pregunta que se hace cuando algo no cuadra. El rol NUEVO no se duplica
+     * aquí — es `roles`, que está a tres líneas.
+     *
+     * Guarda solo el último cambio, igual que `passwordFijadaEn`. Un
+     * histórico completo pediría una tabla de auditoría, y este modelo
+     * deliberadamente no tiene ninguna.
+     */
+    rolAnterior: v.optional(companiaRoleValidator),
+    rolCambiadoEn: v.optional(v.number()),
+    rolCambiadoPorUserId: v.optional(v.id("users")),
 
     createdAt: v.number(),
     updatedAt: v.number(),

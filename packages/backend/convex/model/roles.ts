@@ -114,6 +114,59 @@ export const companiaRoleValidator = v.union(
 );
 
 /**
+ * UN USUARIO DE COMPAÑÍA = UN ÚNICO ROL DE COMPAÑÍA.
+ *
+ * `companiaMiembros.roles` sigue siendo un array —cambiar la forma de la
+ * tabla obligaría a migrar el esquema y a reescribir los ciento y pico sitios
+ * que hoy preguntan `roles.includes(...)`, que funcionan igual de bien con un
+ * array de un elemento—. Lo que cambia es que ahora hay una sola longitud
+ * válida, y se comprueba aquí en vez de en cada formulario.
+ *
+ * El motivo es de ruteo, no de permisos: tras el login el sistema tiene que
+ * poder decir a qué experiencia lleva a esta persona, y con dos roles a la vez
+ * —guarda Y supervisor— no hay respuesta. La alternativa era desempatar por
+ * orden de comprobación en el cliente, que es exactamente la clase de regla
+ * que se olvida de actualizar cuando aparece el tercer rol.
+ *
+ * OJO: esto es SOLO el eje de vigilancia. `memberships.roles` sigue siendo
+ * multi-rol a propósito —alguien es propietario Y miembro de la junta— y no
+ * debe pasar por aquí.
+ *
+ * Lanza en vez de normalizar: quedarse en silencio con el primero de dos
+ * roles enviados por error deja a una persona con menos permisos de los que
+ * quien la dio de alta cree haberle puesto, y eso no se descubre hasta que
+ * no puede entrar.
+ */
+export function exigirRolUnicoCompania(
+  roles: readonly CompaniaRole[],
+): CompaniaRole {
+  if (roles.length === 0) throw new Error("Selecciona un rol.");
+  if (roles.length > 1) {
+    throw new Error(
+      "Una persona solo puede tener un rol en la compañía. Selecciona uno.",
+    );
+  }
+  return roles[0]!;
+}
+
+/**
+ * El rol de un miembro tal como lo leen el ruteo y la interfaz.
+ *
+ * Tolerante a propósito, al revés que `exigirRolUnicoCompania`: las filas
+ * anteriores a la regla pueden traer varios roles hasta que se normalicen, y
+ * una pantalla que reviente al pintarlas sería peor que una que muestre el de
+ * mayor responsabilidad. La jerarquía es la misma que usa la normalización.
+ */
+export function rolPrincipalDeCompania(
+  roles: readonly CompaniaRole[],
+): CompaniaRole | null {
+  for (const rol of COMPANIA_ROLES) {
+    if (roles.includes(rol)) return rol;
+  }
+  return null;
+}
+
+/**
  * Estado de la compañía. El único enum nuevo del modelo.
  *
  * `suspendida` existe porque un booleano no puede expresar "bloqueada pero
