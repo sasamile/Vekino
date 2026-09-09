@@ -969,6 +969,198 @@ describe("el administrador del conjunto ve la vigilancia de SU conjunto", () => 
   });
 });
 
+/**
+ * LAS METRICAS DEL PERIODO.
+ *
+ * Las dos cifras de la cabecera de Vigilancia se sacaban de las listas que ya
+ * pedia la pantalla, y esas vienen capadas: `listMinuta` trae como mucho 300
+ * eventos. "Incidentes" no era ni el total ni el del periodo, era cuantas
+ * novedades cabian en la ultima pagina — y con historico suficiente daba cero
+ * sin avisar de nada.
+ *
+ * `guardia.resumenPeriodo` cuenta en el servidor, sobre el rango entero y sin
+ * tope. El dia civil es el de Bogota, el mismo criterio que portería ya aplica
+ * a los visitantes.
+ */
+describe("las metricas de vigilancia se cuentan por periodo", () => {
+  let e: Escenario;
+
+  /** Instante dentro del dia civil de Bogota. */
+  const enBogota = (iso: string, hora = "12:00:00") =>
+    new Date(`${iso}T${hora}-05:00`).getTime();
+
+  /** Un evento de minuta con fecha controlada. */
+  const sembrarEvento = async (
+    condominioId: Id<"condominios">,
+    modulo: "novedades" | "minuta",
+    resumen: string,
+    createdAt: number,
+  ) => {
+    await e.t.run(async (ctx) => {
+      await ctx.db.insert("minutaEventos", {
+        condominioId,
+        modulo,
+        tipo: modulo === "novedades" ? "Novedad" : "Anotacion",
+        unidad: "Porteria",
+        resumen,
+        estado: "cerrado",
+        actorNombre: "Gabriel Guarda",
+        createdAt,
+      });
+    });
+  };
+
+  beforeEach(async () => {
+    e = await montar();
+
+    /* En orden cronologico a proposito: `createdAt` se escribe siempre en el
+     * insert, asi que en produccion crece igual que el orden del indice. El
+     * recorrido corta cuando se pasa del inicio del rango apoyandose en eso;
+     * sembrar al reves seria montar un escenario que no puede existir. */
+    await sembrarEvento(e.norte, "novedades", "Porton forzado", enBogota("2026-03-10"));
+    await sembrarEvento(e.norte, "novedades", "Luminaria rota", enBogota("2026-03-31", "23:59:00"));
+    await sembrarEvento(e.norte, "novedades", "Fuera de rango", enBogota("2026-04-01", "00:01:00"));
+    /* Y una novedad en OTRO conjunto, para que contar no cruce tenants. */
+    await sembrarEvento(e.sur, "novedades", "Del conjunto vecino", enBogota("2026-03-12"));
+  });
+
+  test("cuenta un solo dia, con los dos extremos incluidos", async () => {
+    const soloEseDia = await e.como("hernan").query(api.guardia.resumenPeriodo, {
+      condominioId: e.norte,
+      desde: "2026-03-10",
+      hasta: "2026-03-10",
+    });
+    expect(soloEseDia).toEqual({ rondas: 0, incidentes: 1 });
+
+    /* El ultimo dia entra COMPLETO: la novedad de las 23:59 cuenta, y la de un
+     * minuto despues de medianoche ya es del mes siguiente. */
+    const marzo = await e.como("hernan").query(api.guardia.resumenPeriodo, {
+      condominioId: e.norte,
+      desde: "2026-03-01",
+      hasta: "2026-03-31",
+    });
+    expect(marzo.incidentes).toBe(2);
+
+    const abril = await e.como("hernan").query(api.guardia.resumenPeriodo, {
+      condominioId: e.norte,
+      desde: "2026-04-01",
+      hasta: "2026-04-30",
+    });
+    expect(abril.incidentes).toBe(1);
+  });
+
+  test("un rango sin registros da cero, no el acumulado anterior", async () => {
+    const enero = await e.como("hernan").query(api.guardia.resumenPeriodo, {
+      condominioId: e.norte,
+      desde: "2026-01-01",
+      hasta: "2026-01-31",
+    });
+    expect(enero).toEqual({ rondas: 0, incidentes: 0 });
+  });
+
+  test("cuenta las rondas del rango, no las del turno abierto", async () => {
+    await operar(e, "gabriel", e.norte, "Zona A");
+    const hoy = new Date();
+    const p = (n: number) => String(n).padStart(2, "0");
+    const iso = `${hoy.getFullYear()}-${p(hoy.getMonth() + 1)}-${p(hoy.getDate())}`;
+
+    const deHoy = await e.como("hernan").query(api.guardia.resumenPeriodo, {
+      condominioId: e.norte,
+      desde: iso,
+      hasta: iso,
+    });
+    expect(deHoy.rondas).toBe(1);
+
+    /* Y en un rango viejo la ronda de hoy no aparece, aunque el turno siga
+     * abierto: es justo la diferencia con la cifra que habia antes. */
+    const marzo = await e.como("hernan").query(api.guardia.resumenPeriodo, {
+      condominioId: e.norte,
+      desde: "2026-03-01",
+      hasta: "2026-03-31",
+    });
+    expect(marzo.rondas).toBe(0);
+  });
+
+  test("no cuenta lo de otro conjunto", async () => {
+    const norte = await e.como("hernan").query(api.guardia.resumenPeriodo, {
+      condominioId: e.norte,
+      desde: "2026-03-01",
+      hasta: "2026-03-31",
+    });
+    // Marzo tiene 2 en Norte; la del vecino es del 12 de marzo y no se suma.
+    expect(norte.incidentes).toBe(2);
+  });
+
+  test("la fecha inicial no puede ser posterior a la final", async () => {
+    await expect(
+      e.como("hernan").query(api.guardia.resumenPeriodo, {
+        condominioId: e.norte,
+        desde: "2026-03-31",
+        hasta: "2026-03-01",
+      }),
+    ).rejects.toThrow(/no puede ser posterior/i);
+  });
+
+  test("cambiar el id no cuenta la porteria de al lado", async () => {
+    for (const condominioId of [e.sur, e.oriente]) {
+      await expect(
+        e.como("hernan").query(api.guardia.resumenPeriodo, {
+          condominioId,
+          desde: "2026-03-01",
+          hasta: "2026-03-31",
+        }),
+      ).rejects.toThrow(/porteria\.ver/);
+    }
+  });
+
+  test("la compania y el supervisor tambien pueden pedirlo de su conjunto", async () => {
+    for (const quien of ["alicia", "sofia"] as const) {
+      const r = await e.como(quien).query(api.guardia.resumenPeriodo, {
+        condominioId: e.norte,
+        desde: "2026-03-01",
+        hasta: "2026-03-31",
+      });
+      expect(r.incidentes).toBe(2);
+    }
+  });
+
+  /**
+   * EL BUG, FIJADO.
+   *
+   * Con mas eventos de los que cabe una pagina, la cuenta vieja —filtrar la
+   * lista que ya trae la pantalla— da CERO incidentes en un mes que tuvo dos.
+   * Es la razon de que esto se cuente en el servidor y no en el cliente.
+   */
+  test("no se queda corto cuando hay mas eventos que el tope de la lista", async () => {
+    /* 320 anotaciones POSTERIORES a las novedades de marzo: empujan a las dos
+     * novedades fuera de cualquier pagina razonable de `listMinuta`. */
+    const base = enBogota("2026-05-01");
+    for (let i = 0; i < 320; i++) {
+      await sembrarEvento(
+        e.norte,
+        "minuta",
+        `Relleno ${i}`,
+        base + i * 60_000,
+      );
+    }
+
+    // Como se contaba antes: sobre la lista, que viene capada.
+    const lista = await e.como("hernan").query(api.guardia.listMinuta, {
+      condominioId: e.norte,
+      limit: 200,
+    });
+    expect(lista.filter((m) => m.modulo === "novedades")).toHaveLength(0);
+
+    // Como se cuenta ahora.
+    const marzo = await e.como("hernan").query(api.guardia.resumenPeriodo, {
+      condominioId: e.norte,
+      desde: "2026-03-01",
+      hasta: "2026-03-31",
+    });
+    expect(marzo.incidentes).toBe(2);
+  });
+});
+
 describe("multi-tenant: cada compania ve solo lo suyo", () => {
   let e: Escenario;
   beforeEach(async () => {

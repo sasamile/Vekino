@@ -11,7 +11,11 @@ import {
 import { exigirAcceso, resolverAcceso } from "./model/acceso";
 import { asignacionVigente } from "./model/asignacion";
 import { logMinuta, rondaEnCurso, turnoAbierto } from "./model/minuta";
-import { esVisitanteVigente, ventanaHoyBogota } from "./model/visitantes";
+import {
+  esVisitanteVigente,
+  ventanaDiaBogota,
+  ventanaHoyBogota,
+} from "./model/visitantes";
 import { displayNameFromUser } from "./model/displayName";
 import { resolveMediaUrl, resolveMediaUrlList } from "./model/files";
 import { normalizarPlaca } from "./lib/placa";
@@ -653,6 +657,81 @@ export const listMinuta = query({
         rondaZona: ronda?.zona ?? null,
       };
     });
+  },
+});
+
+/**
+ * CUÁNTAS RONDAS Y CUÁNTOS INCIDENTES HUBO EN UN PERÍODO.
+ *
+ * Existe porque contar no es listar. Las dos cifras se sacaban antes de las
+ * listas que ya pedía la pantalla, y esas vienen capadas —`listMinuta` trae
+ * como mucho 300 eventos y `rondas.listar` 200—, así que "incidentes" no era
+ * ni el total ni el del período: era cuántas novedades cabían en la última
+ * página. Con más de 200 eventos el número se quedaba corto sin avisar.
+ *
+ * Contar en el servidor y no en el cliente es justamente lo que arregla eso:
+ * aquí se recorre el índice entero del rango, sin tope.
+ *
+ * El rango llega como "AAAA-MM-DD" —la convención que ya usa
+ * `reservas.reporte`— y se traduce a milisegundos con `ventanaDiaBogota`, que
+ * es el mismo criterio de día civil que aplica portería a los visitantes. Sin
+ * eso, "hoy" empezaría a las 7 p.m. del día anterior para media operación.
+ *
+ * Ambos extremos son INCLUSIVE: pedir 01/09 → 01/09 cuenta ese día completo.
+ */
+export const resumenPeriodo = query({
+  args: {
+    condominioId: v.id("condominios"),
+    /** "2026-09-01". Inclusive. */
+    desde: v.string(),
+    /** "2026-09-09". Inclusive. */
+    hasta: v.string(),
+  },
+  handler: async (ctx, args) => {
+    /* Mismo permiso que la minuta y las rondas que resume: leer la portería
+     * es supervisión. No abre nada que la pantalla no pudiera ya ver. */
+    await exigirAcceso(ctx, args.condominioId, "porteria.ver");
+
+    if (args.desde > args.hasta) {
+      throw new Error("La fecha inicial no puede ser posterior a la final.");
+    }
+
+    const { inicio } = ventanaDiaBogota(args.desde);
+    const { fin } = ventanaDiaBogota(args.hasta);
+
+    /* Se recorre de lo más nuevo a lo más viejo y se CORTA al pasarse del
+     * inicio del rango, en vez de `.collect()`: en una portería con años de
+     * histórico, contar lo de esta semana no puede costar leer la tabla
+     * entera. Es la misma técnica que ya usa `listMinuta` al filtrar por
+     * actor.
+     *
+     * El corte se hace por `createdAt` —que se escribe en el insert y por
+     * tanto crece igual que el orden del índice— aunque la ronda se cuente
+     * por `fechaInicio`: las dos se sellan en la misma escritura, así que no
+     * hay ronda con inicio dentro del rango y creación anterior. */
+    let rondas = 0;
+    for await (const r of ctx.db
+      .query("guardiaRondas")
+      .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
+      .order("desc")) {
+      if (r.createdAt < inicio) break;
+      const en = r.fechaInicio ?? r.createdAt;
+      if (en >= inicio && en <= fin) rondas++;
+    }
+
+    let incidentes = 0;
+    for await (const e of ctx.db
+      .query("minutaEventos")
+      .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
+      .order("desc")) {
+      if (e.createdAt < inicio) break;
+      /* La misma definición de incidente que ya pintaba la tarjeta: el módulo
+       * `novedades` de la minuta. No se amplía aquí lo que cuenta como
+       * incidente; solo se acota al período. */
+      if (e.createdAt <= fin && e.modulo === "novedades") incidentes++;
+    }
+
+    return { rondas, incidentes };
   },
 });
 

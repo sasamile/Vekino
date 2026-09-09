@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useParams } from "next/navigation";
 import { useQuery, useMutation } from "convex/react";
 import {
-  AlertTriangle, BookOpenCheck, Car, Check, ClipboardCheck, Download, Eye, Footprints, Loader2, Paperclip, Plus, Search, Settings2, ShieldCheck, Timer, Trash2, Users,
+  AlertTriangle, BookOpenCheck, CalendarDays, Car, Check, ClipboardCheck, Download, Eye, Footprints, Loader2, Paperclip, Plus, Search, Settings2, ShieldCheck, Timer, Trash2, Users,
 } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import type { Id, Doc } from "@vekino/backend/dataModel";
@@ -32,6 +32,35 @@ const MODULO_META: Record<Modulo, { label: string; tone: React.ComponentProps<ty
   novedades:  { label: "Novedades", tone: "destructive" },
   minuta:     { label: "Minuta", tone: "primary" },
 };
+
+/**
+ * Del día 1 del mes en curso hasta hoy.
+ *
+ * La sección no tenía período por defecto —las dos cifras se sacaban de listas
+ * capadas—, así que se toma el mismo criterio que el reporte de reservas: un
+ * rango que arranca con el mes. Hasta HOY y no hasta fin de mes porque estas
+ * dos métricas cuentan lo que ya pasó; ofrecer días futuros solo añade ceros.
+ */
+function mesEnCurso(): { desde: string; hasta: string } {
+  const hoy = new Date();
+  const p = (n: number) => String(n).padStart(2, "0");
+  const iso = (d: Date) =>
+    `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  return {
+    desde: iso(new Date(hoy.getFullYear(), hoy.getMonth(), 1)),
+    hasta: iso(hoy),
+  };
+}
+
+/** "2026-09-01" → "1 sep 2026", para redactar el pie de las tarjetas. */
+function fmtDiaCorto(iso: string): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(y ?? 1970, (m ?? 1) - 1, d ?? 1).toLocaleDateString("es-CO", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+}
 
 function fmtFechaHora(ts?: number) {
   if (!ts) return "—";
@@ -106,6 +135,20 @@ export default function VigilanciaConjuntoPage() {
 
   const activos = (personal ?? []).filter((p) => p.estado !== "terminada");
 
+  const [periodo, setPeriodo] = useState(mesEnCurso);
+  const rangoValido = periodo.desde <= periodo.hasta;
+
+  /* Las dos cifras del período las cuenta el SERVIDOR. Sacarlas de `minuta`
+   * —que viene capada a 200 eventos— era el motivo de que el número no
+   * cuadrara con nada. Con el rango al revés no se pregunta: el servidor lo
+   * rechazaría y la pantalla entera se caería por un dato mal escrito. */
+  const resumen = useQuery(
+    api.guardia.resumenPeriodo,
+    rangoValido
+      ? { condominioId, desde: periodo.desde, hasta: periodo.hasta }
+      : "skip",
+  );
+
   return (
     <PageContainer>
       <div className="space-y-6">
@@ -114,7 +157,15 @@ export default function VigilanciaConjuntoPage() {
           description="Quién cubre la portería, qué recorre y qué queda anotado"
         />
 
+        <FiltroPeriodo
+          periodo={periodo}
+          onChange={setPeriodo}
+          valido={rangoValido}
+        />
+
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+          {/* Turno actual y Personal NO dependen del período: dicen qué pasa
+              ahora mismo en la portería, no cuánto pasó en unas fechas. */}
           <StatCard
             icon={ShieldCheck}
             label="Turno actual"
@@ -127,11 +178,18 @@ export default function VigilanciaConjuntoPage() {
             value={activos.length}
             tone="primary"
           />
-          <StatCard icon={Footprints} label="Rondas del turno" value={turnoActivo?.rondasCount ?? 0} tone="brand" />
+          {/* Estas dos sí. Se etiquetan "del período" para que el número no se
+              lea como un total: antes decía "del turno" y contaba otra cosa. */}
+          <StatCard
+            icon={Footprints}
+            label="Rondas del período"
+            value={rangoValido ? (resumen?.rondas ?? "…") : "—"}
+            tone="brand"
+          />
           <StatCard
             icon={AlertTriangle}
-            label="Incidentes (minuta)"
-            value={(minuta ?? []).filter((e) => e.modulo === "novedades").length}
+            label="Incidentes del período"
+            value={rangoValido ? (resumen?.incidentes ?? "…") : "—"}
             tone="destructive"
           />
         </div>
@@ -165,6 +223,81 @@ export default function VigilanciaConjuntoPage() {
         )}
       </div>
     </PageContainer>
+  );
+}
+
+/* ───────── Filtro de período ───────── */
+
+/**
+ * Desde / Hasta para las dos métricas que cuentan hechos.
+ *
+ * Dos `<Input type="date">` y no un componente nuevo: es el patrón que ya usa
+ * el reporte de reservas, y extraer un `<RangoFechas />` con dos usos en todo
+ * el proyecto sería una abstracción antes de tiempo. Si aparece un tercero,
+ * ahí sí conviene sacarlo.
+ *
+ * La validación va en el input (`max` en Desde, `min` en Hasta) para que el
+ * calendario no deje ni escoger un rango invertido, y además se comprueba
+ * arriba antes de preguntar. El servidor la repite por su cuenta: escribir la
+ * fecha a mano es perfectamente posible.
+ */
+function FiltroPeriodo({
+  periodo,
+  onChange,
+  valido,
+}: {
+  periodo: { desde: string; hasta: string };
+  onChange: (p: { desde: string; hasta: string }) => void;
+  valido: boolean;
+}) {
+  return (
+    <Card className="flex flex-wrap items-end gap-4 p-4">
+      <div className="space-y-1.5">
+        <label
+          htmlFor="vig-desde"
+          className="flex items-center gap-1.5 text-[12.5px] font-medium text-foreground"
+        >
+          <CalendarDays className="h-3.5 w-3.5 text-brand" aria-hidden />
+          Desde
+        </label>
+        <Input
+          id="vig-desde"
+          type="date"
+          value={periodo.desde}
+          max={periodo.hasta}
+          onChange={(e) => onChange({ ...periodo, desde: e.target.value })}
+        />
+      </div>
+      <div className="space-y-1.5">
+        <label
+          htmlFor="vig-hasta"
+          className="block text-[12.5px] font-medium text-foreground"
+        >
+          Hasta
+        </label>
+        <Input
+          id="vig-hasta"
+          type="date"
+          value={periodo.hasta}
+          min={periodo.desde}
+          onChange={(e) => onChange({ ...periodo, hasta: e.target.value })}
+        />
+      </div>
+
+      <p className="min-w-[220px] flex-1 pb-2 text-[11.5px] text-muted-foreground">
+        {valido ? (
+          <>
+            Rondas e incidentes contados entre el{" "}
+            {fmtDiaCorto(periodo.desde)} y el {fmtDiaCorto(periodo.hasta)},
+            ambos incluidos.
+          </>
+        ) : (
+          <span className="text-destructive">
+            La fecha inicial no puede ser posterior a la final.
+          </span>
+        )}
+      </p>
+    </Card>
   );
 }
 
