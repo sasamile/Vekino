@@ -10,15 +10,16 @@ import {
   condominiosSupervisados,
 } from "./model/acceso";
 import {
+  asignacionEstorba,
   asignacionVigente,
   misAsignacionesVigentes,
 } from "./model/asignacion";
 import { rolAsignacionValidator } from "./model/roles";
 import {
+  acotado,
   cabeDentro,
   estaVigente,
   estadoVigencia,
-  haySolape,
   type Capacidad,
 } from "./lib/vigilancia";
 import { displayNameFromUser } from "./model/displayName";
@@ -50,11 +51,29 @@ async function exigirGestionDeContrato(
   return await exigirAccesoContrato(ctx, contrato, capacidad);
 }
 
-async function hidratar(ctx: QueryCtx, a: Doc<"asignaciones">) {
-  const [u, condo, compania] = await Promise.all([
+/**
+ * El estado que se muestra sale de la asignación ACOTADA por su contrato.
+ *
+ * Mirando la fila sola, una asignación sin fecha de fin bajo un contrato
+ * terminado sale "vigente" para siempre — y eso es lo que leía el
+ * administrador del conjunto en "quién cubre hoy mi portería": gente
+ * autorizada a entrar que en realidad ya no lo está. El acceso nunca estuvo
+ * abierto, `asignacionVigente` sí comprueba el contrato; lo que estaba mal
+ * era lo que se contaba en pantalla.
+ */
+async function hidratar(
+  ctx: QueryCtx,
+  a: Doc<"asignaciones">,
+  /** Si quien llama ya lo tiene, se ahorra la lectura. */
+  contratoConocido?: Doc<"companiaContratos"> | null,
+) {
+  const [u, condo, compania, contrato] = await Promise.all([
     ctx.db.get(a.userId),
     ctx.db.get(a.condominioId),
     ctx.db.get(a.companiaId),
+    contratoConocido !== undefined
+      ? Promise.resolve(contratoConocido)
+      : ctx.db.get(a.contratoId),
   ]);
   return {
     _id: a._id,
@@ -70,7 +89,7 @@ async function hidratar(ctx: QueryCtx, a: Doc<"asignaciones">) {
     rol: a.rol,
     vigenciaDesde: a.vigenciaDesde,
     vigenciaHasta: a.vigenciaHasta ?? null,
-    estado: estadoVigencia(a),
+    estado: estadoVigencia(contrato ? acotado(a, contrato) : a),
     createdAt: a.createdAt,
   };
 }
@@ -92,11 +111,19 @@ async function hidratar(ctx: QueryCtx, a: Doc<"asignaciones">) {
  *     que el modelo va a negar, y el error aparecería en la portería un mes
  *     después en vez de al guardar.
  *
- *  3. La misma persona no puede tener dos asignaciones que se pisen en el
- *     MISMO conjunto. Dos asignaciones simultáneas en conjuntos DISTINTOS sí
- *     son válidas: es el guarda que cubre dos porterías, un caso real y
+ *  3. La misma persona no puede tener dos asignaciones VIVAS que se pisen en
+ *     el MISMO conjunto. Dos asignaciones simultáneas en conjuntos DISTINTOS
+ *     sí son válidas: es el guarda que cubre dos porterías, un caso real y
  *     pedido. Lo que no tiene sentido es estar asignado dos veces al mismo
  *     sitio, con el mismo rol o con roles distintos.
+ *
+ *     "Vivas" es la palabra que faltaba. Una asignación cuyo contrato se
+ *     terminó no da acceso a nadie —así está hecho el modelo, y terminar un
+ *     contrato no le escribe fecha de fin a sus asignaciones a propósito—,
+ *     así que tampoco puede chocar con nada. Mirando la fila cruda parecía
+ *     abierta para siempre, y un guarda que pasó por una compañía de pruebas
+ *     quedaba vetado del conjunto de por vida. Lo decide `asignacionEstorba`,
+ *     que comprueba la misma cadena que `asignacionVigente`.
  */
 export const crear = mutation({
   args: {
@@ -155,10 +182,12 @@ export const crear = mutation({
           .eq("condominioId", contrato.condominioId),
       )
       .collect();
-    if (previas.some((p) => haySolape(p, nueva))) {
-      throw new Error(
-        "Esa persona ya tiene una asignación que se solapa con esas fechas en este conjunto.",
-      );
+    for (const previa of previas) {
+      if (await asignacionEstorba(ctx, previa, nueva)) {
+        throw new Error(
+          "Esa persona ya tiene una asignación que se solapa con esas fechas en este conjunto.",
+        );
+      }
     }
 
     return await ctx.db.insert("asignaciones", {
@@ -280,10 +309,13 @@ export const trasladar = mutation({
         q.eq("userId", miembro.userId).eq("condominioId", destino.condominioId),
       )
       .collect();
-    if (previas.some((p) => haySolape(p, nueva))) {
-      throw new Error(
-        "Esa persona ya tiene una asignación que se solapa con esas fechas en el conjunto de destino.",
-      );
+    for (const previa of previas) {
+      /* Misma regla que en `crear`: solo estorba lo que sigue vivo. */
+      if (await asignacionEstorba(ctx, previa, nueva)) {
+        throw new Error(
+          "Esa persona ya tiene una asignación que se solapa con esas fechas en el conjunto de destino.",
+        );
+      }
     }
 
     await ctx.db.patch(args.asignacionId, { vigenciaHasta: args.hasta });
@@ -323,23 +355,15 @@ export const porContrato = query({
       .withIndex("by_contrato", (q) => q.eq("contratoId", args.contratoId))
       .collect();
 
-    /* Una asignación no puede seguir "vigente" bajo un contrato terminado:
-     * ya no autoriza nada —`asignacionVigente` comprueba el contrato— y
-     * mostrarla en verde dentro de un conjunto archivado era decir que
-     * alguien puede entrar donde no puede. El fin del contrato manda. */
-    const finContrato = estadoVigencia(contrato) === "terminada";
-    const estadoDe = (a: Doc<"asignaciones">) =>
-      finContrato ? ("terminada" as const) : estadoVigencia(a);
-
-    const visibles = args.incluirTerminadas
-      ? filas
-      : filas.filter((a) => estadoDe(a) !== "terminada");
-    const salida = await Promise.all(
-      visibles.map(async (a) => ({
-        ...(await hidratar(ctx, a)),
-        estado: estadoDe(a),
-      })),
-    );
+    /* El contrato ya está leído: se lo pasamos a `hidratar`, que es quien
+     * acota el estado. Antes se corregía aquí a mano —"si el contrato terminó,
+     * terminada"— y era el único sitio donde se corregía, así que el mismo
+     * listado visto desde el conjunto seguía pintando en verde a gente que ya
+     * no puede entrar. Con la cuenta en un solo sitio, coinciden. */
+    const todas = await Promise.all(filas.map((a) => hidratar(ctx, a, contrato)));
+    const salida = args.incluirTerminadas
+      ? todas
+      : todas.filter((a) => a.estado !== "terminada");
     return salida.sort((a, b) => b.vigenciaDesde - a.vigenciaDesde);
   },
 });
@@ -368,10 +392,12 @@ export const porCondominio = query({
       )
       .collect();
 
-    const visibles = args.incluirTerminadas
-      ? filas
-      : filas.filter((a) => estadoVigencia(a) !== "terminada");
-    const salida = await Promise.all(visibles.map((a) => hidratar(ctx, a)));
+    /* Se hidrata antes de filtrar: si se filtrara por la fila cruda volvería
+     * a colarse la asignación de un contrato terminado. */
+    const todas = await Promise.all(filas.map((a) => hidratar(ctx, a)));
+    const salida = args.incluirTerminadas
+      ? todas
+      : todas.filter((a) => a.estado !== "terminada");
 
     /* Un guarda puede ver quién más cubre SU portería —es su relevo— pero no
      * los datos de contacto de sus compañeros. El correo solo lo ve quien

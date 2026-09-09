@@ -50,7 +50,7 @@ export type EstadoVigencia = "programada" | "vigente" | "terminada";
  * Manda el que llegue primero: un corte a mano no puede alargar lo pactado, y
  * una fecha de fin posterior no puede resucitar lo ya cortado.
  */
-function finDe(r: Rango): number {
+export function finDe(r: Rango): number {
   const porFecha =
     r.vigenciaHasta == null ? Infinity : r.vigenciaHasta + FIN_DEL_DIA;
   return r.terminadoEn == null ? porFecha : Math.min(porFecha, r.terminadoEn);
@@ -103,6 +103,30 @@ export function vigentes<T extends Rango>(
  */
 export function haySolape(a: Rango, b: Rango): boolean {
   return a.vigenciaDesde < finDe(b) && b.vigenciaDesde < finDe(a);
+}
+
+/**
+ * `interno` recortado a lo que `externo` le permite cubrir de verdad.
+ *
+ * Una asignacion no puede dar acceso mas alla de su contrato: asi esta hecho
+ * el modelo —cuelga del contrato justamente para que terminarlo corte a todo
+ * su personal sin tocar una fila—, y `asignacionVigente` ya lo aplica al
+ * leer. Pero una asignacion sin `vigenciaHasta` bajo un contrato terminado
+ * SIGUE pareciendo abierta si se mira la fila sola, y ahi es donde se
+ * colaba el error: un contrato de pruebas terminado hace meses bloqueaba
+ * asignaciones nuevas para siempre.
+ *
+ * Recortar antes de comparar deja las dos lecturas —quien puede operar y que
+ * choca con que— diciendo lo mismo.
+ */
+export function acotado(interno: Rango, externo: Rango): Rango {
+  const fin = Math.min(finDe(interno), finDe(externo));
+  return {
+    vigenciaDesde: Math.max(interno.vigenciaDesde, externo.vigenciaDesde),
+    /* `terminadoEn` y no `vigenciaHasta`: es un instante exacto, ya calculado,
+     * al que no hay que regalarle el dia entero otra vez. */
+    terminadoEn: Number.isFinite(fin) ? fin : undefined,
+  };
 }
 
 /**
