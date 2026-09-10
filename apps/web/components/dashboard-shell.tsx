@@ -15,7 +15,11 @@ import { LayoutDashboard, LogOut, ShieldCheck } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import { authClient } from "@/lib/auth-client";
 import { cn } from "@/lib/utils";
-import { homeHrefForRoles, homeHrefForAsignacion } from "@/lib/role-routing";
+import {
+  homeHrefForRoles,
+  homeHrefForAsignacion,
+  homeHrefForCompania,
+} from "@/lib/role-routing";
 import {
   PlatformSidebar,
   PlatformMobileNav,
@@ -126,19 +130,29 @@ function Shell({ children }: { children: React.ReactNode }) {
     }
   }
 
-  /* El administrador de una compañía no tiene ni membresías ni asignaciones:
-   * no pisa ninguna portería, administra la empresa que las cubre. Sin esta
-   * rama caía en "Mis condominios" con la lista vacía, que es justo lo que se
-   * reportó: entra bien y no ve un solo conjunto. Su panel es el de su
-   * compañía, donde ya están sus contratos y su gente. */
+  /* Personal de una compañía sin membresía ni asignación. El caso típico es
+   * el administrador —no pisa ninguna portería, administra la empresa que las
+   * cubre—, pero también cae aquí el supervisor al que todavía no le han dado
+   * conjuntos. Sin esta rama los dos aterrizaban en "Mis condominios" con la
+   * lista vacía: entran bien y no ven nada.
+   *
+   * El destino sale de `homeHrefForCompania`, que es UN mapa rol → sitio. Se
+   * puede escribir así porque el rol de compañía es único: el backend lo
+   * garantiza en todos sus puntos de escritura, de modo que aquí no hay que
+   * desempatar entre "tiene guardia" y "además tiene supervisor". */
   if (
     !isPlatform &&
     me.memberships.length === 0 &&
     me.asignaciones.length === 0 &&
-    me.compania?.roles.includes("admin_compania") &&
-    !pathname.startsWith(`/dashboard/companias/${me.compania.companiaId}`)
+    me.compania
   ) {
-    return <Redirect to={`/dashboard/companias/${me.compania.companiaId}`} />;
+    const destino = homeHrefForCompania(
+      me.compania.roles[0],
+      me.compania.companiaId,
+    );
+    if (destino && !pathname.startsWith(destino)) {
+      return <Redirect to={destino} />;
+    }
   }
 
   if (

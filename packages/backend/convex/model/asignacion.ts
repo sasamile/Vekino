@@ -1,6 +1,6 @@
 import type { QueryCtx, MutationCtx } from "../_generated/server";
 import type { Doc, Id } from "../_generated/dataModel";
-import { estaVigente } from "../lib/vigilancia";
+import { acotado, estaVigente, haySolape, type Rango } from "../lib/vigilancia";
 
 type Ctx = QueryCtx | MutationCtx;
 
@@ -124,4 +124,57 @@ export async function misAsignacionesVigentes(
   return salida.sort((a, b) =>
     a.condominioNombre.localeCompare(b.condominioNombre, "es"),
   );
+}
+
+/**
+ * Si una asignacion ya existente choca DE VERDAD con una ventana nueva.
+ *
+ * ── Por que no basta con mirar las fechas ────────────────────────────────
+ * Porque en este modelo el significado de una fila no esta en la fila. Una
+ * asignacion cuelga del contrato y del miembro precisamente para que
+ * terminar el contrato o dar de baja a la persona la invaliden sin tocarla:
+ * lo dice el esquema y lo aplica `asignacionVigente` al leer. Terminar un
+ * contrato NO le pone fecha de fin a sus asignaciones, a proposito.
+ *
+ * De modo que una asignacion vieja, sin `vigenciaHasta`, bajo un contrato
+ * terminado hace meses, leida sola parece abierta e infinita. Y asi es como
+ * un guarda registrado en una compania de pruebas —contrato terminado, baja
+ * dada— quedaba bloqueado para siempre en el conjunto: la comprobacion de
+ * solape miraba la fila cruda mientras el resto del sistema miraba la cadena.
+ *
+ * Esta funcion comprueba los mismos cuatro eslabones que `asignacionVigente`
+ * —asignacion, contrato, compania, miembro— y vive pegada a ella para que no
+ * vuelvan a separarse. Si una asignacion no puede dar acceso, no puede
+ * estorbar: no hay nadie ahi con quien chocar.
+ *
+ * ── Lo que SIGUE bloqueando ──────────────────────────────────────────────
+ * Dos asignaciones vivas a la misma porteria a la vez, aunque las traiga otra
+ * compania. No se filtra por `companiaId`: la misma persona no puede cubrir
+ * dos veces el mismo puesto a la misma hora, y de quien la contrate no
+ * depende. Acotar por compania habria hecho pasar este caso, si, pero
+ * abriendo justo ese agujero.
+ */
+export async function asignacionEstorba(
+  ctx: Ctx,
+  previa: Doc<"asignaciones">,
+  nueva: Rango,
+): Promise<boolean> {
+  /* Lo barato primero. Acotar por el contrato solo puede ENCOGER la ventana,
+   * asi que si las fechas crudas ya no se pisan no hay nada que ir a leer, y
+   * el caso normal no cuesta una sola consulta. */
+  if (!haySolape(previa, nueva)) return false;
+
+  /* Sin contrato no ampara nada. No deberia pasar; si pasa, la fila esta
+   * huerfana y no es motivo para bloquear a nadie. */
+  const contrato = await ctx.db.get(previa.contratoId);
+  if (!contrato) return false;
+  if (!haySolape(acotado(previa, contrato), nueva)) return false;
+
+  const compania = await ctx.db.get(previa.companiaId);
+  if (!compania || compania.estado !== "activa") return false;
+
+  const miembro = await ctx.db.get(previa.companiaMiembroId);
+  if (!miembro || !miembro.isActive) return false;
+
+  return true;
 }

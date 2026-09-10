@@ -16,6 +16,7 @@ import {
 } from "./model/authz";
 import {
   exigirAccesoCompania,
+  exigirAccesoContrato,
   getCompaniaMiembro,
   condominiosSupervisados,
   miCompaniaDe,
@@ -23,10 +24,15 @@ import {
 import {
   companiaRoleValidator,
   estadoCompaniaValidator,
+  exigirRolUnicoCompania,
+  rolPrincipalDeCompania,
+  tipoDocumentoValidator,
 } from "./model/roles";
 import { estadoVigencia, haySolape, estaVigente } from "./lib/vigilancia";
 import { normalizarTelefonoE164 } from "./lib/telefono";
+import { evaluarPassword } from "./lib/passwordFuerte";
 import { displayNameFromUser } from "./model/displayName";
+import { fijarPasswordDeCuenta } from "./model/credencial";
 
 /**
  * Compañías de vigilancia: la empresa, su personal y sus contratos.
@@ -45,15 +51,24 @@ import { displayNameFromUser } from "./model/displayName";
 // Lectura
 // ─────────────────────────────────────────────────────────────
 
-/** Compañías con sus conteos. Solo plataforma. */
+/**
+ * Compañías con sus conteos. Solo plataforma.
+ *
+ * `archivo` separa las dos vistas EN EL SERVIDOR y no en la pantalla: que una
+ * compañía dada de baja no aparezca entre las activas es una regla del
+ * modelo, no una decisión de pintado. Por omisión, las que no están
+ * archivadas —incluidas las suspendidas, que siguen siendo una situación
+ * temporal y no el final del camino—.
+ */
 export const listAll = query({
-  args: { soloActivas: v.optional(v.boolean()) },
+  args: { archivo: v.optional(v.union(v.literal("activas"), v.literal("archivadas"))) },
   handler: async (ctx, args) => {
     await requirePlatformStaff(ctx);
     const todas = await ctx.db.query("companiasSeguridad").order("desc").collect();
-    const filtradas = args.soloActivas
-      ? todas.filter((c) => c.estado === "activa")
-      : todas;
+    const archivadas = args.archivo === "archivadas";
+    const filtradas = todas.filter((c) =>
+      archivadas ? c.estado === "inactiva" : c.estado !== "inactiva",
+    );
 
     return await Promise.all(
       filtradas.map(async (c) => {
@@ -66,6 +81,9 @@ export const listAll = query({
           .withIndex("by_compania", (q) => q.eq("companiaId", c._id))
           .collect();
         const activos = miembros.filter((m) => m.isActive);
+        const archivadaPor = c.archivadaPorUserId
+          ? await ctx.db.get(c.archivadaPorUserId)
+          : null;
         return {
           ...c,
           personalCount: activos.length,
@@ -73,6 +91,12 @@ export const listAll = query({
             .length,
           guardiaCount: activos.filter((m) => m.roles.includes("guardia")).length,
           contratosVigentes: contratos.filter((k) => estaVigente(k)).length,
+          /* El histórico entero sigue ahí: se dice cuánto hay, no se borra. */
+          contratosTotales: contratos.length,
+          archivadaEn: c.archivadaEn ?? null,
+          archivadaPorNombre: archivadaPor
+            ? displayNameFromUser(archivadaPor)
+            : null,
         };
       }),
     );
@@ -179,15 +203,42 @@ export const detail = query({
           .query("asignaciones")
           .withIndex("by_contrato", (q) => q.eq("contratoId", k._id))
           .collect();
+        const estado = estadoVigencia(k);
+        /* Dos motivos lo archivan: contrato terminado, o compañía dada de
+         * baja —sus contratos ya no autorizan nada aunque las fechas digan
+         * otra cosa, porque `resolverAcceso` mira el estado de la empresa—.
+         * Suspender no: es temporal. */
+        const archivado = estado === "terminada" || compania.estado === "inactiva";
+        const terminadoPor = k.terminadoPorUserId
+          ? await ctx.db.get(k.terminadoPorUserId)
+          : null;
         return {
           _id: k._id,
           condominioId: k.condominioId,
           condominioNombre: condo?.name ?? "(conjunto eliminado)",
           vigenciaDesde: k.vigenciaDesde,
           vigenciaHasta: k.vigenciaHasta ?? null,
-          estado: estadoVigencia(k),
+          estado,
+          /** Si va en Activos o en Archivados. Lo decide el SERVIDOR. */
+          archivado,
+          /* Quién lo cortó y cuándo. `terminadoEn` solo existe si se terminó a
+           * mano; los que vencieron por fecha lo dicen con `vigenciaHasta`. */
+          terminadoEn: k.terminadoEn ?? null,
+          terminadoPorNombre: terminadoPor
+            ? displayNameFromUser(terminadoPor)
+            : null,
           notas: k.notas ?? null,
-          asignacionesVigentes: asigs.filter((a) => estaVigente(a)).length,
+          /* Bajo un contrato archivado NO queda nadie vigente, digan lo que
+           * digan las fechas de la asignación: `asignacionVigente` comprueba
+           * el contrato antes que nada, así que contarlas por su cuenta haría
+           * que un conjunto archivado siguiera diciendo "2 asignados" — gente
+           * que ya no puede entrar. Es la misma regla que aplica
+           * `asignaciones.porContrato`. */
+          asignacionesVigentes: archivado
+            ? 0
+            : asigs.filter((a) => estaVigente(a)).length,
+          /* El histórico no se va a ninguna parte al archivar. */
+          asignacionesTotales: asigs.length,
           createdAt: k.createdAt,
         };
       }),
@@ -504,12 +555,24 @@ export const update = mutation({
 });
 
 /**
- * Activa, suspende o da de baja una compañía. Solo plataforma.
+ * Activa, suspende o ARCHIVA una compañía. Solo plataforma.
  *
- * Suspender corta la operación de TODO su personal en TODOS sus contratos a
- * la vez: `asignacionVigente` deja de resolver en cuanto el estado no es
- * "activa". Los contratos y las asignaciones quedan intactos, que es
- * exactamente la diferencia entre suspender y terminar.
+ * `inactiva` es el archivado: el estado ya existía y no hacía falta inventar
+ * otro. Suspender es temporal y archivar es el final del camino, pero los dos
+ * cortan igual de rápido la operación de TODO su personal en TODOS sus
+ * contratos: `asignacionVigente` y `resolverAcceso` dejan de resolver en
+ * cuanto el estado no es "activa".
+ *
+ * SIN CASCADA, a propósito. No se toca ni un contrato ni una asignación: ya
+ * dejan de autorizar por sí solos al comprobar el estado de la empresa, y
+ * reescribirlos convertiría una decisión reversible en una pérdida de
+ * histórico. Reactivar una compañía archivada la devuelve exactamente como
+ * estaba; una cascada no tiene vuelta.
+ *
+ * Sus conjuntos, usuarios, minutas, rondas y eventos no se tocan siquiera de
+ * lejos: cuelgan del CONJUNTO, no de la compañía.
+ *
+ * IDEMPOTENTE: reponer el mismo estado no mueve el sello de quién archivó.
  */
 export const setEstado = mutation({
   args: {
@@ -517,14 +580,22 @@ export const setEstado = mutation({
     estado: estadoCompaniaValidator,
   },
   handler: async (ctx, args) => {
-    await requirePlatformStaff(ctx);
+    const user = await requirePlatformStaff(ctx);
     const compania = await ctx.db.get(args.companiaId);
     if (!compania) throw new Error("Compañía no encontrada.");
 
-    await ctx.db.patch(args.companiaId, {
-      estado: args.estado,
-      updatedAt: Date.now(),
-    });
+    const ahora = Date.now();
+    if (compania.estado !== args.estado) {
+      await ctx.db.patch(args.companiaId, {
+        estado: args.estado,
+        /* El rastro del archivado. Se pone al archivar y se limpia al
+         * sacarla del archivo, para que la ficha nunca diga "archivada por
+         * Fulano" de una compañía que hoy opera. */
+        archivadaEn: args.estado === "inactiva" ? ahora : undefined,
+        archivadaPorUserId: args.estado === "inactiva" ? user._id : undefined,
+        updatedAt: ahora,
+      });
+    }
 
     // Para que la interfaz pueda decir a cuánta gente y cuántos conjuntos afecta.
     const contratos = await ctx.db
@@ -566,12 +637,18 @@ export const upsertMiembroProfile = mutation({
     cargo: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await exigirAccesoCompania(ctx, args.companiaId, "seguridad.personal");
+    const { user: quienDaDeAlta } = await exigirAccesoCompania(
+      ctx,
+      args.companiaId,
+      "seguridad.personal",
+    );
 
     const email = args.email.trim().toLowerCase();
     const name = args.name.trim();
     if (!email || !name) throw new Error("Nombre y correo son obligatorios.");
-    if (args.roles.length === 0) throw new Error("Selecciona al menos un rol.");
+    /* Un solo rol de compañía. Se comprueba aquí, en la mutación, y no solo
+     * en la action que la llama: ésta es la puerta que toca la base. */
+    exigirRolUnicoCompania(args.roles);
 
     const now = Date.now();
     const telefono = args.telefono?.trim() || undefined;
@@ -633,11 +710,23 @@ export const upsertMiembroProfile = mutation({
     let miembroId: Id<"companiaMiembros">;
     if (previo) {
       miembroId = previo._id;
+      /* Volver a dar de alta a alguien puede cambiarle el rol —se da de baja
+       * a un guarda y se le vuelve a subir como supervisor—, así que deja el
+       * mismo rastro que `setRolesMiembro`. */
+      const anterior = rolPrincipalDeCompania(previo.roles);
+      const nuevo = exigirRolUnicoCompania(args.roles);
       await ctx.db.patch(previo._id, {
-        roles: args.roles,
+        roles: [nuevo],
         cargo: args.cargo?.trim() || undefined,
         isActive: true,
         updatedAt: now,
+        ...(anterior !== nuevo
+          ? {
+              rolAnterior: anterior ?? undefined,
+              rolCambiadoEn: now,
+              rolCambiadoPorUserId: quienDaDeAlta._id,
+            }
+          : {}),
       });
     } else {
       miembroId = await ctx.db.insert("companiaMiembros", {
@@ -683,9 +772,20 @@ export const crearMiembro = action({
     existed: boolean;
   }> => {
     const password = args.password.trim();
-    if (password.length < 8) {
-      throw new Error("La contraseña debe tener al menos 8 caracteres.");
-    }
+    /* La política completa la aplica `fijarPasswordDeCuenta` más abajo, pero
+     * el perfil se crea ANTES que la credencial: sin este corte temprano, una
+     * clave rechazada dejaría a la persona dada de alta y sin poder entrar. */
+    const fuerza = evaluarPassword(password, {
+      email: args.email,
+      nombre: args.name,
+    });
+    if (!fuerza.ok) throw new Error(fuerza.problemas[0]!);
+
+    /* El rol, por la misma razón que la clave: `upsertMiembroProfile` lo
+     * vuelve a comprobar —es la puerta de verdad— pero rechazarlo aquí evita
+     * gastar una escritura y una llamada a Better Auth en un alta que iba a
+     * fallar de todos modos. */
+    exigirRolUnicoCompania(args.roles);
 
     const perfil: {
       userId: Id<"users">;
@@ -702,41 +802,18 @@ export const crearMiembro = action({
       cargo: args.cargo,
     });
 
-    const auth = createAuth(ctx);
-    const authCtx = await auth.$context;
-    const ia = authCtx.internalAdapter;
-    const hashed = await authCtx.password.hash(password);
+    /* La credencial la escribe el helper compartido: la misma secuencia que
+     * usa el restablecimiento, en un solo sitio. */
+    await fijarPasswordDeCuenta(ctx, {
+      email: perfil.email,
+      name: perfil.name,
+      password,
+    });
 
+    const ia = (await createAuth(ctx).$context).internalAdapter;
     const found = await ia.findUserByEmail(perfil.email);
-    let authUserId: string;
-    if (!found) {
-      const created = await ia.createUser({
-        email: perfil.email,
-        name: perfil.name,
-        emailVerified: false,
-      });
-      authUserId = created.id;
-      await ia.createAccount({
-        userId: created.id,
-        providerId: "credential",
-        accountId: created.id,
-        password: hashed,
-      });
-    } else {
-      authUserId = found.user.id;
-      const accounts = await ia.findAccounts(found.user.id);
-      const credential = accounts.find((a) => a.providerId === "credential");
-      if (!credential) {
-        await ia.createAccount({
-          userId: found.user.id,
-          providerId: "credential",
-          accountId: found.user.id,
-          password: hashed,
-        });
-      } else {
-        await ia.updatePassword(found.user.id, hashed);
-      }
-    }
+    if (!found) throw new Error("No se pudo crear la cuenta de acceso.");
+    const authUserId = found.user.id;
 
     await ctx.runMutation(internal.users.linkAuthId, {
       userId: perfil.userId,
@@ -761,9 +838,17 @@ export const setRolesMiembro = mutation({
   handler: async (ctx, args) => {
     const miembro = await ctx.db.get(args.miembroId);
     if (!miembro) throw new Error("Miembro no encontrado.");
-    await exigirAccesoCompania(ctx, miembro.companiaId, "seguridad.personal");
+    const { user: quienCambia } = await exigirAccesoCompania(
+      ctx,
+      miembro.companiaId,
+      "seguridad.personal",
+    );
 
-    if (args.roles.length === 0) throw new Error("Selecciona al menos un rol.");
+    /* La regla, en el sitio donde se cambia el rol. Cambiar de GUARDA a
+     * SUPERVISOR REEMPLAZA: llega un array de uno y se guarda tal cual, así
+     * que no hay forma de acumular. */
+    const nuevo = exigirRolUnicoCompania(args.roles);
+    const anterior = rolPrincipalDeCompania(miembro.roles);
 
     /* Quitarle un rol a alguien que está asignado con ese rol dejaría una
      * asignación que ya no puede ejercerse. Se avisa en vez de romperla en
@@ -781,10 +866,29 @@ export const setRolesMiembro = mutation({
       );
     }
 
+    const ahora = Date.now();
     await ctx.db.patch(args.miembroId, {
-      roles: args.roles,
-      cargo: args.cargo?.trim() || undefined,
-      updatedAt: Date.now(),
+      roles: [nuevo],
+      updatedAt: ahora,
+      /* Patch condicional, como en `upsertMiembroProfile`: en Convex, patch
+       * con undefined BORRA el campo. La pantalla cambia el rol sin mandar el
+       * cargo —son dos acciones distintas—, así que escribirlo siempre le
+       * borraba a la persona su "Supervisor zona norte" cada vez que alguien
+       * le tocaba el rol. */
+      ...(args.cargo !== undefined
+        ? { cargo: args.cargo.trim() || undefined }
+        : {}),
+      /* Rastro del cambio de rol, en la propia fila afectada —como
+       * `passwordFijadaPorUserId` justo al lado—. Solo si el rol cambió de
+       * verdad: dejarlo también al corregir el cargo diría que hubo un cambio
+       * de rol donde no lo hubo. */
+      ...(anterior !== nuevo
+        ? {
+            rolAnterior: anterior ?? undefined,
+            rolCambiadoEn: ahora,
+            rolCambiadoPorUserId: quienCambia._id,
+          }
+        : {}),
     });
     return args.miembroId;
   },
@@ -893,43 +997,437 @@ export const crearContrato = mutation({
 });
 
 /**
- * Termina un contrato poniéndole fecha de fin.
+ * TERMINA UN CONTRATO. Sin `vigenciaHasta`, el corte es AHORA.
+ *
+ * Los dos casos son reales y distintos:
+ *
+ *  - Sin fecha: "se acabó, hoy". Escribe `terminadoEn` con el instante, y el
+ *    conjunto sale de los listados activos en la siguiente lectura. Es lo que
+ *    hace el botón, y lo que antes no funcionaba: mandaba `vigenciaHasta =
+ *    ahora`, y como `finDe` regala el día entero el contrato seguía vigente
+ *    24 horas más. Nada cambiaba en pantalla, ni el personal perdía el acceso.
+ *
+ *  - Con fecha: "termina el 31". Programado, como estaba. Solo la plataforma:
+ *    es una condición del contrato comercial.
  *
  * No borra nada ni recorre sus asignaciones: dejan de resolver solas porque
  * `asignacionVigente` comprueba el contrato. Ése es el motivo de que la
- * asignación cuelgue del contrato y no del conjunto.
+ * asignación cuelgue del contrato y no del conjunto — y por eso terminar no
+ * pierde una sola ronda, minuta ni evento: todo eso cuelga del CONJUNTO, que
+ * sigue intacto. Terminar el contrato no da de baja al conjunto.
+ *
+ * IDEMPOTENTE: sobre un contrato ya terminado no reescribe nada —conservar
+ * quién y cuándo lo cortó importa más que registrar el segundo clic— y avisa
+ * con `yaEstaba`.
  */
 export const terminarContrato = mutation({
   args: {
     contratoId: v.id("companiaContratos"),
-    vigenciaHasta: v.number(),
+    /** Último día pactado. Ausente = terminar ahora. */
+    vigenciaHasta: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    await requirePlatformStaff(ctx);
     const contrato = await ctx.db.get(args.contratoId);
     if (!contrato) throw new Error("Contrato no encontrado.");
-    if (args.vigenciaHasta < contrato.vigenciaDesde) {
-      throw new Error("La fecha de fin no puede ser anterior a la de inicio.");
+
+    /* La compañía y el conjunto salen del DOCUMENTO del contrato, nunca de un
+     * argumento: cambiar el id lleva a otro contrato, cuya compañía se vuelve
+     * a comprobar. Pasan la plataforma y el `admin_compania` de ESA empresa;
+     * el supervisor no, porque `seguridad.terminar` no está entre lo que da
+     * su rol de asignación. */
+    const { user, esPlataforma } = await exigirAccesoContrato(
+      ctx,
+      contrato,
+      "seguridad.terminar",
+    );
+
+    const ahora = Date.now();
+
+    /* Ya terminado: no se toca. Repetir la petición —doble clic, reintento de
+     * red— no puede reescribir quién lo cortó ni correr la fecha. */
+    if (estadoVigencia(contrato, ahora) === "terminada") {
+      return { ok: true as const, yaEstaba: true as const, personasAfectadas: 0 };
     }
 
-    await ctx.db.patch(args.contratoId, {
-      vigenciaHasta: args.vigenciaHasta,
-      updatedAt: Date.now(),
-    });
+    if (args.vigenciaHasta != null) {
+      /* Programar el fin es una condición del contrato comercial, y ésas las
+       * pone Vekino. La compañía puede renunciar hoy, no reescribir el pacto. */
+      if (!esPlataforma) {
+        throw new Error(
+          "Solo Vekino puede programar la fecha de fin de un contrato. Puedes terminarlo ahora.",
+        );
+      }
+      if (args.vigenciaHasta < contrato.vigenciaDesde) {
+        throw new Error("La fecha de fin no puede ser anterior a la de inicio.");
+      }
+      await ctx.db.patch(args.contratoId, {
+        vigenciaHasta: args.vigenciaHasta,
+        updatedAt: ahora,
+      });
+    } else {
+      await ctx.db.patch(args.contratoId, {
+        terminadoEn: ahora,
+        terminadoPorUserId: user._id,
+        updatedAt: ahora,
+      });
+    }
 
+    const corte = args.vigenciaHasta ?? ahora;
     const asignaciones = await ctx.db
       .query("asignaciones")
       .withIndex("by_contrato", (q) => q.eq("contratoId", args.contratoId))
       .collect();
     return {
       ok: true as const,
-      /* Para que la interfaz pueda decir a cuánta gente deja sin acceso
-       * cuando llegue la fecha. */
+      yaEstaba: false as const,
+      /* Para que la interfaz pueda decir a cuánta gente deja sin acceso. */
       personasAfectadas: new Set(
         asignaciones
-          .filter((a) => a.vigenciaHasta == null || a.vigenciaHasta > args.vigenciaHasta)
+          .filter((a) => a.vigenciaHasta == null || a.vigenciaHasta > corte)
           .map((a) => a.userId),
       ).size,
+    };
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// Editar a una persona de la compañía
+//
+// El administrador de la compañía ya podía darla de alta, cambiarle los roles
+// y darla de baja. Lo que faltaba era corregir lo que se escribió mal el día
+// del alta —un apellido, un documento, un teléfono— y volverle a poner la
+// clave cuando la pierde, que en una empresa de vigilancia con rotación pasa
+// todas las semanas. Sin esto había que darla de baja y volverla a crear.
+// ─────────────────────────────────────────────────────────────
+
+/** Roles de conjunto cuya cuenta NO puede tomar el administrador de una compañía. */
+const ROLES_DE_MANDO_EN_CONJUNTO = [
+  "administrador",
+  "contadora",
+  "junta_directiva",
+] as const;
+
+/**
+ * Autoriza tocar a una persona de una compañía, y devuelve lo justo.
+ *
+ * ── De dónde sale la compañía ────────────────────────────────────────────
+ * Del DOCUMENTO del miembro, nunca de un argumento. No hay `companiaId` que
+ * mandar desde el cliente: se envía el id del miembro, se lee su compañía y
+ * es ÉSA la que se comprueba contra la identidad de quien llama. Cambiar el
+ * id lleva a otro miembro, cuya compañía se vuelve a comprobar, así que no
+ * queda nada que manipular.
+ *
+ * ── Escalada de privilegios ──────────────────────────────────────────────
+ * Dos puertas cerradas, y ninguna es teórica: una misma persona tiene un solo
+ * `users` —el alta reutiliza la fila por correo— y puede estar a la vez en
+ * una compañía y en un conjunto.
+ *
+ *  1. Cuentas de plataforma. Igual que en `users.assertCanEditMember`: quien
+ *     administra una empresa no le fija la contraseña a un superadmin porque
+ *     lo tenga apuntado como guarda.
+ *
+ *  2. Cuentas con mando en algún conjunto. Sin esto, dar de alta como guarda
+ *     a la administradora de un conjunto —cosa que nadie impide— y acto
+ *     seguido cambiarle la clave entregaba ese conjunto entero. Es el salto
+ *     entre los dos ejes del modelo, y es el que había que cerrar.
+ *
+ * Devuelve solo correo y nombre. Nada de credenciales: el hash no sale de
+ * Better Auth ni siquiera hacia el servidor que lo pide.
+ */
+export const assertPuedeEditarMiembro = query({
+  args: { miembroId: v.id("companiaMiembros") },
+  handler: async (ctx, args) => {
+    const miembro = await ctx.db.get(args.miembroId);
+    if (!miembro) throw new Error("Miembro no encontrado.");
+
+    await exigirAccesoCompania(ctx, miembro.companiaId, "seguridad.personal");
+
+    const user = await ctx.db.get(miembro.userId);
+    if (!user) throw new Error("Perfil no encontrado.");
+    if (!user.email) throw new Error("Esa persona no tiene correo.");
+
+    if (user.platformRole) {
+      throw new Error(
+        "Esa cuenta es de la plataforma. Debe gestionarse desde el panel maestro.",
+      );
+    }
+
+    const membresias = await ctx.db
+      .query("memberships")
+      .withIndex("by_user", (q) => q.eq("userId", miembro.userId))
+      .collect();
+    const mandaEnUnConjunto = membresias.some(
+      (m) =>
+        m.isActive &&
+        m.roles.some((r) =>
+          (ROLES_DE_MANDO_EN_CONJUNTO as readonly string[]).includes(r),
+        ),
+    );
+    if (mandaEnUnConjunto) {
+      throw new Error(
+        "Esa persona administra un conjunto. Sus credenciales se gestionan desde el conjunto, no desde la compañía.",
+      );
+    }
+
+    return {
+      userId: miembro.userId,
+      companiaId: miembro.companiaId,
+      email: user.email,
+      name: user.name,
+    };
+  },
+});
+
+/**
+ * Corrige los datos personales de alguien de la compañía.
+ *
+ * Solo lo que vive en la PERSONA. El rol es de `setRolesMiembro`, la baja de
+ * `desactivarMiembro`, el correo de `setEmailMiembro` —porque además toca la
+ * credencial— y dónde trabaja es de `asignaciones`. Meterlo todo en un mismo
+ * formulario haría que corregir un apellido pudiera, de paso, cambiar quién
+ * entra a qué portería.
+ */
+export const actualizarMiembro = mutation({
+  args: {
+    miembroId: v.id("companiaMiembros"),
+    name: v.string(),
+    firstName: v.optional(v.string()),
+    lastName: v.optional(v.string()),
+    tipoDocumento: v.optional(tipoDocumentoValidator),
+    numeroDocumento: v.optional(v.string()),
+    telefono: v.optional(v.string()),
+    cargo: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const miembro = await ctx.db.get(args.miembroId);
+    if (!miembro) throw new Error("Miembro no encontrado.");
+    const { user: quienEdita } = await exigirAccesoCompania(
+      ctx,
+      miembro.companiaId,
+      "seguridad.personal",
+    );
+    /* Las mismas dos puertas contra la escalada. Se reusa la query en vez de
+     * repetir el criterio: dos copias es como acaban divergiendo. */
+    await ctx.runQuery(api.companias.assertPuedeEditarMiembro, {
+      miembroId: args.miembroId,
+    });
+
+    const name = args.name.trim();
+    if (!name) throw new Error("El nombre es obligatorio.");
+    if (name.length > 120) throw new Error("El nombre es demasiado largo.");
+
+    const numeroDocumento = args.numeroDocumento?.trim() || undefined;
+    if (numeroDocumento && !/^[A-Za-z0-9.-]{4,20}$/.test(numeroDocumento)) {
+      throw new Error("El número de documento no parece válido.");
+    }
+
+    const telefono = args.telefono?.trim() || undefined;
+    if (telefono && !normalizarTelefonoE164(telefono)) {
+      throw new Error("El teléfono no parece válido.");
+    }
+
+    const ahora = Date.now();
+    await ctx.db.patch(miembro.userId, {
+      name,
+      firstName: args.firstName?.trim() || undefined,
+      lastName: args.lastName?.trim() || undefined,
+      tipoDocumento: args.tipoDocumento,
+      numeroDocumento,
+      telefono,
+      telefonoE164: normalizarTelefonoE164(telefono) ?? undefined,
+      updatedAt: ahora,
+    });
+
+    /* Rastro de quién lo tocó, en la propia fila afectada. Es como el resto
+     * del modelo registra lo sensible —`terminadoPorUserId`,
+     * `archivadaPorUserId`, `creadoPorUserId`— y no hay tabla de auditoría
+     * que alimentar ni conviene inventar una para esto. */
+    await ctx.db.patch(args.miembroId, {
+      cargo: args.cargo?.trim() || undefined,
+      actualizadoPorUserId: quienEdita._id,
+      updatedAt: ahora,
+    });
+
+    return { ok: true as const };
+  },
+});
+
+/**
+ * Le pone una contraseña nueva a alguien de la compañía.
+ *
+ * Aparte de `actualizarMiembro` a propósito: corregir un apellido y reescribir
+ * una credencial no son la misma clase de acto, y mezclarlos haría que cada
+ * corrección de un teléfono pasara por el código que toca contraseñas.
+ *
+ * La clave entra, se valida contra la política del proyecto y se va a Better
+ * Auth. No se guarda en `users`, no queda en ningún registro y no vuelve en la
+ * respuesta.
+ */
+export const setPasswordMiembro = action({
+  args: {
+    miembroId: v.id("companiaMiembros"),
+    password: v.string(),
+  },
+  handler: async (ctx, args): Promise<{ ok: true; cuentaCreada: boolean }> => {
+    const objetivo: {
+      userId: Id<"users">;
+      companiaId: Id<"companiasSeguridad">;
+      email: string;
+      name: string;
+    } = await ctx.runQuery(api.companias.assertPuedeEditarMiembro, {
+      miembroId: args.miembroId,
+    });
+
+    const r = await fijarPasswordDeCuenta(ctx, {
+      email: objetivo.email,
+      name: objetivo.name,
+      password: args.password,
+    });
+
+    await ctx.runMutation(internal.companias.marcarPasswordFijada, {
+      miembroId: args.miembroId,
+    });
+
+    /* Solo si hubo que crear la cuenta. Ni la clave ni nada derivado de ella. */
+    return { ok: true as const, cuentaCreada: r.cuentaCreada };
+  },
+});
+
+/** Deja constancia de cuándo y por orden de quién se reescribió la clave. */
+export const marcarPasswordFijada = internalMutation({
+  args: { miembroId: v.id("companiaMiembros") },
+  handler: async (ctx, args) => {
+    const quien = await getCurrentAppUser(ctx);
+    await ctx.db.patch(args.miembroId, {
+      passwordFijadaEn: Date.now(),
+      passwordFijadaPorUserId: quien?._id,
+      updatedAt: Date.now(),
+    });
+  },
+});
+
+/**
+ * Cambia el correo de alguien de la compañía.
+ *
+ * Va aparte porque el correo NO es un dato personal más: es con lo que se
+ * entra. Hay que moverlo en los dos sitios —el perfil de aplicación y Better
+ * Auth— o el login seguiría pidiendo el viejo. Es exactamente lo que hace
+ * `users.setMemberEmail` en el eje del conjunto.
+ *
+ * Las sesiones abiertas siguen abiertas: Better Auth las guarda contra el id
+ * del usuario, no contra su correo. Cambiarlo no echa a nadie, y el
+ * restablecimiento por correo pasa a usar el nuevo.
+ */
+export const setEmailMiembro = action({
+  args: {
+    miembroId: v.id("companiaMiembros"),
+    email: v.string(),
+  },
+  handler: async (ctx, args): Promise<{ ok: true; changed: boolean }> => {
+    const email = args.email.trim().toLowerCase();
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      throw new Error("Correo inválido.");
+    }
+
+    const objetivo: {
+      userId: Id<"users">;
+      companiaId: Id<"companiasSeguridad">;
+      email: string;
+      name: string;
+    } = await ctx.runQuery(api.companias.assertPuedeEditarMiembro, {
+      miembroId: args.miembroId,
+    });
+
+    const actual = objetivo.email.trim().toLowerCase();
+    if (actual === email) return { ok: true as const, changed: false };
+
+    /* Único global: `users` se indexa por correo con `.unique()` y el alta
+     * reutiliza la fila que encuentre. Dos cuentas con el mismo correo
+     * romperían esa lectura, así que se comprueba en los dos lados. */
+    const ocupado = await ctx.runQuery(internal.users.emailEnUso, {
+      email,
+      exceptUserId: objetivo.userId,
+    });
+    if (ocupado) throw new Error("Ese correo ya está en uso por otra cuenta.");
+
+    const ia = (await createAuth(ctx).$context).internalAdapter;
+    if (await ia.findUserByEmail(email)) {
+      throw new Error("Ese correo ya está en uso por otra cuenta.");
+    }
+
+    const found = await ia.findUserByEmail(actual);
+    if (found) {
+      await ia.updateUser(found.user.id, { email, emailVerified: false });
+    }
+    await ctx.runMutation(internal.users.patchMemberEmail, {
+      userId: objetivo.userId,
+      email,
+    });
+
+    return { ok: true as const, changed: true };
+  },
+});
+
+/**
+ * Los datos de una persona, para el formulario de edición.
+ *
+ * Aparte de `detail` y no dentro: el documento y el teléfono de cada guarda no
+ * tienen por qué viajar en el listado de la compañía entera para que alguien
+ * abra una ficha. Se piden al abrirla.
+ *
+ * Pasa por la misma puerta que las escrituras, así que una ficha que no se
+ * puede editar tampoco se puede leer desde aquí, y el motivo lo dice el mismo
+ * mensaje.
+ *
+ * NO devuelve nada de la credencial. No hay campo que devolver: el hash vive
+ * en Better Auth y esta consulta ni lo mira.
+ */
+export const detalleMiembro = query({
+  args: { miembroId: v.id("companiaMiembros") },
+  handler: async (ctx, args) => {
+    const miembro = await ctx.db.get(args.miembroId);
+    if (!miembro) throw new Error("Miembro no encontrado.");
+    await exigirAccesoCompania(ctx, miembro.companiaId, "seguridad.personal");
+
+    const user = await ctx.db.get(miembro.userId);
+    if (!user) throw new Error("Perfil no encontrado.");
+
+    if (user.platformRole) {
+      throw new Error(
+        "Esa cuenta es de la plataforma. Debe gestionarse desde el panel maestro.",
+      );
+    }
+    const membresias = await ctx.db
+      .query("memberships")
+      .withIndex("by_user", (q) => q.eq("userId", miembro.userId))
+      .collect();
+    if (
+      membresias.some(
+        (m) =>
+          m.isActive &&
+          m.roles.some((r) =>
+            (ROLES_DE_MANDO_EN_CONJUNTO as readonly string[]).includes(r),
+          ),
+      )
+    ) {
+      throw new Error(
+        "Esa persona administra un conjunto. Sus credenciales se gestionan desde el conjunto, no desde la compañía.",
+      );
+    }
+
+    return {
+      miembroId: miembro._id,
+      nombre: user.name,
+      email: user.email,
+      firstName: user.firstName ?? null,
+      lastName: user.lastName ?? null,
+      tipoDocumento: user.tipoDocumento ?? null,
+      numeroDocumento: user.numeroDocumento ?? null,
+      telefono: user.telefono ?? null,
+      cargo: miembro.cargo ?? null,
+      /* Cuándo se le fijó la clave por última vez. El hecho, no el secreto:
+       * es lo que responde "¿ya le pusieron una nueva?". */
+      passwordFijadaEn: miembro.passwordFijadaEn ?? null,
     };
   },
 });

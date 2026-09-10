@@ -558,6 +558,19 @@ export default defineSchema({
      * `guardiaReservaDepositos`; esto es lo que se esperaba recibir.
      */
     depositoRequerido: v.optional(v.number()),
+    /**
+     * Lo que cuesta usar el espacio, congelado al crear la reserva.
+     *
+     * Se guarda por el mismo motivo que el deposito: la tarifa de la zona
+     * cambia, y una reserva de febrero no puede empezar a valer lo que la
+     * administracion cobre en marzo. Sin este campo el valor solo existia en
+     * la pantalla del residente mientras llenaba el formulario, y la
+     * administracion no podia verlo despues en ninguna parte.
+     *
+     * `undefined` cuando la zona no tiene tarifa configurada: no es gratis,
+     * es que nadie le puso precio, y un cero diria lo primero.
+     */
+    valorReserva: v.optional(v.number()),
     // Control operativo en portería (guardia).
     ingresoValidadoAt: v.optional(v.number()),
     salidaValidadaAt: v.optional(v.number()),
@@ -2321,6 +2334,14 @@ export default defineSchema({
     primaryColor: v.optional(v.string()),
 
     estado: estadoCompaniaValidator,
+    /**
+     * Quién la archivó y cuándo. Archivar es `estado: "inactiva"` —el estado
+     * ya existía— y esto es solo su rastro: sin él la ficha decía que estaba
+     * dada de baja pero no desde cuándo ni por orden de quién, que es lo
+     * primero que se pregunta meses después. Se limpian al reactivarla.
+     */
+    archivadaEn: v.optional(v.number()),
+    archivadaPorUserId: v.optional(v.id("users")),
 
     createdAt: v.number(),
     updatedAt: v.number(),
@@ -2341,9 +2362,17 @@ export default defineSchema({
     companiaId: v.id("companiasSeguridad"),
 
     /**
-     * Multi-rol, por el mismo motivo que `memberships.roles`: un supervisor
-     * puede además cubrir turnos, y quien administra una compañía pequeña
-     * suele ser también quien supervisa.
+     * UN SOLO ROL. Sigue siendo un array —la forma de la tabla no cambia y
+     * `roles.includes(...)` se lee igual en los ciento y pico sitios que ya
+     * preguntan— pero la única longitud válida es 1, y eso lo impone
+     * `exigirRolUnicoCompania` en todos los puntos de escritura.
+     *
+     * Nació multi-rol pensando en el supervisor que además cubre turnos. El
+     * caso existe, pero se paga en el sitio equivocado: tras el login hay que
+     * decidir a qué experiencia entra la persona, y con guarda Y supervisor a
+     * la vez no hay respuesta. Cubrir un turno siendo supervisor ya tiene su
+     * sitio propio y mejor —`asignaciones.rol`, que es por conjunto—, así que
+     * el array no compraba nada que el modelo no diera ya.
      */
     roles: v.array(companiaRoleValidator),
 
@@ -2351,6 +2380,40 @@ export default defineSchema({
     cargo: v.optional(v.string()),
 
     isActive: v.boolean(),
+
+    /**
+     * Rastro de las operaciones sensibles sobre esta persona.
+     *
+     * No hay tabla de auditoría en el proyecto y no se inventa una aquí: el
+     * modelo deja constancia en la propia fila afectada —`terminadoPorUserId`
+     * en contratos y asignaciones, `archivadaPorUserId` en la compañía— y
+     * esto sigue ese mismo camino. Responde "quién le cambió los datos" y
+     * "quién le reescribió la clave, y cuándo", que es lo que se pregunta
+     * cuando alguien dice que no puede entrar.
+     *
+     * Lo que NUNCA se guarda aquí es la clave, su hash ni nada derivado: solo
+     * el hecho de que se fijó.
+     */
+    actualizadoPorUserId: v.optional(v.id("users")),
+    passwordFijadaEn: v.optional(v.number()),
+    passwordFijadaPorUserId: v.optional(v.id("users")),
+
+    /**
+     * El último cambio de rol: cuál era, cuándo se cambió y quién lo ordenó.
+     *
+     * Mismo mecanismo que las tres líneas de arriba y por el mismo motivo: el
+     * rol decide a qué experiencia entra la persona y qué puede hacer en la
+     * portería, así que "quién le cambió el rol" es exactamente la clase de
+     * pregunta que se hace cuando algo no cuadra. El rol NUEVO no se duplica
+     * aquí — es `roles`, que está a tres líneas.
+     *
+     * Guarda solo el último cambio, igual que `passwordFijadaEn`. Un
+     * histórico completo pediría una tabla de auditoría, y este modelo
+     * deliberadamente no tiene ninguna.
+     */
+    rolAnterior: v.optional(companiaRoleValidator),
+    rolCambiadoEn: v.optional(v.number()),
+    rolCambiadoPorUserId: v.optional(v.id("users")),
 
     createdAt: v.number(),
     updatedAt: v.number(),
@@ -2377,6 +2440,18 @@ export default defineSchema({
     vigenciaDesde: v.number(),
     /** Ausente = indefinido, igual que en `usuarioUnidad`. */
     vigenciaHasta: v.optional(v.number()),
+
+    /**
+     * Instante del corte a mano, y quién lo ordenó.
+     *
+     * `vigenciaHasta` es la fecha PACTADA y `lib/vigilancia` le regala el día
+     * entero; terminar "ahora" no cabía ahí y por eso el botón no cambiaba
+     * nada durante 24 horas. `finDe` toma el menor de los dos, así que basta
+     * con esto para que el corte sea exacto: ninguna asignación hay que
+     * tocar, que es la razón de que cuelguen del contrato.
+     */
+    terminadoEn: v.optional(v.number()),
+    terminadoPorUserId: v.optional(v.id("users")),
 
     /** Referencia del contrato comercial. No autoriza nada. */
     notas: v.optional(v.string()),
@@ -2431,6 +2506,10 @@ export default defineSchema({
 
     vigenciaDesde: v.number(),
     vigenciaHasta: v.optional(v.number()),
+
+    /** El corte a mano, igual que en el contrato y por el mismo motivo. */
+    terminadoEn: v.optional(v.number()),
+    terminadoPorUserId: v.optional(v.id("users")),
 
     creadoPorUserId: v.id("users"),
     /** Sin `updatedAt`: una asignación se termina, no se reescribe. */

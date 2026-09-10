@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useParams } from "next/navigation";
 import { useQuery, useMutation } from "convex/react";
 import {
-  AlertTriangle, BookOpenCheck, Car, Check, ClipboardCheck, Download, Eye, Footprints, Loader2, Paperclip, Plus, Search, Settings2, ShieldCheck, Timer, Trash2,
+  AlertTriangle, BookOpenCheck, CalendarDays, Car, Check, ClipboardCheck, Download, Eye, Footprints, Loader2, Paperclip, Plus, Search, Settings2, ShieldCheck, Timer, Trash2, Users,
 } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import type { Id, Doc } from "@vekino/backend/dataModel";
@@ -19,6 +19,8 @@ import { Modal } from "@/components/ui/modal";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Input, Select } from "@/components/ui/input";
+import { EtiquetaRonda } from "@/components/guardia/etiqueta-ronda";
+import { TablaRondas } from "@/components/vigilancia/tabla-rondas";
 import { cn } from "@/lib/utils";
 
 type Modulo = Doc<"minutaEventos">["modulo"];
@@ -31,12 +33,67 @@ const MODULO_META: Record<Modulo, { label: string; tone: React.ComponentProps<ty
   minuta:     { label: "Minuta", tone: "primary" },
 };
 
+/**
+ * Del día 1 del mes en curso hasta hoy.
+ *
+ * La sección no tenía período por defecto —las dos cifras se sacaban de listas
+ * capadas—, así que se toma el mismo criterio que el reporte de reservas: un
+ * rango que arranca con el mes. Hasta HOY y no hasta fin de mes porque estas
+ * dos métricas cuentan lo que ya pasó; ofrecer días futuros solo añade ceros.
+ */
+function mesEnCurso(): { desde: string; hasta: string } {
+  const hoy = new Date();
+  const p = (n: number) => String(n).padStart(2, "0");
+  const iso = (d: Date) =>
+    `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  return {
+    desde: iso(new Date(hoy.getFullYear(), hoy.getMonth(), 1)),
+    hasta: iso(hoy),
+  };
+}
+
+/** "2026-09-01" → "1 sep 2026", para redactar el pie de las tarjetas. */
+function fmtDiaCorto(iso: string): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(y ?? 1970, (m ?? 1) - 1, d ?? 1).toLocaleDateString("es-CO", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+}
+
 function fmtFechaHora(ts?: number) {
   if (!ts) return "—";
   return new Date(ts).toLocaleString("es-CO", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 }
 
+/**
+ * LA CONFIGURACIÓN DE PORTERÍA, APAGADA A PROPÓSITO.
+ *
+ * Checklist de inicio de turno, zonas de ronda y motivos de vehículo están
+ * implementados de punta a punta y funcionan —el guarda los consume al abrir
+ * turno, al iniciar una ronda y al reportar un vehículo—, pero no se pidieron
+ * para esta entrega y hoy no se muestran.
+ *
+ * Se apaga la PUERTA, no la funcionalidad: `ConfigTab` y sus tres paneles
+ * siguen enteros justo debajo, y las mutaciones del backend siguen ahí y
+ * siguen exigiendo rol de administración. Borrarlos habría obligado a
+ * reescribirlos el día que se decida mostrarlos; esto es una palabra.
+ *
+ * Mientras esté en `false`, los conjuntos usan los valores por defecto: el
+ * checklist básico de tres ítems, "Recorrido general" como zona y los cinco
+ * motivos de vehículo que trae el backend. Ninguna pantalla del guarda se
+ * queda vacía por esto.
+ *
+ * El tipo es `boolean` explícito y no el literal `false` para que el resto del
+ * archivo compile igual con el interruptor en cualquiera de las dos
+ * posiciones.
+ */
+const MOSTRAR_CONFIGURACION: boolean = false;
+
 const TABS = [
+  { key: "personal", label: "Personal", icon: Users },
+  { key: "rondas", label: "Rondas", icon: Footprints },
   { key: "minuta", label: "Minuta digital", icon: BookOpenCheck },
   { key: "turnos", label: "Turnos", icon: Timer },
   { key: "novedades", label: "Novedades", icon: AlertTriangle },
@@ -44,41 +101,101 @@ const TABS = [
 ] as const;
 type TabKey = (typeof TABS)[number]["key"];
 
-export default function ControlGuardiaPage() {
+/** Lo que se pinta hoy. `TABS` sigue completo para no perder el tipo. */
+const TABS_VISIBLES = TABS.filter(
+  (t) => t.key !== "config" || MOSTRAR_CONFIGURACION,
+);
+
+/**
+ * VIGILANCIA DEL CONJUNTO.
+ *
+ * La portería vista desde el conjunto: quién la cubre, qué recorre y qué
+ * anota. Es la contraparte de `/vigilancia/:condominioId` —la misma operación
+ * mirada desde la compañía que la presta— y comparte con ella las consultas
+ * (`rondas.listar`, `guardia.listMinuta`) y la tabla de rondas. Lo que cambia
+ * es por dónde llega el permiso: aquí por el rol en el conjunto y allí por el
+ * contrato de la empresa. En los dos casos lo resuelve el servidor exigiendo
+ * `porteria.ver` sobre ESE conjunto; el id de la URL no autoriza nada.
+ *
+ * El conjunto sale de la ruta del shell, así que no hay selector que
+ * manipular: un administrador solo puede estar dentro de su conjunto, y la
+ * plataforma dentro del que abrió.
+ */
+export default function VigilanciaConjuntoPage() {
   const params = useParams<{ id: string }>();
   const condominioId = params.id as Id<"condominios">;
-  const [tab, setTab] = useState<TabKey>("minuta");
+  const [tab, setTab] = useState<TabKey>("personal");
 
   const turnoActivo = useQuery(api.guardia.turnoActivo, { condominioId });
   const minuta = useQuery(api.guardia.listMinuta, { condominioId, limit: 200 });
+  /* Quién cubre esta portería. La consulta ya existía para responder justo
+   * esta pregunta desde el conjunto ("¿quién está autorizado a entrar?") y
+   * trae guardas y supervisores juntos, con su compañía y su vigencia. */
+  const personal = useQuery(api.asignaciones.porCondominio, { condominioId });
+
+  const activos = (personal ?? []).filter((p) => p.estado !== "terminada");
+
+  const [periodo, setPeriodo] = useState(mesEnCurso);
+  const rangoValido = periodo.desde <= periodo.hasta;
+
+  /* Las dos cifras del período las cuenta el SERVIDOR. Sacarlas de `minuta`
+   * —que viene capada a 200 eventos— era el motivo de que el número no
+   * cuadrara con nada. Con el rango al revés no se pregunta: el servidor lo
+   * rechazaría y la pantalla entera se caería por un dato mal escrito. */
+  const resumen = useQuery(
+    api.guardia.resumenPeriodo,
+    rangoValido
+      ? { condominioId, desde: periodo.desde, hasta: periodo.hasta }
+      : "skip",
+  );
 
   return (
     <PageContainer>
       <div className="space-y-6">
         <PageHeader
-          title="Control de Guardia"
-          description="Minuta digital, turnos y configuración de portería"
+          title="Vigilancia"
+          description="Quién cubre la portería, qué recorre y qué queda anotado"
+        />
+
+        <FiltroPeriodo
+          periodo={periodo}
+          onChange={setPeriodo}
+          valido={rangoValido}
         />
 
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+          {/* Turno actual y Personal NO dependen del período: dicen qué pasa
+              ahora mismo en la portería, no cuánto pasó en unas fechas. */}
           <StatCard
             icon={ShieldCheck}
             label="Turno actual"
             value={turnoActivo ? turnoActivo.guardiaNombre.split(" ")[0] ?? "Abierto" : "Sin turno"}
             tone={turnoActivo ? "success" : "neutral"}
           />
-          <StatCard icon={BookOpenCheck} label="Eventos en minuta" value={minuta?.length ?? 0} tone="primary" />
-          <StatCard icon={Footprints} label="Rondas del turno" value={turnoActivo?.rondasCount ?? 0} tone="brand" />
+          <StatCard
+            icon={Users}
+            label="Personal asignado"
+            value={activos.length}
+            tone="primary"
+          />
+          {/* Estas dos sí. Se etiquetan "del período" para que el número no se
+              lea como un total: antes decía "del turno" y contaba otra cosa. */}
+          <StatCard
+            icon={Footprints}
+            label="Rondas del período"
+            value={rangoValido ? (resumen?.rondas ?? "…") : "—"}
+            tone="brand"
+          />
           <StatCard
             icon={AlertTriangle}
-            label="Incidentes (minuta)"
-            value={(minuta ?? []).filter((e) => e.modulo === "novedades").length}
+            label="Incidentes del período"
+            value={rangoValido ? (resumen?.incidentes ?? "…") : "—"}
             tone="destructive"
           />
         </div>
 
         <nav className="flex items-center gap-1 overflow-x-auto rounded-xl border border-border bg-card p-1">
-          {TABS.map((t) => {
+          {TABS_VISIBLES.map((t) => {
             const Icon = t.icon;
             const active = tab === t.key;
             return (
@@ -96,17 +213,244 @@ export default function ControlGuardiaPage() {
           })}
         </nav>
 
+        {tab === "personal" && <PersonalTab personal={personal} />}
+        {tab === "rondas" && <RondasTab condominioId={condominioId} />}
         {tab === "minuta" && <MinutaTab minuta={minuta} />}
         {tab === "turnos" && <TurnosTab condominioId={condominioId} />}
         {tab === "novedades" && <NovedadesTab condominioId={condominioId} />}
-        {tab === "config" && <ConfigTab condominioId={condominioId} />}
+        {tab === "config" && MOSTRAR_CONFIGURACION && (
+          <ConfigTab condominioId={condominioId} />
+        )}
       </div>
     </PageContainer>
   );
 }
 
+/* ───────── Filtro de período ───────── */
+
+/**
+ * Desde / Hasta para las dos métricas que cuentan hechos.
+ *
+ * Dos `<Input type="date">` y no un componente nuevo: es el patrón que ya usa
+ * el reporte de reservas, y extraer un `<RangoFechas />` con dos usos en todo
+ * el proyecto sería una abstracción antes de tiempo. Si aparece un tercero,
+ * ahí sí conviene sacarlo.
+ *
+ * La validación va en el input (`max` en Desde, `min` en Hasta) para que el
+ * calendario no deje ni escoger un rango invertido, y además se comprueba
+ * arriba antes de preguntar. El servidor la repite por su cuenta: escribir la
+ * fecha a mano es perfectamente posible.
+ */
+function FiltroPeriodo({
+  periodo,
+  onChange,
+  valido,
+}: {
+  periodo: { desde: string; hasta: string };
+  onChange: (p: { desde: string; hasta: string }) => void;
+  valido: boolean;
+}) {
+  return (
+    <Card className="flex flex-wrap items-end gap-4 p-4">
+      <div className="space-y-1.5">
+        <label
+          htmlFor="vig-desde"
+          className="flex items-center gap-1.5 text-[12.5px] font-medium text-foreground"
+        >
+          <CalendarDays className="h-3.5 w-3.5 text-brand" aria-hidden />
+          Desde
+        </label>
+        <Input
+          id="vig-desde"
+          type="date"
+          value={periodo.desde}
+          max={periodo.hasta}
+          onChange={(e) => onChange({ ...periodo, desde: e.target.value })}
+        />
+      </div>
+      <div className="space-y-1.5">
+        <label
+          htmlFor="vig-hasta"
+          className="block text-[12.5px] font-medium text-foreground"
+        >
+          Hasta
+        </label>
+        <Input
+          id="vig-hasta"
+          type="date"
+          value={periodo.hasta}
+          min={periodo.desde}
+          onChange={(e) => onChange({ ...periodo, hasta: e.target.value })}
+        />
+      </div>
+
+      <p className="min-w-[220px] flex-1 pb-2 text-[11.5px] text-muted-foreground">
+        {valido ? (
+          <>
+            Rondas e incidentes contados entre el{" "}
+            {fmtDiaCorto(periodo.desde)} y el {fmtDiaCorto(periodo.hasta)},
+            ambos incluidos.
+          </>
+        ) : (
+          <span className="text-destructive">
+            La fecha inicial no puede ser posterior a la final.
+          </span>
+        )}
+      </p>
+    </Card>
+  );
+}
+
+/* ───────── Personal: guardas y supervisores del conjunto ───────── */
+
+const ROL_META = {
+  supervisor: { label: "Supervisor", tone: "info" },
+  guardia: { label: "Guarda", tone: "brand" },
+} as const;
+
+const TONO_VIGENCIA = {
+  programada: "info",
+  vigente: "success",
+  terminada: "neutral",
+} as const;
+
+function fmtFecha(ms: number | null) {
+  if (ms == null) return "indefinida";
+  return new Date(ms).toLocaleDateString("es-CO", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+type PersonalVigilancia = FunctionReturnType<
+  typeof api.asignaciones.porCondominio
+>;
+
+/**
+ * Quién está autorizado a entrar a esta portería.
+ *
+ * Todo sale de `asignaciones.porCondominio`, que ya acota al conjunto en el
+ * servidor: no hay nada que filtrar aquí. Guardas y supervisores viajan en la
+ * misma respuesta porque son la misma pregunta con distinto rol; separarlos
+ * en dos consultas habría duplicado la autorización.
+ *
+ * Se separan al PINTAR y no al pedir: el administrador quiere ver de un
+ * vistazo a quién manda y quién cubre el turno.
+ */
+function PersonalTab({ personal }: { personal: PersonalVigilancia | undefined }) {
+  if (personal === undefined) {
+    return <div className="space-y-2">{[...Array(3)].map((_, i) => <Skeleton key={i} className="h-16 rounded-xl" />)}</div>;
+  }
+
+  const vigentes = personal.filter((p) => p.estado !== "terminada");
+  const supervisores = vigentes.filter((p) => p.rol === "supervisor");
+  const guardas = vigentes.filter((p) => p.rol === "guardia");
+
+  if (vigentes.length === 0) {
+    return (
+      <EmptyState
+        icon={Users}
+        title="Nadie asignado a esta portería"
+        description="Cuando la compañía de vigilancia asigne supervisores o guardas a tu conjunto aparecerán aquí, con la vigencia de cada uno."
+      />
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+      <GrupoPersonal
+        titulo="Supervisores"
+        descripcion="Dirigen la operación de tu portería. No cubren turno."
+        gente={supervisores}
+      />
+      <GrupoPersonal
+        titulo="Guardas"
+        descripcion="Abren turno, hacen las rondas y escriben la minuta."
+        gente={guardas}
+      />
+    </div>
+  );
+}
+
+function GrupoPersonal({
+  titulo,
+  descripcion,
+  gente,
+}: {
+  titulo: string;
+  descripcion: string;
+  gente: PersonalVigilancia;
+}) {
+  return (
+    <div className="space-y-2">
+      <div>
+        <h2 className="text-sm font-semibold text-foreground">
+          {titulo}{" "}
+          <span className="font-normal text-muted-foreground">
+            ({gente.length})
+          </span>
+        </h2>
+        <p className="text-[12px] text-muted-foreground">{descripcion}</p>
+      </div>
+
+      {gente.length === 0 ? (
+        <Card className="p-5 text-center text-[13px] text-muted-foreground">
+          Ninguno asignado en este momento.
+        </Card>
+      ) : (
+        <Card className="divide-y divide-border p-0">
+          {gente.map((p) => {
+            const meta = ROL_META[p.rol];
+            return (
+              <div
+                key={p._id}
+                className="flex flex-wrap items-center gap-x-4 gap-y-1.5 px-4 py-3"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-medium text-foreground">
+                      {p.nombre}
+                    </span>
+                    <Badge tone={meta.tone}>{meta.label}</Badge>
+                  </div>
+                  <p className="mt-0.5 text-[11.5px] text-muted-foreground">
+                    {p.companiaNombre}
+                    {/* El correo solo lo devuelve el servidor a quien
+                        administra: para los demás llega en null. */}
+                    {p.email ? ` · ${p.email}` : ""}
+                  </p>
+                </div>
+                <div className="text-right">
+                  <Badge tone={TONO_VIGENCIA[p.estado]}>{p.estado}</Badge>
+                  <p className="mt-0.5 text-[11px] text-muted-foreground">
+                    {fmtFecha(p.vigenciaDesde)} → {fmtFecha(p.vigenciaHasta)}
+                  </p>
+                </div>
+              </div>
+            );
+          })}
+        </Card>
+      )}
+    </div>
+  );
+}
+
+/* ───────── Rondas ───────── */
+
+/**
+ * El historial de recorridos. Misma consulta y misma tabla que usa la
+ * compañía en `/vigilancia/:condominioId`: aquí solo cambia quién pregunta.
+ */
+function RondasTab({ condominioId }: { condominioId: Id<"condominios"> }) {
+  const rondas = useQuery(api.rondas.listar, { condominioId, limite: 50 });
+  return <TablaRondas rondas={rondas} />;
+}
+
 /* ───────── Minuta (auditoría) ───────── */
-function MinutaTab({ minuta }: { minuta: Doc<"minutaEventos">[] | undefined }) {
+type EventoMinuta = FunctionReturnType<typeof api.guardia.listMinuta>[number];
+
+function MinutaTab({ minuta }: { minuta: EventoMinuta[] | undefined }) {
   const [moduloFiltro, setModuloFiltro] = useState<"" | Modulo>("");
   const [buscar, setBuscar] = useState("");
 
@@ -175,6 +519,10 @@ function MinutaTab({ minuta }: { minuta: Doc<"minutaEventos">[] | undefined }) {
                     {e.unidad && e.unidad !== "—" && (
                       <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">{e.unidad}</span>
                     )}
+                    {/* En qué recorrido ocurrió. `listMinuta` ya lo resuelve y
+                        la portería y la compañía ya lo pintaban; esta vista
+                        era la única que se lo callaba. */}
+                    <EtiquetaRonda numero={e.rondaNumero} zona={e.rondaZona} />
                   </div>
                   <p className="mt-1 text-sm text-foreground">{e.resumen}</p>
                   <p className="mt-0.5 text-[11px] text-muted-foreground">{e.actorNombre}</p>

@@ -51,6 +51,72 @@ test("el que vence 'el 30' cubre el 30 completo, no hasta las 00:00", () => {
   assert.equal(estadoVigencia(r, JULIO_1), "terminada");
 });
 
+/**
+ * EL CORTE INMEDIATO.
+ *
+ * `vigenciaHasta` es una fecha y `finDe` le regala el dia entero. Terminar un
+ * contrato "hoy" escribiendo la fecha de hoy lo dejaba vigente 24 horas mas:
+ * el boton no cambiaba nada y el personal seguia entrando. `terminadoEn` dice
+ * el instante exacto y manda sobre la fecha pactada.
+ */
+test("terminar ahora corta ahora, no manana", () => {
+  const mediodia = JUNIO_30 + 12 * 60 * 60 * 1000;
+  const pactado: Rango = { vigenciaDesde: ENERO, vigenciaHasta: JUNIO_30 };
+  // Antes: escribir la fecha de hoy dejaba el resto del dia vigente.
+  assert.equal(estaVigente(pactado, mediodia), true);
+
+  const cortado: Rango = { ...pactado, terminadoEn: mediodia };
+  assert.equal(estaVigente(cortado, mediodia), false);
+  assert.equal(estadoVigencia(cortado, mediodia), "terminada");
+  // Un segundo antes seguia cubriendo: el corte es exacto.
+  assert.equal(estaVigente(cortado, mediodia - 1000), true);
+});
+
+test("el corte no puede alargar lo pactado", () => {
+  /* Un `terminadoEn` posterior al fin pactado no resucita nada: manda el que
+   * llegue primero. */
+  const r: Rango = {
+    vigenciaDesde: ENERO,
+    vigenciaHasta: JUNIO_30,
+    terminadoEn: DICIEMBRE_31,
+  };
+  assert.equal(estaVigente(r, JULIO_1), false);
+});
+
+test("un contrato indefinido tambien se puede cortar", () => {
+  const r: Rango = { vigenciaDesde: ENERO, terminadoEn: JUNIO_30 };
+  assert.equal(estaVigente(r, JUNIO_30 - 1000), true);
+  assert.equal(estaVigente(r, JUNIO_30), false);
+  assert.equal(estadoVigencia(r, JULIO_1), "terminada");
+});
+
+test("cancelar algo que aun no empezaba lo deja terminado, no programado", () => {
+  /* Sin esto, un contrato que arranca en julio y se cancela en enero se leia
+   * como "programada" hasta julio: en la pantalla parecia que seguia en pie. */
+  const r: Rango = { vigenciaDesde: JULIO_1, terminadoEn: ENERO };
+  assert.equal(estadoVigencia(r, D(3, 1)), "terminada");
+  assert.equal(estaVigente(r, D(8, 1)), false);
+});
+
+test("un contrato cortado deja sitio para el siguiente", () => {
+  /* Terminar y volver a contratar la misma empresa es un caso real: si el
+   * cortado siguiera ocupando su rango, `crearContrato` lo veria como solape
+   * y no dejaria. */
+  const cortado: Rango = { vigenciaDesde: ENERO, terminadoEn: JUNIO_30 };
+  const nuevo: Rango = { vigenciaDesde: JULIO_1 };
+  assert.equal(haySolape(cortado, nuevo), false);
+});
+
+test("terminar la compania no cambia como se leen los rangos sin corte", () => {
+  /* Regresion: todo lo que ya existe no lleva `terminadoEn` y tiene que
+   * comportarse exactamente igual que antes. */
+  const r: Rango = { vigenciaDesde: ENERO, vigenciaHasta: JUNIO_30 };
+  assert.equal(estadoVigencia(r, D(3, 1)), "vigente");
+  assert.equal(estadoVigencia(r, JUNIO_30), "vigente");
+  assert.equal(estadoVigencia(r, JULIO_1), "terminada");
+  assert.equal(estadoVigencia({ vigenciaDesde: JULIO_1 }, ENERO), "programada");
+});
+
 test("vigentes deja solo lo que cubre el instante pedido", () => {
   const lista: Rango[] = [
     { vigenciaDesde: ENERO, vigenciaHasta: JUNIO_30 },
@@ -208,6 +274,21 @@ test("contratar es solo de plataforma", () => {
     assert.equal(caps.has("seguridad.contratar"), false);
   }
   assert.equal(capacidadesDePlataforma().has("seguridad.contratar"), true);
+});
+
+test("terminar el contrato propio es de la compania, firmarlo no", () => {
+  /* Si `seguridad.terminar` no existiera y se hubiera reutilizado
+   * `seguridad.contratar`, el administrador de una compania podria contratar
+   * conjuntos a su antojo. Y el supervisor no termina contratos: administra
+   * turnos, no la relacion comercial. */
+  const admin = capacidadesDeRolesCompania(["admin_compania"]);
+  assert.equal(admin.has("seguridad.terminar"), true);
+  assert.equal(admin.has("seguridad.contratar"), false);
+
+  const supervisor = capacidadesDeRolAsignacion("supervisor");
+  assert.equal(supervisor.has("seguridad.terminar"), false);
+
+  assert.equal(capacidadesDeRolesCompania(["guardia"]).size, 0);
 });
 
 test("la plataforma tiene todas las capacidades declaradas", () => {

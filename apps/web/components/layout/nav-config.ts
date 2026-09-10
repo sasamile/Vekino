@@ -14,6 +14,7 @@ import {
   Landmark,
   Users,
   Clock3,
+  ShieldCheck,
   type LucideIcon,
 } from "lucide-react";
 
@@ -93,6 +94,28 @@ export const NAV_GROUPS: NavGroup[] = [
         icon: ReceiptText,
         ready: true,
         keywords: ["soportes", "pagos", "whatsapp", "transferencias", "consignaciones", "recibos"],
+      },
+      {
+        /* La portería del conjunto: quién la cubre, qué recorre y qué anota.
+         * No lleva regla de acceso propia — `allowedCondoSegments` ya da paso
+         * total al administrador y a la plataforma, y deja fuera a la
+         * contadora, que es exactamente a quien no le toca. El backend lo
+         * vuelve a comprobar con `porteria.ver` en cada consulta. */
+        label: "Vigilancia",
+        segment: "vigilancia",
+        icon: ShieldCheck,
+        ready: true,
+        keywords: [
+          "guardas",
+          "guardias",
+          "supervisores",
+          "porteria",
+          "minuta",
+          "rondas",
+          "turnos",
+          "seguridad",
+          "novedades",
+        ],
       },
     ],
   },

@@ -2,7 +2,7 @@ import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
 import { query, mutation, internalQuery, internalMutation } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
-import type { Doc } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import {
   aMinutos,
   cabeEnAlgunaFranja,
@@ -10,6 +10,7 @@ import {
   rangoAbsoluto,
   seSolapan,
 } from "./lib/horarios";
+import { calcularCosto } from "./lib/costoReserva";
 import {
   requireCondominioRole,
   requireAppUser,
@@ -19,6 +20,35 @@ import {
 } from "./model/authz";
 
 const ADMIN_ROLES = ["administrador", "junta_directiva", "contadora"] as const;
+
+/**
+ * Lo que se pacta al crear una reserva: cuanto cuesta y cuanto se deja en
+ * garantia.
+ *
+ * Se copia de la zona en vez de leerla despues, por lo mismo que ya se hacia
+ * con el deposito: si la administracion sube la tarifa en marzo, una reserva
+ * de febrero sigue valiendo lo que se acordo. Antes solo se congelaba el
+ * deposito; el valor del alquiler se calculaba en la pantalla del residente y
+ * se perdia al enviar el formulario, asi que la administracion no podia verlo
+ * en ninguna parte.
+ *
+ * El calculo es el MISMO que ve el residente antes de confirmar
+ * (`lib/costoReserva`), no una segunda cuenta que pueda desviarse.
+ */
+function valoresPactados(
+  zona: Doc<"zonasComunes">,
+  horaInicio: string,
+  horaFin: string,
+): { valorReserva: number | undefined; depositoRequerido: number | undefined } {
+  const costo = calcularCosto(zona, horaInicio, horaFin);
+  return {
+    /* Sin tarifa no se guarda un cero: cero es "gratis", y esto es "nadie le
+     * puso precio". La diferencia importa cuando la administracion cuadre
+     * caja. */
+    valorReserva: costo.sinTarifa ? undefined : costo.alquiler,
+    depositoRequerido: zona.depositoRequerido,
+  };
+}
 
 const estadoValidator = v.union(
   v.literal("pendiente"),
@@ -242,6 +272,62 @@ export const countsByCondominio = query({
   },
 });
 
+/**
+ * Le pone a cada reserva lo que cuesta y lo que se deja en garantia.
+ *
+ * Las reservas creadas desde que existe `valorReserva` ya lo traen pactado y
+ * aqui no se toca. Las anteriores no lo tienen —el valor solo vivia en la
+ * pantalla del residente— y en vez de dejar la columna en blanco se calcula
+ * con la tarifa que la zona tiene HOY, marcandolo como estimado: es un dato
+ * util para la administracion, pero no es lo que se acordo y no puede
+ * presentarse como si lo fuera.
+ *
+ * Las zonas se leen UNA vez por pagina, no una por fila: treinta reservas de
+ * un conjunto suelen ser cuatro zonas, y preguntar por fila serian treinta
+ * consultas para cuatro respuestas.
+ */
+async function conValores<T extends Doc<"reservas">>(
+  ctx: QueryCtx,
+  condominioId: Id<"condominios">,
+  filas: T[],
+) {
+  const necesitaZonas = filas.some((r) => r.valorReserva == null);
+  const zonas = necesitaZonas
+    ? new Map(
+        (
+          await ctx.db
+            .query("zonasComunes")
+            .withIndex("by_condominio", (q) => q.eq("condominioId", condominioId))
+            .collect()
+        ).map((z) => [z._id, z]),
+      )
+    : new Map<Id<"zonasComunes">, Doc<"zonasComunes">>();
+
+  return filas.map((r) => {
+    if (r.valorReserva != null) {
+      return { ...r, valorReserva: r.valorReserva, valoresEstimados: false };
+    }
+    /* La zona pudo borrarse: sin ella no hay tarifa de donde estimar, y eso
+     * es "no se sabe", no "estimado". */
+    const zona = zonas.get(r.zonaId);
+    const costo = zona ? calcularCosto(zona, r.horaInicio, r.horaFin) : null;
+    const valorReserva = costo && !costo.sinTarifa ? costo.alquiler : null;
+    /* El deposito SI se guardaba desde antes, asi que lo pactado manda; solo
+     * se recurre a la zona cuando la reserva no trae ninguno. */
+    const depositoDeZona =
+      r.depositoRequerido == null && zona?.depositoRequerido != null;
+    return {
+      ...r,
+      valorReserva,
+      depositoRequerido: r.depositoRequerido ?? zona?.depositoRequerido,
+      /* Solo se marca cuando de verdad se saco algo de la zona de hoy. Marcar
+       * una fila que no estima nada haria dudar de un dato que si esta
+       * pactado. */
+      valoresEstimados: valorReserva != null || depositoDeZona,
+    };
+  });
+}
+
 export const listPage = query({
   args: {
     condominioId: v.id("condominios"),
@@ -267,17 +353,22 @@ export const listPage = query({
       });
       const limit = Math.min(args.paginationOpts.numItems || 30, 60);
       return {
-        page: filtered.slice(0, limit),
+        page: await conValores(ctx, args.condominioId, filtered.slice(0, limit)),
         isDone: true,
         continueCursor: "",
       };
     }
 
-    return await ctx.db
+    const pagina = await ctx.db
       .query("reservas")
       .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
       .order("desc")
       .paginate(args.paginationOpts);
+
+    return {
+      ...pagina,
+      page: await conValores(ctx, args.condominioId, pagina.page),
+    };
   },
 });
 
@@ -324,9 +415,7 @@ export const create = mutation({
       horaFin: args.horaFin,
       estado: "pendiente",
       observaciones: args.observaciones?.trim(),
-      /* Copiado, no leído de la zona: si la administración sube el depósito
-       * en marzo, una reserva de febrero sigue debiendo lo pactado. */
-      depositoRequerido: zona.depositoRequerido,
+      ...valoresPactados(zona, args.horaInicio, args.horaFin),
       createdAt: now,
       updatedAt: now,
     });
@@ -504,9 +593,7 @@ export const createMia = mutation({
       horaFin: args.horaFin,
       estado: "pendiente",
       observaciones: args.observaciones?.trim(),
-      /* Copiado, no leído de la zona: si la administración sube el depósito
-       * en marzo, una reserva de febrero sigue debiendo lo pactado. */
-      depositoRequerido: zona.depositoRequerido,
+      ...valoresPactados(zona, args.horaInicio, args.horaFin),
       createdAt: now,
       updatedAt: now,
     });
@@ -728,9 +815,7 @@ export const createFromBot = internalMutation({
       horaFin: args.horaFin,
       estado: "pendiente",
       observaciones: args.observaciones?.trim(),
-      /* Copiado, no leído de la zona: si la administración sube el depósito
-       * en marzo, una reserva de febrero sigue debiendo lo pactado. */
-      depositoRequerido: zona.depositoRequerido,
+      ...valoresPactados(zona, args.horaInicio, args.horaFin),
       createdAt: now,
       updatedAt: now,
     });

@@ -22,14 +22,38 @@ export const FIN_DEL_DIA = 24 * 60 * 60 * 1000;
 export type Rango = {
   vigenciaDesde: number;
   vigenciaHasta?: number | undefined;
+  /**
+   * CORTE INMEDIATO. El instante exacto en que se terminó a mano.
+   *
+   * `vigenciaHasta` es una FECHA —sale de un `<input type="date">` y por eso
+   * `finDe` le suma el día entero—, así que no puede expresar "se acaba
+   * ahora": terminar un contrato hoy lo dejaba vigente hasta mañana, y quien
+   * pulsaba el botón no veía cambiar absolutamente nada. Ése era el bug.
+   *
+   * Se separa en lugar de retroceder `vigenciaHasta` porque son dos hechos
+   * distintos: hasta cuándo se pactó y cuándo se cortó. Escribir "terminó
+   * ayer" para conseguir el efecto habría falseado el histórico, que es justo
+   * lo que este modelo existe para no hacer.
+   *
+   * Opcional: los rangos que no se cortaron a mano —todos los existentes— se
+   * comportan exactamente igual que antes.
+   */
+  terminadoEn?: number | undefined;
 };
 
 /** Estado derivado de las fechas. No se guarda: se calcula al leer. */
 export type EstadoVigencia = "programada" | "vigente" | "terminada";
 
-/** Instante en que el rango deja de cubrir. `Infinity` si es indefinido. */
-function finDe(r: Rango): number {
-  return r.vigenciaHasta == null ? Infinity : r.vigenciaHasta + FIN_DEL_DIA;
+/**
+ * Instante en que el rango deja de cubrir. `Infinity` si es indefinido.
+ *
+ * Manda el que llegue primero: un corte a mano no puede alargar lo pactado, y
+ * una fecha de fin posterior no puede resucitar lo ya cortado.
+ */
+export function finDe(r: Rango): number {
+  const porFecha =
+    r.vigenciaHasta == null ? Infinity : r.vigenciaHasta + FIN_DEL_DIA;
+  return r.terminadoEn == null ? porFecha : Math.min(porFecha, r.terminadoEn);
 }
 
 /**
@@ -44,13 +68,22 @@ export function estaVigente(r: Rango, ahora: number = Date.now()): boolean {
   return r.vigenciaDesde <= ahora && ahora < finDe(r);
 }
 
+/**
+ * Terminado gana a programado.
+ *
+ * Un contrato que empieza el mes que viene y se cancela hoy esta TERMINADO,
+ * no "programado": preguntar primero por el fin es lo que evita que aparezca
+ * como pendiente de arrancar hasta la fecha en que iba a hacerlo. Para un
+ * rango sin corte a mano el resultado es identico al de siempre, porque
+ * `vigenciaDesde <= finDe` se cumple solo.
+ */
 export function estadoVigencia(
   r: Rango,
   ahora: number = Date.now(),
 ): EstadoVigencia {
+  if (ahora >= finDe(r)) return "terminada";
   if (ahora < r.vigenciaDesde) return "programada";
-  if (ahora < finDe(r)) return "vigente";
-  return "terminada";
+  return "vigente";
 }
 
 /** Deja solo lo que cubre este instante. */
@@ -70,6 +103,30 @@ export function vigentes<T extends Rango>(
  */
 export function haySolape(a: Rango, b: Rango): boolean {
   return a.vigenciaDesde < finDe(b) && b.vigenciaDesde < finDe(a);
+}
+
+/**
+ * `interno` recortado a lo que `externo` le permite cubrir de verdad.
+ *
+ * Una asignacion no puede dar acceso mas alla de su contrato: asi esta hecho
+ * el modelo —cuelga del contrato justamente para que terminarlo corte a todo
+ * su personal sin tocar una fila—, y `asignacionVigente` ya lo aplica al
+ * leer. Pero una asignacion sin `vigenciaHasta` bajo un contrato terminado
+ * SIGUE pareciendo abierta si se mira la fila sola, y ahi es donde se
+ * colaba el error: un contrato de pruebas terminado hace meses bloqueaba
+ * asignaciones nuevas para siempre.
+ *
+ * Recortar antes de comparar deja las dos lecturas —quien puede operar y que
+ * choca con que— diciendo lo mismo.
+ */
+export function acotado(interno: Rango, externo: Rango): Rango {
+  const fin = Math.min(finDe(interno), finDe(externo));
+  return {
+    vigenciaDesde: Math.max(interno.vigenciaDesde, externo.vigenciaDesde),
+    /* `terminadoEn` y no `vigenciaHasta`: es un instante exacto, ya calculado,
+     * al que no hay que regalarle el dia entero otra vez. */
+    terminadoEn: Number.isFinite(fin) ? fin : undefined,
+  };
 }
 
 /**
@@ -112,6 +169,16 @@ export const CAPACIDADES = [
   "seguridad.asignar",
   /** Crear, suspender y terminar contratos compania <-> conjunto. */
   "seguridad.contratar",
+  /**
+   * Terminar un contrato de LA PROPIA compania.
+   *
+   * Aparte de `seguridad.contratar` a proposito: firmar un contrato es la
+   * relacion comercial del SaaS y sigue siendo solo de la plataforma, pero
+   * renunciar al servicio que uno presta es una decision de la empresa. Darle
+   * `seguridad.contratar` al administrador de compania para que pudiera
+   * terminar le habria dejado tambien contratar conjuntos a su antojo.
+   */
+  "seguridad.terminar",
 ] as const;
 
 export type Capacidad = (typeof CAPACIDADES)[number];
@@ -154,7 +221,7 @@ const POR_ROL_ASIGNACION: Record<string, readonly Capacidad[]> = {
 
 /** Lo que habilita pertenecer a una compania, sin mirar conjunto alguno. */
 const POR_ROL_COMPANIA: Record<string, readonly Capacidad[]> = {
-  admin_compania: ["seguridad.personal", "seguridad.asignar"],
+  admin_compania: ["seguridad.personal", "seguridad.asignar", "seguridad.terminar"],
   supervisor: [],
   guardia: [],
 };

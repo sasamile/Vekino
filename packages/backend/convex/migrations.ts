@@ -1,16 +1,20 @@
 import { v } from "convex/values";
 import { internalMutation, internalQuery } from "./_generated/server";
 import {
+  companiaRoleValidator,
   operationalRoleValidator,
+  rolPrincipalDeCompania,
   platformRoleValidator,
   tipoDocumentoValidator,
   subscriptionPlanValidator,
   tipoUnidadValidator,
   estadoUnidadValidator,
   vinculoUnidadValidator,
+  type CompaniaRole,
 } from "./model/roles";
 import { resolveTipoVehiculo } from "./model/placa";
 import { normalizarTelefonoE164 } from "./lib/telefono";
+import { estaVigente } from "./lib/vigilancia";
 import { internal } from "./_generated/api";
 
 /**
@@ -725,6 +729,11 @@ export const backfillTelefonoE164 = internalMutation({
  * Idempotente: se puede correr las veces que haga falta. A quien ya tenga una
  * asignación vigente en ese conjunto se le salta.
  *
+ * Tampoco toca a quien ya sea personal de esta compañía con OTRO rol: sale en
+ * `conRolDistinto` y se decide a mano. Antes le AÑADÍA "guardia" a lo que ya
+ * tuviera, y era la única vía del sistema capaz de dejar a alguien con dos
+ * roles de compañía.
+ *
  *   bunx convex run migrations:migrarGuardiasACompania '{
  *     "condominioId": "…", "companiaId": "…", "contratoId": "…"
  *   }'
@@ -773,6 +782,9 @@ export const migrarGuardiasACompania = internalMutation({
     const creados: string[] = [];
     const yaEstaban: string[] = [];
     const omitidos: string[] = [];
+    /* Ya es personal de esta compañía con OTRO rol. No se le toca: ver el
+     * bloque de abajo. */
+    const conRolDistinto: string[] = [];
 
     for (const m of guardias) {
       const u = await ctx.db.get(m.userId);
@@ -808,24 +820,37 @@ export const migrarGuardiasACompania = internalMutation({
         continue;
       }
 
-      if (args.simular) {
-        creados.push(u.email);
-        continue;
-      }
-
-      let miembro = await ctx.db
+      /* Se busca ANTES del corte de simulación para que el ensayo reporte
+       * también los choques de rol, que es justo lo que hay que ver antes de
+       * ejecutar. */
+      const miembro = await ctx.db
         .query("companiaMiembros")
         .withIndex("by_compania_user", (q) =>
           q.eq("companiaId", args.companiaId).eq("userId", m.userId),
         )
         .unique();
 
+      /* Un usuario de compañía tiene UN rol. Antes esto le añadía "guardia" a
+       * lo que ya tuviera, y era la única vía del sistema que fabricaba
+       * multi-rol. Ahora, si la persona ya es de esta compañía con otro rol
+       * —o con varios, de una fila anterior a la regla—, se informa y se deja
+       * como está: degradar a un supervisor a guarda en silencio, en mitad de
+       * una migración, es peor que no migrarlo. */
+      if (miembro && (miembro.roles.length !== 1 || miembro.roles[0] !== "guardia")) {
+        conRolDistinto.push(u.email);
+        continue;
+      }
+
+      if (args.simular) {
+        creados.push(u.email);
+        continue;
+      }
+
       let miembroId;
       if (miembro) {
         miembroId = miembro._id;
-        if (!miembro.isActive || !miembro.roles.includes("guardia")) {
+        if (!miembro.isActive) {
           await ctx.db.patch(miembro._id, {
-            roles: [...new Set([...miembro.roles, "guardia" as const])],
             isActive: true,
             updatedAt: now,
           });
@@ -862,6 +887,224 @@ export const migrarGuardiasACompania = internalMutation({
       creados,
       yaEstaban,
       omitidos,
+      conRolDistinto,
+    };
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// VIGILANCIA — dejar a cada persona con UN solo rol de compañía
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Normaliza `companiaMiembros.roles` a un solo elemento.
+ *
+ * A partir de `exigirRolUnicoCompania` ninguna vía del sistema puede crear
+ * filas con dos roles, pero las que ya existan siguen ahí: el modelo no las
+ * borra ni las reescribe solo. Esto las convierte, y NO adivina cuando no hay
+ * una respuesta buena.
+ *
+ * ── Cómo se elige el rol que se conserva ─────────────────────────────────
+ *
+ *  1. Si la persona tiene asignaciones VIGENTES y todas son del mismo rol, se
+ *     conserva ése. Es la única regla que no rompe nada: `asignaciones.crear`
+ *     exige que el miembro tenga el rol de la asignación, así que quitarle
+ *     precisamente ese rol dejaría a un guarda sin poder entrar a su portería
+ *     en mitad de un turno.
+ *
+ *  2. Sin asignaciones vigentes, manda la jerarquía
+ *     `admin_compania > supervisor > guardia` (la de `COMPANIA_ROLES`).
+ *     Conservar el mayor evita el caso peor: dejar sin administración a una
+ *     compañía cuyo único admin tenía además apuntado "guardia".
+ *
+ *  3. Si tiene asignaciones vigentes de DOS roles distintos, o si ninguno de
+ *     sus roles cubre las asignaciones que tiene, NO se toca. Se reporta en
+ *     `ambiguos` con el detalle, y lo resuelve una persona: cualquiera de las
+ *     dos opciones le quita a alguien un acceso que hoy usa.
+ *
+ * ── Cómo se usa ──────────────────────────────────────────────────────────
+ *
+ * Ensayo primero, SIEMPRE (no escribe nada):
+ *
+ *   bunx convex run migrations:normalizarRolesCompania '{"simular": true}'
+ *
+ * Y cuando el informe cuadre:
+ *
+ *   bunx convex run migrations:normalizarRolesCompania '{}'
+ *
+ * Un caso ambiguo se resuelve pasándole la decisión a mano, sin tocar los
+ * demás:
+ *
+ *   bunx convex run migrations:normalizarRolesCompania \
+ *     '{"decisiones": [{"miembroId": "…", "rol": "supervisor"}]}'
+ *
+ * Idempotente: correrlo dos veces no cambia nada la segunda. Sobre datos ya
+ * normalizados —el caso normal— es un no-op que solo cuenta.
+ */
+export const normalizarRolesCompania = internalMutation({
+  args: {
+    /** Sin escribir nada, para revisar antes de ejecutar. */
+    simular: v.optional(v.boolean()),
+    /** Acota a una compañía. Por omisión, todas. */
+    companiaId: v.optional(v.id("companiasSeguridad")),
+    /** Resuelve a mano los casos que la regla deja como ambiguos. */
+    decisiones: v.optional(
+      v.array(
+        v.object({
+          miembroId: v.id("companiaMiembros"),
+          rol: companiaRoleValidator,
+        }),
+      ),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const ahora = Date.now();
+    const aMano = new Map<string, CompaniaRole>(
+      (args.decisiones ?? []).map((d) => [d.miembroId as string, d.rol]),
+    );
+
+    const companiaId = args.companiaId;
+    const todos = companiaId
+      ? await ctx.db
+          .query("companiaMiembros")
+          .withIndex("by_compania", (q) => q.eq("companiaId", companiaId))
+          .collect()
+      : await ctx.db.query("companiaMiembros").collect();
+
+    /* Solo las filas que incumplen. Las de un rol —el caso normal— ni se
+     * miran: no hay nada que decidir ni que escribir. */
+    const multiRol = todos.filter((m) => m.roles.length !== 1);
+
+    const normalizados: {
+      miembroId: string;
+      email: string | null;
+      antes: CompaniaRole[];
+      despues: CompaniaRole;
+      porque: "decision_manual" | "asignacion_vigente" | "jerarquia";
+    }[] = [];
+    const ambiguos: {
+      miembroId: string;
+      email: string | null;
+      roles: CompaniaRole[];
+      rolesAsignadosVigentes: string[];
+      motivo: string;
+    }[] = [];
+
+    for (const m of multiRol) {
+      const u = await ctx.db.get(m.userId);
+      const email = u?.email ?? null;
+
+      /* Las vigentes de verdad: la asignación puede seguir abierta y su
+       * contrato haber terminado, y entonces no da acceso a nada. Es la misma
+       * lectura que hace `asignacionVigente`. */
+      const suyas = await ctx.db
+        .query("asignaciones")
+        .withIndex("by_miembro", (q) => q.eq("companiaMiembroId", m._id))
+        .collect();
+      const rolesEnUso = new Set<string>();
+      for (const a of suyas) {
+        if (!estaVigente(a, ahora)) continue;
+        const contrato = await ctx.db.get(a.contratoId);
+        if (!contrato || !estaVigente(contrato, ahora)) continue;
+        rolesEnUso.add(a.rol);
+      }
+
+      const decidido = aMano.get(m._id as string);
+      let elegido: CompaniaRole | null = null;
+      let porque: "decision_manual" | "asignacion_vigente" | "jerarquia" =
+        "jerarquia";
+
+      if (decidido) {
+        /* Una decisión a mano manda sobre la regla, pero no sobre la
+         * coherencia: dejar a alguien con un rol que no cubre la asignación
+         * que está ejerciendo hoy es justo el estado roto que esto viene a
+         * evitar. */
+        if (rolesEnUso.size > 0 && !rolesEnUso.has(decidido)) {
+          ambiguos.push({
+            miembroId: m._id,
+            email,
+            roles: m.roles,
+            rolesAsignadosVigentes: [...rolesEnUso],
+            motivo: `La decision manual (${decidido}) no cubre sus asignaciones vigentes.`,
+          });
+          continue;
+        }
+        elegido = decidido;
+        porque = "decision_manual";
+      } else if (rolesEnUso.size > 1) {
+        ambiguos.push({
+          miembroId: m._id,
+          email,
+          roles: m.roles,
+          rolesAsignadosVigentes: [...rolesEnUso],
+          motivo:
+            "Cubre hoy dos roles distintos a la vez. Hay que terminar una de las asignaciones antes de elegir.",
+        });
+        continue;
+      } else if (rolesEnUso.size === 1) {
+        const enUso = [...rolesEnUso][0] as CompaniaRole;
+        if (!m.roles.includes(enUso)) {
+          ambiguos.push({
+            miembroId: m._id,
+            email,
+            roles: m.roles,
+            rolesAsignadosVigentes: [...rolesEnUso],
+            motivo:
+              "Su asignacion vigente usa un rol que no tiene en la compania. Revisar a mano.",
+          });
+          continue;
+        }
+        elegido = enUso;
+        porque = "asignacion_vigente";
+      } else {
+        elegido = rolPrincipalDeCompania(m.roles);
+        porque = "jerarquia";
+      }
+
+      if (!elegido) {
+        ambiguos.push({
+          miembroId: m._id,
+          email,
+          roles: m.roles,
+          rolesAsignadosVigentes: [...rolesEnUso],
+          motivo: "No tiene ningun rol. Hay que asignarle uno o darlo de baja.",
+        });
+        continue;
+      }
+
+      normalizados.push({
+        miembroId: m._id,
+        email,
+        antes: m.roles,
+        despues: elegido,
+        porque,
+      });
+
+      if (args.simular) continue;
+
+      /* NO se escribe el rastro `rolAnterior` / `rolCambiadoPorUserId`.
+       *
+       * Esos campos responden "quién le cambió el rol a esta persona", y aquí
+       * no hay tal cosa: nadie se lo cambió, se normalizó una fila que ya
+       * incumplía. Y `rolAnterior` es un rol, no dos, así que tampoco podría
+       * decir la verdad de una fila que tenía guarda Y supervisor —diría uno
+       * de los dos y parecería un cambio deliberado que nunca ocurrió—.
+       *
+       * El registro de esta pasada es lo que devuelve la función, que es lo
+       * que ve y guarda quien la ejecuta. */
+      await ctx.db.patch(m._id, {
+        roles: [elegido],
+        updatedAt: ahora,
+      });
+    }
+
+    return {
+      simulado: args.simular === true,
+      revisados: todos.length,
+      /* Lo esperable es 0: significa que no había nada que normalizar. */
+      conVariosRoles: multiRol.length,
+      normalizados,
+      ambiguos,
     };
   },
 });

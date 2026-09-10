@@ -4,6 +4,11 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
 import { requireCondominioRole, requireAppUser } from "./model/authz";
+import {
+  carteraDeUnidad,
+  estadoCuentaDeCadena,
+  saldoAnteriorDe,
+} from "./lib/cartera";
 
 /**
  * Quien puede ver la cartera del conjunto.
@@ -65,11 +70,6 @@ const lineValidator = v.object({
 
 /** Tolerancia en pesos para considerar una deuda como saldada (redondeos). */
 const TOLERANCIA_PAGO = 1;
-
-/** Deuda que la factura declara arrastrar del período anterior. */
-function saldoAnteriorDe(f: Doc<"facturas">): number {
-  return f.lineas.reduce((s, l) => s + l.saldoAnterior, 0);
-}
 
 /**
  * Recorre la cadena de facturas de una unidad (orden ascendente por período)
@@ -858,5 +858,146 @@ export const backfillFechas = internalMutation({
       actualizadas++;
     }
     return { actualizadas, total: rows.length };
+  },
+});
+
+/**
+ * Estado de cartera de un grupo de unidades, en una sola consulta.
+ *
+ * Nace para la tabla de reservas: la administración necesita ver, al lado de
+ * cada solicitud, si esa casa está al día. Vive aquí y no en `reservas.ts`
+ * porque es cartera —quién debe y desde cuándo lo decide este módulo— y
+ * porque así hereda su control de acceso: `reservas.listPage` la puede leer
+ * cualquier miembro del conjunto, y la situación financiera del vecino no es
+ * dato de vecino. Reservas solo la consume.
+ *
+ * ── Por qué recibe una lista y no una unidad ─────────────────────────────
+ * Preguntar unidad por unidad desde la tabla serían tantas consultas como
+ * filas. Se piden juntas y se responden juntas: el llamador manda las
+ * unidades DISTINTAS que tiene en pantalla —treinta reservas suelen ser doce
+ * casas— y cada una se lee una sola vez.
+ *
+ * NO decide nada sobre la reserva. Informa; aprobar o rechazar sigue siendo
+ * de quien administra, que es el único que sabe si hay un acuerdo de pago de
+ * por medio.
+ */
+
+/**
+ * Topes de la consulta. Se leen juntos: lo que acota el trabajo es el
+ * PRODUCTO, porque cada unidad se resuelve con su propio recorrido de índice.
+ *
+ * 120 × 120 = 14.400 documentos en el peor caso imaginable, que es el orden
+ * de lo que Convex deja leer en una función. Con 240 facturas por unidad el
+ * peor caso se pasaba del techo y la consulta reventaba en vez de degradarse.
+ *
+ * Ninguno se alcanza con datos reales: 120 unidades son cuatro páginas de
+ * reservas sin una sola casa repetida, y 120 facturas son diez años de cuotas
+ * mensuales. Son cinturones de seguridad, no dimensionamiento.
+ *
+ * Si el de unidades se alcanza, las que sobren se devuelven sin fila: quien
+ * llama debe distinguir "todavía cargando" de "no vino", y no dejar una
+ * casilla girando para siempre.
+ */
+const MAX_UNIDADES_CARTERA = 120;
+const MAX_FACTURAS_UNIDAD = 120;
+
+export const carteraPorUnidad = query({
+  args: {
+    condominioId: v.id("condominios"),
+    unidadIds: v.array(v.id("unidades")),
+  },
+  handler: async (ctx, args) => {
+    await requireCondominioRole(ctx, args.condominioId, [...CARTERA_ROLES]);
+
+    const ids = [...new Set(args.unidadIds)].slice(0, MAX_UNIDADES_CARTERA);
+    const ahora = Date.now();
+
+    const filas = await Promise.all(
+      ids.map(async (unidadId) => {
+        /* El id llega del cliente: hay que comprobar que la unidad es de ESTE
+         * conjunto antes de contar su plata. Sin esto, quien administra un
+         * conjunto podría leer la cartera de otro pasando ids ajenos. */
+        const unidad = await ctx.db.get(unidadId);
+        if (!unidad || unidad.condominioId !== args.condominioId) return null;
+
+        const facturas = await ctx.db
+          .query("facturas")
+          .withIndex("by_unidad", (q) => q.eq("unidadId", unidadId))
+          .take(MAX_FACTURAS_UNIDAD);
+
+        /* `by_unidad` no lleva el condominio en la llave; el mismo filtro que
+         * hace la conciliación. */
+        const propias = facturas.filter((f) => f.condominioId === args.condominioId);
+
+        return { unidadId, ...carteraDeUnidad(propias, ahora) };
+      }),
+    );
+
+    return filas.filter((f) => f !== null);
+  },
+});
+
+/**
+ * Estado de cuenta de UNA unidad: sus facturas, una por una.
+ *
+ * Es el detalle detrás del resumen que `carteraPorUnidad` pone en la tabla de
+ * reservas, y se pide sólo cuando la administración abre el modal de una
+ * casa. Por eso son dos consultas y no una: cargar el detalle de las treinta
+ * casas de la página para que se mire una sería traer treinta veces más de lo
+ * que se va a leer.
+ *
+ * No calcula nada nuevo. El estado de cada factura lo puso la conciliación,
+ * el abono sale del saldo anterior de la factura siguiente —el mismo número
+ * con el que la conciliación decide— y la mora sale del vencimiento. Aquí
+ * sólo se ordena la cadena y se traduce.
+ *
+ * Devuelve `null` si la unidad no es de este condominio, en vez de lanzar:
+ * quien pregunta ya demostró que administra ESTE conjunto, y un id que no
+ * corresponde es una pantalla desincronizada, no un intento de intrusión. Lo
+ * que no hace nunca es responder con datos de otro conjunto.
+ */
+export const estadoCuentaUnidad = query({
+  args: {
+    condominioId: v.id("condominios"),
+    unidadId: v.id("unidades"),
+  },
+  handler: async (ctx, args) => {
+    await requireCondominioRole(ctx, args.condominioId, [...CARTERA_ROLES]);
+
+    const unidad = await ctx.db.get(args.unidadId);
+    if (!unidad || unidad.condominioId !== args.condominioId) return null;
+
+    const cadena = (
+      await ctx.db
+        .query("facturas")
+        .withIndex("by_unidad", (q) => q.eq("unidadId", args.unidadId))
+        .take(MAX_FACTURAS_UNIDAD)
+    )
+      .filter((f) => f.condominioId === args.condominioId)
+      /* Del más viejo al más nuevo: cada factura se juzga con la siguiente,
+       * igual que en la conciliación. */
+      .sort((a, b) => a.periodo.localeCompare(b.periodo));
+
+    const ahora = Date.now();
+    const filas = estadoCuentaDeCadena(cadena).map((fila, i) => ({
+      ...fila,
+      _id: cadena[i]!._id,
+      numeroFactura: cadena[i]!.numeroFactura,
+      fechaEmision: cadena[i]!.fechaEmision,
+      pdfUrl: cadena[i]!.pdfUrl ?? null,
+    }));
+
+    return {
+      unidad: {
+        _id: unidad._id,
+        numero: unidad.numero,
+        torre: unidad.torre ?? null,
+        residenteNombre: cadena[cadena.length - 1]?.residenteNombre ?? null,
+      },
+      cartera: carteraDeUnidad(cadena, ahora),
+      /* De la más reciente hacia atrás: es el orden en el que se lee un
+       * estado de cuenta. */
+      facturas: filas.reverse(),
+    };
   },
 });

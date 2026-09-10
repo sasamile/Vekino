@@ -173,7 +173,6 @@ function ReservaForm({
   const [error, setError] = useState<string | null>(null);
 
   const zona = zonas.find((z) => z._id === zonaId);
-  const costo = zona ? calcularCosto(zona, horaInicio, horaFin) : null;
 
   async function guardar(e: React.FormEvent) {
     e.preventDefault();
@@ -269,56 +268,15 @@ function ReservaForm({
             />
           </Field>
 
-          {/* El valor, antes de confirmar y no despues de que se lo cobren. */}
-          {costo && (
-            <div className="rounded-xl border border-border bg-muted/40 p-3.5 text-sm">
-              {costo.sinTarifa && costo.deposito === 0 ? (
-                <p className="text-muted-foreground">
-                  Este espacio no tiene tarifa configurada. Confirma el valor
-                  con la administración.
-                </p>
-              ) : (
-                <>
-                  {costo.alquiler > 0 && (
-                    <div className="flex items-baseline justify-between gap-3">
-                      <span className="text-muted-foreground">
-                        Uso del espacio
-                        {costo.detalle ? (
-                          <span className="ml-1 text-xs">({costo.detalle})</span>
-                        ) : null}
-                      </span>
-                      <span className="font-medium text-foreground">
-                        {enPesos(costo.alquiler)}
-                      </span>
-                    </div>
-                  )}
-                  {costo.deposito > 0 && (
-                    <div className="mt-1.5 flex items-baseline justify-between gap-3">
-                      <span className="text-muted-foreground">
-                        Depósito
-                        {/* Se aclara que vuelve: si no, la reserva parece el
-                            doble de cara y el residente desiste. */}
-                        <span className="ml-1 text-xs">(se devuelve)</span>
-                      </span>
-                      <span className="font-medium text-foreground">
-                        {enPesos(costo.deposito)}
-                      </span>
-                    </div>
-                  )}
-                  <div className="mt-2.5 flex items-baseline justify-between gap-3 border-t border-border pt-2.5">
-                    <span className="font-medium text-foreground">Total</span>
-                    <span className="text-base font-semibold text-foreground">
-                      {enPesos(costo.totalAPagar)}
-                    </span>
-                  </div>
-                  <p className="mt-2 text-xs text-muted-foreground">
-                    El pago se realiza con la administración una vez aprueben tu
-                    reserva.
-                  </p>
-                </>
-              )}
-            </div>
-          )}
+          {/* El valor, antes de confirmar y no despues de que se lo cobren.
+              El mismo bloque que ve la administracion: si se separan, uno de
+              los dos envejece. */}
+          <ResumenCosto
+            zona={zona}
+            horaInicio={horaInicio}
+            horaFin={horaFin}
+            nota="El pago se realiza con la administración una vez aprueben tu reserva."
+          />
 
           {error && <p className="text-sm text-red-600">{error}</p>}
 
@@ -346,7 +304,8 @@ function ReservaForm({
 }
 
 import { cn } from "@/lib/utils";
-import { calcularCosto, enPesos, type Tarifa } from "@vekino/backend/costoReserva";
+import type { Tarifa } from "@vekino/backend/costoReserva";
+import { ResumenCosto } from "@/components/reservas/resumen-costo";
 
 const inputCls =
   "h-10 w-full rounded-lg border border-input bg-card px-3 text-sm text-foreground outline-none transition-colors focus:border-brand focus:ring-2 focus:ring-brand/20";

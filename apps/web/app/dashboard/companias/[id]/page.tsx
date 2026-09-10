@@ -13,6 +13,10 @@ import {
   Plus,
   UserMinus,
   CalendarOff,
+  BookOpenCheck,
+  Archive,
+  ArchiveRestore,
+  Pencil,
 } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
@@ -25,6 +29,7 @@ import { Input, Select } from "@/components/ui/input";
 import { EmptyState } from "@/components/ui/empty-state";
 import { cn } from "@/lib/utils";
 import { EstadoBadge, Campo } from "../page";
+import { EditarPersonaDialog } from "@/components/companias/editar-persona-dialog";
 
 type Estado = "activa" | "suspendida" | "inactiva";
 type RolCompania = "admin_compania" | "supervisor" | "guardia";
@@ -205,16 +210,40 @@ function Cabecera({
         </div>
 
         {esPlataforma && (
-          <Select
-            className="w-auto"
-            value={compania.estado}
-            onChange={(e) => setConfirmar(e.target.value as Estado)}
-            aria-label="Estado de la compañía"
-          >
-            <option value="activa">Activa</option>
-            <option value="suspendida">Suspendida</option>
-            <option value="inactiva">Dada de baja</option>
-          </Select>
+          <div className="flex items-center gap-2">
+            <Select
+              className="w-auto"
+              value={compania.estado}
+              onChange={(e) => setConfirmar(e.target.value as Estado)}
+              aria-label="Estado de la compañía"
+            >
+              <option value="activa">Activa</option>
+              <option value="suspendida">Suspendida</option>
+              <option value="inactiva">Archivada</option>
+            </Select>
+            {/* Archivar es `estado: "inactiva"` de siempre; lo que faltaba era
+                una acción que se llamara como lo que hace. Solo plataforma:
+                el backend rechaza a cualquier otro. */}
+            {compania.estado === "inactiva" ? (
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => setConfirmar("activa")}
+              >
+                <ArchiveRestore className="h-4 w-4" aria-hidden />
+                Sacar del archivo
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setConfirmar("inactiva")}
+              >
+                <Archive className="h-4 w-4" aria-hidden />
+                Archivar compañía
+              </Button>
+            )}
+          </div>
         )}
       </div>
 
@@ -249,6 +278,7 @@ function ConfirmarEstado({
 }) {
   const data = useQuery(api.companias.detail, { companiaId });
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   if (!estado) return null;
 
   const vigentes = data?.contratos.filter((c) => c.estado === "vigente") ?? [];
@@ -258,8 +288,14 @@ function ConfirmarEstado({
   return (
     <Modal
       open
-      onClose={onClose}
-      title={estado === "activa" ? "Reactivar compañía" : `Marcar como ${estado}`}
+      onClose={busy ? () => {} : onClose}
+      title={
+        estado === "activa"
+          ? "Reactivar compañía"
+          : estado === "inactiva"
+            ? "Archivar compañía"
+            : "Suspender compañía"
+      }
     >
       <div className="space-y-4">
         {corta ? (
@@ -279,6 +315,15 @@ function ConfirmarEstado({
             vigente.
           </p>
         )}
+
+        {estado === "inactiva" && (
+          <p className="rounded-lg border border-border bg-muted/40 px-3 py-2.5 text-[12.5px] text-muted-foreground">
+            No se borra nada. La compañía pasa a <strong>Archivadas</strong> con
+            sus contratos, su personal y todo lo que registró en las porterías
+            —turnos, rondas, minutas y eventos—, que pertenecen al conjunto y no
+            se tocan. Se puede sacar del archivo y todo vuelve a funcionar.
+          </p>
+        )}
         {vigentes.length > 0 && corta && (
           <ul className="rounded-lg bg-muted/60 p-3 text-[13px] text-muted-foreground">
             {vigentes.map((c) => (
@@ -286,23 +331,39 @@ function ConfirmarEstado({
             ))}
           </ul>
         )}
+        {error && <p className="text-sm text-destructive">{error}</p>}
+
         <div className="flex justify-end gap-2">
-          <Button variant="secondary" onClick={onClose}>
+          <Button variant="secondary" onClick={onClose} disabled={busy}>
             Cancelar
           </Button>
           <Button
             variant={corta ? "destructive" : "primary"}
             disabled={busy}
             onClick={async () => {
+              setError(null);
               setBusy(true);
               try {
                 await onConfirm(estado);
+              } catch (err) {
+                /* Antes se lo tragaba el `finally` y el modal se quedaba como
+                   si nada. La fuente de verdad es el servidor: si rechaza, se
+                   dice. */
+                setError(
+                  err instanceof Error
+                    ? err.message
+                    : "No se pudo cambiar el estado.",
+                );
               } finally {
                 setBusy(false);
               }
             }}
           >
-            {busy ? "Aplicando…" : "Confirmar"}
+            {busy
+              ? "Aplicando…"
+              : estado === "inactiva"
+                ? "Sí, archivar"
+                : "Confirmar"}
           </Button>
         </div>
       </div>
@@ -362,7 +423,7 @@ function PanelPersonal({
             <thead>
               <tr className="border-b border-border text-left text-xs text-muted-foreground">
                 <th className="px-5 py-3 font-medium">Persona</th>
-                <th className="px-5 py-3 font-medium">Roles</th>
+                <th className="px-5 py-3 font-medium">Rol</th>
                 <th className="px-5 py-3 font-medium">Conjuntos</th>
                 <th className="px-5 py-3 text-right font-medium">Acciones</th>
               </tr>
@@ -402,26 +463,15 @@ function PanelPersonal({
 }
 
 function FilaPersona({ p }: { p: Persona }) {
-  const setRoles = useMutation(api.companias.setRolesMiembro);
   const desactivar = useMutation(api.companias.desactivarMiembro);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [editando, setEditando] = useState(false);
 
-  async function alternar(rol: RolCompania) {
-    const nuevos = p.roles.includes(rol)
-      ? p.roles.filter((r) => r !== rol)
-      : [...p.roles, rol];
-    if (nuevos.length === 0) return;
-    setError(null);
-    setBusy(true);
-    try {
-      await setRoles({ miembroId: p._id, roles: nuevos as RolCompania[] });
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "No se pudo cambiar.");
-    } finally {
-      setBusy(false);
-    }
-  }
+  /* `[0]` y no un `find`: el backend garantiza que solo hay uno. Se lee así
+   * para que, si alguna vez llegara una fila vieja sin normalizar, la fila
+   * muestre el primero en vez de reventar. */
+  const rolActual = p.roles[0] as RolCompania | undefined;
 
   return (
     <tr className="align-top">
@@ -434,48 +484,66 @@ function FilaPersona({ p }: { p: Persona }) {
         {error && <p className="mt-1 text-xs text-destructive">{error}</p>}
       </td>
       <td className="px-5 py-3.5">
-        <div className="flex flex-wrap gap-1.5">
-          {(Object.keys(ETIQUETA_ROL) as RolCompania[]).map((rol) => {
-            const puesto = p.roles.includes(rol);
-            return (
-              <button
-                key={rol}
-                type="button"
-                disabled={busy}
-                onClick={() => alternar(rol)}
-                className={cn(
-                  "rounded-full border px-2.5 py-0.5 text-[11.5px] transition-colors disabled:opacity-50",
-                  puesto
-                    ? "border-brand bg-brand/10 text-brand"
-                    : "border-border text-muted-foreground hover:bg-accent",
-                )}
-              >
-                {ETIQUETA_ROL[rol]}
-              </button>
-            );
-          })}
-        </div>
+        {/* Solo lectura. La tabla dice QUÉ es cada persona; cambiarlo es una
+            decisión, y las decisiones se toman en "Editar" —donde además se
+            ve a quién se le está cambiando—. Con el control aquí, un clic
+            despistado al recorrer la lista le cambiaba el rol a alguien. */}
+        {rolActual ? (
+          <Badge tone="brand">{ETIQUETA_ROL[rolActual]}</Badge>
+        ) : (
+          <span className="text-xs text-muted-foreground">—</span>
+        )}
       </td>
       <td className="px-5 py-3.5 tabular-nums text-muted-foreground">
         {p.asignacionesVigentes}
       </td>
       <td className="px-5 py-3.5 text-right">
-        <Button
-          size="sm"
-          variant="ghost"
-          disabled={busy}
-          onClick={async () => {
-            setBusy(true);
-            try {
-              await desactivar({ miembroId: p._id });
-            } finally {
-              setBusy(false);
-            }
-          }}
-        >
-          <UserMinus className="h-3.5 w-3.5" aria-hidden />
-          Dar de baja
-        </Button>
+        <div className="flex items-center justify-end gap-1">
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={busy}
+            onClick={() => setEditando(true)}
+          >
+            <Pencil className="h-3.5 w-3.5" aria-hidden />
+            Editar
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={busy}
+            onClick={async () => {
+              setError(null);
+              setBusy(true);
+              try {
+                await desactivar({ miembroId: p._id });
+              } catch (e) {
+                /* El hueco de error de la fila lo alimentaba el control de
+                 * rol, que ya no está aquí. Darlo de baja puede fallar
+                 * —perfil sin correo, permisos— y hasta ahora ese fallo se
+                 * perdía en silencio. */
+                setError(e instanceof Error ? e.message : "No se pudo dar de baja.");
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            <UserMinus className="h-3.5 w-3.5" aria-hidden />
+            Dar de baja
+          </Button>
+        </div>
+        {/* La ficha se monta al pulsar: los datos personales no viajan en el
+            listado de toda la compañía. */}
+        {editando && (
+          <EditarPersonaDialog
+            miembroId={p._id}
+            /* El rol viaja como prop y no lo vuelve a pedir el modal:
+             * `detalleMiembro` no lo devuelve, y la fila ya lo tiene. Así el
+             * cambio se queda en el frontend. */
+            rolActual={rolActual}
+            onClose={() => setEditando(false)}
+          />
+        )}
       </td>
     </tr>
   );
@@ -496,7 +564,7 @@ function AgregarPersonaDialog({
   const [password, setPassword] = useState("");
   const [telefono, setTelefono] = useState("");
   const [cargo, setCargo] = useState("");
-  const [roles, setRoles] = useState<RolCompania[]>(["guardia"]);
+  const [rol, setRol] = useState<RolCompania>("guardia");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -506,7 +574,7 @@ function AgregarPersonaDialog({
     setPassword("");
     setTelefono("");
     setCargo("");
-    setRoles(["guardia"]);
+    setRol("guardia");
     setError(null);
     onClose();
   }
@@ -523,7 +591,7 @@ function AgregarPersonaDialog({
         password,
         telefono: telefono || undefined,
         cargo: cargo || undefined,
-        roles,
+        roles: [rol],
       });
       cerrar();
     } catch (err) {
@@ -581,33 +649,23 @@ function AgregarPersonaDialog({
           />
         </Campo>
 
-        <Campo label="Roles en la compañía" requerido>
-          <div className="flex flex-wrap gap-1.5">
-            {(Object.keys(ETIQUETA_ROL) as RolCompania[]).map((rol) => {
-              const puesto = roles.includes(rol);
-              return (
-                <button
-                  key={rol}
-                  type="button"
-                  onClick={() =>
-                    setRoles(
-                      puesto
-                        ? roles.filter((r) => r !== rol)
-                        : [...roles, rol],
-                    )
-                  }
-                  className={cn(
-                    "rounded-full border px-3 py-1 text-[12.5px] transition-colors",
-                    puesto
-                      ? "border-brand bg-brand/10 text-brand"
-                      : "border-border text-muted-foreground hover:bg-accent",
-                  )}
-                >
-                  {ETIQUETA_ROL[rol]}
-                </button>
-              );
-            })}
-          </div>
+        {/* Un solo rol. Mismo `Select` que el diálogo de asignación de abajo:
+            no hay dos maneras de elegir un rol en esta pantalla. */}
+        <Campo
+          label="Rol en la compañía"
+          requerido
+          ayuda="Una persona tiene un único rol. Se puede cambiar después."
+        >
+          <Select
+            value={rol}
+            onChange={(e) => setRol(e.target.value as RolCompania)}
+          >
+            {(Object.keys(ETIQUETA_ROL) as RolCompania[]).map((r) => (
+              <option key={r} value={r}>
+                {ETIQUETA_ROL[r]}
+              </option>
+            ))}
+          </Select>
         </Campo>
 
         {error && <p className="text-sm text-destructive">{error}</p>}
@@ -618,7 +676,7 @@ function AgregarPersonaDialog({
           </Button>
           <Button
             type="submit"
-            disabled={busy || roles.length === 0 || password.length < 8}
+            disabled={busy || password.length < 8}
           >
             {busy ? "Agregando…" : "Agregar"}
           </Button>
@@ -639,9 +697,22 @@ type Contrato = {
   vigenciaDesde: number;
   vigenciaHasta: number | null;
   estado: "programada" | "vigente" | "terminada";
+  /* Lo decide el servidor, no esta pantalla: es la regla del modelo. */
+  archivado: boolean;
+  terminadoEn: number | null;
+  terminadoPorNombre: string | null;
   asignacionesVigentes: number;
+  asignacionesTotales: number;
 };
 
+/**
+ * Los conjuntos de la compañía, separados en Activos y Archivados.
+ *
+ * `archivado` viene calculado del servidor —contrato terminado, o compañía
+ * dada de baja—: aquí solo se agrupa. Si la separación se decidiera en esta
+ * pantalla, sería la pantalla la que define qué está terminado, y bastaría
+ * abrir otra vista para volver a verlo activo.
+ */
 function PanelContratos({
   companiaId,
   contratos,
@@ -655,11 +726,16 @@ function PanelContratos({
 }) {
   const [nuevo, setNuevo] = useState(false);
   const [abierto, setAbierto] = useState<Id<"companiaContratos"> | null>(null);
+  const [archivo, setArchivo] = useState(false);
+
+  const activos = contratos.filter((k) => !k.archivado);
+  const archivados = contratos.filter((k) => k.archivado);
+  const visibles = archivo ? archivados : activos;
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="max-w-xl text-sm text-muted-foreground">
           Los conjuntos donde esta compañía presta servicio. El contrato es lo
           que autoriza: sin uno vigente, ninguna asignación funciona.
         </p>
@@ -671,28 +747,46 @@ function PanelContratos({
         )}
       </div>
 
-      {contratos.length === 0 ? (
+      <div className="flex gap-1 rounded-xl border border-border bg-card p-1">
+        <SubTab
+          activo={!archivo}
+          onClick={() => setArchivo(false)}
+          label="Activos"
+          n={activos.length}
+        />
+        <SubTab
+          activo={archivo}
+          onClick={() => setArchivo(true)}
+          label="Archivados"
+          n={archivados.length}
+        />
+      </div>
+
+      {visibles.length === 0 ? (
         <EmptyState
-          icon={FileText}
-          title="Sin conjuntos contratados"
+          icon={archivo ? Archive : FileText}
+          title={archivo ? "Nada archivado todavía" : "Sin conjuntos activos"}
           description={
-            esPlataforma
-              ? "Contrata un conjunto para poder asignarle supervisores y guardas."
-              : "Cuando Vekino firme un contrato con un conjunto aparecerá aquí y podrás asignarle tu personal."
+            archivo
+              ? "Cuando termine el contrato de un conjunto pasará aquí, con su histórico intacto."
+              : esPlataforma
+                ? "Contrata un conjunto para poder asignarle supervisores y guardas."
+                : "Cuando Vekino firme un contrato con un conjunto aparecerá aquí y podrás asignarle tu personal."
           }
           action={
-            esPlataforma ? (
+            !archivo && esPlataforma ? (
               <Button onClick={() => setNuevo(true)}>Contratar conjunto</Button>
             ) : undefined
           }
         />
       ) : (
         <div className="space-y-3">
-          {contratos.map((k) => (
+          {visibles.map((k) => (
             <FilaContrato
               key={k._id}
               contrato={k}
               personal={personal}
+              esPlataforma={esPlataforma}
               abierto={abierto === k._id}
               onToggle={() => setAbierto(abierto === k._id ? null : k._id)}
             />
@@ -709,14 +803,44 @@ function PanelContratos({
   );
 }
 
+function SubTab({
+  activo,
+  onClick,
+  label,
+  n,
+}: {
+  activo: boolean;
+  onClick: () => void;
+  label: string;
+  n: number;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "flex flex-1 items-center justify-center gap-2 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors",
+        activo
+          ? "bg-brand text-brand-foreground"
+          : "text-muted-foreground hover:bg-accent",
+      )}
+    >
+      {label}
+      <span className="tabular-nums opacity-80">({n})</span>
+    </button>
+  );
+}
+
 function FilaContrato({
   contrato,
   personal,
+  esPlataforma,
   abierto,
   onToggle,
 }: {
   contrato: Contrato;
   personal: Persona[];
+  esPlataforma: boolean;
   abierto: boolean;
   onToggle: () => void;
 }) {
@@ -724,9 +848,8 @@ function FilaContrato({
     api.asignaciones.porContrato,
     abierto ? { contratoId: contrato._id, incluirTerminadas: true } : "skip",
   );
-  const terminar = useMutation(api.companias.terminarContrato);
   const [asignar, setAsignar] = useState(false);
-  const [terminando, setTerminando] = useState(false);
+  const [confirmar, setConfirmar] = useState(false);
 
   return (
     <Card className="overflow-hidden p-0">
@@ -743,7 +866,13 @@ function FilaContrato({
             <Badge tone={TONO_VIGENCIA[contrato.estado]}>{contrato.estado}</Badge>
           </div>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            {fmt(contrato.vigenciaDesde)} → {fmt(contrato.vigenciaHasta)}
+            {fmt(contrato.vigenciaDesde)} →{" "}
+            {contrato.terminadoEn != null
+              ? fmt(contrato.terminadoEn)
+              : fmt(contrato.vigenciaHasta)}
+            {/* Quién lo cortó. Es lo primero que se pregunta meses después. */}
+            {contrato.terminadoPorNombre &&
+              ` · terminado por ${contrato.terminadoPorNombre}`}
           </p>
         </div>
         <div className="text-right">
@@ -754,6 +883,26 @@ function FilaContrato({
         </div>
       </button>
 
+      {/* La operación del conjunto: rondas y minuta del equipo que lo cubre.
+          Es la misma pantalla que ya usa el supervisor —no una copia— y el
+          servidor vuelve a resolver el permiso por contrato en cada consulta.
+          Solo en los contratos que siguen en pie: en uno terminado la
+          portería rebota, y ofrecer el enlace sería prometer lo que no hay.
+          Y solo al personal de la compañía: el staff de plataforma no entra
+          por ese shell —no es de ninguna empresa— y tiene la minuta del
+          conjunto en su propio panel de control de guardia. */}
+      {contrato.estado !== "terminada" && !esPlataforma && (
+        <div className="border-t border-border px-4 py-2.5">
+          <Link
+            href={`/vigilancia/${contrato.condominioId}`}
+            className="inline-flex items-center gap-1.5 text-[12.5px] text-brand hover:underline"
+          >
+            <BookOpenCheck className="h-3.5 w-3.5" aria-hidden />
+            Ver minuta y rondas del conjunto
+          </Link>
+        </div>
+      )}
+
       {abierto && (
         <div className="border-t border-border bg-muted/30 p-4">
           <div className="mb-3 flex items-center justify-between">
@@ -761,27 +910,20 @@ function FilaContrato({
               Personal asignado
             </p>
             <div className="flex gap-2">
-              {contrato.estado !== "terminada" && (
+              {!contrato.archivado && (
                 <>
                   <Button size="sm" onClick={() => setAsignar(true)}>
                     <UserPlus className="h-3.5 w-3.5" aria-hidden />
                     Asignar
                   </Button>
+                  {/* Antes ejecutaba al primer clic y se tragaba el error: si
+                      el backend rechazaba —y a la compañía la rechazaba
+                      siempre— no pasaba nada y no se decía por qué. Ahora
+                      confirma, y el resultado sale del servidor. */}
                   <Button
                     size="sm"
                     variant="ghost"
-                    disabled={terminando}
-                    onClick={async () => {
-                      setTerminando(true);
-                      try {
-                        await terminar({
-                          contratoId: contrato._id,
-                          vigenciaHasta: Date.now(),
-                        });
-                      } finally {
-                        setTerminando(false);
-                      }
-                    }}
+                    onClick={() => setConfirmar(true)}
                   >
                     <CalendarOff className="h-3.5 w-3.5" aria-hidden />
                     Terminar contrato
@@ -814,7 +956,102 @@ function FilaContrato({
         open={asignar}
         onClose={() => setAsignar(false)}
       />
+      <TerminarContratoDialog
+        contrato={contrato}
+        open={confirmar}
+        onClose={() => setConfirmar(false)}
+      />
     </Card>
+  );
+}
+
+/**
+ * Confirmar la terminación de un contrato.
+ *
+ * Dice lo que va a pasar de verdad —a cuánta gente deja sin portería y qué se
+ * conserva— porque terminar un contrato corta el acceso de todo su personal
+ * en ese conjunto de inmediato, y desde el botón no se veía venir.
+ *
+ * No mueve nada a mano al terminar: la lista es una consulta de Convex y el
+ * conjunto salta a "Archivados" solo, en cuanto el servidor lo dice. Un
+ * estado local aquí sería justo la mentira que había que evitar.
+ */
+function TerminarContratoDialog({
+  contrato,
+  open,
+  onClose,
+}: {
+  contrato: Contrato;
+  open: boolean;
+  onClose: () => void;
+}) {
+  const terminar = useMutation(api.companias.terminarContrato);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function confirmar() {
+    setError(null);
+    setBusy(true);
+    try {
+      /* Sin `vigenciaHasta`: se termina AHORA. Mandar la fecha de hoy era el
+         bug — `finDe` le regala el día entero y no cortaba hasta mañana. */
+      await terminar({ contratoId: contrato._id });
+      onClose();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "No se pudo terminar el contrato.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal
+      open={open}
+      onClose={busy ? () => {} : onClose}
+      title="Terminar contrato"
+      description={contrato.condominioNombre}
+    >
+      <div className="space-y-4">
+        <p className="text-sm text-foreground">
+          El contrato queda terminado <strong>hoy mismo</strong>.{" "}
+          {contrato.asignacionesVigentes > 0 ? (
+            <>
+              <strong>
+                {contrato.asignacionesVigentes} persona
+                {contrato.asignacionesVigentes === 1 ? "" : "s"}
+              </strong>{" "}
+              de tu compañía dejará
+              {contrato.asignacionesVigentes === 1 ? "" : "n"} de poder entrar a
+              esa portería de inmediato.
+            </>
+          ) : (
+            "Nadie de tu compañía está asignado a ese conjunto ahora mismo."
+          )}
+        </p>
+        <p className="rounded-lg border border-border bg-muted/40 px-3 py-2.5 text-[12.5px] text-muted-foreground">
+          No se borra nada. El conjunto pasa a <strong>Archivados</strong> con
+          su histórico completo —turnos, rondas, minuta y las{" "}
+          {contrato.asignacionesTotales} asignación
+          {contrato.asignacionesTotales === 1 ? "" : "es"} que hubo—, y el
+          conjunto sigue funcionando en Vekino con normalidad.
+        </p>
+
+        {error && <p className="text-sm text-destructive">{error}</p>}
+
+        <div className="flex justify-end gap-2">
+          <Button variant="secondary" onClick={onClose} disabled={busy}>
+            Cancelar
+          </Button>
+          <Button variant="destructive" onClick={confirmar} disabled={busy}>
+            {busy ? "Terminando…" : "Sí, terminar contrato"}
+          </Button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -832,15 +1069,17 @@ function FilaAsignacion({
 }) {
   const terminar = useMutation(api.asignaciones.terminar);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   return (
-    <li className="flex items-center gap-3 py-2.5">
+    <li className="flex flex-wrap items-center gap-3 py-2.5">
       <div className="min-w-0 flex-1">
         <p className="text-[13.5px] font-medium text-foreground">{a.nombre}</p>
         <p className="text-xs text-muted-foreground">
           {a.rol === "supervisor" ? "Supervisor" : "Guarda"} ·{" "}
           {fmt(a.vigenciaDesde)} → {fmt(a.vigenciaHasta)}
         </p>
+        {error && <p className="mt-0.5 text-xs text-destructive">{error}</p>}
       </div>
       <Badge tone={TONO_VIGENCIA[a.estado]}>{a.estado}</Badge>
       {a.estado !== "terminada" && (
@@ -849,12 +1088,16 @@ function FilaAsignacion({
           variant="ghost"
           disabled={busy}
           onClick={async () => {
+            setError(null);
             setBusy(true);
             try {
-              await terminar({
-                asignacionId: a._id,
-                vigenciaHasta: Date.now(),
-              });
+              /* Sin fecha: sale del conjunto ahora. Mandar la de hoy lo
+                 dejaba operando la portería hasta mañana. */
+              await terminar({ asignacionId: a._id });
+            } catch (err) {
+              setError(
+                err instanceof Error ? err.message : "No se pudo terminar.",
+              );
             } finally {
               setBusy(false);
             }

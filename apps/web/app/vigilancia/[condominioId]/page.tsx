@@ -19,6 +19,8 @@ import { Badge } from "@/components/ui/badge";
 import { Select } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
+import { EtiquetaRonda } from "@/components/guardia/etiqueta-ronda";
+import { TablaRondas } from "@/components/vigilancia/tabla-rondas";
 import { cn } from "@/lib/utils";
 
 function fechaHora(ms: number): string {
@@ -30,19 +32,19 @@ function fechaHora(ms: number): string {
   });
 }
 
-const TONO_RONDA = {
-  en_curso: "brand",
-  finalizada: "success",
-} as const;
-
 /**
  * SUPERVISIÓN DE UN CONJUNTO.
  *
+ * La misma pantalla para el supervisor y para el administrador de la compañía:
+ * los dos miran la operación de un conjunto que su empresa cubre, y lo que
+ * cambia entre ellos —cuáles— ya viene resuelto del servidor.
+ *
  * El conjunto seleccionado es el contexto: viene en la URL y va en cada
  * consulta. Que venga del cliente no autoriza nada —el servidor comprueba en
- * cada llamada que quien pregunta tiene `porteria.ver` sobre ESE conjunto, y
- * el supervisor solo la tiene donde hay una asignación vigente suya—. Cambiar
- * el id a mano lleva a un conjunto que responde vacío o rechaza.
+ * cada llamada que quien pregunta tiene `porteria.ver` sobre ESE conjunto: el
+ * supervisor solo la tiene donde hay una asignación vigente suya, y el
+ * administrador solo donde su empresa tiene contrato en vigor—. Cambiar el id
+ * a mano lleva a un conjunto que responde vacío o rechaza.
  *
  * No es la app de portería: `/guardia/:id` es donde el guarda abre turno y
  * cierra rondas, y sigue siendo suya. Aquí solo se mira.
@@ -85,14 +87,14 @@ export default function SupervisionConjuntoPage({
     );
   }
 
-  /* Un conjunto que no supervisa se ve igual que uno que no existe. */
+  /* Un conjunto que no tiene a su cargo se ve igual que uno que no existe. */
   if (!conjunto) {
     return (
       <PageContainer>
         <EmptyState
           icon={ShieldAlert}
           title="Ese conjunto no está entre los tuyos"
-          description="Solo puedes supervisar los conjuntos que la compañía te tiene asignados hoy."
+          description="Solo alcanzas los conjuntos que tu compañía atiende hoy y que te corresponden. Si el contrato o tu asignación terminaron, el conjunto deja de estar aquí."
           action={
             <Link href="/vigilancia" className="text-sm text-brand hover:underline">
               Volver a mis conjuntos
@@ -164,71 +166,14 @@ export default function SupervisionConjuntoPage({
         </div>
 
         {tab === "rondas" ? (
-          rondas === undefined ? (
-            <Skeleton className="h-64 rounded-2xl" />
-          ) : rondas.length === 0 ? (
-            <EmptyState
-              icon={Footprints}
-              title="Sin rondas registradas"
-              description={
-                guarda
-                  ? `${guarda.nombre} todavía no tiene rondas en este conjunto.`
-                  : "Cuando la portería haga su primera ronda aparecerá aquí."
-              }
-            />
-          ) : (
-            <Card className="overflow-hidden p-0">
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[720px] text-sm">
-                  <thead>
-                    <tr className="border-b border-border text-left text-xs text-muted-foreground">
-                      <th className="px-5 py-3 font-medium">#</th>
-                      <th className="px-5 py-3 font-medium">Zona</th>
-                      <th className="px-5 py-3 font-medium">Guarda</th>
-                      <th className="px-5 py-3 font-medium">Inicio</th>
-                      <th className="px-5 py-3 font-medium">Duración</th>
-                      <th className="px-5 py-3 font-medium">Registros</th>
-                      <th className="px-5 py-3 font-medium">Estado</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border/60">
-                    {rondas.map((r) => (
-                      <tr key={r._id}>
-                        <td className="px-5 py-3 tabular-nums text-muted-foreground">
-                          {r.numero ?? "—"}
-                        </td>
-                        <td className="px-5 py-3 text-foreground">{r.zona}</td>
-                        <td className="px-5 py-3 text-muted-foreground">
-                          {r.guardiaNombre ?? "—"}
-                        </td>
-                        <td className="px-5 py-3 text-muted-foreground">
-                          {fechaHora(r.fechaInicio)}
-                        </td>
-                        <td className="px-5 py-3 text-muted-foreground">
-                          {r.duracion}
-                        </td>
-                        <td className="px-5 py-3 text-muted-foreground">
-                          {r.totales.eventos} evento
-                          {r.totales.eventos === 1 ? "" : "s"}
-                          {r.totales.vehiculos > 0 &&
-                            ` · ${r.totales.vehiculos} vehículo${r.totales.vehiculos === 1 ? "" : "s"}`}
-                          {r.totales.novedades > 0 && (
-                            <span className="ml-1.5 text-destructive">
-                              · {r.totales.novedades} novedad
-                              {r.totales.novedades === 1 ? "" : "es"}
-                            </span>
-                          )}
-                        </td>
-                        <td className="px-5 py-3">
-                          <Badge tone={TONO_RONDA[r.estado]}>{r.estado}</Badge>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </Card>
-          )
+          <TablaRondas
+            rondas={rondas}
+            vacio={
+              guarda
+                ? `${guarda.nombre} todavía no tiene rondas en este conjunto.`
+                : undefined
+            }
+          />
         ) : minuta === undefined ? (
           <Skeleton className="h-64 rounded-2xl" />
         ) : minuta.length === 0 ? (
@@ -258,6 +203,11 @@ export default function SupervisionConjuntoPage({
                       <span className="text-[11.5px] text-muted-foreground">
                         {e.unidad}
                       </span>
+                      {/* En qué recorrido ocurrió. Lo mismo que ya muestra la
+                          minuta de portería, con la misma etiqueta y el mismo
+                          dato de `listMinuta`: aquí faltaba, y sin eso el
+                          supervisor no podía situar el evento en su ronda. */}
+                      <EtiquetaRonda numero={e.rondaNumero} zona={e.rondaZona} />
                     </span>
                     <span className="mt-0.5 block text-[12.5px] text-muted-foreground">
                       {e.resumen}
