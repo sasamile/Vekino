@@ -2783,4 +2783,96 @@ export default defineSchema({
     /* Todo lo que la compañía tiene fuera. Sostiene el listado sin N+1: una
      * lectura da la custodia de todos los elementos de la página. */
     .index("by_compania_devuelta", ["companiaId", "devueltaEn"]),
+  /**
+   * LA CUSTODIA INTERNA: qué guarda tiene el elemento dentro del conjunto.
+   *
+   * ── Por qué CUELGA de `inventarioAsignaciones` ──────────────────────
+   * Es el mismo mecanismo con el que `asignaciones` cuelga de
+   * `companiaContratos`, y la tarea 2 lo dejó prometido a propósito: cerrar la
+   * custodia del conjunto invalida la del guarda sin escribir una sola fila,
+   * sin cascada que ejecutar y sin custodias huérfanas que sigan diciendo que
+   * alguien tiene un radio de un conjunto que ya devolvió todo.
+   *
+   * La alternativa —colgar del elemento y guardar el conjunto al lado— dejaba
+   * dos verdades sobre dónde está la cosa, que es exactamente lo que este
+   * módulo existe para no tener.
+   *
+   * ── Lo que NO es ────────────────────────────────────────────────────
+   * NO es `compañía → guarda`. El elemento sigue asignado al conjunto
+   * mientras un guarda lo tiene; ésta es una custodia ANIDADA dentro de
+   * aquélla, no una que la sustituya. Por eso son dos tablas y no una con un
+   * campo "tipo de destinatario": con una sola, un elemento en el conjunto A
+   * en manos de Juan tendría dos filas activas y la regla "una custodia
+   * activa" dejaría de poder comprobarse.
+   *
+   * ── La relación laboral NO la cierra ────────────────────────────────
+   * Que a Juan se le acabe la asignación al conjunto no devuelve el radio,
+   * igual que terminar un contrato no lo devuelve a la bodega. La asignación
+   * laboral decide si puede RECIBIR material nuevo; esta fila dice dónde está
+   * físicamente, y solo se cierra con una devolución explícita. Un guarda sin
+   * asignación y con custodia abierta es un pendiente que hay que resolver, y
+   * la pantalla del supervisor lo señala en vez de esconderlo.
+   * ─────────────────────────────────────────────────────────────
+   */
+  inventarioCustodiaGuardas: defineTable({
+    /** La custodia del conjunto de la que depende. La que manda. */
+    inventarioAsignacionId: v.id("inventarioAsignaciones"),
+
+    /**
+     * Denormalizados desde la asignación padre, igual que en `asignaciones` y
+     * por lo mismo: poder indexar por elemento, por tenant y por conjunto sin
+     * saltar a la tabla de arriba en cada lectura.
+     */
+    itemId: v.id("inventarioItems"),
+    companiaId: v.id("companiasSeguridad"),
+    condominioId: v.id("condominios"),
+
+    /**
+     * Quién lo tiene. Es un `users` y no un `companiaMiembros` porque la
+     * identidad del guarda nunca se bifurcó en este proyecto —lo dice el
+     * schema de vigilancia— y porque la custodia sigue siendo suya aunque se
+     * le dé de baja como miembro: lo que hay que poder responder es "quién
+     * tiene el radio", no "quién lo tenía mientras estuvo contratado".
+     */
+    guardaUserId: v.id("users"),
+
+    entregadaEn: v.number(),
+    /** El supervisor que se lo entregó. */
+    entregadaPorUserId: v.id("users"),
+    observacionEntrega: v.optional(v.string()),
+
+    /**
+     * EL ÚNICO FINAL. Ausente = el guarda todavía lo tiene.
+     *
+     * Mismo criterio que `inventarioAsignaciones.devueltaEn` y que
+     * `inventarioItems.archivadoEn`: un timestamp opcional, nunca un booleano,
+     * porque "devuelto" sin fecha no responde desde cuándo.
+     */
+    devueltaEn: v.optional(v.number()),
+    /** El supervisor que se lo recibió. */
+    devueltaPorUserId: v.optional(v.id("users")),
+    observacionDevolucion: v.optional(v.string()),
+
+    /* Sin `updatedAt`: una custodia se abre y se cierra, no se reescribe. */
+    createdAt: v.number(),
+  })
+    /* El historial de manos por las que pasó un elemento. */
+    .index("by_item", ["itemId"])
+    /**
+     * LA RUTA CALIENTE, y la que sostiene DOS reglas a la vez: que un elemento
+     * no pueda estar en manos de dos guardas, y que el conjunto no pueda
+     * devolverlo a la compañía mientras alguien lo tenga. Una lectura.
+     */
+    .index("by_item_devuelta", ["itemId", "devueltaEn"])
+    /**
+     * Todo lo que está repartido hoy en una portería. Con la compañía DELANTE:
+     * dos empresas pueden cubrir el mismo conjunto, y acotar la lectura por
+     * conjunto para filtrar después por compañía se lleva las filas de la otra
+     * — el error que la tarea 2 ya pagó una vez.
+     */
+    .index("by_compania_condominio_devuelta", [
+      "companiaId",
+      "condominioId",
+      "devueltaEn",
+    ]),
 });

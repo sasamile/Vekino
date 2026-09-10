@@ -259,6 +259,33 @@ export const tipoNovedadItemValidator = v.union(
    */
   v.literal("ITEM_ASSIGNED_TO_CONDOMINIUM"),
   v.literal("ITEM_RETURNED_FROM_CONDOMINIUM"),
+
+  /**
+   * La custodia INTERNA del conjunto: el supervisor entrega el elemento a un
+   * guarda y se lo recibe de vuelta.
+   *
+   * Son otro nivel, no otro valor del mismo: mientras un guarda lo tiene, el
+   * elemento SIGUE asignado al conjunto. Por eso hay cuatro literales y no
+   * dos con un campo "a quién": la linea de tiempo tiene que poder decir
+   * "salió a la portería" y "se lo quedó Juan" como dos hechos distintos.
+   */
+  v.literal("ITEM_ASSIGNED_TO_GUARD"),
+  v.literal("ITEM_RETURNED_BY_GUARD"),
+
+  /**
+   * Una nota sobre el elemento. NO cambia su estado.
+   *
+   * "El radio presenta interferencia" es una observación, no un diagnóstico:
+   * convertirla automáticamente en `averiado` haría que cualquiera pudiera
+   * sacar material de circulación con una frase, y que el estado dejara de
+   * significar lo que dice. Quien decide que un radio está averiado es una
+   * operación propia, y todavía no existe.
+   *
+   * Va al MISMO historial y no a una bitácora aparte: el modelo de la tarea 1
+   * ya lo soporta entero —conjunto, guarda, actor, descripción, fecha— y una
+   * segunda auditoría partiría en dos la historia del elemento.
+   */
+  v.literal("ITEM_NOTE"),
 );
 
 export type TipoNovedadItem =
@@ -267,4 +294,7 @@ export type TipoNovedadItem =
   | "ITEM_ARCHIVED"
   | "ITEM_IMPORTED"
   | "ITEM_ASSIGNED_TO_CONDOMINIUM"
-  | "ITEM_RETURNED_FROM_CONDOMINIUM";
+  | "ITEM_RETURNED_FROM_CONDOMINIUM"
+  | "ITEM_ASSIGNED_TO_GUARD"
+  | "ITEM_RETURNED_BY_GUARD"
+  | "ITEM_NOTE";

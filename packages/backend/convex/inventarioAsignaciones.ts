@@ -6,10 +6,13 @@ import { contratoVigente, exigirAccesoCompania } from "./model/acceso";
 import { logNovedadItem } from "./model/inventarioNovedad";
 import {
   aVistaCustodia,
+  aVistaCustodiaGuarda,
   cacheDeCondominios,
   cacheDeUsuarios,
   custodiaActiva,
+  custodiaGuardaActiva,
   custodiasDeItem,
+  custodiasGuardaDeCondominio,
 } from "./model/inventarioCustodia";
 import { MAX_OBSERVACION, normalizarTexto } from "./lib/inventario";
 import { estaVigente } from "./lib/vigilancia";
@@ -166,21 +169,47 @@ export const porCondominio = query({
 
     const items = await Promise.all(mias.map((a) => ctx.db.get(a.itemId)));
 
-    const filas = mias
-      .map((a, i) => {
-        const item = items[i];
-        if (!item) return null;
-        return {
-          asignacionId: a._id,
-          itemId: item._id,
-          nombre: item.nombre,
-          serial: item.serial ?? null,
-          fotoUrl: item.fotoUrl ?? null,
-          estado: item.estado,
-          asignadaEn: a.asignadaEn,
-          observacionAsignacion: a.observacionAsignacion ?? null,
-        };
-      })
+    /* Quién tiene cada elemento DENTRO del conjunto.
+     *
+     * El administrador de la compañía no puede repartir material en una
+     * portería —eso es del supervisor, que está allí— pero sí tiene que poder
+     * ver dónde está el suyo: es su patrimonio y él responde por él. Consulta
+     * sí, acción no.
+     *
+     * Una lectura indexada para todas las filas, no una por elemento. */
+    const { porItem: enManos } = await custodiasGuardaDeCondominio(
+      ctx,
+      args.companiaId,
+      args.condominioId,
+      TOPE_CUSTODIAS,
+    );
+    const usuario = cacheDeUsuarios(ctx);
+
+    const filas = (
+      await Promise.all(
+        mias.map(async (a, i) => {
+          const item = items[i];
+          if (!item) return null;
+          const c = enManos.get(item._id);
+          return {
+            asignacionId: a._id,
+            itemId: item._id,
+            nombre: item.nombre,
+            serial: item.serial ?? null,
+            fotoUrl: item.fotoUrl ?? null,
+            estado: item.estado,
+            asignadaEn: a.asignadaEn,
+            observacionAsignacion: a.observacionAsignacion ?? null,
+            /* Sin marcar pendientes: quién sigue asignado al conjunto es una
+             * pregunta del supervisor, y resolverla aquí costaría leer el
+             * equipo de cada portería para pintar una lista. */
+            custodiaGuarda: c
+              ? await aVistaCustodiaGuarda(ctx, c, usuario)
+              : null,
+          };
+        }),
+      )
+    )
       .filter((f): f is NonNullable<typeof f> => f !== null)
       .sort((a, b) => b.asignadaEn - a.asignadaEn);
 
@@ -396,6 +425,20 @@ export const devolver = mutation({
      * el segundo clic no puede reescribir quién la recibió ni correr la fecha,
      * ni añadir una segunda línea al historial. */
     if (!abierta) return { yaEstaba: true as const };
+
+    /* NO se devuelve a la bodega lo que un guarda tiene en la mano.
+     *
+     * Cerrar la custodia del conjunto invalida la del guarda —cuelga de ella—
+     * así que hacerlo con una abierta borraría del mapa un elemento que sigue
+     * físicamente con una persona, y nadie volvería a preguntarle por él.
+     * Primero se lo recibe el supervisor, y entonces vuelve. */
+    const enManos = await custodiaGuardaActiva(ctx, item._id);
+    if (enManos) {
+      const guarda = await ctx.db.get(enManos.guardaUserId);
+      throw new Error(
+        `Este elemento lo tiene el guarda ${guarda?.name ?? "(sin nombre)"} en el conjunto. El supervisor debe registrarle la devolución antes de que el elemento vuelva a la compañía.`,
+      );
+    }
 
     const condominio = await ctx.db.get(abierta.condominioId);
     const observacion = exigirObservacion(args.observacion);

@@ -1,6 +1,7 @@
 import type { QueryCtx, MutationCtx } from "../_generated/server";
 import type { Doc, Id } from "../_generated/dataModel";
 import { acotado, estaVigente, haySolape, type Rango } from "../lib/vigilancia";
+import { displayNameFromUser } from "./displayName";
 
 type Ctx = QueryCtx | MutationCtx;
 
@@ -11,8 +12,9 @@ type Ctx = QueryCtx | MutationCtx;
  * resolver una asignación —el guarda de compañía tiene que pasar por
  * `requireCondominioRole` igual que el guarda propio del conjunto— y
  * `acceso.ts` ya depende de `authz.ts`. Importarlo al revés cerraría un ciclo.
- * Aquí no se importa nada del proyecto salvo las cuentas de vigencia, así que
- * los dos lados pueden colgarse de este archivo sin enredo.
+ * Aquí no se importa nada del proyecto salvo las cuentas de vigencia y el
+ * formateo de nombres —ambos hojas, sin dependencias—, así que los dos lados
+ * pueden colgarse de este archivo sin enredo.
  */
 
 /**
@@ -55,6 +57,55 @@ export async function asignacionVigente(
     return { asignacion, contrato, compania };
   }
   return null;
+}
+
+/**
+ * Los guardas que HOY cubren un conjunto por cuenta de una compañía.
+ *
+ * Vive aquí y no dentro de `asignaciones.ts` porque la usan dos módulos: el
+ * equipo del supervisor y la custodia del inventario. Es exactamente el caso
+ * del que avisa la cabecera de este archivo — tener el criterio de vigencia
+ * en dos sitios es cómo se abre el agujero por el que alguien entrega un
+ * radio a un guarda que ya no trabaja allí.
+ *
+ * Filtra por compañía A PROPÓSITO y no por comodidad: dos empresas pueden
+ * cubrir la misma portería, y "está asignado a este conjunto" no implica "es
+ * de los nuestros". Sin este filtro, el material de una empresa podría acabar
+ * en manos del personal de la otra.
+ *
+ * Coste acotado por el número de guardas del conjunto —decenas—, no por el
+ * inventario. Comprueba la cadena entera de `asignacionVigente` para cada uno.
+ */
+export async function guardasDelConjunto(
+  ctx: Ctx,
+  condominioId: Id<"condominios">,
+  companiaId: Id<"companiasSeguridad">,
+) {
+  const filas = await ctx.db
+    .query("asignaciones")
+    .withIndex("by_condominio_rol", (q) =>
+      q.eq("condominioId", condominioId).eq("rol", "guardia"),
+    )
+    .collect();
+
+  const guardas = [];
+  for (const a of filas) {
+    if (a.companiaId !== companiaId) continue;
+    if (!(await asignacionVigente(ctx, a.userId, condominioId))) continue;
+
+    const u = await ctx.db.get(a.userId);
+    if (!u || !u.active) continue;
+    guardas.push({
+      asignacionId: a._id,
+      userId: u._id,
+      nombre: displayNameFromUser(u),
+      email: u.email,
+      telefono: u.telefono ?? null,
+      vigenciaDesde: a.vigenciaDesde,
+      vigenciaHasta: a.vigenciaHasta ?? null,
+    });
+  }
+  return guardas.sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
 }
 
 /** Una asignación vigente, con lo que hace falta para pintarla y rutear. */

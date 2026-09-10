@@ -12,6 +12,7 @@ import {
 import {
   asignacionEstorba,
   asignacionVigente,
+  guardasDelConjunto,
   misAsignacionesVigentes,
 } from "./model/asignacion";
 import { rolAsignacionValidator } from "./model/roles";
@@ -439,37 +440,8 @@ export const misAsignaciones = query({
  * contratos se solapan a propósito durante el empalme, y en esos días quien
  * entra no tiene por qué ver la nómina de la que sale.
  */
-async function guardasDelConjunto(
-  ctx: QueryCtx,
-  condominioId: Id<"condominios">,
-  companiaId: Id<"companiasSeguridad">,
-) {
-  const filas = await ctx.db
-    .query("asignaciones")
-    .withIndex("by_condominio_rol", (q) =>
-      q.eq("condominioId", condominioId).eq("rol", "guardia"),
-    )
-    .collect();
-
-  const guardas = [];
-  for (const a of filas) {
-    if (a.companiaId !== companiaId) continue;
-    if (!(await asignacionVigente(ctx, a.userId, condominioId))) continue;
-
-    const u = await ctx.db.get(a.userId);
-    if (!u || !u.active) continue;
-    guardas.push({
-      asignacionId: a._id,
-      userId: u._id,
-      nombre: displayNameFromUser(u),
-      email: u.email,
-      telefono: u.telefono ?? null,
-      vigenciaDesde: a.vigenciaDesde,
-      vigenciaHasta: a.vigenciaHasta ?? null,
-    });
-  }
-  return guardas.sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
-}
+/* Movida a `model/asignacion.ts`: la custodia del inventario necesita la
+ * misma lista, y dos copias del criterio de vigencia acabarían discrepando. */
 
 /**
  * LOS CONJUNTOS A CARGO DE QUIEN PREGUNTA, Y EN CADA UNO SUS GUARDAS.
