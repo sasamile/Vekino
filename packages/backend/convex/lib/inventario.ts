@@ -45,6 +45,17 @@ export const MAX_SERIAL = 60;
 export const MAX_DESCRIPCION = 1000;
 
 /**
+ * Tope de una observación de entrega o devolución.
+ *
+ * Corto a propósito: la observación se guarda en la fila de custodia Y se
+ * concatena en el texto de la novedad, así que cada operación deja dos copias.
+ * Sin tope, cien entregas con observaciones largas bastan para que la ficha
+ * del elemento —que lee su historial entero— deje de caber en una respuesta y
+ * no vuelva a cargar nunca, sin forma de arreglarlo desde la pantalla.
+ */
+export const MAX_OBSERVACION = 500;
+
+/**
  * Cuántas filas admite una sola carga.
  *
  * Una importación es UNA mutación, y una mutación de Convex es una

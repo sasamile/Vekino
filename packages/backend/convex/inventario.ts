@@ -4,6 +4,14 @@ import type { QueryCtx, MutationCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { exigirAccesoCompania } from "./model/acceso";
 import { logNovedadItem, historialDeItem } from "./model/inventarioNovedad";
+import {
+  aVistaCustodia,
+  cacheDeCondominios,
+  cacheDeUsuarios,
+  custodiaActiva,
+  custodiasActivasDeCompania,
+  custodiasDeItem,
+} from "./model/inventarioCustodia";
 import { displayNameFromUser } from "./model/displayName";
 import {
   MAX_DESCRIPCION,
@@ -205,6 +213,15 @@ export const listar = query({
     companiaId: v.id("companiasSeguridad"),
     archivo: v.optional(v.union(v.literal("activos"), v.literal("archivados"))),
     busqueda: v.optional(v.string()),
+    /**
+     * Dónde está físicamente. Es OTRO eje que `archivo`, no un valor más del
+     * mismo: un elemento archivado nunca está entregado, pero uno activo puede
+     * estar en la bodega o en una portería, y esas son las dos preguntas que
+     * se hacen al preparar una entrega.
+     */
+    custodia: v.optional(
+      v.union(v.literal("en_compania"), v.literal("en_condominio")),
+    ),
   },
   handler: async (ctx, args) => {
     await exigirAccesoCompania(ctx, args.companiaId, "inventario.ver");
@@ -228,7 +245,7 @@ export const listar = query({
     if (truncado) items.length = TOPE_LISTADO;
 
     const q = normalizarTexto(args.busqueda)?.toLowerCase();
-    const filtrados = q
+    const porTexto = q
       ? items.filter(
           (i) =>
             i.nombre.toLowerCase().includes(q) ||
@@ -237,12 +254,52 @@ export const listar = query({
         )
       : items;
 
+    /* UNA lectura para la custodia de toda la página, no una por fila: es lo
+     * que evita el N+1 al pintar "¿dónde está?" en mil filas. Y va acotada por
+     * lo que la compañía tiene FUERA, que siempre es menos que su inventario. */
+    const { porItem: custodias, incompleto: custodiaIncompleta } =
+      await custodiasActivasDeCompania(ctx, args.companiaId, TOPE_LISTADO);
+    const filtrados =
+      args.custodia == null
+        ? porTexto
+        : porTexto.filter((i) =>
+            args.custodia === "en_condominio"
+              ? custodias.has(i._id)
+              : !custodias.has(i._id),
+          );
+
+    /* Los nombres de conjunto se resuelven una vez cada uno: una compañía
+     * atiende unas pocas porterías, así que mil filas cuestan cinco lecturas. */
+    const condominio = cacheDeCondominios(ctx);
+    const conCustodia = await Promise.all(
+      filtrados.map(async (i) => {
+        const a = custodias.get(i._id);
+        /* Sin custodia en el mapa NO significa "está en la bodega" si el mapa
+         * se quedó corto: significa que no se sabe. Decir lo primero sería
+         * mentir sobre dónde está un objeto físico. */
+        if (!a) return { ...aVista(i), asignacion: null };
+        const c = await condominio(a.condominioId);
+        return {
+          ...aVista(i),
+          asignacion: {
+            asignacionId: a._id,
+            condominioId: a.condominioId,
+            condominioNombre: c?.name ?? "(conjunto eliminado)",
+            asignadaEn: a.asignadaEn,
+          },
+        };
+      }),
+    );
+
     return {
-      items: filtrados.map(aVista),
+      items: conCustodia,
       /* Cuántos hay en esta vista antes de buscar, para poder decir "3 de 84"
        * sin que la pantalla tenga que recordar el total. */
       totalSinFiltrar: items.length,
       total: filtrados.length,
+      /* Había más elementos entregados de los que caben en una lectura, así
+       * que `asignacion: null` deja de significar "en la compañía". */
+      custodiaIncompleta,
       /* La pantalla tiene que poder decir que no lo está enseñando todo. Callar
        * esto es peor que el propio tope: quien busca un elemento y no lo ve
        * concluye que no existe. */
@@ -278,11 +335,31 @@ export const conteos = query({
         .take(TOPE_CONTEO + 1),
     ]);
 
+    /* Cuántos están fuera. Se lee por `by_compania_devuelta`, así que cuesta
+     * lo que la compañía tiene entregado y no su inventario entero. */
+    const entregados = await ctx.db
+      .query("inventarioAsignaciones")
+      .withIndex("by_compania_devuelta", (q) =>
+        q.eq("companiaId", args.companiaId).eq("devueltaEn", undefined),
+      )
+      .take(TOPE_CONTEO + 1);
+
+    const nActivos = Math.min(activos.length, TOPE_CONTEO);
+    const nEntregados = Math.min(entregados.length, TOPE_CONTEO);
+    /* Un aproximado POR EJE y no uno global: con dos mil archivados y doce
+     * activos, una sola bandera pintaba "12+" en la pestaña de activos, que
+     * es un número exacto presentado como estimación. */
     return {
-      activos: Math.min(activos.length, TOPE_CONTEO),
+      activos: nActivos,
+      activosAproximado: activos.length > TOPE_CONTEO,
       archivados: Math.min(archivados.length, TOPE_CONTEO),
-      aproximado:
-        activos.length > TOPE_CONTEO || archivados.length > TOPE_CONTEO,
+      archivadosAproximado: archivados.length > TOPE_CONTEO,
+      /* En una portería. */
+      enCondominio: nEntregados,
+      /* En la bodega. Se resta en vez de contarse aparte: no hay índice que
+       * responda "activo y sin custodia abierta", y leer las dos mitades para
+       * cruzarlas costaría el inventario entero. */
+      enCompania: Math.max(0, nActivos - nEntregados),
     };
   },
 });
@@ -307,9 +384,20 @@ export const detalle = query({
       Math.min(args.limiteHistorial ?? 100, 200),
     );
 
+    const usuario = cacheDeUsuarios(ctx);
+    const condominio = cacheDeCondominios(ctx);
+
     const archivadoPor = item.archivadoPorUserId
-      ? await ctx.db.get(item.archivadoPorUserId)
+      ? await usuario(item.archivadoPorUserId)
       : null;
+
+    /* El historial de custodias completo, no solo la activa: es lo que
+     * responde "¿por dónde ha pasado?" — la razón de que la custodia sea una
+     * tabla y no un campo en el elemento. */
+    const custodias = await custodiasDeItem(ctx, item._id, 100);
+    const asignaciones = await Promise.all(
+      custodias.map((a) => aVistaCustodia(ctx, a, condominio, usuario)),
+    );
 
     return {
       item: {
@@ -318,6 +406,10 @@ export const detalle = query({
           ? displayNameFromUser(archivadoPor)
           : null,
       },
+      /* Dónde está AHORA. Sale del mismo listado ya leído, sin otra consulta:
+       * la activa es, como mucho, la primera. */
+      asignacionActiva: asignaciones.find((a) => a.activa) ?? null,
+      asignaciones,
       historial: novedades.map((n) => ({
         _id: n._id,
         tipo: n.tipo,
@@ -499,6 +591,22 @@ export const archivar = mutation({
     /* Idempotente: archivar dos veces no reescribe la fecha ni añade una
      * segunda línea al historial. Con dos pestañas abiertas pasa. */
     if (!estaActivo(item)) return { yaEstaba: true };
+
+    /* No se archiva algo que está en una portería.
+     *
+     * Archivarlo lo sacaría del inventario activo dejando una custodia
+     * abierta: el elemento desaparecería de la pantalla mientras sigue
+     * físicamente en el conjunto, que es justo el faltante que este módulo
+     * existe para no producir. Si se perdió o se dio de baja allí, la
+     * secuencia honesta es devolverlo con el motivo y archivarlo después —así
+     * el historial dice qué pasó y dónde. */
+    const abierta = await custodiaActiva(ctx, item._id);
+    if (abierta) {
+      const donde = await ctx.db.get(abierta.condominioId);
+      throw new Error(
+        `Este elemento está entregado en ${donde?.name ?? "un conjunto"}. Regístrale la devolución antes de archivarlo.`,
+      );
+    }
 
     const motivo = normalizarTexto(args.motivo);
     const ahora = Date.now();

@@ -114,8 +114,13 @@ export async function miCompaniaDe(
  * Es lo que convierte "soy el administrador de Seguridad Andina" en "puedo
  * mirar la portería de este conjunto": no el rol por sí solo, sino el rol más
  * un contrato en vigor. El día que el contrato termina, deja de resolver.
+ *
+ * Exportada porque el inventario hace la misma pregunta al entregar un
+ * elemento a un conjunto: solo se le puede entregar a quien se atiende hoy.
+ * Duplicar la consulta habría dejado dos definiciones de "atendemos este
+ * conjunto" que se irían separando.
  */
-async function contratoVigente(
+export async function contratoVigente(
   ctx: Ctx,
   companiaId: Id<"companiasSeguridad">,
   condominioId: Id<"condominios">,

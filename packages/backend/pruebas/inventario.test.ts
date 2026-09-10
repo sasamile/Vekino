@@ -371,7 +371,15 @@ describe("archivado (nunca borrado fisico)", () => {
     /* `aproximado` dice si el conteo se quedo corto por el tope de lectura.
      * Convex no tiene una operacion de contar: contar es leer, y un contador
      * que miente en silencio es peor que uno que dice "2000+". */
-    expect(c).toEqual({ activos: 1, archivados: 1, aproximado: false });
+    expect(c).toEqual({
+      activos: 1,
+      activosAproximado: false,
+      archivados: 1,
+      archivadosAproximado: false,
+      /* La custodia es otro eje: nada entregado, todo en bodega. */
+      enCondominio: 0,
+      enCompania: 1,
+    });
   });
 });
 

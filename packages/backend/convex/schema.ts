@@ -2681,4 +2681,106 @@ export default defineSchema({
     /* La línea de tiempo de un elemento: la ruta caliente del detalle. */
     .index("by_item", ["itemId"])
     .index("by_compania", ["companiaId"]),
+  /**
+   * LA CUSTODIA: dónde está un elemento y desde cuándo.
+   *
+   * Tabla propia y no un `condominioId` dentro de `inventarioItems`, porque un
+   * campo solo sabe dónde está HOY: el día que el radio vuelve y sale a otro
+   * conjunto, la respuesta anterior se pierde y con ella la pregunta que de
+   * verdad se hace —"¿por dónde ha pasado esto?"—.
+   *
+   * ── Por qué NO cuelga del contrato ──────────────────────────────────
+   * `asignaciones` (el personal) cuelga de `companiaContratos` para que
+   * terminar un contrato corte el acceso de toda su gente sin escribir una
+   * fila. Aquí sería un error copiarlo: terminar un contrato NO devuelve
+   * físicamente el radio. Si la custodia caducara con el contrato, el sistema
+   * diría que está en la bodega mientras sigue en la portería, y el faltante
+   * se volvería invisible justo cuando hay que reclamarlo.
+   *
+   * El contrato decide si se PUEDE entregar —solo a un conjunto que la
+   * compañía atiende hoy— y se guarda para poder preguntar después qué se
+   * quedó sin devolver al terminarlo. Pero solo un acto explícito de
+   * devolución cierra una custodia.
+   *
+   * ── Por qué no hay `vigenciaHasta` ──────────────────────────────────
+   * No existe fecha pactada de devolución de un radio. Y si se declarara,
+   * habría dos fuentes de verdad para "¿está aquí?" —la fecha y el hecho— que
+   * acabarían discrepando; el índice `by_item_devuelto`, que es lo que hace
+   * que la custodia activa se resuelva en UNA lectura y sin ambigüedad,
+   * seguiría solo a una de las dos. Un único final: `devueltaEn`.
+   *
+   * Nunca se borra ni se reescribe una fila cerrada: el ciclo
+   * compañía → A → compañía → B deja dos filas, no una editada.
+   * ─────────────────────────────────────────────────────────────
+   */
+  inventarioAsignaciones: defineTable({
+    itemId: v.id("inventarioItems"),
+
+    /**
+     * Denormalizado desde el elemento, igual que `asignaciones.condominioId`
+     * y por lo mismo: toda tabla de negocio tiene que poder indexarse por su
+     * tenant sin saltar a la tabla padre. Además cierra el aislamiento — leer
+     * una custodia no obliga a cargar el item para saber de quién es.
+     */
+    companiaId: v.id("companiasSeguridad"),
+
+    condominioId: v.id("condominios"),
+
+    /**
+     * El contrato bajo el que salió. NO la termina, y por eso no hay índice
+     * por él: es rastro, no autorización. Responde "¿qué nos quedamos sin
+     * devolver cuando se acabó ese contrato?", que es la primera pregunta al
+     * cerrar una relación comercial.
+     *
+     * Opcional porque la plataforma puede obrar sin contrato de por medio, y
+     * porque un contrato borrado no debe impedir cerrar la custodia.
+     */
+    contratoId: v.optional(v.id("companiaContratos")),
+
+    /** Cuándo salió, y quién la entregó. */
+    asignadaEn: v.number(),
+    asignadaPorUserId: v.id("users"),
+    /** Lo que dijo quien la entregó. Opcional. */
+    observacionAsignacion: v.optional(v.string()),
+
+    /**
+     * EL ÚNICO FINAL. Ausente = el elemento sigue en ese conjunto.
+     *
+     * Timestamp y no booleano, igual que `inventarioItems.archivadoEn`:
+     * "devuelto" sin fecha no responde desde cuándo, que es lo primero que se
+     * pregunta al cuadrar un inventario.
+     */
+    devueltaEn: v.optional(v.number()),
+    devueltaPorUserId: v.optional(v.id("users")),
+    observacionDevolucion: v.optional(v.string()),
+
+    /* Sin `updatedAt`: una custodia se abre y se cierra, no se reescribe. */
+    createdAt: v.number(),
+  })
+    /* El historial de un elemento, del más reciente al más antiguo. */
+    .index("by_item", ["itemId"])
+    /**
+     * LA RUTA CALIENTE. `.eq("devueltaEn", undefined)` da la custodia activa
+     * de un elemento en una sola lectura, y es lo que convierte "como máximo
+     * una activa" en una regla comprobable en vez de en una esperanza. Mismo
+     * truco que `inventarioItems.by_compania_archivado`.
+     */
+    .index("by_item_devuelta", ["itemId", "devueltaEn"])
+    /**
+     * Qué tiene HOY una compañía en un conjunto.
+     *
+     * Lleva `companiaId` delante a propósito. Un índice solo por conjunto
+     * mezcla el material de las dos empresas que pueden cubrir la misma
+     * portería, y filtrar después de acotar la lectura daría cero elementos a
+     * quien sí tiene material allí — el peor resultado posible en la pantalla
+     * con la que se reclama un faltante.
+     */
+    .index("by_compania_condominio_devuelta", [
+      "companiaId",
+      "condominioId",
+      "devueltaEn",
+    ])
+    /* Todo lo que la compañía tiene fuera. Sostiene el listado sin N+1: una
+     * lectura da la custodia de todos los elementos de la página. */
+    .index("by_compania_devuelta", ["companiaId", "devueltaEn"]),
 });

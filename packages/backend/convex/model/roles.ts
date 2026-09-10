@@ -246,10 +246,25 @@ export const tipoNovedadItemValidator = v.union(
    *  "¿esto lo tecleó alguien o entró en el Excel de marzo?", que es la
    *  primera pregunta cuando aparecen doscientos elementos iguales. */
   v.literal("ITEM_IMPORTED"),
+
+  /**
+   * La custodia: el elemento sale a un conjunto y vuelve.
+   *
+   * Dos literales y no uno con un campo "direccion" porque son dos hechos
+   * distintos que se leen distinto en la linea de tiempo, y porque filtrar
+   * "todo lo que salio y no ha vuelto" tiene que poder hacerse por el tipo.
+   *
+   * El conjunto va en `inventarioNovedades.condominioId`, que la tarea 1 dejo
+   * declarado justamente para esto.
+   */
+  v.literal("ITEM_ASSIGNED_TO_CONDOMINIUM"),
+  v.literal("ITEM_RETURNED_FROM_CONDOMINIUM"),
 );
 
 export type TipoNovedadItem =
   | "ITEM_CREATED"
   | "ITEM_UPDATED"
   | "ITEM_ARCHIVED"
-  | "ITEM_IMPORTED";
+  | "ITEM_IMPORTED"
+  | "ITEM_ASSIGNED_TO_CONDOMINIUM"
+  | "ITEM_RETURNED_FROM_CONDOMINIUM";

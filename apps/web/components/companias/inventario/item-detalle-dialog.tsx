@@ -4,11 +4,13 @@ import { useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import {
   Archive,
+  Building2,
   FilePlus2,
   Loader2,
   Pencil,
   PackagePlus,
   FileUp,
+  Undo2,
 } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
@@ -19,6 +21,7 @@ import { Modal } from "@/components/ui/modal";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ErrorBoundary, ErrorMessage } from "@/components/ui/error-boundary";
 import { ItemFormDialog } from "./item-form-dialog";
+import { DevolverDialog, EntregarDialog } from "./custodia-dialog";
 
 /**
  * Ficha de un elemento y su historial completo.
@@ -33,7 +36,9 @@ type TipoNovedad =
   | "ITEM_CREATED"
   | "ITEM_UPDATED"
   | "ITEM_ARCHIVED"
-  | "ITEM_IMPORTED";
+  | "ITEM_IMPORTED"
+  | "ITEM_ASSIGNED_TO_CONDOMINIUM"
+  | "ITEM_RETURNED_FROM_CONDOMINIUM";
 
 /**
  * Cómo se pinta cada tipo de evento.
@@ -49,6 +54,16 @@ const ESTILO_EVENTO: Record<
   ITEM_IMPORTED: { etiqueta: "Importado", icono: FileUp, tono: "success" },
   ITEM_UPDATED: { etiqueta: "Editado", icono: Pencil, tono: "info" },
   ITEM_ARCHIVED: { etiqueta: "Archivado", icono: Archive, tono: "neutral" },
+  ITEM_ASSIGNED_TO_CONDOMINIUM: {
+    etiqueta: "Entregado",
+    icono: Building2,
+    tono: "info",
+  },
+  ITEM_RETURNED_FROM_CONDOMINIUM: {
+    etiqueta: "Devuelto",
+    icono: Undo2,
+    tono: "info",
+  },
 };
 
 function fechaHora(ms: number): string {
@@ -93,6 +108,8 @@ function Contenido({ itemId }: { itemId: Id<"inventarioItems"> }) {
   const archivar = useMutation(api.inventario.archivar);
 
   const [editando, setEditando] = useState(false);
+  const [entregando, setEntregando] = useState(false);
+  const [devolviendo, setDevolviendo] = useState(false);
   const [confirmandoArchivo, setConfirmandoArchivo] = useState(false);
   const [motivo, setMotivo] = useState("");
   const [busy, setBusy] = useState(false);
@@ -108,7 +125,7 @@ function Contenido({ itemId }: { itemId: Id<"inventarioItems"> }) {
     );
   }
 
-  const { item, historial } = datos;
+  const { item, historial, asignacionActiva, asignaciones } = datos;
 
   async function confirmarArchivo() {
     setError(null);
@@ -151,7 +168,20 @@ function Contenido({ itemId }: { itemId: Id<"inventarioItems"> }) {
                 Archivado
               </Badge>
             ) : (
-              <Badge tone="success">Disponible</Badge>
+              /* Dos insignias porque son DOS EJES, no uno: el estado dice cómo
+                 está el aparato y la custodia dónde está. Un radio averiado en
+                 una portería tiene que poder decir las dos cosas a la vez. */
+              <>
+                <Badge tone="success">{item.estado}</Badge>
+                {asignacionActiva ? (
+                  <Badge tone="info">
+                    <Building2 className="h-3 w-3" aria-hidden />
+                    {asignacionActiva.condominioNombre}
+                  </Badge>
+                ) : (
+                  <Badge tone="neutral">En la compañía</Badge>
+                )}
+              </>
             )}
           </div>
 
@@ -174,6 +204,18 @@ function Contenido({ itemId }: { itemId: Id<"inventarioItems"> }) {
               {item.descripcion}
             </p>
           )}
+
+          {asignacionActiva && (
+            <p className="pt-1 text-[12.5px] text-muted-foreground">
+              Entregado el {fechaHora(asignacionActiva.asignadaEn)}
+              {asignacionActiva.asignadaPorNombre
+                ? ` por ${asignacionActiva.asignadaPorNombre}`
+                : ""}
+              {asignacionActiva.observacionAsignacion
+                ? ` · ${asignacionActiva.observacionAsignacion}`
+                : ""}
+            </p>
+          )}
         </div>
       </div>
 
@@ -182,18 +224,37 @@ function Contenido({ itemId }: { itemId: Id<"inventarioItems"> }) {
           conserva. El backend lo impide; aquí ni se ofrece. */}
       {!item.archivado && (
         <div className="flex flex-wrap gap-2 border-t border-border pt-4">
+          {/* Entregar y devolver son excluyentes: o está fuera o está dentro,
+              y ofrecer las dos a la vez invitaría a un error que el servidor
+              rechazaría de todos modos. */}
+          {asignacionActiva ? (
+            <Button size="sm" onClick={() => setDevolviendo(true)}>
+              <Undo2 className="h-3.5 w-3.5" aria-hidden />
+              Registrar devolución
+            </Button>
+          ) : (
+            <Button size="sm" onClick={() => setEntregando(true)}>
+              <Building2 className="h-3.5 w-3.5" aria-hidden />
+              Entregar a un conjunto
+            </Button>
+          )}
           <Button variant="secondary" size="sm" onClick={() => setEditando(true)}>
             <Pencil className="h-3.5 w-3.5" aria-hidden />
             Editar
           </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setConfirmandoArchivo(true)}
-          >
-            <Archive className="h-3.5 w-3.5" aria-hidden />
-            Archivar
-          </Button>
+          {/* Archivar desaparece mientras esté fuera: el backend lo rechaza
+              —archivarlo perdería el rastro de dónde quedó— y un botón que
+              solo sirve para producir un error no ayuda a nadie. */}
+          {!asignacionActiva && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setConfirmandoArchivo(true)}
+            >
+              <Archive className="h-3.5 w-3.5" aria-hidden />
+              Archivar
+            </Button>
+          )}
         </div>
       )}
 
@@ -235,6 +296,47 @@ function Contenido({ itemId }: { itemId: Id<"inventarioItems"> }) {
         <p className="rounded-lg bg-destructive/10 px-3 py-2 text-[13px] text-destructive">
           {error}
         </p>
+      )}
+
+      {asignaciones.length > 0 && (
+        <div className="border-t border-border pt-4">
+          <p className="mb-3 text-[11px] font-medium uppercase tracking-[0.04em] text-muted-foreground">
+            Dónde ha estado
+          </p>
+          <ol className="space-y-2">
+            {asignaciones.map((a) => (
+              <li
+                key={a._id}
+                className="rounded-xl border border-border px-3 py-2.5 text-[12.5px]"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <Building2
+                    className="h-3.5 w-3.5 text-muted-foreground"
+                    aria-hidden
+                  />
+                  <span className="font-medium text-foreground">
+                    {a.condominioNombre}
+                  </span>
+                  {a.activa && <Badge tone="info">Ahí ahora</Badge>}
+                </div>
+                <p className="mt-1 text-muted-foreground">
+                  Entregado el {fechaHora(a.asignadaEn)}
+                  {a.asignadaPorNombre ? ` por ${a.asignadaPorNombre}` : ""}
+                  {a.observacionAsignacion ? ` · ${a.observacionAsignacion}` : ""}
+                </p>
+                {a.devueltaEn != null && (
+                  <p className="text-muted-foreground">
+                    Devuelto el {fechaHora(a.devueltaEn)}
+                    {a.devueltaPorNombre ? ` a ${a.devueltaPorNombre}` : ""}
+                    {a.observacionDevolucion
+                      ? ` · ${a.observacionDevolucion}`
+                      : ""}
+                  </p>
+                )}
+              </li>
+            ))}
+          </ol>
+        </div>
       )}
 
       <div className="border-t border-border pt-4">
@@ -296,6 +398,26 @@ function Contenido({ itemId }: { itemId: Id<"inventarioItems"> }) {
           onClose={() => setEditando(false)}
           /* Apilado sobre este modal: sin subirle la capa, el formulario se
              abre DEBAJO de la ficha y parece que el boton no hace nada. */
+          overlayClassName="z-[110]"
+        />
+      )}
+
+      {entregando && (
+        <EntregarDialog
+          companiaId={item.companiaId}
+          itemId={item._id}
+          itemNombre={item.nombre}
+          onClose={() => setEntregando(false)}
+          overlayClassName="z-[110]"
+        />
+      )}
+
+      {devolviendo && asignacionActiva && (
+        <DevolverDialog
+          itemId={item._id}
+          itemNombre={item.nombre}
+          condominioNombre={asignacionActiva.condominioNombre}
+          onClose={() => setDevolviendo(false)}
           overlayClassName="z-[110]"
         />
       )}
