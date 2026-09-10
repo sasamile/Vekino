@@ -39,6 +39,10 @@
     "./costoReserva": {
       "types": "./convex/lib/costoReserva.ts",
       "default": "./convex/lib/costoReserva.ts"
+    },
+    "./inventario": {
+      "types": "./convex/lib/inventario.ts",
+      "default": "./convex/lib/inventario.ts"
     }
   },
   "dependencies": {

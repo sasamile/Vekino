@@ -195,3 +195,61 @@ export const rolAsignacionValidator = v.union(
 );
 
 export type RolAsignacion = "supervisor" | "guardia";
+
+// ─────────────────────────────────────────────────────────────
+// INVENTARIO DE LA COMPAÑÍA
+//
+// Los elementos físicos que la empresa entrega a su gente: radios, linternas,
+// chalecos, bastones. Pertenecen a la COMPAÑÍA, no al conjunto: sobreviven a
+// perder un contrato y se mueven de una portería a otra.
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * CONDICIÓN del elemento. NO es dónde está ni quién lo tiene.
+ *
+ * La distinción es la decisión estructural del módulo. La tentación es meter
+ * aquí "asignado" o "en conjunto", y entonces un radio averiado que además
+ * está prestado a un guarda no se puede representar: hay que elegir una de
+ * las dos verdades y se pierde la otra. La custodia se derivará de filas con
+ * vigencia —como hace `asignaciones` con el personal—, y este enum se queda
+ * hablando solo del estado físico del aparato.
+ *
+ * Un único valor hoy a propósito. `averiado`, `mantenimiento` y `perdido`
+ * son las siguientes y entran añadiendo un literal, que en Convex es un
+ * cambio retrocompatible: las filas existentes siguen validando. Declararlos
+ * ahora sería peor —serían estados a los que ninguna operación lleva, y el
+ * primero que los usara descubriría que nadie decidió qué significan para el
+ * resto del sistema—.
+ */
+export const estadoItemValidator = v.union(v.literal("disponible"));
+
+export type EstadoItem = "disponible";
+
+/**
+ * Los eventos del historial de un elemento.
+ *
+ * Enum y no texto libre: sobre texto libre no se puede filtrar, ni contar, ni
+ * pintar un icono distinto, ni construir después "todo lo que le pasó a este
+ * radio en la portería norte". La descripción legible va aparte y se compone
+ * al escribir.
+ *
+ * Solo los cuatro que alguna operación produce hoy. Los de asignación
+ * —`ITEM_ASSIGNED_TO_CONDOMINIUM`, `ITEM_ASSIGNED_TO_GUARD`, `ITEM_RETURNED`—
+ * y los de condición —`ITEM_DAMAGED`, `ITEM_MAINTENANCE`— entran igual que los
+ * estados: añadiendo un literal, sin tocar lo escrito.
+ */
+export const tipoNovedadItemValidator = v.union(
+  v.literal("ITEM_CREATED"),
+  v.literal("ITEM_UPDATED"),
+  v.literal("ITEM_ARCHIVED"),
+  /** Alta por carga masiva. Se separa de `ITEM_CREATED` porque responde a
+   *  "¿esto lo tecleó alguien o entró en el Excel de marzo?", que es la
+   *  primera pregunta cuando aparecen doscientos elementos iguales. */
+  v.literal("ITEM_IMPORTED"),
+);
+
+export type TipoNovedadItem =
+  | "ITEM_CREATED"
+  | "ITEM_UPDATED"
+  | "ITEM_ARCHIVED"
+  | "ITEM_IMPORTED";

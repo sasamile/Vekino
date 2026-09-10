@@ -17,6 +17,7 @@ import {
   Archive,
   ArchiveRestore,
   Pencil,
+  Boxes,
 } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
@@ -27,9 +28,11 @@ import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { Input, Select } from "@/components/ui/input";
 import { EmptyState } from "@/components/ui/empty-state";
+import { ErrorBoundary, ErrorMessage } from "@/components/ui/error-boundary";
 import { cn } from "@/lib/utils";
 import { EstadoBadge, Campo } from "../page";
 import { EditarPersonaDialog } from "@/components/companias/editar-persona-dialog";
+import { PanelInventario } from "@/components/companias/inventario/panel-inventario";
 
 type Estado = "activa" | "suspendida" | "inactiva";
 type RolCompania = "admin_compania" | "supervisor" | "guardia";
@@ -74,7 +77,9 @@ export default function CompaniaDetallePage() {
   const companiaId = params.id as Id<"companiasSeguridad">;
   const data = useQuery(api.companias.detail, { companiaId });
   const me = useQuery(api.users.me);
-  const [tab, setTab] = useState<"personal" | "contratos">("personal");
+  const [tab, setTab] = useState<"personal" | "contratos" | "inventario">(
+    "personal",
+  );
 
   /* Firmar contratos y suspender la empresa son decisiones comerciales del
    * SaaS, no de la compañía: `crearContrato` y `setEstado` exigen plataforma
@@ -82,6 +87,14 @@ export default function CompaniaDetallePage() {
    * solo le ofrecería botones que terminan en un error. */
   const esPlataforma =
     me?.platformRole === "superadmin" || me?.platformRole === "admin";
+
+  /* El inventario es SOLO del administrador de la compania (y de la
+   * plataforma). `companias.detail` deja entrar tambien al supervisor con
+   * asignacion vigente, y a ese las consultas del inventario le responden con
+   * un error de permiso: sin ocultarle la pestana, el primer clic le tumbaba
+   * la pagina entera y perdia tambien Personal y Conjuntos. */
+  const puedeInventario =
+    esPlataforma || me?.compania?.roles?.includes("admin_compania") === true;
 
   if (data === undefined) {
     return (
@@ -130,11 +143,24 @@ export default function CompaniaDetallePage() {
             label="Conjuntos"
             n={contratos.filter((c) => c.estado === "vigente").length}
           />
+          {/* El inventario es de la EMPRESA, no de ninguno de sus conjuntos:
+              por eso vive aqui y no en la ficha de un contrato. Su conteo lo
+              pide el propio panel — meterlo en `companias.detail` obligaria a
+              leer el inventario entero en cada carga de esta pagina. */}
+          {puedeInventario && (
+            <TabSimple
+              activo={tab === "inventario"}
+              onClick={() => setTab("inventario")}
+              icon={Boxes}
+              label="Inventario"
+            />
+          )}
         </div>
 
-        {tab === "personal" ? (
+        {tab === "personal" && (
           <PanelPersonal companiaId={companiaId} personal={personal} />
-        ) : (
+        )}
+        {tab === "contratos" && (
           <PanelContratos
             companiaId={companiaId}
             contratos={contratos}
@@ -142,8 +168,58 @@ export default function CompaniaDetallePage() {
             esPlataforma={esPlataforma}
           />
         )}
+        {tab === "inventario" && puedeInventario && (
+          /* Red de seguridad ademas de ocultar la pestana: una compania
+           * SUSPENDIDA deja pasar `companias.detail` pero no
+           * `exigirAccesoCompania`, y `useQuery` lanza en el render. Sin
+           * boundary propio, ese error sube hasta Next y se lleva la pagina. */
+          <ErrorBoundary
+            resetKey={companiaId}
+            fallback={(e) => (
+              <ErrorMessage title="No se puede ver el inventario" detail={e.message} />
+            )}
+          >
+            <PanelInventario companiaId={companiaId} />
+          </ErrorBoundary>
+        )}
       </div>
     </PageContainer>
+  );
+}
+
+/**
+ * Pestana sin contador.
+ *
+ * `Tab` exige un numero y lo pinta siempre; el del inventario no esta en
+ * `companias.detail` a proposito —lo pide el panel cuando se abre— y pasarle
+ * un 0 mentiria hasta que cargara. Antes que aflojar `Tab` para todas, una
+ * variante para esta.
+ */
+function TabSimple({
+  activo,
+  onClick,
+  icon: Icon,
+  label,
+}: {
+  activo: boolean;
+  onClick: () => void;
+  icon: typeof Users;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "-mb-px flex items-center gap-2 border-b-2 px-4 py-2.5 text-[13.5px] font-medium transition-colors",
+        activo
+          ? "border-brand text-foreground"
+          : "border-transparent text-muted-foreground hover:text-foreground",
+      )}
+    >
+      <Icon className="h-4 w-4" aria-hidden />
+      {label}
+    </button>
   );
 }
 

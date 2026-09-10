@@ -179,6 +179,18 @@ export const CAPACIDADES = [
    * terminar le habria dejado tambien contratar conjuntos a su antojo.
    */
   "seguridad.terminar",
+
+  /**
+   * Ver el inventario de la propia compania.
+   *
+   * Separada de gestionar porque el dia que el supervisor necesite consultar
+   * que radios hay antes de pedir uno, se le da esta y no la otra: mirar la
+   * bodega no es poder darla de baja. Hoy no la tiene nadie mas que el
+   * administrador, pero la costura ya esta hecha.
+   */
+  "inventario.ver",
+  /** Crear, editar, archivar e importar elementos del inventario. */
+  "inventario.gestionar",
 ] as const;
 
 export type Capacidad = (typeof CAPACIDADES)[number];
@@ -221,7 +233,17 @@ const POR_ROL_ASIGNACION: Record<string, readonly Capacidad[]> = {
 
 /** Lo que habilita pertenecer a una compania, sin mirar conjunto alguno. */
 const POR_ROL_COMPANIA: Record<string, readonly Capacidad[]> = {
-  admin_compania: ["seguridad.personal", "seguridad.asignar", "seguridad.terminar"],
+  admin_compania: [
+    "seguridad.personal",
+    "seguridad.asignar",
+    "seguridad.terminar",
+    /* El inventario es de la empresa y lo lleva quien la administra. El
+     * supervisor y el guarda no aparecen aqui a proposito: entregar y recibir
+     * elementos es la tarea 3, y darles permiso antes de que exista ese flujo
+     * les abriria hoy el CRUD entero de la bodega. */
+    "inventario.ver",
+    "inventario.gestionar",
+  ],
   supervisor: [],
   guardia: [],
 };
