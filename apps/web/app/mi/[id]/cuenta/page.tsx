@@ -635,10 +635,18 @@ function PayButton({
       return;
     }
     setLoading(true);
+    /* Igual que en portal-pay-button: la pestaña se abre con el clic todavía
+     * en curso, o el navegador la bloquea por emergente. Navegar en la misma
+     * pestaña dejaba a la persona sin Vekino si la pasarela terminaba en una
+     * pantalla sin salida. */
+    const pestana = window.open("", "_blank", "noopener,noreferrer");
     try {
       const { redirectUrl } = await crearPago({ facturaId: factura._id });
-      window.location.href = redirectUrl;
+      if (pestana && !pestana.closed) pestana.location.href = redirectUrl;
+      else window.location.href = redirectUrl;
+      setLoading(false);
     } catch {
+      if (pestana && !pestana.closed) pestana.close();
       setLoading(false);
     }
   }

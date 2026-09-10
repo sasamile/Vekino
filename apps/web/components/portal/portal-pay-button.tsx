@@ -86,10 +86,33 @@ export function PortalPayButton({
     }
     setLoading(true);
     setError(null);
+
+    /* La pestaña se abre YA, con el clic todavía en curso.
+     *
+     * Antes esto era `window.location.href = redirectUrl`, y Vekino se
+     * quedaba por el camino: si la pasarela terminaba en una pantalla sin
+     * salida —el simulador de PSE tiene varias—, cerrar la ventana era
+     * cerrar Vekino, y el residente perdía la sesión sin saber si pagó.
+     *
+     * Abrirla después de `await` no sirve: el navegador ya no lo considera
+     * parte del clic y lo bloquea como ventana emergente. Por eso se abre
+     * vacía primero y se le pone la dirección cuando llega. */
+    const pestana = window.open("", "_blank", "noopener,noreferrer");
+
     try {
       const { redirectUrl } = await crearPago({ facturaId });
-      window.location.href = redirectUrl;
+      if (pestana && !pestana.closed) {
+        pestana.location.href = redirectUrl;
+      } else {
+        /* El navegador la bloqueó, o el residente la cerró. Se navega en la
+         * misma pestaña antes que dejarlo sin pagar. */
+        window.location.href = redirectUrl;
+      }
+      setLoading(false);
     } catch (e) {
+      /* Si falló, se cierra la pestaña en blanco: dejarla abierta hace creer
+       * que algo está cargando cuando el pago ni siquiera empezó. */
+      if (pestana && !pestana.closed) pestana.close();
       /* Antes esto era `catch { setLoading(false) }`: el botón dejaba de
        * girar y no pasaba NADA. El residente vuelve a tocar, y otra vez
        * nada. La pasarela sí estaba respondiendo —y con un motivo claro—
