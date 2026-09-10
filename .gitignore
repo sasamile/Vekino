@@ -29,3 +29,4 @@ coverage
 
 # scripts one-shot de migración (no runtime)
 migrate/
+evidencias/
