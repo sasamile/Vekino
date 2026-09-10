@@ -89,44 +89,45 @@ function Contenido() {
   return (
     <main className="flex min-h-dvh items-center justify-center bg-background px-4 py-10">
       <div className="w-full max-w-md rounded-2xl border border-border bg-card p-7 text-center shadow-sm">
-        {pminValido(pmtId) && pago === undefined ? (
-          <Loader2 className="mx-auto h-7 w-7 animate-spin text-muted-foreground" />
-        ) : (
-          <>
-            <Icono className={`mx-auto h-12 w-12 ${info?.color ?? "text-muted-foreground"}`} />
-            <h1 className="mt-4 text-xl font-semibold text-foreground">
-              {info?.titulo ?? "Transacción recibida"}
-            </h1>
-            <p className="mt-2 text-sm text-muted-foreground">
-              {info?.texto ??
-                "Registramos tu regreso desde la pasarela. Si el pago se completó, se verá reflejado en tu estado de cuenta en unos minutos."}
-            </p>
+        {/* El contenido se pinta SIEMPRE, sin esperar la consulta.
+            La consulta exige sesión, y quien vuelve de la pasarela puede no
+            tenerla —pagó desde otra pestaña, se le venció, entró desde el
+            correo—. Bloquear la pantalla en un girador dejaba a esa persona
+            mirando una rueda para siempre justo después de pagar. El detalle
+            aparece si la consulta responde; si no, queda el mensaje y la
+            referencia, que es lo que de verdad hace falta. */}
+        <Icono className={`mx-auto h-12 w-12 ${info?.color ?? "text-muted-foreground"}`} />
+        <h1 className="mt-4 text-xl font-semibold text-foreground">
+          {info?.titulo ?? "Transacción recibida"}
+        </h1>
+        <p className="mt-2 text-sm text-muted-foreground">
+          {info?.texto ??
+            "Registramos tu regreso desde la pasarela. Si el pago se completó, se verá reflejado en tu estado de cuenta en unos minutos."}
+        </p>
 
-            {pago && (
-              <dl className="mt-5 space-y-1.5 rounded-xl bg-muted/50 p-4 text-left text-sm">
-                <Fila etiqueta="Valor" valor={enPesos(pago.monto)} />
-                {pago.medioPago && <Fila etiqueta="Medio de pago" valor={pago.medioPago} />}
-                {pago.banco && <Fila etiqueta="Banco" valor={pago.banco} />}
-              </dl>
-            )}
-
-            {/* La referencia va SIEMPRE, haya o no detalle: es lo único con lo
-                que el residente puede reclamar si algo salió mal. */}
-            {pmtId && (
-              <p className="mt-4 text-xs text-muted-foreground">
-                Referencia de la transacción:{" "}
-                <span className="font-mono text-foreground">{pmtId}</span>
-              </p>
-            )}
-
-            <Link
-              href="/"
-              className="mt-6 inline-flex h-11 items-center justify-center rounded-xl bg-brand px-6 text-sm font-semibold text-brand-foreground transition-colors hover:bg-brand/90"
-            >
-              Volver a Vekino
-            </Link>
-          </>
+        {pago && (
+          <dl className="mt-5 space-y-1.5 rounded-xl bg-muted/50 p-4 text-left text-sm">
+            <Fila etiqueta="Valor" valor={enPesos(pago.monto)} />
+            {pago.medioPago && <Fila etiqueta="Medio de pago" valor={pago.medioPago} />}
+            {pago.banco && <Fila etiqueta="Banco" valor={pago.banco} />}
+          </dl>
         )}
+
+        {/* La referencia va SIEMPRE, haya o no detalle: es lo único con lo
+            que el residente puede reclamar si algo salió mal. */}
+        {pmtId && (
+          <p className="mt-4 text-xs text-muted-foreground">
+            Referencia de la transacción:{" "}
+            <span className="font-mono text-foreground">{pmtId}</span>
+          </p>
+        )}
+
+        <Link
+          href="/"
+          className="mt-6 inline-flex h-11 items-center justify-center rounded-xl bg-brand px-6 text-sm font-semibold text-brand-foreground transition-colors hover:bg-brand/90"
+        >
+          Volver a Vekino
+        </Link>
       </div>
     </main>
   );
