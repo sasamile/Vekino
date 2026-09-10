@@ -3,7 +3,7 @@
 import { Suspense } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useQuery } from "convex/react";
+import { useConvexAuth, useQuery } from "convex/react";
 import { CheckCircle2, Clock, Loader2, XCircle } from "lucide-react";
 import { api } from "@vekino/backend/api";
 
@@ -73,11 +73,18 @@ function Contenido() {
   const params = useSearchParams();
   const pmtId = params.get("pmtId") ?? params.get("PmtId") ?? "";
 
-  /* Sin pmtId no hay nada que consultar: la pasarela lo agrega siempre, así
-   * que llegar sin él significa que alguien abrió la URL a mano. */
+  /* La consulta exige sesión y REVIENTA sin ella: no devuelve null, lanza, y
+   * al lanzar tumba toda la página con un "Application error". Quien vuelve
+   * de la pasarela puede perfectamente no tener sesión —pagó desde otra
+   * pestaña, se le venció, entró desde el correo—, así que solo se pregunta
+   * cuando hay con qué preguntar.
+   *
+   * Sin pmtId tampoco: la pasarela lo agrega siempre, y llegar sin él
+   * significa que alguien abrió la URL a mano. */
+  const { isAuthenticated } = useConvexAuth();
   const pago = useQuery(
     api.pagos.estadoPagoPorPmt,
-    pminValido(pmtId) ? { pmtId } : "skip",
+    isAuthenticated && pminValido(pmtId) ? { pmtId } : "skip",
   );
 
   const estado = pago?.estado;
