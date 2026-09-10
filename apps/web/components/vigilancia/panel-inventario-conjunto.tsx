@@ -168,6 +168,16 @@ export function PanelInventarioConjunto({
                         Desde {fechaHora(i.custodia.entregadaEn)}
                       </p>
                     </div>
+                  ) : datos.custodiaIncompleta ? (
+                    /* Sin custodia en un mapa que se quedó corto NO significa
+                       "está en la caseta": significa que no se sabe. Decir lo
+                       primero invitaría a entregar algo que alguien ya tiene. */
+                    <span
+                      className="text-[12.5px] text-muted-foreground"
+                      title="Hay más elementos repartidos de los que caben en una consulta."
+                    >
+                      —
+                    </span>
                   ) : (
                     <span className="text-[12.5px] text-muted-foreground">
                       En la portería
@@ -207,6 +217,10 @@ export function PanelInventarioConjunto({
                             nombre: i.nombre,
                           })
                         }
+                        /* Con el mapa incompleto no se sabe si alguien lo
+                           tiene: ofrecer "Entregar" acabaría en un rechazo del
+                           servidor que el usuario no puede anticipar. */
+                        disabled={datos.custodiaIncompleta}
                       >
                         <HandCoins className="h-3.5 w-3.5" aria-hidden />
                         Entregar
@@ -248,9 +262,12 @@ export function PanelInventarioConjunto({
         </Table>
       </TableCard>
 
-      {datos.truncado && (
+      {(datos.truncado || datos.custodiaIncompleta) && (
         <p className="text-[12.5px] text-muted-foreground">
-          Hay más elementos en este conjunto de los que caben en la lista.
+          {datos.truncado &&
+            "Hay más elementos en este conjunto de los que caben en la lista. "}
+          {datos.custodiaIncompleta &&
+            "Hay más elementos repartidos de los que caben en una consulta: los marcados con “—” pueden estar en manos de un guarda, y el aviso de pendientes puede quedarse corto."}
         </p>
       )}
 

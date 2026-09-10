@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useQuery } from "convex/react";
 import {
   ArrowLeft,
+  Boxes,
   Footprints,
   BookOpenCheck,
   Users,
@@ -21,6 +22,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { EtiquetaRonda } from "@/components/guardia/etiqueta-ronda";
 import { TablaRondas } from "@/components/vigilancia/tabla-rondas";
+import { PanelInventarioConjunto } from "@/components/vigilancia/panel-inventario-conjunto";
 import { cn } from "@/lib/utils";
 
 function fechaHora(ms: number): string {
@@ -64,7 +66,9 @@ export default function SupervisionConjuntoPage({
   const conjunto = equipo?.find((c) => c.condominioId === condominioId);
 
   const [guardaId, setGuardaId] = useState<string>("");
-  const [tab, setTab] = useState<"rondas" | "minuta">("rondas");
+  const [tab, setTab] = useState<"rondas" | "minuta" | "inventario">(
+    "rondas",
+  );
 
   const filtro = guardaId ? (guardaId as Id<"users">) : undefined;
   const rondas = useQuery(
@@ -163,7 +167,25 @@ export default function SupervisionConjuntoPage({
             label="Minuta"
             n={minuta?.length}
           />
+          {/* Solo para quien llega como SUPERVISOR. El administrador de la
+              compañía ve esta misma pantalla —`miEquipo` se la da por la vía
+              del contrato— pero no tiene `inventario.custodiar`: repartir
+              material dentro de una portería es de quien está allí. Enseñarle
+              la pestaña solo le daría una consulta que rebota. Lo suyo lo ve
+              en la ficha de la compañía. */}
+          {conjunto.via === "supervisor" && (
+            <Tab
+              activo={tab === "inventario"}
+              onClick={() => setTab("inventario")}
+              icon={Boxes}
+              label="Inventario"
+            />
+          )}
         </div>
+
+        {tab === "inventario" && conjunto.via === "supervisor" && (
+          <PanelInventarioConjunto condominioId={condominioId} />
+        )}
 
         {tab === "rondas" ? (
           <TablaRondas
@@ -174,7 +196,7 @@ export default function SupervisionConjuntoPage({
                 : undefined
             }
           />
-        ) : minuta === undefined ? (
+        ) : tab === "inventario" ? null : minuta === undefined ? (
           <Skeleton className="h-64 rounded-2xl" />
         ) : minuta.length === 0 ? (
           <EmptyState

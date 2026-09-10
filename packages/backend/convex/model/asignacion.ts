@@ -1,5 +1,5 @@
 import type { QueryCtx, MutationCtx } from "../_generated/server";
-import type { Doc, Id } from "../_generated/dataModel";
+import type { Doc, Id, TableNames } from "../_generated/dataModel";
 import { acotado, estaVigente, haySolape, type Rango } from "../lib/vigilancia";
 import { displayNameFromUser } from "./displayName";
 
@@ -16,6 +16,76 @@ type Ctx = QueryCtx | MutationCtx;
  * formateo de nombres —ambos hojas, sin dependencias—, así que los dos lados
  * pueden colgarse de este archivo sin enredo.
  */
+
+/**
+ * Un lector de documentos que no relee el mismo dos veces.
+ *
+ * Guarda la PROMESA y no el valor. Con `set(id, await get(id))` el `await`
+ * suspende antes de escribir en el mapa, así que dentro de un `Promise.all`
+ * todos comprueban `has()` a la vez, todos fallan y todos leen: el caché solo
+ * deduplicaría si se le llamara en serie. Es un error que este proyecto ya
+ * pagó una vez.
+ */
+function cacheDoc<T extends TableNames>(ctx: Ctx) {
+  const visto = new Map<Id<T>, Promise<Doc<T> | null>>();
+  return (id: Id<T>): Promise<Doc<T> | null> => {
+    if (!visto.has(id)) visto.set(id, ctx.db.get(id));
+    return visto.get(id)!;
+  };
+}
+
+/**
+ * Los cuatro documentos que hacen falta para juzgar una asignación.
+ *
+ * Se comparte entre todas las asignaciones de una misma consulta porque los
+ * cincuenta guardas de una portería cuelgan del MISMO contrato y de la MISMA
+ * compañía: sin caché eran cien lecturas de dos documentos.
+ */
+export function cacheDeCadena(ctx: Ctx) {
+  return {
+    contrato: cacheDoc<"companiaContratos">(ctx),
+    compania: cacheDoc<"companiasSeguridad">(ctx),
+    miembro: cacheDoc<"companiaMiembros">(ctx),
+    usuario: cacheDoc<"users">(ctx),
+  };
+}
+
+export type CacheDeCadena = ReturnType<typeof cacheDeCadena>;
+
+/**
+ * LOS CUATRO ESLABONES, EN UN SOLO SITIO.
+ *
+ * Asignación vigente → contrato vigente → compañía activa → miembro no dado
+ * de baja. Es EL criterio del eje de seguridad, y existe como función propia
+ * justamente para que no haya dos versiones: la cabecera de este archivo
+ * avisa de que tenerlo repetido es cómo se abren los agujeros por los que
+ * alguien sigue entrando a un conjunto que ya no cubre.
+ *
+ * Recibe la fila ya leída —quien pregunta por un conjunto entero ya las tiene
+ * todas— y los lectores cacheados, para poder resolver cincuenta a la vez sin
+ * releer lo mismo cincuenta veces.
+ */
+async function cadenaVigente(
+  a: Doc<"asignaciones">,
+  ahora: number,
+  cache: CacheDeCadena,
+): Promise<{
+  contrato: Doc<"companiaContratos">;
+  compania: Doc<"companiasSeguridad">;
+} | null> {
+  if (!estaVigente(a, ahora)) return null;
+
+  const contrato = await cache.contrato(a.contratoId);
+  if (!contrato || !estaVigente(contrato, ahora)) return null;
+
+  const compania = await cache.compania(a.companiaId);
+  if (!compania || compania.estado !== "activa") return null;
+
+  const miembro = await cache.miembro(a.companiaMiembroId);
+  if (!miembro || !miembro.isActive) return null;
+
+  return { contrato, compania };
+}
 
 /**
  * La asignación con la que esta persona puede operar hoy en este conjunto.
@@ -42,19 +112,10 @@ export async function asignacionVigente(
     )
     .collect();
 
+  const cache = cacheDeCadena(ctx);
   for (const asignacion of candidatas) {
-    if (!estaVigente(asignacion, ahora)) continue;
-
-    const contrato = await ctx.db.get(asignacion.contratoId);
-    if (!contrato || !estaVigente(contrato, ahora)) continue;
-
-    const compania = await ctx.db.get(asignacion.companiaId);
-    if (!compania || compania.estado !== "activa") continue;
-
-    const miembro = await ctx.db.get(asignacion.companiaMiembroId);
-    if (!miembro || !miembro.isActive) continue;
-
-    return { asignacion, contrato, compania };
+    const via = await cadenaVigente(asignacion, ahora, cache);
+    if (via) return { asignacion, ...via };
   }
   return null;
 }
@@ -73,8 +134,11 @@ export async function asignacionVigente(
  * de los nuestros". Sin este filtro, el material de una empresa podría acabar
  * en manos del personal de la otra.
  *
- * Coste acotado por el número de guardas del conjunto —decenas—, no por el
- * inventario. Comprueba la cadena entera de `asignacionVigente` para cada uno.
+ * Comprueba la MISMA cadena que `asignacionVigente` —es la misma función—
+ * pero sobre las filas que ya trajo el índice y con los lectores compartidos:
+ * los cincuenta guardas de una portería cuelgan del mismo contrato y de la
+ * misma compañía, así que sin caché eran cien lecturas de dos documentos, y
+ * en serie. Con caché y en paralelo, dos lecturas y un salto.
  */
 export async function guardasDelConjunto(
   ctx: Ctx,
@@ -88,24 +152,47 @@ export async function guardasDelConjunto(
     )
     .collect();
 
-  const guardas = [];
-  for (const a of filas) {
-    if (a.companiaId !== companiaId) continue;
-    if (!(await asignacionVigente(ctx, a.userId, condominioId))) continue;
+  const cache = cacheDeCadena(ctx);
+  const ahora = Date.now();
 
-    const u = await ctx.db.get(a.userId);
-    if (!u || !u.active) continue;
-    guardas.push({
-      asignacionId: a._id,
-      userId: u._id,
-      nombre: displayNameFromUser(u),
-      email: u.email,
-      telefono: u.telefono ?? null,
-      vigenciaDesde: a.vigenciaDesde,
-      vigenciaHasta: a.vigenciaHasta ?? null,
-    });
-  }
-  return guardas.sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
+  /* Se juzga CADA fila, no "¿tiene esta persona alguna asignación vigente
+   * aquí?". Preguntar lo segundo hacía que alguien con dos filas en el mismo
+   * conjunto —una vencida y otra viva— apareciera DOS VECES en el listado y
+   * en el desplegable de entrega. */
+  const resueltas = await Promise.all(
+    filas
+      .filter((a) => a.companiaId === companiaId)
+      .map(async (a) => {
+        if (!(await cadenaVigente(a, ahora, cache))) return null;
+        const u = await cache.usuario(a.userId);
+        if (!u || !u.active) return null;
+        return {
+          asignacionId: a._id,
+          userId: u._id,
+          nombre: displayNameFromUser(u),
+          email: u.email,
+          telefono: u.telefono ?? null,
+          vigenciaDesde: a.vigenciaDesde,
+          vigenciaHasta: a.vigenciaHasta ?? null,
+        };
+      }),
+  );
+
+  /* Una persona, una entrada.
+   *
+   * `asignacionEstorba` impide por API crear dos asignaciones solapadas, pero
+   * una fila llegada de otro modo haria aparecer al mismo guarda dos veces en
+   * el desplegable de entrega — dos opciones identicas, y quien las mira sin
+   * saber cual elegir. Se queda la primera por orden del indice. */
+  const vistos = new Set<Id<"users">>();
+  return resueltas
+    .filter((g): g is NonNullable<typeof g> => g !== null)
+    .filter((g) => {
+      if (vistos.has(g.userId)) return false;
+      vistos.add(g.userId);
+      return true;
+    })
+    .sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
 }
 
 /** Una asignación vigente, con lo que hace falta para pintarla y rutear. */

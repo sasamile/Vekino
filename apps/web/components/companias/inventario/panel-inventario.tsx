@@ -322,10 +322,13 @@ export function PanelInventario({
               )}
               {/* Callar el tope seria peor que el tope: quien busca un
                   elemento y no lo ve concluye que no existe. */}
+              {/* El buscador NO es el remedio: filtra sobre el mismo tope. Se
+                  dice lo que de verdad ayuda. */}
               {datos.truncado &&
-                "Hay más elementos de los que caben en la lista; usa el buscador para llegar a uno concreto. "}
+                `Se están mostrando los ${datos.totalSinFiltrar} más recientes; hay más. Usa las pestañas o el filtro de ubicación para acotar. `}
+                
               {datos.custodiaIncompleta &&
-                "Hay más elementos entregados de los que caben en una consulta: los marcados con “—” pueden estar en un conjunto."}
+                "Hay más elementos entregados de los que caben en una consulta: los marcados con “—” pueden estar en un conjunto, y el filtro de ubicación los deja fuera."}
             </p>
           )}
         </>

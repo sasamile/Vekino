@@ -10,6 +10,7 @@ import {
   cacheDeUsuarios,
   custodiaActiva,
   custodiaGuardaActiva,
+  custodiasDeItem,
   custodiasGuardaDeCondominio,
   custodiasGuardaDeItem,
 } from "./model/inventarioCustodia";
@@ -54,6 +55,13 @@ type Contexto = {
   condominioId: Id<"condominios">;
   /** El supervisor que obra. */
   user: Doc<"users">;
+  /**
+   * La compañía por la que supervisa. Se devuelve resuelta para que quien
+   * necesite el ámbito NO vuelva a llamar a `exigirAcceso`: resolverlo cuesta
+   * cinco lecturas por índice, y hacerlo dos veces en la misma consulta es
+   * además una segunda copia de la misma comprobación.
+   */
+  companiaId: Id<"companiasSeguridad">;
 };
 
 /**
@@ -111,6 +119,7 @@ async function exigirCadena(
     asignacion,
     condominioId: asignacion.condominioId,
     user: acceso.user,
+    companiaId: exigirCompaniaDelAcceso(acceso.compania),
   };
 }
 
@@ -207,12 +216,13 @@ export const itemsDelCondominio = query({
     const truncado = asignaciones.length > TOPE_CUSTODIAS;
     const enElConjunto = asignaciones.slice(0, TOPE_CUSTODIAS);
 
-    const { porItem: custodias } = await custodiasGuardaDeCondominio(
-      ctx,
-      companiaId,
-      args.condominioId,
-      TOPE_CUSTODIAS,
-    );
+    const { porItem: custodias, incompleto: custodiaIncompleta } =
+      await custodiasGuardaDeCondominio(
+        ctx,
+        companiaId,
+        args.condominioId,
+        TOPE_CUSTODIAS,
+      );
 
     /* Una sola resolución de "quién sigue asignado", no una por fila. */
     const vigentes = new Set(
@@ -253,6 +263,14 @@ export const itemsDelCondominio = query({
     return {
       items: utiles.sort((a, b) => a.nombre.localeCompare(b.nombre, "es")),
       truncado,
+      /**
+       * El mapa de custodias se quedó corto: `custodia: null` deja de
+       * significar "está en la portería" y pasa a significar "no se sabe".
+       * Callarlo haría que la pantalla ofreciera "Entregar" sobre algo que
+       * alguien ya tiene, y que el contador de pendientes de abajo se
+       * presentara como exacto sin serlo.
+       */
+      custodiaIncompleta,
       /* Cuántos elementos están en manos de alguien que ya no cubre este
        * conjunto. Es el número que hay que mirar antes de cerrar un turno. */
       pendientes: utiles.filter((f) => f.custodia?.pendiente === true).length,
@@ -260,18 +278,41 @@ export const itemsDelCondominio = query({
   },
 });
 
-/** El historial de manos por las que ha pasado un elemento. */
+/**
+ * El historial de manos por las que ha pasado un elemento.
+ *
+ * NO pasa por `exigirCadena`, y ésa es la diferencia con las mutaciones: se
+ * autoriza sobre la ÚLTIMA estancia del elemento en un conjunto, esté abierta
+ * o cerrada. Exigir que siga asignado dejaba al supervisor sin poder consultar
+ * por qué manos pasó un radio en su portería en cuanto la compañía se lo
+ * llevaba de vuelta — que es exactamente el momento en que se reclama un
+ * faltante.
+ *
+ * Sigue siendo su portería y sigue haciendo falta `inventario.custodiar` allí,
+ * así que no abre nada: solo deja de cerrarse en el peor momento.
+ */
 export const historialDeItem = query({
   args: { itemId: v.id("inventarioItems") },
   handler: async (ctx, args) => {
-    const { item, condominioId } = await exigirCadena(ctx, args.itemId);
+    const item = await ctx.db.get(args.itemId);
+    if (!item) throw new Error("Elemento no encontrado.");
+
+    /* La última estancia, abierta o cerrada. Sin ninguna, no hay conjunto
+     * desde el que preguntar y no hay nada que contar. */
+    const [ultima] = await custodiasDeItem(ctx, item._id, 1);
+    if (!ultima) return [];
 
     const acceso = await exigirAcceso(
       ctx,
-      condominioId,
+      ultima.condominioId,
       "inventario.custodiar",
     );
     const companiaId = exigirCompaniaDelAcceso(acceso.compania);
+    if (companiaId !== item.companiaId) {
+      throw new Error("Ese elemento no pertenece a tu compañía.");
+    }
+    const condominioId = ultima.condominioId;
+
     const vigentes = new Set(
       (await guardasDelConjunto(ctx, condominioId, companiaId)).map(
         (g) => g.userId,

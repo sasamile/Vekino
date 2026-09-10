@@ -177,12 +177,13 @@ export const porCondominio = query({
      * sí, acción no.
      *
      * Una lectura indexada para todas las filas, no una por elemento. */
-    const { porItem: enManos } = await custodiasGuardaDeCondominio(
-      ctx,
-      args.companiaId,
-      args.condominioId,
-      TOPE_CUSTODIAS,
-    );
+    const { porItem: enManos, incompleto: custodiaGuardaIncompleta } =
+      await custodiasGuardaDeCondominio(
+        ctx,
+        args.companiaId,
+        args.condominioId,
+        TOPE_CUSTODIAS,
+      );
     const usuario = cacheDeUsuarios(ctx);
 
     const filas = (
@@ -202,7 +203,11 @@ export const porCondominio = query({
             observacionAsignacion: a.observacionAsignacion ?? null,
             /* Sin marcar pendientes: quién sigue asignado al conjunto es una
              * pregunta del supervisor, y resolverla aquí costaría leer el
-             * equipo de cada portería para pintar una lista. */
+             * equipo de cada portería para pintar una lista.
+             *
+             * `null` significa "nadie lo tiene" SOLO si el mapa está completo;
+             * si no, significa "no se sabe", y eso lo dice
+             * `custodiaGuardaIncompleta`. */
             custodiaGuarda: c
               ? await aVistaCustodiaGuarda(ctx, c, usuario)
               : null,
@@ -215,7 +220,7 @@ export const porCondominio = query({
 
     /* El recuento no puede presentarse como exacto si se quedó corto: es el
      * número con el que se cuadra un inventario. */
-    return { items: filas, truncado };
+    return { items: filas, truncado, custodiaGuardaIncompleta };
   },
 });
 
@@ -243,7 +248,13 @@ export const condominiosConMaterial = query({
         q.eq("companiaId", args.companiaId).eq("devueltaEn", undefined),
       )
       .order("desc")
-      .take(TOPE_CUSTODIAS);
+      /* +1 como el resto del módulo: los recuentos por conjunto que pinta la
+       * pantalla se cortaban en silencio, y un conjunto con setecientos
+       * elementos podía mostrar trescientos sin decirlo. */
+      .take(TOPE_CUSTODIAS + 1);
+
+    const truncado = abiertas.length > TOPE_CUSTODIAS;
+    abiertas.length = Math.min(abiertas.length, TOPE_CUSTODIAS);
 
     const cuantos = new Map<Id<"condominios">, number>();
     for (const a of abiertas) {
@@ -261,6 +272,8 @@ export const condominiosConMaterial = query({
            * sí recuperar lo que quedó. */
           activo: c?.isActive ?? false,
           elementos,
+          /* El recuento se quedó corto: no se puede presentar como exacto. */
+          aproximado: truncado,
         };
       }),
     );
@@ -416,6 +429,23 @@ export const devolver = mutation({
   args: {
     itemId: v.id("inventarioItems"),
     observacion: v.optional(v.string()),
+    /**
+     * LA SALIDA DE EMERGENCIA. Cierra también la custodia del guarda.
+     *
+     * Existe porque sin ella el material podía quedar atrapado para siempre:
+     * al terminar el contrato, el supervisor pierde `inventario.custodiar`
+     * —depende de una asignación vigente, que depende del contrato— así que ya
+     * no puede recibirle el radio al guarda; y sin esa devolución, ni se puede
+     * devolver a la compañía ni archivar. Un estado sin salida que solo la
+     * plataforma podía deshacer.
+     *
+     * Deliberadamente NO es el comportamiento por omisión. La vía normal sigue
+     * siendo que el supervisor se lo reciba al guarda, porque es quien está
+     * allí y quien puede mirarlo. Esto es el administrador de la compañía
+     * afirmando "me hago cargo yo", y por eso exige decirlo y deja las DOS
+     * novedades, cada una con su tipo.
+     */
+    cerrarCustodiaDeGuarda: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const { item, user } = await exigirItemGestionable(ctx, args.itemId);
@@ -433,15 +463,48 @@ export const devolver = mutation({
      * físicamente con una persona, y nadie volvería a preguntarle por él.
      * Primero se lo recibe el supervisor, y entonces vuelve. */
     const enManos = await custodiaGuardaActiva(ctx, item._id);
-    if (enManos) {
+    if (enManos && !args.cerrarCustodiaDeGuarda) {
       const guarda = await ctx.db.get(enManos.guardaUserId);
       throw new Error(
         `Este elemento lo tiene el guarda ${guarda?.name ?? "(sin nombre)"} en el conjunto. El supervisor debe registrarle la devolución antes de que el elemento vuelva a la compañía.`,
       );
     }
 
-    const condominio = await ctx.db.get(abierta.condominioId);
     const observacion = exigirObservacion(args.observacion);
+
+    /* El cierre a la fuerza, cuando el administrador se hace cargo.
+     *
+     * Se exige el motivo: cerrar la custodia de alguien que no ha devuelto
+     * nada es una afirmación sobre dónde está una cosa física, y sin decir por
+     * qué el historial diría que el radio volvió sin que nadie lo trajera.
+     *
+     * Y se escriben las DOS novedades, cada una con su tipo, dentro de la
+     * misma transacción: la del guarda y la del conjunto. Una sola línea
+     * dejaría la custodia del guarda cerrada sin nada que lo explique. */
+    if (enManos && args.cerrarCustodiaDeGuarda) {
+      if (!observacion) {
+        throw new Error(
+          "Para cerrar la custodia del guarda hay que indicar el motivo en la observación.",
+        );
+      }
+      const guarda = await ctx.db.get(enManos.guardaUserId);
+      await ctx.db.patch(enManos._id, {
+        devueltaEn: Date.now(),
+        devueltaPorUserId: user._id,
+        observacionDevolucion: `Cerrada por la compañía: ${observacion}`,
+      });
+      await logNovedadItem(ctx, {
+        itemId: item._id,
+        companiaId: item.companiaId,
+        tipo: "ITEM_RETURNED_BY_GUARD",
+        descripcion: `La compañía cerró la custodia del guarda ${guarda?.name ?? "(sin nombre)"} sin devolución del guarda. Motivo: ${observacion}`,
+        condominioId: abierta.condominioId,
+        guardaUserId: enManos.guardaUserId,
+        actor: user,
+      });
+    }
+
+    const condominio = await ctx.db.get(abierta.condominioId);
     const ahora = Date.now();
 
     await ctx.db.patch(abierta._id, {

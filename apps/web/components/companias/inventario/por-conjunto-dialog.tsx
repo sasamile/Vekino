@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useQuery } from "convex/react";
-import { Building2, Package } from "lucide-react";
+import { Building2, Package, UserCheck } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
 import { Badge } from "@/components/ui/badge";
@@ -105,6 +105,7 @@ function Contenido({ companiaId }: { companiaId: Id<"companiasSeguridad"> }) {
           {conjuntos.map((c) => (
             <option key={c.condominioId} value={c.condominioId}>
               {c.nombre} · {c.elementos}
+              {c.aproximado ? "+" : ""}
               {c.activo ? "" : " (dado de baja)"}
             </option>
           ))}
@@ -132,6 +133,10 @@ function Contenido({ companiaId }: { companiaId: Id<"companiasSeguridad"> }) {
             {/* El recuento con el que se cuadra un inventario no puede
                 presentarse como exacto si la lectura se quedó corta. */}
             {enConjunto.truncado ? " o más (la lista se quedó corta)" : ""}.
+            {/* Sin esto, un elemento cuya custodia cayó fuera de la lectura se
+                pintaría como si nadie lo tuviera. */}
+            {enConjunto.custodiaGuardaIncompleta &&
+              " Hay más elementos en manos de guardas de los que caben en una consulta: puede faltar alguno por señalar."}
           </p>
           <ul className="space-y-2">
             {enConjunto.items.map((i) => (
@@ -169,6 +174,15 @@ function Contenido({ companiaId }: { companiaId: Id<"companiasSeguridad"> }) {
                     {i.observacionAsignacion ? ` · ${i.observacionAsignacion}` : ""}
                   </p>
                 </div>
+                {/* Quién lo tiene dentro de la portería. El backend ya lo
+                    servía —es la consulta que el administrador conserva sobre
+                    su propio patrimonio— y la pantalla lo tiraba. */}
+                {i.custodiaGuarda && (
+                  <Badge tone="warning">
+                    <UserCheck className="h-3 w-3" aria-hidden />
+                    {i.custodiaGuarda.guardaNombre}
+                  </Badge>
+                )}
                 <Badge tone="success">{i.estado}</Badge>
               </li>
             ))}

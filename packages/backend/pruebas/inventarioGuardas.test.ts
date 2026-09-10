@@ -1178,3 +1178,459 @@ describe("novedades del elemento", () => {
     expect(historial[2]!.descripcion).toContain("Gabriel");
   });
 });
+
+describe("el ciclo de vida completo, de punta a punta", () => {
+  let e: Escenario;
+  beforeEach(async () => {
+    e = await montar();
+  });
+
+  test("la historia del elemento se reconstruye entera y en orden", async () => {
+    /* La secuencia del enunciado, contra el sistema de verdad:
+     *
+     *   CREADO -> ASIGNADO A CONDOMINIO -> ENTREGADO A JUAN -> NOVEDAD ->
+     *   DEVUELTO POR JUAN -> ENTREGADO A PEDRO -> DEVUELTO POR PEDRO ->
+     *   DEVUELTO A LA COMPANIA
+     *
+     * Ocho hechos, tres tablas distintas (item, custodia de conjunto, custodia
+     * de guarda) y UNA sola linea de tiempo que los cuenta todos. Es la
+     * exigencia de que la auditoria no quede partida entre varios sistemas. */
+    const pedro = await e.plataforma.action(api.companias.crearMiembro, {
+      companiaId: e.andina,
+      email: "pedro@andina.test",
+      name: "Pedro Guarda",
+      password: CLAVE,
+      roles: ["guardia"],
+    });
+    const { contratos } = await e.plataforma.query(api.companias.detail, {
+      companiaId: e.andina,
+    });
+    await e.plataforma.mutation(api.asignaciones.crear, {
+      contratoId: contratos.find((k) => k.condominioId === e.norte)!._id,
+      companiaMiembroId: pedro.miembroId,
+      rol: "guardia",
+      vigenciaDesde: Date.now() - DIA,
+    });
+    const pedroId = await e.t.run(async (ctx) => {
+      const u = await ctx.db
+        .query("users")
+        .withIndex("by_email", (q) => q.eq("email", "pedro@andina.test"))
+        .unique();
+      return u!._id;
+    });
+
+    const alicia = e.como("alicia");
+    const sofia = e.como("sofia");
+
+    const item = await alicia.mutation(api.inventario.crear, {
+      companiaId: e.andina,
+      nombre: "Radio Motorola X",
+      serial: "VK-1042",
+    });
+    await alicia.mutation(api.inventarioAsignaciones.asignar, {
+      itemId: item,
+      condominioId: e.norte,
+    });
+    await sofia.mutation(api.inventarioGuardas.entregar, {
+      itemId: item,
+      guardaUserId: e.userIds.gabriel,
+    });
+    await sofia.mutation(api.inventarioGuardas.registrarNovedad, {
+      itemId: item,
+      descripcion: "El radio presenta interferencia",
+    });
+    await sofia.mutation(api.inventarioGuardas.recibir, { itemId: item });
+    await sofia.mutation(api.inventarioGuardas.entregar, {
+      itemId: item,
+      guardaUserId: pedroId,
+    });
+    await sofia.mutation(api.inventarioGuardas.recibir, { itemId: item });
+    await alicia.mutation(api.inventarioAsignaciones.devolver, { itemId: item });
+
+    const { item: doc, historial, asignaciones, asignacionActiva } =
+      await alicia.query(api.inventario.detalle, { itemId: item });
+
+    /* 1. La linea de tiempo, del mas reciente al mas antiguo. */
+    expect(historial.map((h) => h.tipo)).toEqual([
+      "ITEM_RETURNED_FROM_CONDOMINIUM",
+      "ITEM_RETURNED_BY_GUARD",
+      "ITEM_ASSIGNED_TO_GUARD",
+      "ITEM_RETURNED_BY_GUARD",
+      "ITEM_NOTE",
+      "ITEM_ASSIGNED_TO_GUARD",
+      "ITEM_ASSIGNED_TO_CONDOMINIUM",
+      "ITEM_CREATED",
+    ]);
+
+    /* 2. Cada linea dice quien y cuando, sin excepcion. */
+    for (const h of historial) {
+      expect(h.actorNombre).toBeTruthy();
+      expect(h.createdAt).toBeGreaterThan(0);
+    }
+
+    /* 3. Los nombres van COPIADOS: sobreviven a que se den de baja. */
+    const entregas = historial.filter(
+      (h) => h.tipo === "ITEM_ASSIGNED_TO_GUARD",
+    );
+    expect(entregas[0]!.descripcion).toContain("Pedro");
+    expect(entregas[1]!.descripcion).toContain("Gabriel");
+
+    /* 4. Las tres fuentes de verdad concuerdan al final del ciclo. */
+    expect(doc.estado).toBe("disponible"); // condicion fisica: intacta
+    expect(doc.archivado).toBe(false);
+    expect(asignacionActiva).toBeNull(); // custodia de conjunto: cerrada
+    expect(asignaciones).toHaveLength(1); // y conservada en el historico
+    expect(asignaciones[0]!.condominioNombre).toBe("Conjunto Norte");
+
+    /* 5. Las dos custodias de guarda tambien se conservan, cerradas. */
+    const custodias = await e.t.run(async (ctx) =>
+      ctx.db
+        .query("inventarioCustodiaGuardas")
+        .withIndex("by_item", (q) => q.eq("itemId", item))
+        .collect(),
+    );
+    expect(custodias).toHaveLength(2);
+    expect(custodias.every((c) => c.devueltaEn != null)).toBe(true);
+
+    /* 6. Y el elemento vuelve a estar disponible para asignarse otra vez. */
+    await alicia.mutation(api.inventarioAsignaciones.asignar, {
+      itemId: item,
+      condominioId: e.sur,
+    });
+    const despues = await alicia.query(api.inventario.detalle, { itemId: item });
+    expect(despues.asignacionActiva!.condominioNombre).toBe("Conjunto Sur");
+    expect(despues.asignaciones).toHaveLength(2);
+  });
+});
+
+describe("endurecimiento: defectos encontrados en la auditoria final", () => {
+  let e: Escenario;
+  beforeEach(async () => {
+    e = await montar();
+  });
+
+  test("D1: el material NO queda atrapado cuando termina el contrato", async () => {
+    /* EL BLOQUEO SIN SALIDA. Al terminar el contrato el supervisor pierde
+     * `inventario.custodiar` —depende de su asignacion, que depende del
+     * contrato— asi que ya no puede recibirle el radio al guarda; y sin esa
+     * devolucion no se podia ni devolver a la compania ni archivar. El item
+     * quedaba congelado y solo la plataforma podia deshacerlo. */
+    const item = await itemEnConjunto(e, e.norte);
+    await e.como("sofia").mutation(api.inventarioGuardas.entregar, {
+      itemId: item,
+      guardaUserId: e.userIds.gabriel,
+    });
+
+    const { contratos } = await e.plataforma.query(api.companias.detail, {
+      companiaId: e.andina,
+    });
+    await e.plataforma.mutation(api.companias.terminarContrato, {
+      contratoId: contratos.find((k) => k.condominioId === e.norte)!._id,
+    });
+
+    /* El supervisor ya no alcanza: es la causa del bloqueo. */
+    expect(
+      await falla(() =>
+        e
+          .como("sofia")
+          .mutation(api.inventarioGuardas.recibir, { itemId: item }),
+      ),
+    ).toContain("inventario.custodiar");
+
+    /* Y la via normal sigue bloqueada, como debe. */
+    expect(
+      await falla(() =>
+        e
+          .como("alicia")
+          .mutation(api.inventarioAsignaciones.devolver, { itemId: item }),
+      ),
+    ).toContain("Gabriel");
+
+    /* LA SALIDA: el administrador se hace cargo, diciendo por que. */
+    await e.como("alicia").mutation(api.inventarioAsignaciones.devolver, {
+      itemId: item,
+      cerrarCustodiaDeGuarda: true,
+      observacion: "El guarda no devolvio el radio al terminar el contrato",
+    });
+
+    const { asignacionActiva, historial } = await e
+      .como("alicia")
+      .query(api.inventario.detalle, { itemId: item });
+    expect(asignacionActiva).toBeNull();
+
+    /* LAS DOS novedades, cada una con su tipo: una sola dejaria la custodia
+     * del guarda cerrada sin nada que lo explique. */
+    expect(historial.map((h) => h.tipo)).toEqual([
+      "ITEM_RETURNED_FROM_CONDOMINIUM",
+      "ITEM_RETURNED_BY_GUARD",
+      "ITEM_ASSIGNED_TO_GUARD",
+      "ITEM_ASSIGNED_TO_CONDOMINIUM",
+      "ITEM_CREATED",
+    ]);
+    const cierre = historial.find((h) => h.tipo === "ITEM_RETURNED_BY_GUARD")!;
+    expect(cierre.descripcion).toContain("sin devolución del guarda");
+    expect(cierre.descripcion).toContain("no devolvio el radio");
+
+    /* Y ya se puede archivar. */
+    await e.como("alicia").mutation(api.inventario.archivar, { itemId: item });
+  });
+
+  test("D1: cerrar la custodia a la fuerza EXIGE decir por que", async () => {
+    const item = await itemEnConjunto(e, e.norte);
+    await e.como("sofia").mutation(api.inventarioGuardas.entregar, {
+      itemId: item,
+      guardaUserId: e.userIds.gabriel,
+    });
+
+    expect(
+      await falla(() =>
+        e.como("alicia").mutation(api.inventarioAsignaciones.devolver, {
+          itemId: item,
+          cerrarCustodiaDeGuarda: true,
+        }),
+      ),
+    ).toContain("indicar el motivo");
+
+    /* Y no se aplico a medias. */
+    const { asignacionActiva } = await e
+      .como("alicia")
+      .query(api.inventario.detalle, { itemId: item });
+    expect(asignacionActiva).not.toBeNull();
+  });
+
+  test("D2: un guarda que se paso a la competencia NO cuenta como vigente", async () => {
+    /* `guardasDelConjunto` comprobaba la vigencia de la PERSONA en el
+     * conjunto, no la de la FILA. Con dos empresas en la misma porteria, un
+     * guarda cuya asignacion con Andina vencio pero que ahora trabaja para
+     * Rival alli mismo seguia contando como guarda vigente de Andina — y su
+     * custodia pendiente dejaba de senalarse, que es el caso mas caro. */
+    const item = await itemEnConjunto(e, e.norte);
+    await e.como("sofia").mutation(api.inventarioGuardas.entregar, {
+      itemId: item,
+      guardaUserId: e.userIds.gabriel,
+    });
+
+    // Se le acaba a Gabriel con Andina...
+    const asignacionAndina = await e.t.run(async (ctx) => {
+      const a = await ctx.db
+        .query("asignaciones")
+        .withIndex("by_user_condominio", (q) =>
+          q.eq("userId", e.userIds.gabriel).eq("condominioId", e.norte),
+        )
+        .first();
+      return a!._id;
+    });
+    await e.plataforma.mutation(api.asignaciones.terminar, {
+      asignacionId: asignacionAndina,
+    });
+    /* El sistema NO admite a una persona activa en dos companias a la vez, asi
+     * que primero se le da de baja: es la secuencia real de un traspaso. */
+    await e.plataforma.mutation(api.companias.desactivarMiembro, {
+      miembroId: e.miembros.gabriel.miembroId,
+    });
+
+    // ...y lo contrata Rival, en el MISMO conjunto.
+    const enRival = await e.plataforma.action(api.companias.crearMiembro, {
+      companiaId: e.rival,
+      email: "gabriel@andina.test",
+      name: "Gabriel Guarda",
+      password: CLAVE,
+      roles: ["guardia"],
+    });
+    const { contratos } = await e.plataforma.query(api.companias.detail, {
+      companiaId: e.rival,
+    });
+    await e.plataforma.mutation(api.asignaciones.crear, {
+      contratoId: contratos.find((k) => k.condominioId === e.norte)!._id,
+      companiaMiembroId: enRival.miembroId,
+      rol: "guardia",
+      vigenciaDesde: Date.now() - 1000,
+    });
+
+    const { items, pendientes } = await e
+      .como("sofia")
+      .query(api.inventarioGuardas.itemsDelCondominio, {
+        condominioId: e.norte,
+      });
+
+    /* Sigue teniendo el radio de Andina, y AHORA se ve que es un pendiente. */
+    expect(items[0]!.custodia!.pendiente).toBe(true);
+    expect(pendientes).toBe(1);
+
+    /* Y no se le ofrece para recibir material nuevo de Andina. */
+    expect(
+      await e
+        .como("sofia")
+        .query(api.inventarioGuardas.guardasDisponibles, {
+          condominioId: e.norte,
+        }),
+    ).toEqual([]);
+  });
+
+  test("D2: nadie aparece dos veces por tener dos asignaciones", async () => {
+    /* `asignacionEstorba` impide crear dos asignaciones solapadas por la API,
+     * asi que la fila se duplica POR DEBAJO: lo que se fija es que el listado
+     * aguante si alguna vez existiera —una migracion, un arreglo a mano— y no
+     * ofrezca a la misma persona dos veces en el desplegable de entrega. */
+    await e.t.run(async (ctx) => {
+      const a = await ctx.db
+        .query("asignaciones")
+        .withIndex("by_user_condominio", (q) =>
+          q.eq("userId", e.userIds.gabriel).eq("condominioId", e.norte),
+        )
+        .first();
+      const { _id, _creationTime, ...campos } = a!;
+      await ctx.db.insert("asignaciones", campos);
+    });
+
+    const guardas = await e
+      .como("sofia")
+      .query(api.inventarioGuardas.guardasDisponibles, {
+        condominioId: e.norte,
+      });
+    expect(guardas).toHaveLength(1);
+    expect(guardas[0]!.nombre).toBe("Gabriel Guarda");
+  });
+
+  test("D3: archivar comprueba TAMBIEN la custodia de guarda", async () => {
+    /* Hoy no puede existir custodia de guarda sin asignacion de conjunto, pero
+     * la invariante se apoyaba en esa transitividad en vez de comprobarse.
+     * Se fuerza el estado que una migracion podria producir. */
+    const item = await itemEnConjunto(e, e.norte);
+    await e.como("sofia").mutation(api.inventarioGuardas.entregar, {
+      itemId: item,
+      guardaUserId: e.userIds.gabriel,
+    });
+    /* Se cierra la asignacion del conjunto POR DEBAJO, saltandose la
+     * mutacion: es justo lo que una fila mal migrada haria. */
+    await e.t.run(async (ctx) => {
+      const a = await ctx.db
+        .query("inventarioAsignaciones")
+        .withIndex("by_item_devuelta", (q) =>
+          q.eq("itemId", item).eq("devueltaEn", undefined),
+        )
+        .first();
+      await ctx.db.patch(a!._id, { devueltaEn: Date.now() });
+    });
+
+    /* Sin la comprobacion nueva, esto archivaba un radio que un guarda tiene
+     * en la mano: el faltante invisible. */
+    expect(
+      await falla(() =>
+        e.como("alicia").mutation(api.inventario.archivar, { itemId: item }),
+      ),
+    ).toContain("Gabriel");
+  });
+
+  test("D6: el supervisor consulta el historial aunque el item ya volvio", async () => {
+    /* Es justo el momento en que se reclama un faltante: la compania se lleva
+     * el radio y el supervisor deja de poder mirar por que manos paso. */
+    const item = await itemEnConjunto(e, e.norte);
+    await e.como("sofia").mutation(api.inventarioGuardas.entregar, {
+      itemId: item,
+      guardaUserId: e.userIds.gabriel,
+    });
+    await e
+      .como("sofia")
+      .mutation(api.inventarioGuardas.recibir, { itemId: item });
+    await e
+      .como("alicia")
+      .mutation(api.inventarioAsignaciones.devolver, { itemId: item });
+
+    const historial = await e
+      .como("sofia")
+      .query(api.inventarioGuardas.historialDeItem, { itemId: item });
+    expect(historial).toHaveLength(1);
+    expect(historial[0]!.guardaNombre).toBe("Gabriel Guarda");
+  });
+
+  test("D6: pero sigue sin alcanzar el historial de material ajeno", async () => {
+    const deRival = await itemDeRivalEnNorte(e);
+    await e.como("rodrigo").mutation(api.inventarioGuardas.entregar, {
+      itemId: deRival,
+      guardaUserId: e.userIds.raul,
+    });
+    await e
+      .como("rodrigo")
+      .mutation(api.inventarioGuardas.recibir, { itemId: deRival });
+    await e
+      .como("ramon")
+      .mutation(api.inventarioAsignaciones.devolver, { itemId: deRival });
+
+    expect(
+      await falla(() =>
+        e
+          .como("sofia")
+          .query(api.inventarioGuardas.historialDeItem, { itemId: deRival }),
+      ),
+    ).toContain("no pertenece a tu compañía");
+  });
+
+  test("D4: la foto se valida igual venga del formulario o del Excel", async () => {
+    /* El mismo campo tenia dos reglas segun por donde entrara, y la del
+     * formulario era ninguna: un data: de novecientos kilobytes cabia en el
+     * documento y hacia que el LISTADO entero dejara de caber en una
+     * respuesta — la pantalla desde la que habria que arreglarlo. */
+    const alicia = e.como("alicia");
+
+    expect(
+      await falla(() =>
+        alicia.mutation(api.inventario.crear, {
+          companiaId: e.andina,
+          nombre: "Radio con foto enorme",
+          fotoUrl: `data:image/png;base64,${"A".repeat(900_000)}`,
+        }),
+      ),
+    ).toContain("http");
+
+    expect(
+      await falla(() =>
+        alicia.mutation(api.inventario.crear, {
+          companiaId: e.andina,
+          nombre: "Radio con foto rara",
+          fotoUrl: "javascript:alert(1)",
+        }),
+      ),
+    ).toContain("http");
+
+    /* Una URL normal sigue entrando. */
+    const ok = await alicia.mutation(api.inventario.crear, {
+      companiaId: e.andina,
+      nombre: "Radio con foto",
+      fotoUrl: "https://bucket.s3.amazonaws.com/inventario/radio.jpg",
+    });
+    expect(ok).toBeTruthy();
+
+    /* Y editar aplica la misma regla. */
+    expect(
+      await falla(() =>
+        alicia.mutation(api.inventario.editar, {
+          itemId: ok,
+          nombre: "Radio con foto",
+          fotoUrl: "no-es-una-url",
+        }),
+      ),
+    ).toContain("http");
+  });
+
+  test("la ficha del admin avisa de que un guarda lo tiene", async () => {
+    /* Sin esto, el boton "Registrar devolucion" se ofrecia sobre un elemento
+     * que un guarda tiene en la mano y el backend rechazaba el clic. */
+    const item = await itemEnConjunto(e, e.norte);
+    const antes = await e
+      .como("alicia")
+      .query(api.inventario.detalle, { itemId: item });
+    expect(antes.enManosDeGuarda).toBeNull();
+
+    await e.como("sofia").mutation(api.inventarioGuardas.entregar, {
+      itemId: item,
+      guardaUserId: e.userIds.gabriel,
+    });
+
+    const despues = await e
+      .como("alicia")
+      .query(api.inventario.detalle, { itemId: item });
+    expect(despues.enManosDeGuarda?.guardaNombre).toBe("Gabriel Guarda");
+    expect(despues.enManosDeGuarda?.entregadaEn).toBeGreaterThan(0);
+  });
+});

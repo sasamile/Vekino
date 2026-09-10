@@ -275,7 +275,11 @@ describe("asignar un elemento a un conjunto", () => {
     expect(enCompania.items.map((i) => i.nombre)).toEqual(["Dentro"]);
   });
 
-  test("los conteos separan bodega de porteria sin tocar el eje del archivo", async () => {
+  test("la custodia es OTRO eje que el archivo, y se cuenta aparte", async () => {
+    /* Los contadores de las pestanas hablan del archivo; donde esta cada cosa
+     * lo responde el filtro de ubicacion del listado. Son dos ejes y se
+     * consultan por separado a proposito: mezclarlos costaba una lectura de
+     * hasta dos mil documentos que ninguna pantalla usaba. */
     const fuera = await itemDeAndina(e, "Fuera");
     await itemDeAndina(e, "Dentro");
     await e
@@ -290,8 +294,21 @@ describe("asignar un elemento a un conjunto", () => {
       .query(api.inventario.conteos, { companiaId: e.andina });
     expect(c.activos).toBe(2);
     expect(c.archivados).toBe(0);
-    expect(c.enCondominio).toBe(1);
-    expect(c.enCompania).toBe(1);
+
+    const enPorteria = await e
+      .como("alicia")
+      .query(api.inventario.listar, {
+        companiaId: e.andina,
+        custodia: "en_condominio",
+      });
+    const enBodega = await e
+      .como("alicia")
+      .query(api.inventario.listar, {
+        companiaId: e.andina,
+        custodia: "en_compania",
+      });
+    expect(enPorteria.total).toBe(1);
+    expect(enBodega.total).toBe(1);
   });
 
   test("el conjunto puede consultar que tiene hoy", async () => {

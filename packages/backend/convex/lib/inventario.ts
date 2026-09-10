@@ -56,6 +56,21 @@ export const MAX_DESCRIPCION = 1000;
 export const MAX_OBSERVACION = 500;
 
 /**
+ * Tope de la referencia de la foto.
+ *
+ * Es una URL de S3, no un sitio donde meter datos. Sin tope, un solo elemento
+ * con una `data:` de novecientos kilobytes cabe en el documento pero hace que
+ * el LISTADO entero de la compañía deje de caber en una respuesta — y el
+ * listado es justamente la pantalla desde la que habría que arreglarlo.
+ */
+export const MAX_FOTO_URL = 2048;
+
+/** Una referencia de foto utilizable. La misma regla que aplica la carga masiva. */
+export function esUrlDeFoto(valor: string): boolean {
+  return /^https?:\/\//i.test(valor) && valor.length <= MAX_FOTO_URL;
+}
+
+/**
  * Cuántas filas admite una sola carga.
  *
  * Una importación es UNA mutación, y una mutación de Convex es una
@@ -169,7 +184,8 @@ export const MOTIVOS = {
     "Ese serial aparece más de una vez en este archivo.",
   SERIAL_YA_EXISTE:
     "Ya hay un elemento activo con ese serial en el inventario.",
-  FOTO_URL_INVALIDA: "La foto debe ser una URL que empiece por http:// o https://.",
+  FOTO_URL_INVALIDA:
+    "La foto debe ser una URL que empiece por http:// o https:// y no superar 2048 caracteres.",
 } as const;
 
 export type CodigoMotivo = keyof typeof MOTIVOS;
@@ -297,7 +313,9 @@ export function validarImportacion(
     }
 
     const fotoUrl = normalizarTexto(cruda.fotoUrl);
-    if (fotoUrl && !/^https?:\/\//i.test(fotoUrl)) {
+    /* La MISMA función que usan `crear` y `editar`: el campo tenía dos reglas
+     * distintas según por dónde entrara, y la del formulario era ninguna. */
+    if (fotoUrl && !esUrlDeFoto(fotoUrl)) {
       anotar("FOTO_URL_INVALIDA", "Foto (URL)");
     }
 

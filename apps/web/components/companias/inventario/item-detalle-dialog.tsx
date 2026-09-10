@@ -5,12 +5,14 @@ import { useMutation, useQuery } from "convex/react";
 import {
   Archive,
   Building2,
+  ClipboardList,
   FilePlus2,
   Loader2,
   Pencil,
   PackagePlus,
   FileUp,
   Undo2,
+  UserCheck,
 } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
@@ -38,7 +40,10 @@ type TipoNovedad =
   | "ITEM_ARCHIVED"
   | "ITEM_IMPORTED"
   | "ITEM_ASSIGNED_TO_CONDOMINIUM"
-  | "ITEM_RETURNED_FROM_CONDOMINIUM";
+  | "ITEM_RETURNED_FROM_CONDOMINIUM"
+  | "ITEM_ASSIGNED_TO_GUARD"
+  | "ITEM_RETURNED_BY_GUARD"
+  | "ITEM_NOTE";
 
 /**
  * Cómo se pinta cada tipo de evento.
@@ -48,7 +53,11 @@ type TipoNovedad =
  */
 const ESTILO_EVENTO: Record<
   TipoNovedad,
-  { etiqueta: string; icono: typeof PackagePlus; tono: "success" | "info" | "neutral" }
+  {
+    etiqueta: string;
+    icono: typeof PackagePlus;
+    tono: "success" | "info" | "neutral" | "warning";
+  }
 > = {
   ITEM_CREATED: { etiqueta: "Creado", icono: PackagePlus, tono: "success" },
   ITEM_IMPORTED: { etiqueta: "Importado", icono: FileUp, tono: "success" },
@@ -64,6 +73,20 @@ const ESTILO_EVENTO: Record<
     icono: Undo2,
     tono: "info",
   },
+  /* Los tres de la custodia interna. Sin ellos la linea de tiempo caia en el
+   * respaldo y pintaba el literal crudo del enum —"ITEM_ASSIGNED_TO_GUARD"—
+   * justo en la pantalla que existe para que la historia se lea. */
+  ITEM_ASSIGNED_TO_GUARD: {
+    etiqueta: "Entregado a guarda",
+    icono: UserCheck,
+    tono: "info",
+  },
+  ITEM_RETURNED_BY_GUARD: {
+    etiqueta: "Devuelto por guarda",
+    icono: Undo2,
+    tono: "info",
+  },
+  ITEM_NOTE: { etiqueta: "Novedad", icono: ClipboardList, tono: "warning" },
 };
 
 function fechaHora(ms: number): string {
@@ -125,7 +148,8 @@ function Contenido({ itemId }: { itemId: Id<"inventarioItems"> }) {
     );
   }
 
-  const { item, historial, asignacionActiva, asignaciones } = datos;
+  const { item, historial, asignacionActiva, asignaciones, enManosDeGuarda } =
+    datos;
 
   async function confirmarArchivo() {
     setError(null);
@@ -174,10 +198,18 @@ function Contenido({ itemId }: { itemId: Id<"inventarioItems"> }) {
               <>
                 <Badge tone="success">{item.estado}</Badge>
                 {asignacionActiva ? (
-                  <Badge tone="info">
-                    <Building2 className="h-3 w-3" aria-hidden />
-                    {asignacionActiva.condominioNombre}
-                  </Badge>
+                  <>
+                    <Badge tone="info">
+                      <Building2 className="h-3 w-3" aria-hidden />
+                      {asignacionActiva.condominioNombre}
+                    </Badge>
+                    {enManosDeGuarda && (
+                      <Badge tone="warning">
+                        <UserCheck className="h-3 w-3" aria-hidden />
+                        {enManosDeGuarda.guardaNombre}
+                      </Badge>
+                    )}
+                  </>
                 ) : (
                   <Badge tone="neutral">En la compañía</Badge>
                 )}
@@ -227,7 +259,17 @@ function Contenido({ itemId }: { itemId: Id<"inventarioItems"> }) {
           {/* Entregar y devolver son excluyentes: o está fuera o está dentro,
               y ofrecer las dos a la vez invitaría a un error que el servidor
               rechazaría de todos modos. */}
-          {asignacionActiva ? (
+          {/* Con un guarda de por medio NO se ofrece devolver a la compañía:
+              el backend lo rechaza —cerrar la custodia del conjunto borraría
+              del mapa un elemento que alguien tiene en la mano— y un botón que
+              solo produce un error no ayuda. Se dice quién lo tiene. */}
+          {asignacionActiva && enManosDeGuarda ? (
+            <p className="flex items-center gap-1.5 rounded-lg bg-amber-500/12 px-3 py-1.5 text-[12.5px] text-amber-800 dark:text-amber-300">
+              <UserCheck className="h-3.5 w-3.5 shrink-0" aria-hidden />
+              Lo tiene el guarda {enManosDeGuarda.guardaNombre}. El supervisor
+              del conjunto debe recibírselo antes de que vuelva a la compañía.
+            </p>
+          ) : asignacionActiva ? (
             <Button size="sm" onClick={() => setDevolviendo(true)}>
               <Undo2 className="h-3.5 w-3.5" aria-hidden />
               Registrar devolución

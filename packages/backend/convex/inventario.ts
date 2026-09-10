@@ -9,6 +9,7 @@ import {
   cacheDeCondominios,
   cacheDeUsuarios,
   custodiaActiva,
+  custodiaGuardaActiva,
   custodiasActivasDeCompania,
   custodiasDeItem,
 } from "./model/inventarioCustodia";
@@ -19,6 +20,7 @@ import {
   MAX_NOMBRE,
   MAX_SERIAL,
   calcularCambios,
+  esUrlDeFoto,
   normalizarSerial,
   normalizarTexto,
   resumirCambios,
@@ -159,6 +161,7 @@ function exigirLongitudes(args: {
   nombre: string;
   serial: string | null;
   descripcion: string | undefined;
+  fotoUrl: string | undefined;
 }) {
   if (!args.nombre) throw new Error("El nombre es obligatorio.");
   if (args.nombre.length > MAX_NOMBRE) {
@@ -170,6 +173,14 @@ function exigirLongitudes(args: {
   if (args.descripcion && args.descripcion.length > MAX_DESCRIPCION) {
     throw new Error(
       `La descripción no puede superar ${MAX_DESCRIPCION} caracteres.`,
+    );
+  }
+  /* La foto NO estaba aquí, y la carga masiva sí la validaba: el mismo campo
+   * tenía dos reglas según por dónde entrara, y la del formulario era
+   * ninguna. Un `data:` de novecientos kilobytes cabía. */
+  if (args.fotoUrl && !esUrlDeFoto(args.fotoUrl)) {
+    throw new Error(
+      "La foto debe ser una URL que empiece por http:// o https:// y no superar 2048 caracteres.",
     );
   }
 }
@@ -259,13 +270,18 @@ export const listar = query({
      * lo que la compañía tiene FUERA, que siempre es menos que su inventario. */
     const { porItem: custodias, incompleto: custodiaIncompleta } =
       await custodiasActivasDeCompania(ctx, args.companiaId, TOPE_LISTADO);
+    /* Con el mapa incompleto, "no está en el mapa" deja de significar "está
+     * en la bodega": significa que no se sabe. Meter esos elementos en el cubo
+     * de "en la compañía" los AFIRMA allí, justo lo que la columna de al lado
+     * se niega a hacer al pintar "—". Se quedan fuera de los dos filtros y el
+     * aviso de `custodiaIncompleta` lo explica. */
     const filtrados =
       args.custodia == null
         ? porTexto
         : porTexto.filter((i) =>
             args.custodia === "en_condominio"
               ? custodias.has(i._id)
-              : !custodias.has(i._id),
+              : !custodias.has(i._id) && !custodiaIncompleta,
           );
 
     /* Los nombres de conjunto se resuelven una vez cada uno: una compañía
@@ -335,17 +351,15 @@ export const conteos = query({
         .take(TOPE_CONTEO + 1),
     ]);
 
-    /* Cuántos están fuera. Se lee por `by_compania_devuelta`, así que cuesta
-     * lo que la compañía tiene entregado y no su inventario entero. */
-    const entregados = await ctx.db
-      .query("inventarioAsignaciones")
-      .withIndex("by_compania_devuelta", (q) =>
-        q.eq("companiaId", args.companiaId).eq("devueltaEn", undefined),
-      )
-      .take(TOPE_CONTEO + 1);
-
+    /* Solo los dos contadores de las pestañas.
+     *
+     * Había aquí una tercera lectura —hasta dos mil documentos más— para
+     * calcular cuántos estaban entregados y cuántos en bodega. NINGUNA
+     * pantalla los pintaba, y esto es una suscripción reactiva que se vuelve a
+     * ejecutar entera con cada escritura de la compañía. El dato sigue estando
+     * a un clic: el filtro de ubicación del listado lo responde leyendo lo que
+     * ya tiene cargado. */
     const nActivos = Math.min(activos.length, TOPE_CONTEO);
-    const nEntregados = Math.min(entregados.length, TOPE_CONTEO);
     /* Un aproximado POR EJE y no uno global: con dos mil archivados y doce
      * activos, una sola bandera pintaba "12+" en la pestaña de activos, que
      * es un número exacto presentado como estimación. */
@@ -354,12 +368,6 @@ export const conteos = query({
       activosAproximado: activos.length > TOPE_CONTEO,
       archivados: Math.min(archivados.length, TOPE_CONTEO),
       archivadosAproximado: archivados.length > TOPE_CONTEO,
-      /* En una portería. */
-      enCondominio: nEntregados,
-      /* En la bodega. Se resta en vez de contarse aparte: no hay índice que
-       * responda "activo y sin custodia abierta", y leer las dos mitades para
-       * cruzarlas costaría el inventario entero. */
-      enCompania: Math.max(0, nActivos - nEntregados),
     };
   },
 });
@@ -399,6 +407,11 @@ export const detalle = query({
       custodias.map((a) => aVistaCustodia(ctx, a, condominio, usuario)),
     );
 
+    const enManos = await custodiaGuardaActiva(ctx, item._id);
+    const guardaConElItem = enManos
+      ? await usuario(enManos.guardaUserId)
+      : null;
+
     return {
       item: {
         ...aVista(item),
@@ -410,6 +423,22 @@ export const detalle = query({
        * la activa es, como mucho, la primera. */
       asignacionActiva: asignaciones.find((a) => a.activa) ?? null,
       asignaciones,
+      /**
+       * Y en manos de quién, si alguien lo tiene.
+       *
+       * Una lectura indexada. Sin ella, la ficha ofrecía "Registrar
+       * devolución" sobre un elemento que un guarda tiene en la mano y el
+       * backend rechazaba el clic: el administrador no tenía forma de saberlo
+       * antes de pulsar.
+       */
+      enManosDeGuarda: enManos
+        ? {
+            guardaNombre: guardaConElItem
+              ? displayNameFromUser(guardaConElItem)
+              : "(perfil eliminado)",
+            entregadaEn: enManos.entregadaEn,
+          }
+        : null,
       historial: novedades.map((n) => ({
         _id: n._id,
         tipo: n.tipo,
@@ -445,7 +474,7 @@ export const crear = mutation({
     const serial = normalizarSerial(args.serial);
     const descripcion = normalizarTexto(args.descripcion);
     const fotoUrl = normalizarTexto(args.fotoUrl);
-    exigirLongitudes({ nombre, serial, descripcion });
+    exigirLongitudes({ nombre, serial, descripcion, fotoUrl });
 
     if (serial) {
       const choca = await serialEnUso(ctx, args.companiaId, serial);
@@ -525,7 +554,7 @@ export const editar = mutation({
     const serial = normalizarSerial(args.serial);
     const descripcion = normalizarTexto(args.descripcion);
     const fotoUrl = normalizarTexto(args.fotoUrl);
-    exigirLongitudes({ nombre, serial, descripcion });
+    exigirLongitudes({ nombre, serial, descripcion, fotoUrl });
 
     if (serial) {
       const choca = await serialEnUso(ctx, item.companiaId, serial, item._id);
@@ -605,6 +634,21 @@ export const archivar = mutation({
       const donde = await ctx.db.get(abierta.condominioId);
       throw new Error(
         `Este elemento está entregado en ${donde?.name ?? "un conjunto"}. Regístrale la devolución antes de archivarlo.`,
+      );
+    }
+
+    /* Y la del guarda, aunque hoy no pueda existir sin la de arriba.
+     *
+     * La invariante "archivado ⇒ sin custodia" se apoyaba en una
+     * TRANSITIVIDAD —entregar exige asignación abierta, devolver la bloquea—
+     * y no en una comprobación. Una fila llegada por migración o por un camino
+     * futuro rompería la cadena y produciría justo el faltante invisible que
+     * este módulo existe para no producir. Cuesta una lectura indexada. */
+    const enManos = await custodiaGuardaActiva(ctx, item._id);
+    if (enManos) {
+      const guarda = await ctx.db.get(enManos.guardaUserId);
+      throw new Error(
+        `Este elemento lo tiene el guarda ${guarda?.name ?? "(sin nombre)"}. Regístrale la devolución antes de archivarlo.`,
       );
     }
 

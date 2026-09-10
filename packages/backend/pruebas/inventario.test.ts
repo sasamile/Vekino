@@ -371,14 +371,15 @@ describe("archivado (nunca borrado fisico)", () => {
     /* `aproximado` dice si el conteo se quedo corto por el tope de lectura.
      * Convex no tiene una operacion de contar: contar es leer, y un contador
      * que miente en silencio es peor que uno que dice "2000+". */
+    /* Solo los dos contadores de las pestañas. Los de custodia se quitaron:
+     * costaban una tercera lectura de hasta dos mil documentos en una
+     * suscripcion reactiva, y ninguna pantalla los pintaba. El dato sigue
+     * disponible en el filtro de ubicacion del listado. */
     expect(c).toEqual({
       activos: 1,
       activosAproximado: false,
       archivados: 1,
       archivadosAproximado: false,
-      /* La custodia es otro eje: nada entregado, todo en bodega. */
-      enCondominio: 0,
-      enCompania: 1,
     });
   });
 });

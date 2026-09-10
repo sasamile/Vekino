@@ -2599,7 +2599,9 @@ export default defineSchema({
     createdAt: v.number(),
     updatedAt: v.number(),
   })
-    .index("by_compania", ["companiaId"])
+    /* Sin `by_compania` a secas: es prefijo de los dos de abajo, así que no
+     * responde ninguna consulta que ellos no respondan, y Convex lo mantendría
+     * en cada escritura para nada. */
     /* La comprobación de duplicados. Por (compañía, serial) y no por serial a
      * secas: dos empresas distintas pueden tener el mismo número grabado y
      * eso no es conflicto de nadie. */
@@ -2678,9 +2680,11 @@ export default defineSchema({
     /* Sin `updatedAt`: una novedad ocurrió, no se reescribe. */
     createdAt: v.number(),
   })
-    /* La línea de tiempo de un elemento: la ruta caliente del detalle. */
-    .index("by_item", ["itemId"])
-    .index("by_compania", ["companiaId"]),
+    /* La línea de tiempo de un elemento: la ruta caliente del detalle, y la
+     * única forma en que se lee esta tabla. Un índice por compañía se
+     * mantendría en cada novedad —la escritura más frecuente del módulo— sin
+     * que nadie lo consulte. */
+    .index("by_item", ["itemId"]),
   /**
    * LA CUSTODIA: dónde está un elemento y desde cuándo.
    *
