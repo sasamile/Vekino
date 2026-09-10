@@ -1315,7 +1315,7 @@ export const MOTIVOS_VEHICULO_POR_DEFECTO = [
    * parquear en zonas comunes lo da el aporte voluntario, y el guarda sale a
    * mirar quien parquea sin haberlo pagado. Los otros cuatro son la
    * excepcion. */
-  "No tiene aporte voluntario",
+  "Aporte Voluntario Parqueadero",
   "Parqueado en horario no permitido",
   "Parqueado en zona no autorizada",
   "Obstruye el paso o una salida",
