@@ -7,8 +7,12 @@ import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
 import {
   COLUMNAS_PLANTILLA,
+  MAX_DESCRIPCION,
   MAX_FILAS_IMPORTACION,
+  MAX_NOMBRE,
+  MAX_SERIAL,
   mapearColumnas,
+  type ClaveColumna,
   type FilaCruda,
 } from "@vekino/backend/inventario";
 import { Badge } from "@/components/ui/badge";
@@ -101,6 +105,48 @@ export function ImportarItemsDialog({
   );
 }
 
+/** Cuántas filas en blanco se preformatean en la plantilla. */
+const FILAS_EN_BLANCO = 40;
+
+/**
+ * Cómo se ve cada columna de la plantilla.
+ *
+ * Vive aquí y no en `COLUMNAS_PLANTILLA` porque es presentación: anchos,
+ * globos de ayuda y formato de celda no le importan al servidor, que solo
+ * empareja por el nombre del encabezado. El `Record<ClaveColumna, …>` es a
+ * propósito — el día que se añada una columna al dominio, esto no compila
+ * hasta que alguien decida cómo se ve.
+ *
+ * Los límites de los textos de ayuda se leen de las constantes reales de la
+ * validación: si mañana el nombre admite 200 caracteres, la plantilla lo dice
+ * sola en vez de quedarse mintiendo.
+ */
+const PRESENTACION: Record<
+  ClaveColumna,
+  { ancho: number; ayuda: string; formato?: "texto" }
+> = {
+  nombre: {
+    ancho: 34,
+    ayuda: `Qué es el elemento. Máximo ${MAX_NOMBRE} caracteres.\nEjemplo: Radio Motorola DEP450`,
+  },
+  serial: {
+    ancho: 20,
+    /* Formato de texto: sin él, Excel convierte "0012345" en 12345 al
+     * escribirlo y el serial deja de casar con la etiqueta del aparato. */
+    formato: "texto",
+    ayuda: `Opcional, pero no puede repetirse dentro del inventario activo. Máximo ${MAX_SERIAL} caracteres.`,
+  },
+  descripcion: {
+    ancho: 46,
+    ayuda: `Opcional. Detalles útiles para identificarlo. Máximo ${MAX_DESCRIPCION} caracteres.`,
+  },
+  fotoUrl: {
+    ancho: 38,
+    ayuda:
+      "Opcional. Dirección de una imagen que empiece por http:// o https://",
+  },
+};
+
 function Contenido({
   companiaId,
   filas,
@@ -151,10 +197,23 @@ function Contenido({
     await descargarXlsx({
       nombreArchivo: "plantilla-inventario",
       hoja: "Inventario",
-      encabezados: COLUMNAS_PLANTILLA.map((c) => c.encabezado),
-      /* Una fila de ejemplo: sin ella, quien la abre no sabe si el serial
-       * lleva guiones ni qué se espera en la descripción. */
-      filas: [COLUMNAS_PLANTILLA.map((c) => c.ejemplo)],
+      /* El texto del encabezado sigue saliendo de COLUMNAS_PLANTILLA y no se
+       * toca: es la llave con la que la carga empareja las columnas. Lo que se
+       * añade aquí es solo presentación. */
+      encabezados: COLUMNAS_PLANTILLA.map((c) => ({
+        encabezado: c.encabezado,
+        requerida: c.requerida,
+        ...PRESENTACION[c.clave],
+      })),
+      filas: [],
+      /* La fila de ejemplo, ahora en gris cursiva sobre fondo suave para que
+       * se lea como lo que es. Sigue siendo una fila de datos normal: quien
+       * la deje sin tocar la importa, igual que antes. */
+      filasEjemplo: [COLUMNAS_PLANTILLA.map((c) => c.ejemplo)],
+      /* El área de escritura, con el borde ya puesto. El lector recorta la
+       * cola vacía, así que no cuentan para el límite de filas ni entran como
+       * elementos en blanco. */
+      filasVacias: FILAS_EN_BLANCO,
     });
   }
 

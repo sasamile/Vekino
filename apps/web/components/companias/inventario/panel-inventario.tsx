@@ -101,13 +101,17 @@ export function PanelInventario({
         ? `inventario-${vista}-filtrado`
         : `inventario-${vista}`,
       hoja: "Inventario",
+      /* Las mismas columnas de siempre, con ancho y alineación para que el
+       * archivo se pueda leer sin tener que ajustar nada al abrirlo. El
+       * serial va como texto por lo mismo que en la plantilla: los ceros a la
+       * izquierda. */
       encabezados: [
-        "Nombre",
-        "Serial",
-        "Descripcion",
-        "Estado",
-        "Ubicacion",
-        "Registrado",
+        { encabezado: "Nombre", ancho: 34 },
+        { encabezado: "Serial", ancho: 20, formato: "texto" as const },
+        { encabezado: "Descripcion", ancho: 46 },
+        { encabezado: "Estado", ancho: 16 },
+        { encabezado: "Ubicacion", ancho: 26 },
+        { encabezado: "Registrado", ancho: 16, alinear: "centro" as const },
       ],
       filas: datos.items.map((i) => [
         i.nombre,
