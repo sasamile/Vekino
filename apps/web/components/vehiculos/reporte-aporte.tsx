@@ -36,12 +36,10 @@ function rangoPorDefecto() {
   return { desde: `${d.getFullYear()}-${p(d.getMonth() + 1)}`, hasta };
 }
 
-export function ReporteAporteModal({
+export function ReporteAportePanel({
   condominioId,
-  onClose,
 }: {
   condominioId: Id<"condominios">;
-  onClose: () => void;
 }) {
   const inicial = rangoPorDefecto();
   const [desde, setDesde] = useState(inicial.desde);
@@ -72,21 +70,7 @@ export function ReporteAporteModal({
   }
 
   return (
-    <Modal
-      open
-      onClose={onClose}
-      title="Aporte voluntario de áreas comunes"
-      description="Quién pagó cupo de parqueadero, por cuántos meses y cuánto"
-      footer={
-        <>
-          <Button variant="ghost" size="sm" onClick={onClose}>Cerrar</Button>
-          <Button size="sm" onClick={descargar} disabled={!data || data.filas.length === 0}>
-            <Download className="h-4 w-4" /> Descargar CSV
-          </Button>
-        </>
-      }
-    >
-      <div className="space-y-4">
+    <div className="space-y-4">
         <div className="flex flex-wrap items-end gap-3">
           <div className="space-y-1.5">
             <label className="block text-xs font-medium text-foreground">Desde</label>
@@ -98,6 +82,9 @@ export function ReporteAporteModal({
           </div>
           <Button variant="outline" size="sm" onClick={() => setConfig(true)}>
             <Settings2 className="h-4 w-4" /> Tarifas
+          </Button>
+          <Button size="sm" variant="outline" onClick={descargar} disabled={!data || data.filas.length === 0}>
+            <Download className="h-4 w-4" /> Descargar CSV
           </Button>
         </div>
 
@@ -117,7 +104,7 @@ export function ReporteAporteModal({
               <Dato valor={String(data.resumen.enMora)} etiqueta="En mora" alerta={data.resumen.enMora > 0} />
             </div>
 
-            <div className="max-h-[45vh] overflow-auto rounded-xl border border-border">
+            <div className="max-h-[55vh] overflow-auto rounded-xl border border-border">
               <Table>
                 <THead>
                   <TR><TH>Casa</TH><TH>Placas</TH><TH>Meses</TH><TH>Total</TH></TR>
@@ -165,11 +152,33 @@ export function ReporteAporteModal({
             )}
           </>
         )}
-      </div>
 
       {config && (
         <TarifasModal condominioId={condominioId} onClose={() => setConfig(false)} />
       )}
+    </div>
+  );
+}
+
+export function ReporteAporteModal({
+  condominioId,
+  onClose,
+}: {
+  condominioId: Id<"condominios">;
+  onClose: () => void;
+}) {
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title="Aporte voluntario de áreas comunes"
+      description="Quién pagó cupo de parqueadero, por cuántos meses y cuánto"
+      className="max-w-3xl"
+      footer={
+        <Button variant="ghost" size="sm" onClick={onClose}>Cerrar</Button>
+      }
+    >
+      <ReporteAportePanel condominioId={condominioId} />
     </Modal>
   );
 }

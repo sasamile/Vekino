@@ -291,7 +291,9 @@ function Inner() {
                             <Tap
                               onPress={() => {
                                 setDepositoReserva(r);
-                                setMonto("");
+                                setMonto(
+                                  r.depositoRequerido ? String(r.depositoRequerido) : "",
+                                );
                                 setObs("");
                                 setFoto(null);
                               }}

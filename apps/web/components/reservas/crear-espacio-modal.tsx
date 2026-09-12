@@ -48,6 +48,7 @@ export type ZonaEditable = {
   descripcion?: string;
   precioPorHora?: number;
   precioPorDia?: number;
+  precioPorMes?: number;
   requiereAprobacion?: boolean;
   depositoRequerido?: number;
   horariosPorDia?: { dia: number; horaInicio: string; horaFin: string }[];
@@ -87,6 +88,9 @@ export function CrearEspacioModal({
   );
   const [precioPorDia, setPrecioPorDia] = useState(
     zona?.precioPorDia != null ? String(zona.precioPorDia) : "",
+  );
+  const [precioPorMes, setPrecioPorMes] = useState(
+    zona?.precioPorMes != null ? String(zona.precioPorMes) : "",
   );
   const [requiereAprobacion, setRequiereAprobacion] = useState(
     zona?.requiereAprobacion ?? true,
@@ -137,11 +141,13 @@ export function CrearEspacioModal({
 
     const horaN = precioPorHora.trim() ? Number(precioPorHora) : undefined;
     const diaN = precioPorDia.trim() ? Number(precioPorDia) : undefined;
-    if (
-      (horaN == null || Number.isNaN(horaN)) &&
-      (diaN == null || Number.isNaN(diaN))
-    ) {
-      setError("Indica al menos un precio (por hora y/o por día).");
+    const mesN = precioPorMes.trim() ? Number(precioPorMes) : undefined;
+    const hayPrecio =
+      (horaN != null && !Number.isNaN(horaN)) ||
+      (diaN != null && !Number.isNaN(diaN)) ||
+      (mesN != null && !Number.isNaN(mesN));
+    if (!hayPrecio) {
+      setError("Indica el precio de la modalidad (hora, día o mes).");
       return;
     }
 
@@ -156,6 +162,7 @@ export function CrearEspacioModal({
         descripcion: descripcion.trim() || undefined,
         precioPorHora: horaN != null && !Number.isNaN(horaN) ? horaN : undefined,
         precioPorDia: diaN != null && !Number.isNaN(diaN) ? diaN : undefined,
+        precioPorMes: mesN != null && !Number.isNaN(mesN) ? mesN : undefined,
         horariosPorDia: horarios,
         requiereAprobacion,
         depositoRequerido: deposito.trim() && !Number.isNaN(Number(deposito))
@@ -274,10 +281,10 @@ export function CrearEspacioModal({
           />
         </div>
 
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <div className="space-y-1.5">
             <label className="block text-xs font-medium text-foreground">
-              Precio por hora (COP)
+              Precio por hora (COP){unidadTiempo === "hora" ? " *" : ""}
             </label>
             <Input
               type="number"
@@ -285,13 +292,13 @@ export function CrearEspacioModal({
               step={1000}
               value={precioPorHora}
               onChange={(e) => setPrecioPorHora(e.target.value)}
-              placeholder="Opcional — ej. 25000"
+              placeholder="Ej. 25000"
               disabled={busy}
             />
           </div>
           <div className="space-y-1.5">
             <label className="block text-xs font-medium text-foreground">
-              Precio por día (COP)
+              Precio por día (COP){unidadTiempo === "dia" ? " *" : ""}
             </label>
             <Input
               type="number"
@@ -299,7 +306,21 @@ export function CrearEspacioModal({
               step={1000}
               value={precioPorDia}
               onChange={(e) => setPrecioPorDia(e.target.value)}
-              placeholder="Opcional — ej. 150000"
+              placeholder="Ej. 150000"
+              disabled={busy}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label className="block text-xs font-medium text-foreground">
+              Precio por mes (COP){unidadTiempo === "mes" ? " *" : ""}
+            </label>
+            <Input
+              type="number"
+              min={0}
+              step={1000}
+              value={precioPorMes}
+              onChange={(e) => setPrecioPorMes(e.target.value)}
+              placeholder="Ej. 90000"
               disabled={busy}
             />
           </div>
@@ -320,13 +341,12 @@ export function CrearEspacioModal({
           />
           <p className="text-[11px] text-muted-foreground">
             Lo que se deja al reservar y se devuelve si el espacio se entrega
-            bien. La portería lo registra al recibirlo.
+            bien. Cada reserva copia este monto; la portería lo registra al recibirlo.
           </p>
         </div>
         <p className="-mt-2 text-xs text-muted-foreground">
-          Puedes definir solo uno o ambos. El cobro al reservar usa la tarifa que
-          corresponda a la modalidad (por hora / por día / por mes) y hace
-          fallback al otro precio si falta.
+          El cobro usa la tarifa de la modalidad (hora, día o mes). Si esa
+          casilla está vacía, toma el otro precio que sí hayas puesto.
         </p>
 
         <div className="space-y-1.5">

@@ -5,13 +5,15 @@ import { useParams } from "next/navigation";
 import { usePaginatedQuery, useQuery, useMutation } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import {
-  Bike, Car, CircleDot, FileSpreadsheet, Loader2, Pencil, Plus, Trash2, type LucideIcon,
+  Bike, Car, CircleDot, FileSpreadsheet, Loader2, Pencil, Plus, Trash2, Upload, type LucideIcon,
 } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
 import { PageContainer } from "@/components/layout/page-container";
 import { PageHeader } from "@/components/layout/page-header";
+import { useTopbarActions } from "@/components/layout/admin-topbar-context";
 import { ReporteAporteModal } from "@/components/vehiculos/reporte-aporte";
+import { ImportarVehiculosModal } from "@/components/vehiculos/importar-vehiculos";
 import { useNuevoQuery } from "@/hooks/use-nuevo-query";
 import { StatCard } from "@/components/layout/stat-card";
 import { SearchInput, Input, Select, Textarea } from "@/components/ui/input";
@@ -119,6 +121,7 @@ export default function VehiculosPage() {
   const [deleteTarget, setDeleteTarget] = useState<Id<"vehiculos"> | null>(
     null,
   );
+  const [importarAbierto, setImportarAbierto] = useState(false);
 
   // Corrige tipos guardados mal (una vez por condo / sesión).
   useEffect(() => {
@@ -149,6 +152,19 @@ export default function VehiculosPage() {
     setDraft(emptyDraft());
   }
   useNuevoQuery(openNew);
+  useTopbarActions(
+    <>
+      <Button variant="outline" onClick={() => setImportarAbierto(true)}>
+        <Upload className="h-4 w-4" />
+        Actualizar Excel
+      </Button>
+      <Button variant="brand" onClick={openNew}>
+        <Plus className="h-3.75 w-3.75" aria-hidden />
+        Registrar vehículo
+      </Button>
+    </>,
+    [],
+  );
 
   function openEdit(v: VehicleRow) {
     setDraft({
@@ -170,9 +186,14 @@ export default function VehiculosPage() {
             title="Vehículos"
             description="Registro vehicular del conjunto"
             action={
-              <Button variant="outline" size="sm" onClick={() => setAporteAbierto(true)}>
-                <FileSpreadsheet className="h-4 w-4" /> Aporte voluntario
-              </Button>
+              <div className="flex gap-2">
+                <Button variant="outline" size="sm" onClick={() => setImportarAbierto(true)}>
+                  <Upload className="h-4 w-4" /> Actualizar Excel
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => setAporteAbierto(true)}>
+                  <FileSpreadsheet className="h-4 w-4" /> Aporte voluntario
+                </Button>
+              </div>
             }
           />
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -234,7 +255,7 @@ export default function VehiculosPage() {
             description={
               hasFilters
                 ? "Ningún vehículo coincide con el filtro."
-                : "Registra los vehículos de los residentes."
+                : "Registra uno o sube el Excel del parqueadero."
             }
             action={
               hasFilters ? (
@@ -249,10 +270,16 @@ export default function VehiculosPage() {
                   Limpiar
                 </Button>
               ) : (
-                <Button size="sm" onClick={openNew}>
-                  <Plus className="h-4 w-4" />
-                  Registrar
-                </Button>
+                <div className="flex gap-2">
+                  <Button variant="outline" size="sm" onClick={() => setImportarAbierto(true)}>
+                    <Upload className="h-4 w-4" />
+                    Subir Excel
+                  </Button>
+                  <Button size="sm" onClick={openNew}>
+                    <Plus className="h-4 w-4" />
+                    Registrar
+                  </Button>
+                </div>
               )
             }
           />
@@ -351,6 +378,12 @@ export default function VehiculosPage() {
       )}
       {aporteAbierto && (
         <ReporteAporteModal condominioId={condominioId} onClose={() => setAporteAbierto(false)} />
+      )}
+      {importarAbierto && (
+        <ImportarVehiculosModal
+          condominioId={condominioId}
+          onClose={() => setImportarAbierto(false)}
+        />
       )}
     </PageContainer>
   );

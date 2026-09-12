@@ -1,12 +1,14 @@
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { query, mutation } from "./_generated/server";
+import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
   getCurrentAppUser,
   requireCondominioRole,
   getMembership,
   hasPlatformRole,
+  vigentes,
 } from "./model/authz";
 import { exigirAcceso, resolverAcceso } from "./model/acceso";
 import { asignacionVigente } from "./model/asignacion";
@@ -18,6 +20,7 @@ import {
 } from "./model/visitantes";
 import { displayNameFromUser } from "./model/displayName";
 import { resolveMediaUrl, resolveMediaUrlList } from "./model/files";
+import { calcularCosto } from "./lib/costoReserva";
 import { normalizarPlaca } from "./lib/placa";
 
 /** Roles que pueden operar la portería. */
@@ -787,6 +790,47 @@ export const listVisitantes = query({
   },
 });
 
+/**
+ * Lo que el guarda necesita ver al escanear: quién llega, a qué casa va y
+ * quién lo espera. Sin esto el QR solo decía "ingreso registrado" y había
+ * que adivinar el resto.
+ */
+async function resumenAcceso(ctx: QueryCtx | MutationCtx, vis: Doc<"visitantes">) {
+  let anfitrionNombre: string | null = null;
+  if (vis.autorizadoPorUserId) {
+    const u = await ctx.db.get(vis.autorizadoPorUserId);
+    if (u) anfitrionNombre = displayNameFromUser(u) || u.name;
+  }
+  if (!anfitrionNombre) {
+    const links = vigentes(
+      await ctx.db
+        .query("usuarioUnidad")
+        .withIndex("by_unidad", (q) => q.eq("unidadId", vis.unidadId))
+        .collect(),
+    );
+    const orden = (v: string) =>
+      v === "propietario" ? 0 : v === "residente" ? 1 : 2;
+    const candidato = [...links].sort(
+      (a, b) => orden(a.vinculo) - orden(b.vinculo),
+    )[0];
+    if (candidato) {
+      const mem = await ctx.db.get(candidato.membershipId);
+      const u = mem ? await ctx.db.get(mem.userId) : null;
+      if (u) anfitrionNombre = displayNameFromUser(u) || u.name;
+    }
+  }
+  return {
+    id: vis._id,
+    nombre: vis.nombre,
+    documento: vis.documento,
+    tipoDocumento: vis.tipoDocumento,
+    tipo: vis.tipo,
+    placa: vis.placa ?? null,
+    unidadNumero: vis.unidadNumero ?? null,
+    anfitrionNombre,
+  };
+}
+
 /** Visitante puntual por id (resultado de escanear un QR). */
 export const getVisitante = query({
   args: { id: v.id("visitantes") },
@@ -794,7 +838,7 @@ export const getVisitante = query({
     const vis = await ctx.db.get(args.id);
     if (!vis) return null;
     await requireCondominioRole(ctx, vis.condominioId, [...GUARD_ROLES]);
-    return vis;
+    return { ...vis, ...(await resumenAcceso(ctx, vis)) };
   },
 });
 
@@ -810,7 +854,12 @@ export const registrarIngreso = mutation({
     const { user } = await requireCondominioRole(ctx, vis.condominioId, [...GUARD_ROLES]);
 
     const vigencia = esVisitanteVigente(vis);
-    if (!vigencia.ok) throw new Error(vigencia.reason);
+    if (!vigencia.ok) {
+      if (vigencia.reason === "YA_ACTIVO") {
+        return { accion: "ya_activo" as const, ...(await resumenAcceso(ctx, vis)) };
+      }
+      throw new Error(vigencia.reason);
+    }
 
     const now = Date.now();
     await ctx.db.patch(args.id, {
@@ -828,6 +877,7 @@ export const registrarIngreso = mutation({
       actorUserId: user._id,
       actorNombre: user.name,
     });
+    return { accion: "ingreso" as const, ...(await resumenAcceso(ctx, vis)) };
   },
 });
 
@@ -857,6 +907,7 @@ export const registrarSalida = mutation({
       actorUserId: user._id,
       actorNombre: user.name,
     });
+    return { accion: "salida" as const, ...(await resumenAcceso(ctx, vis)) };
   },
 });
 
@@ -1136,7 +1187,22 @@ export const listReservasControl = query({
           .query("guardiaReservaDepositos")
           .withIndex("by_reserva", (q) => q.eq("reservaId", r._id))
           .first();
-        return { ...r, deposito: deposito ?? null };
+        let depositoRequerido = r.depositoRequerido;
+        let valorReserva = r.valorReserva;
+        if (depositoRequerido == null || valorReserva == null) {
+          const zona = await ctx.db.get(r.zonaId);
+          if (zona) {
+            const costo = calcularCosto(zona, r.horaInicio, r.horaFin);
+            if (valorReserva == null && !costo.sinTarifa) valorReserva = costo.alquiler;
+            if (depositoRequerido == null) depositoRequerido = zona.depositoRequerido;
+          }
+        }
+        return {
+          ...r,
+          valorReserva,
+          depositoRequerido,
+          deposito: deposito ?? null,
+        };
       }),
     );
   },

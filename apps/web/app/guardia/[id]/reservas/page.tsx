@@ -112,6 +112,11 @@ function ReservaCard({
                 Depósito ${r.deposito.monto.toLocaleString("es-CO")} · {depositoPendiente ? "en portería" : r.deposito.estado === "devuelto" ? "devuelto" : "NO devuelto"}
               </span>
             )}
+            {!r.deposito && r.depositoRequerido ? (
+              <span className="rounded-md bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+                Depósito {r.depositoRequerido.toLocaleString("es-CO", { style: "currency", currency: "COP", maximumFractionDigits: 0 })}
+              </span>
+            ) : null}
           </div>
           <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
             <span className="capitalize">{fmtFecha(r.fecha)}</span>
@@ -156,7 +161,9 @@ function ReservaCard({
 function DepositoModal({ reserva, onClose }: { reserva: Reserva; onClose: () => void }) {
   const registrar = useMutation(api.guardia.registrarDepositoReserva);
   const uploadFile = useUploadToS3();
-  const [monto, setMonto] = useState("");
+  const [monto, setMonto] = useState(
+    reserva.depositoRequerido ? String(reserva.depositoRequerido) : "",
+  );
   const [observaciones, setObservaciones] = useState("");
   const [foto, setFoto] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
@@ -203,6 +210,11 @@ function DepositoModal({ reserva, onClose }: { reserva: Reserva; onClose: () => 
         <div className="space-y-1.5">
           <label className="block text-xs font-medium text-foreground">Monto del depósito (COP) *</label>
           <Input type="number" min={1} value={monto} onChange={(e) => setMonto(e.target.value)} placeholder="Ej. 100000" />
+          {reserva.depositoRequerido ? (
+            <p className="text-[11px] text-muted-foreground">
+              Configurado en la zona: {reserva.depositoRequerido.toLocaleString("es-CO", { style: "currency", currency: "COP", maximumFractionDigits: 0 })}
+            </p>
+          ) : null}
         </div>
         <div className="space-y-1.5">
           <label className="block text-xs font-medium text-foreground">Observaciones</label>

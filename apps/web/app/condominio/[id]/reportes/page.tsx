@@ -24,7 +24,9 @@ import { AreaChart } from "@/components/charts/area-chart";
 import { DonutChart } from "@/components/charts/donut-chart";
 import { HBars } from "@/components/charts/h-bars";
 import { CHART } from "@/components/charts/chart-colors";
-import { cop, num } from "@/lib/utils";
+import { cn, cop, num } from "@/lib/utils";
+import { ReporteAportePanel } from "@/components/vehiculos/reporte-aporte";
+import { ReporteReservasPanel } from "@/components/reservas/reporte-reservas";
 
 const MES_LARGO = [
   "Enero",
@@ -77,9 +79,18 @@ const ROLE_LABEL: Record<string, string> = {
   representante_asamblea: "Rep. asamblea",
 };
 
+type Tab = "monetarios" | "parqueaderos" | "reservas";
+
+const TABS: { id: Tab; label: string }[] = [
+  { id: "monetarios", label: "Cartera" },
+  { id: "parqueaderos", label: "Parqueaderos" },
+  { id: "reservas", label: "Reservas" },
+];
+
 export default function ReportesPage() {
   const params = useParams<{ id: string }>();
   const condominioId = params.id as Id<"condominios">;
+  const [tab, setTab] = useState<Tab>("monetarios");
   const serie = useQuery(api.facturas.serie, { condominioId });
   const unidades = useQuery(api.unidades.listDetailed, { condominioId });
   const members = useQuery(api.memberships.listByCondominio, { condominioId });
@@ -92,10 +103,30 @@ export default function ReportesPage() {
       <div className="space-y-8">
         <PageHeader
           title="Reportes"
-          description="Indicadores de cartera, ocupación y comunidad"
+          description="Cartera, aporte voluntario de parqueaderos y reservas"
         />
 
-        {loading ? (
+        <div className="flex gap-1 rounded-xl bg-muted p-1">
+          {TABS.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => setTab(t.id)}
+              className={cn(
+                "flex-1 rounded-lg px-4 py-1.5 text-sm font-medium transition-colors",
+                tab === t.id ? "bg-card text-foreground shadow-sm" : "text-muted-foreground",
+              )}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        {tab === "parqueaderos" ? (
+          <ReporteAportePanel condominioId={condominioId} />
+        ) : tab === "reservas" ? (
+          <ReporteReservasPanel condominioId={condominioId} />
+        ) : loading ? (
           <ReportesSkeleton />
         ) : serie.length === 0 && unidades.length === 0 ? (
           <EmptyState

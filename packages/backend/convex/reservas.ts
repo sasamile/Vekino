@@ -246,11 +246,12 @@ export const listByCondominio = query({
   args: { condominioId: v.id("condominios") },
   handler: async (ctx, args) => {
     await requireCondominioRole(ctx, args.condominioId, []);
-    return await ctx.db
+    const filas = await ctx.db
       .query("reservas")
       .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
       .order("desc")
       .collect();
+    return await conValores(ctx, args.condominioId, filas);
   },
 });
 
@@ -291,7 +292,9 @@ async function conValores<T extends Doc<"reservas">>(
   condominioId: Id<"condominios">,
   filas: T[],
 ) {
-  const necesitaZonas = filas.some((r) => r.valorReserva == null);
+  const necesitaZonas = filas.some(
+    (r) => r.valorReserva == null || r.depositoRequerido == null,
+  );
   const zonas = necesitaZonas
     ? new Map(
         (
@@ -304,18 +307,27 @@ async function conValores<T extends Doc<"reservas">>(
     : new Map<Id<"zonasComunes">, Doc<"zonasComunes">>();
 
   return filas.map((r) => {
-    if (r.valorReserva != null) {
-      return { ...r, valorReserva: r.valorReserva, valoresEstimados: false };
+    const pactadoValor = r.valorReserva != null;
+    const pactadoDeposito = r.depositoRequerido != null;
+    if (pactadoValor && pactadoDeposito) {
+      return {
+        ...r,
+        valorReserva: r.valorReserva,
+        depositoRequerido: r.depositoRequerido,
+        valoresEstimados: false,
+      };
     }
     /* La zona pudo borrarse: sin ella no hay tarifa de donde estimar, y eso
      * es "no se sabe", no "estimado". */
     const zona = zonas.get(r.zonaId);
     const costo = zona ? calcularCosto(zona, r.horaInicio, r.horaFin) : null;
-    const valorReserva = costo && !costo.sinTarifa ? costo.alquiler : null;
-    /* El deposito SI se guardaba desde antes, asi que lo pactado manda; solo
-     * se recurre a la zona cuando la reserva no trae ninguno. */
+    const valorReserva = pactadoValor
+      ? r.valorReserva
+      : costo && !costo.sinTarifa
+        ? costo.alquiler
+        : null;
     const depositoDeZona =
-      r.depositoRequerido == null && zona?.depositoRequerido != null;
+      !pactadoDeposito && zona?.depositoRequerido != null;
     return {
       ...r,
       valorReserva,
@@ -323,9 +335,40 @@ async function conValores<T extends Doc<"reservas">>(
       /* Solo se marca cuando de verdad se saco algo de la zona de hoy. Marcar
        * una fila que no estima nada haria dudar de un dato que si esta
        * pactado. */
-      valoresEstimados: valorReserva != null || depositoDeZona,
+      valoresEstimados:
+        (!pactadoValor && valorReserva != null) || depositoDeZona,
     };
   });
+}
+
+/** Cruza cada reserva con lo que realmente se cobró. */
+async function conCaja<T extends Doc<"reservas">>(
+  ctx: QueryCtx,
+  filas: Array<T & { valorReserva?: number | null; depositoRequerido?: number; valoresEstimados?: boolean }>,
+) {
+  return await Promise.all(
+    filas.map(async (r) => {
+      const dep = await ctx.db
+        .query("guardiaReservaDepositos")
+        .withIndex("by_reserva", (q) => q.eq("reservaId", r._id))
+        .first();
+      return {
+        ...r,
+        pagoAlquilerMonto: r.pagoAlquilerMonto ?? null,
+        pagoAlquilerAt: r.pagoAlquilerAt ?? null,
+        pagoAlquilerPorNombre: r.pagoAlquilerPorNombre ?? null,
+        pagoAlquilerNotas: r.pagoAlquilerNotas ?? null,
+        depositoCaja: dep
+          ? {
+              _id: dep._id,
+              monto: dep.monto,
+              estado: dep.estado,
+              observacionesSalida: dep.observacionesSalida ?? null,
+            }
+          : null,
+      };
+    }),
+  );
 }
 
 export const listPage = query({
@@ -353,7 +396,10 @@ export const listPage = query({
       });
       const limit = Math.min(args.paginationOpts.numItems || 30, 60);
       return {
-        page: await conValores(ctx, args.condominioId, filtered.slice(0, limit)),
+        page: await conCaja(
+          ctx,
+          await conValores(ctx, args.condominioId, filtered.slice(0, limit)),
+        ),
         isDone: true,
         continueCursor: "",
       };
@@ -367,7 +413,10 @@ export const listPage = query({
 
     return {
       ...pagina,
-      page: await conValores(ctx, args.condominioId, pagina.page),
+      page: await conCaja(
+        ctx,
+        await conValores(ctx, args.condominioId, pagina.page),
+      ),
     };
   },
 });
@@ -435,28 +484,126 @@ export const updateEstado = mutation({
   },
 });
 
+/**
+ * Marca que se cobró el alquiler de la reserva.
+ *
+ * Sin esto el reporte solo podía decir "no se recibió", porque nadie tenía
+ * dónde apuntar que sí se cobró. Portería registra el depósito; el alquiler
+ * lo cobra la administración.
+ */
+export const registrarPagoAlquiler = mutation({
+  args: {
+    id: v.id("reservas"),
+    monto: v.number(),
+    notas: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const r = await ctx.db.get(args.id);
+    if (!r) throw new Error("Reserva no encontrada.");
+    const { user } = await requireCondominioRole(ctx, r.condominioId, [...ADMIN_ROLES]);
+    if (!Number.isFinite(args.monto) || args.monto <= 0) {
+      throw new Error("El monto cobrado debe ser mayor a 0.");
+    }
+    await ctx.db.patch(args.id, {
+      pagoAlquilerMonto: args.monto,
+      pagoAlquilerAt: Date.now(),
+      pagoAlquilerPorNombre: user.name,
+      pagoAlquilerNotas: args.notas?.trim() || undefined,
+      updatedAt: Date.now(),
+    });
+  },
+});
+
+/**
+ * La administración registra el depósito (sin validar el ingreso de portería).
+ *
+ * El depósito vivía solo en el flujo del guarda. Quien cobra en oficina no
+ * podía dejar constancia, y el reporte salía como si no se hubiera recibido.
+ */
+export const registrarDeposito = mutation({
+  args: {
+    id: v.id("reservas"),
+    monto: v.number(),
+    observaciones: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const r = await ctx.db.get(args.id);
+    if (!r) throw new Error("Reserva no encontrada.");
+    const { user } = await requireCondominioRole(ctx, r.condominioId, [...ADMIN_ROLES]);
+    if (!Number.isFinite(args.monto) || args.monto <= 0) {
+      throw new Error("El monto del depósito debe ser mayor a 0.");
+    }
+    const existente = await ctx.db
+      .query("guardiaReservaDepositos")
+      .withIndex("by_reserva", (q) => q.eq("reservaId", args.id))
+      .first();
+    if (existente) throw new Error("Esta reserva ya tiene un depósito registrado.");
+
+    await ctx.db.insert("guardiaReservaDepositos", {
+      condominioId: r.condominioId,
+      reservaId: args.id,
+      monto: args.monto,
+      observacionesIngreso: args.observaciones?.trim() || undefined,
+      estado: "registrado",
+      recibidoPorNombre: user.name,
+      fechaRegistro: Date.now(),
+    });
+    await ctx.db.patch(args.id, { updatedAt: Date.now() });
+  },
+});
+
+/**
+ * Devuelve el depósito o lo retiene (daños, faltantes).
+ *
+ * En oficina la foto no es obligatoria: a veces se anota después. La razón
+ * sí, si se retiene — sin ella el reporte no explica por qué no se devolvió.
+ */
+export const resolverDeposito = mutation({
+  args: {
+    depositoId: v.id("guardiaReservaDepositos"),
+    devuelto: v.boolean(),
+    observaciones: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const dep = await ctx.db.get(args.depositoId);
+    if (!dep) throw new Error("Depósito no encontrado.");
+    const { user } = await requireCondominioRole(ctx, dep.condominioId, [...ADMIN_ROLES]);
+    if (dep.estado !== "registrado") throw new Error("El depósito ya fue resuelto.");
+    if (!args.devuelto && !args.observaciones?.trim()) {
+      throw new Error("Si se retiene el depósito, indica el motivo (daños, faltantes…).");
+    }
+    await ctx.db.patch(args.depositoId, {
+      estado: args.devuelto ? "devuelto" : "no_devuelto",
+      observacionesSalida: args.observaciones?.trim() || undefined,
+      resueltoPorNombre: user.name,
+      fechaResolucion: Date.now(),
+    });
+    await ctx.db.patch(dep.reservaId, { updatedAt: Date.now() });
+  },
+});
+
 export const remove = mutation({
   args: { id: v.id("reservas") },
   handler: async (ctx, args) => {
     const existing = await ctx.db.get(args.id);
     if (!existing) throw new Error("Reserva no encontrada.");
     await requireCondominioRole(ctx, existing.condominioId, [...ADMIN_ROLES]);
+    const dep = await ctx.db
+      .query("guardiaReservaDepositos")
+      .withIndex("by_reserva", (q) => q.eq("reservaId", args.id))
+      .first();
+    if (dep) await ctx.db.delete(dep._id);
     await ctx.db.delete(args.id);
   },
 });
 
-// ─────────────────────────────────────────────────────────────
-// API del propietario: crea y ve las reservas de SUS unidades.
-// ─────────────────────────────────────────────────────────────
-
-/** Reservas de las unidades del usuario autenticado (más recientes primero). */
 /**
- * Reporte de reservas de un rango de fechas, con el estado del deposito.
+ * Reporte de reservas de un rango de fechas, con caja de alquiler y depósito.
  *
- * Cruza tres cosas que hoy viven separadas: la reserva, lo que la porteria
- * recibio de deposito y si lo devolvio. Sin ese cruce la administracion no
- * puede responder la pregunta que de verdad hace —"a quien le queda
- * pendiente devolverle el deposito"— sin mirar dos pantallas.
+ * El valor pactado no es un cobro. Hasta que administración (o portería)
+ * marca que recibió el dinero, el reporte dice "sin registrar" — no "no se
+ * recibió". Mezclar las dos cosas era el hueco: nadie tenía dónde anotar el
+ * pago, y el informe salía como si el conjunto no hubiera cobrado.
  */
 export const reporte = query({
   args: {
@@ -480,8 +627,9 @@ export const reporte = query({
       .filter((r) => r.fecha >= args.desde && r.fecha <= args.hasta)
       .sort((a, b) => a.fecha.localeCompare(b.fecha) || a.horaInicio.localeCompare(b.horaInicio));
 
+    const conVals = await conValores(ctx, args.condominioId, enRango);
     const filas = await Promise.all(
-      enRango.map(async (r) => {
+      conVals.map(async (r) => {
         const dep = await ctx.db
           .query("guardiaReservaDepositos")
           .withIndex("by_reserva", (q) => q.eq("reservaId", r._id))
@@ -495,9 +643,13 @@ export const reporte = query({
           unidadNumero: r.unidadNumero,
           solicitanteNombre: r.solicitanteNombre,
           estado: r.estado,
+          valorReserva: r.valorReserva ?? null,
+          pagoAlquilerMonto: r.pagoAlquilerMonto ?? null,
           depositoRequerido: r.depositoRequerido ?? null,
+          valoresEstimados: r.valoresEstimados,
           depositoRecibido: dep?.monto ?? null,
           depositoEstado: dep?.estado ?? null,
+          depositoRetencion: dep?.estado === "no_devuelto" ? (dep.observacionesSalida ?? null) : null,
           ingresoValidadoAt: r.ingresoValidadoAt ?? null,
           salidaValidadaAt: r.salidaValidadaAt ?? null,
         };
@@ -513,8 +665,16 @@ export const reporte = query({
         total: filas.length,
         aprobadas: filas.filter((f) => f.estado === "aprobada").length,
         canceladas: filas.filter((f) => f.estado === "cancelada").length,
+        alquilerEsperado: cobrables.reduce((s, f) => s + (f.valorReserva ?? 0), 0),
+        alquilerRecibido: cobrables.reduce((s, f) => s + (f.pagoAlquilerMonto ?? 0), 0),
         depositoEsperado: cobrables.reduce((s, f) => s + (f.depositoRequerido ?? 0), 0),
         depositoRecibido: cobrables.reduce((s, f) => s + (f.depositoRecibido ?? 0), 0),
+        alquilerSinRegistrar: cobrables.filter(
+          (f) => f.valorReserva != null && f.pagoAlquilerMonto == null,
+        ).length,
+        depositoSinRegistrar: cobrables.filter(
+          (f) => f.depositoRequerido && f.depositoRecibido == null,
+        ).length,
         depositosSinDevolver: filas.filter((f) => f.depositoEstado === "registrado").length,
         depositosRetenidos: filas.filter((f) => f.depositoEstado === "no_devuelto").length,
       },
@@ -522,6 +682,11 @@ export const reporte = query({
   },
 });
 
+// ─────────────────────────────────────────────────────────────
+// API del propietario: crea y ve las reservas de SUS unidades.
+// ─────────────────────────────────────────────────────────────
+
+/** Reservas de las unidades del usuario autenticado (más recientes primero). */
 export const listMias = query({
   args: { condominioId: v.id("condominios") },
   handler: async (ctx, args) => {
@@ -536,7 +701,8 @@ export const listMias = query({
       .order("desc")
       .collect();
 
-    return reservas.filter((r) => unidadIds.has(r.unidadId));
+    const mias = reservas.filter((r) => unidadIds.has(r.unidadId));
+    return await conValores(ctx, args.condominioId, mias);
   },
 });
 

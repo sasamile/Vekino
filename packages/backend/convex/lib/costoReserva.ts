@@ -48,6 +48,45 @@ const pesos = (n: number) =>
     maximumFractionDigits: 0,
   }).format(n);
 
+/**
+ * El precio que corresponde a la modalidad, o el que sí esté puesto si esa
+ * casilla quedó vacía.
+ *
+ * El formulario deja llenar hora, día o mes por separado. Quien configura
+ * "por día" a veces solo escribe el precio por hora —o al revés— y la reserva
+ * salía en cero aunque la zona sí tenía tarifa. El fallback usa el otro
+ * monto; no inventa uno.
+ */
+function alquilerDe(
+  zona: Tarifa,
+  unidad: "hora" | "dia" | "mes",
+  horaInicio: string,
+  horaFin: string,
+): { alquiler: number; detalle: string | null; sinTarifa: boolean } {
+  const horas = horasDeReserva(horaInicio, horaFin);
+  const porHora = zona.precioPorHora ?? 0;
+  const porDia = zona.precioPorDia ?? 0;
+  const porMes = zona.precioPorMes ?? 0;
+
+  const comoHoras = () =>
+    porHora && horas
+      ? {
+          alquiler: porHora * horas,
+          detalle: `${horas} ${horas === 1 ? "hora" : "horas"} × ${pesos(porHora)}`,
+        }
+      : null;
+  const comoDia = () =>
+    porDia ? { alquiler: porDia, detalle: "Tarifa por día" } : null;
+  const comoMes = () =>
+    porMes ? { alquiler: porMes, detalle: "Tarifa mensual" } : null;
+
+  const preferido =
+    unidad === "hora" ? comoHoras() : unidad === "mes" ? comoMes() : comoDia();
+  const usado = preferido ?? comoDia() ?? comoHoras() ?? comoMes();
+  if (!usado) return { alquiler: 0, detalle: null, sinTarifa: true };
+  return { ...usado, sinTarifa: false };
+}
+
 export function calcularCosto(
   zona: Tarifa,
   horaInicio: string,
@@ -55,32 +94,12 @@ export function calcularCosto(
 ): Costo {
   const deposito = zona.depositoRequerido ?? 0;
   const unidad = zona.unidadTiempo ?? "dia";
-
-  let alquiler = 0;
-  let detalle: string | null = null;
-  let sinTarifa = false;
-
-  if (unidad === "hora") {
-    const horas = horasDeReserva(horaInicio, horaFin);
-    const tarifa = zona.precioPorHora ?? 0;
-    if (!tarifa) sinTarifa = true;
-    alquiler = tarifa * horas;
-    if (tarifa && horas) {
-      detalle = `${horas} ${horas === 1 ? "hora" : "horas"} × ${pesos(tarifa)}`;
-    }
-  } else if (unidad === "mes") {
-    alquiler = zona.precioPorMes ?? 0;
-    if (!alquiler) sinTarifa = true;
-    else detalle = `Tarifa mensual`;
-  } else {
-    /* Por dia: el formulario reserva una sola fecha, asi que es una jornada
-     * aunque el residente escoja tres horas. Cobrar por horas un espacio que
-     * la administracion tarifa por dia daria un numero que no cuadra con la
-     * factura. */
-    alquiler = zona.precioPorDia ?? 0;
-    if (!alquiler) sinTarifa = true;
-    else detalle = `Tarifa por día`;
-  }
+  const { alquiler, detalle, sinTarifa } = alquilerDe(
+    zona,
+    unidad,
+    horaInicio,
+    horaFin,
+  );
 
   return {
     alquiler,

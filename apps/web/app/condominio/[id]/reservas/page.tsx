@@ -5,7 +5,7 @@ import { useParams } from "next/navigation";
 import { usePaginatedQuery, useQuery, useMutation } from "convex/react";
 import {
   CalendarCheck, Plus, Pencil, Trash2, Loader2, CheckCircle, XCircle,
-  Settings, MapPin, Clock, FileSpreadsheet, ChevronRight,
+  Settings, MapPin, Clock, FileSpreadsheet, ChevronRight, Wallet,
 } from "lucide-react";
 import type { FunctionReturnType } from "convex/server";
 import { api } from "@vekino/backend/api";
@@ -30,6 +30,7 @@ import {
 import { ReporteReservasModal } from "@/components/reservas/reporte-reservas";
 import { ResumenCosto } from "@/components/reservas/resumen-costo";
 import { EstadoCuentaModal } from "@/components/reservas/estado-cuenta-modal";
+import { CajaReservaModal } from "@/components/reservas/caja-reserva-modal";
 
 const PAGE_SIZE = 30;
 
@@ -104,6 +105,16 @@ type ReservaRow = {
   /* La reserva es anterior a que se guardara el valor: lo que se muestra sale
      de la tarifa actual de la zona. */
   valoresEstimados?: boolean;
+  pagoAlquilerMonto?: number | null;
+  pagoAlquilerAt?: number | null;
+  pagoAlquilerPorNombre?: string | null;
+  pagoAlquilerNotas?: string | null;
+  depositoCaja?: {
+    _id: Id<"guardiaReservaDepositos">;
+    monto: number;
+    estado: "registrado" | "devuelto" | "no_devuelto";
+    observacionesSalida: string | null;
+  } | null;
 };
 
 /* Los precios y el depósito estaban fuera de este tipo, y ese recorte era
@@ -142,6 +153,7 @@ export default function ReservasPage() {
   const [cuentaAbierta, setCuentaAbierta] = useState<
     { unidadId: Id<"unidades">; unidadNumero: string } | null
   >(null);
+  const [cajaId, setCajaId] = useState<Id<"reservas"> | null>(null);
   const updateEstado = useMutation(api.reservas.updateEstado);
 
   const { results, status, loadMore } = usePaginatedQuery(
@@ -160,6 +172,7 @@ export default function ReservasPage() {
   const loadingMore = status === "LoadingMore";
   const reservas = results as ReservaRow[];
   const hasFilters = Boolean(estadoFiltro || zonaFiltro);
+  const cajaReserva = cajaId ? reservas.find((r) => r._id === cajaId) ?? null : null;
 
   /* La cartera se pide UNA vez para todas las unidades de la página, no una
    * por fila: treinta reservas suelen ser doce casas, y preguntar por cada
@@ -350,6 +363,14 @@ export default function ReservasPage() {
                             </>
                           )}
                           <button
+                            onClick={() => setCajaId(r._id)}
+                            title="Caja de la reserva"
+                            aria-label="Caja de la reserva"
+                            className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                          >
+                            <Wallet className="h-4 w-4" />
+                          </button>
+                          <button
                             onClick={() => setDeleteTarget(r._id)}
                             aria-label="Eliminar"
                             className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-red-500/10 hover:text-red-600 dark:hover:text-red-400"
@@ -409,6 +430,13 @@ export default function ReservasPage() {
           onClose={() => setCuentaAbierta(null)}
         />
       )}
+      {cajaReserva && (
+        <CajaReservaModal
+          key={cajaReserva._id}
+          reserva={cajaReserva}
+          onClose={() => setCajaId(null)}
+        />
+      )}
     </PageContainer>
   );
 }
@@ -430,8 +458,8 @@ export default function ReservasPage() {
  * como pactado es peor que no mostrarlo.
  */
 function CeldaValores({ reserva }: { reserva: ReservaRow }) {
-  const { valorReserva, depositoRequerido, valoresEstimados } = reserva;
-  const sinNada = valorReserva == null && !depositoRequerido;
+  const { valorReserva, depositoRequerido, valoresEstimados, pagoAlquilerMonto, depositoCaja } = reserva;
+  const sinNada = valorReserva == null && !depositoRequerido && pagoAlquilerMonto == null && !depositoCaja;
 
   if (sinNada) {
     return (
@@ -445,6 +473,16 @@ function CeldaValores({ reserva }: { reserva: ReservaRow }) {
       </TD>
     );
   }
+
+  const estadoDeposito = !depositoCaja
+    ? depositoRequerido
+      ? "Sin registrar"
+      : null
+    : depositoCaja.estado === "registrado"
+      ? "Recibido"
+      : depositoCaja.estado === "devuelto"
+        ? "Devuelto"
+        : "Retenido";
 
   return (
     <TD>
@@ -464,9 +502,27 @@ function CeldaValores({ reserva }: { reserva: ReservaRow }) {
             </span>
           )}
         </p>
-        <p className="text-xs text-muted-foreground">
-          Depósito: {depositoRequerido ? cop(depositoRequerido) : "—"}
+        {(pagoAlquilerMonto != null || valorReserva != null) && (
+          <p className="text-[11px] text-muted-foreground">
+            {pagoAlquilerMonto != null ? `Cobrado ${cop(pagoAlquilerMonto)}` : "Pendiente de cobro"}
+          </p>
+        )}
+        <p className="mt-1 text-xs text-muted-foreground">
+          Depósito: {depositoCaja ? cop(depositoCaja.monto) : depositoRequerido ? cop(depositoRequerido) : "—"}
         </p>
+        {estadoDeposito && (
+          <p
+            className={cn(
+              "text-[11px]",
+              depositoCaja?.estado === "no_devuelto"
+                ? "text-red-600 dark:text-red-400"
+                : "text-muted-foreground",
+            )}
+            title={depositoCaja?.observacionesSalida ?? undefined}
+          >
+            {estadoDeposito}
+          </p>
+        )}
       </div>
     </TD>
   );
@@ -745,6 +801,12 @@ function ZonasModal({ condominioId, zonas, onClose }: { condominioId: Id<"condom
                         : null,
                       z.precioPorDia != null
                         ? `${cop(z.precioPorDia)}/día`
+                        : null,
+                      z.precioPorMes != null
+                        ? `${cop(z.precioPorMes)}/mes`
+                        : null,
+                      z.depositoRequerido
+                        ? `Depósito ${cop(z.depositoRequerido)}`
                         : null,
                     ]
                       .filter(Boolean)

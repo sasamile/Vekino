@@ -28,6 +28,7 @@ import {
 } from "@/components/ui/glass";
 import { AuthUI } from "@/lib/auth-ui";
 import { SoftUI, softShadow } from "@/lib/soft-ui";
+import { calcularCosto, enPesos } from "@vekino/backend/costoReserva";
 
 type Estado = "pendiente" | "aprobada" | "rechazada" | "cancelada";
 
@@ -132,6 +133,11 @@ function ReservasContent() {
 
   const filtered = (reservas ?? []).filter((r) => !filtro || r.estado === filtro);
   const zonasActivas = (zonas ?? []).filter((z) => z.activa);
+  const zonaSel = zonasActivas.find((z) => z._id === zonaId);
+  const costo =
+    zonaSel && horaInicio && horaFin
+      ? calcularCosto(zonaSel, horaInicio, horaFin)
+      : null;
   const pendientes = (reservas ?? []).filter((r) => r.estado === "pendiente").length;
   const aprobadas = (reservas ?? []).filter((r) => r.estado === "aprobada").length;
 
@@ -476,6 +482,31 @@ function ReservasContent() {
             </View>
           </View>
 
+          {costo && (!costo.sinTarifa || costo.deposito > 0) ? (
+            <View style={styles.costoBox}>
+              {costo.alquiler > 0 ? (
+                <View style={styles.costoRow}>
+                  <Text style={styles.costoLabel}>Uso del espacio</Text>
+                  <Text style={styles.costoValor}>{enPesos(costo.alquiler)}</Text>
+                </View>
+              ) : null}
+              {costo.deposito > 0 ? (
+                <View style={styles.costoRow}>
+                  <Text style={styles.costoLabel}>Depósito (se devuelve)</Text>
+                  <Text style={styles.costoValor}>{enPesos(costo.deposito)}</Text>
+                </View>
+              ) : null}
+              <View style={[styles.costoRow, styles.costoTotal]}>
+                <Text style={styles.costoTotalLabel}>Total</Text>
+                <Text style={styles.costoTotalValor}>{enPesos(costo.totalAPagar)}</Text>
+              </View>
+            </View>
+          ) : costo?.sinTarifa ? (
+            <Text style={styles.costoHint}>
+              Este espacio no tiene tarifa configurada. Confirma el valor con la administración.
+            </Text>
+          ) : null}
+
           {formError ? (
             <View style={styles.errorBox}>
               <Text style={styles.errorText}>{formError}</Text>
@@ -622,6 +653,14 @@ function ReservaCard({
         {r.observaciones ? (
           <Text style={styles.obsText} numberOfLines={1}>
             {r.observaciones}
+          </Text>
+        ) : null}
+
+        {r.valorReserva != null || r.depositoRequerido ? (
+          <Text style={styles.obsText} numberOfLines={1}>
+            {r.valorReserva != null ? enPesos(r.valorReserva) : ""}
+            {r.valorReserva != null && r.depositoRequerido ? " · " : ""}
+            {r.depositoRequerido ? `Depósito ${enPesos(r.depositoRequerido)}` : ""}
           </Text>
         ) : null}
 
@@ -894,5 +933,52 @@ const styles = StyleSheet.create({
     color: SoftUI.textSecondary,
     fontSize: SoftUI.type.chip.size - 1,
     fontFamily: AuthUI.font.regular,
+  },
+  costoBox: {
+    marginBottom: SoftUI.space.base,
+    padding: SoftUI.space.base,
+    borderRadius: SoftUI.radius.cardSm,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: SoftUI.divider,
+    backgroundColor: SoftUI.bgSecondary,
+    gap: 6,
+  },
+  costoRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "baseline",
+    gap: SoftUI.space.md,
+  },
+  costoLabel: {
+    color: SoftUI.textSecondary,
+    fontSize: SoftUI.type.caption.size,
+    fontFamily: AuthUI.font.regular,
+  },
+  costoValor: {
+    color: SoftUI.text,
+    fontSize: SoftUI.type.caption.size,
+    fontFamily: AuthUI.font.semibold,
+  },
+  costoTotal: {
+    marginTop: 6,
+    paddingTop: 8,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: SoftUI.divider,
+  },
+  costoTotalLabel: {
+    color: SoftUI.text,
+    fontSize: SoftUI.type.body.size,
+    fontFamily: AuthUI.font.semibold,
+  },
+  costoTotalValor: {
+    color: SoftUI.text,
+    fontSize: SoftUI.type.body.size,
+    fontFamily: AuthUI.font.semibold,
+  },
+  costoHint: {
+    color: SoftUI.textSecondary,
+    fontSize: SoftUI.type.caption.size,
+    fontFamily: AuthUI.font.regular,
+    marginBottom: SoftUI.space.base,
   },
 });

@@ -571,6 +571,17 @@ export default defineSchema({
      * es que nadie le puso precio, y un cero diria lo primero.
      */
     valorReserva: v.optional(v.number()),
+    /**
+     * Lo que la administración (o portería) cobró de alquiler.
+     *
+     * El valor pactado no es un pago: hasta que alguien marca que lo recibió,
+     * el reporte no puede decir "se cobró" ni "no se cobró" — solo "falta
+     * registrar". Estos campos son esa marca.
+     */
+    pagoAlquilerMonto: v.optional(v.number()),
+    pagoAlquilerAt: v.optional(v.number()),
+    pagoAlquilerPorNombre: v.optional(v.string()),
+    pagoAlquilerNotas: v.optional(v.string()),
     // Control operativo en portería (guardia).
     ingresoValidadoAt: v.optional(v.number()),
     salidaValidadaAt: v.optional(v.number()),

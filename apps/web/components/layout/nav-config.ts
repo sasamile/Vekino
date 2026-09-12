@@ -155,7 +155,7 @@ export const NAV_GROUPS: NavGroup[] = [
         segment: "reportes",
         icon: ChartColumn,
         ready: true,
-        keywords: ["estadisticas", "exportar", "graficas", "analisis"],
+        keywords: ["estadisticas", "exportar", "graficas", "analisis", "parqueaderos", "aporte", "reservas", "cartera"],
       },
     ],
   },

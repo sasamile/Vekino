@@ -11,6 +11,8 @@ import {
 } from "./model/authz";
 import { resolveTipoVehiculo } from "./model/placa";
 import { displayNameFromUser } from "./model/displayName";
+import { normalizarPlaca } from "./lib/placa";
+import { mapearTipo, resolverUnidad } from "./lib/importarVehiculos";
 
 const ADMIN_ROLES = ["administrador", "junta_directiva", "contadora"] as const;
 
@@ -259,6 +261,122 @@ export const remove = mutation({
     if (!existing) throw new Error("Vehículo no encontrado.");
     await requireCondominioRole(ctx, existing.condominioId, [...ADMIN_ROLES]);
     await ctx.db.delete(args.id);
+  },
+});
+
+const filaExcelValidator = v.object({
+  placa: v.string(),
+  unidad: v.string(),
+  torre: v.optional(v.string()),
+  tipo: v.optional(v.string()),
+  marca: v.optional(v.string()),
+  color: v.optional(v.string()),
+  observaciones: v.optional(v.string()),
+});
+
+/**
+ * Re-sube el Excel del parqueadero: actualiza por placa y crea las nuevas.
+ *
+ * Sin esto la administración tenía que editar carro por carro. La placa es
+ * la llave — "ABC-123" y "abc 123" son el mismo. Si el carro cambió de casa,
+ * se mueve; si estaba archivado, vuelve. Un campo vacío en el Excel no borra
+ * lo que ya había.
+ */
+export const bulkUpsert = mutation({
+  args: {
+    condominioId: v.id("condominios"),
+    filas: v.array(filaExcelValidator),
+  },
+  handler: async (ctx, args) => {
+    await requireCondominioRole(ctx, args.condominioId, [...ADMIN_ROLES]);
+    if (args.filas.length > 200) {
+      throw new Error("Máximo 200 vehículos por carga. Parte el archivo.");
+    }
+
+    const unidades = await ctx.db
+      .query("unidades")
+      .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
+      .collect();
+    const unidadMin = unidades.map((u) => ({
+      _id: u._id as string,
+      numero: u.numero,
+      torre: u.torre ?? null,
+    }));
+
+    const existentes = await ctx.db
+      .query("vehiculos")
+      .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
+      .collect();
+    const porPlaca = new Map<string, (typeof existentes)[number]>();
+    for (const v of existentes) {
+      const k = normalizarPlaca(v.placa);
+      if (!k) continue;
+      const prev = porPlaca.get(k);
+      /* Si hay duplicados, nos quedamos con el que sigue en circulación. */
+      if (!prev || (prev.archivadoEn && !v.archivadoEn)) porPlaca.set(k, v);
+    }
+
+    const now = Date.now();
+    let creados = 0;
+    let actualizados = 0;
+    let restaurados = 0;
+    const omitidos: { placa: string; motivo: string }[] = [];
+
+    for (const fila of args.filas) {
+      const placa = normalizarPlaca(fila.placa);
+      if (!placa) {
+        omitidos.push({ placa: fila.placa, motivo: "Sin placa" });
+        continue;
+      }
+      const unidad = resolverUnidad(unidadMin, fila.unidad, fila.torre);
+      if (!unidad.ok) {
+        omitidos.push({
+          placa,
+          motivo:
+            unidad.motivo === "ambigua"
+              ? `La unidad ${fila.unidad} está en más de una torre. Indica la torre.`
+              : `No hay una unidad ${fila.unidad} en el conjunto.`,
+        });
+        continue;
+      }
+      const unidadId = unidad.unidadId as Id<"unidades">;
+      const tipo = mapearTipo(fila.tipo, placa);
+      const existente = porPlaca.get(placa);
+
+      if (existente) {
+        const restaurar = Boolean(existente.archivadoEn);
+        await ctx.db.patch(existente._id, {
+          unidadId,
+          placa,
+          tipo: resolveTipoVehiculo(placa, tipo),
+          ...(fila.marca ? { marca: fila.marca.trim() } : {}),
+          ...(fila.color ? { color: fila.color.trim() } : {}),
+          ...(fila.observaciones ? { observaciones: fila.observaciones.trim() } : {}),
+          ...(restaurar ? { archivadoEn: undefined } : {}),
+          updatedAt: now,
+        });
+        if (restaurar) restaurados += 1;
+        actualizados += 1;
+        porPlaca.set(placa, { ...existente, unidadId, placa, archivadoEn: undefined });
+      } else {
+        const id = await ctx.db.insert("vehiculos", {
+          condominioId: args.condominioId,
+          unidadId,
+          placa,
+          tipo: resolveTipoVehiculo(placa, tipo),
+          marca: fila.marca?.trim() || undefined,
+          color: fila.color?.trim() || undefined,
+          observaciones: fila.observaciones?.trim() || undefined,
+          createdAt: now,
+          updatedAt: now,
+        });
+        const creado = await ctx.db.get(id);
+        if (creado) porPlaca.set(placa, creado);
+        creados += 1;
+      }
+    }
+
+    return { creados, actualizados, restaurados, omitidos };
   },
 });
 

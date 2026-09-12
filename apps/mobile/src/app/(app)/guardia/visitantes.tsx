@@ -23,6 +23,15 @@ import { Tap } from "@/components/ui/tap";
 import { AuthUI } from "@/lib/auth-ui";
 import { C } from "@/lib/theme";
 
+type ResumenScan = {
+  accion: "ingreso" | "ya_activo" | "salida";
+  id: string;
+  nombre: string;
+  documento: string;
+  unidadNumero: string | null;
+  anfitrionNombre: string | null;
+  placa: string | null;
+};
 type Vis = Doc<"visitantes">;
 type TabKey = "escanear" | "registrar" | "actividad";
 type Filtro = "activo" | "esperando_aprobacion" | "finalizado";
@@ -152,7 +161,8 @@ function EscanearTab() {
   const [pausado, setPausado] = useState(false);
   const [busy, setBusy] = useState(false);
   const [mensaje, setMensaje] = useState<{ tone: "ok" | "error"; texto: string } | null>(null);
-  const [salidaId, setSalidaId] = useState<string | null>(null);
+  const [resumen, setResumen] = useState<ResumenScan | null>(null);
+  const [salidaId, setSalidaId] = useState<ResumenScan | null>(null);
   const [manual, setManual] = useState("");
   const lastScan = useRef(0);
 
@@ -167,13 +177,27 @@ function EscanearTab() {
       setBusy(true);
       setPausado(true);
       setMensaje(null);
+      setResumen(null);
       try {
-        await ingreso({ id: id as Id<"visitantes"> });
-        setMensaje({ tone: "ok", texto: "Ingreso registrado. Bienvenido." });
+        const result = await ingreso({ id: id as Id<"visitantes"> });
+        if (result.accion === "ya_activo") {
+          setSalidaId(result);
+        } else {
+          setResumen(result);
+          setMensaje({ tone: "ok", texto: "Ingreso registrado." });
+        }
       } catch (e) {
         const msg = e instanceof Error ? e.message : "";
         if (msg.includes("YA_ACTIVO")) {
-          setSalidaId(id);
+          setSalidaId({
+            accion: "ya_activo",
+            id,
+            nombre: "Visitante",
+            documento: "",
+            unidadNumero: null,
+            anfitrionNombre: null,
+            placa: null,
+          });
         } else {
           setMensaje({
             tone: "error",
@@ -192,7 +216,8 @@ function EscanearTab() {
     if (!salidaId) return;
     setBusy(true);
     try {
-      await salida({ id: salidaId as Id<"visitantes"> });
+      await salida({ id: salidaId.id as Id<"visitantes"> });
+      setResumen({ ...salidaId, accion: "salida" });
       setMensaje({ tone: "ok", texto: "Salida registrada." });
     } catch {
       setMensaje({ tone: "error", texto: "No se pudo registrar la salida." });
@@ -265,6 +290,24 @@ function EscanearTab() {
         </View>
       ) : null}
 
+      {resumen ? (
+        <View style={styles.resumenCard}>
+          <Text style={styles.resumenKicker}>
+            {resumen.accion === "salida" ? "Salida" : "Ingreso"}
+          </Text>
+          <Text style={styles.resumenNombre}>{resumen.nombre}</Text>
+          <Text style={styles.resumenLine}>
+            Va a {resumen.unidadNumero ? `unidad ${resumen.unidadNumero}` : "—"}
+          </Text>
+          <Text style={styles.resumenLine}>
+            Anfitrión: {resumen.anfitrionNombre ?? "—"}
+          </Text>
+          {resumen.placa ? (
+            <Text style={styles.resumenLine}>Placa {resumen.placa}</Text>
+          ) : null}
+        </View>
+      ) : null}
+
       <Text style={[styles.fieldLabel, { marginTop: 16 }]}>Código manual</Text>
       <View style={{ flexDirection: "row", gap: 8 }}>
         <TextInput
@@ -292,8 +335,19 @@ function EscanearTab() {
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>Visitante adentro</Text>
-            <Text style={styles.hint}>
-              Este visitante ya tiene ingreso activo. ¿Registrar salida?
+            {salidaId ? (
+              <>
+                <Text style={[styles.resumenNombre, { marginTop: 8 }]}>{salidaId.nombre}</Text>
+                <Text style={styles.resumenLine}>
+                  Va a {salidaId.unidadNumero ? `unidad ${salidaId.unidadNumero}` : "—"}
+                </Text>
+                <Text style={styles.resumenLine}>
+                  Anfitrión: {salidaId.anfitrionNombre ?? "—"}
+                </Text>
+              </>
+            ) : null}
+            <Text style={[styles.hint, { marginTop: 8 }]}>
+              Ya tiene ingreso activo. ¿Registrar salida?
             </Text>
             <View style={{ flexDirection: "row", gap: 10, marginTop: 16 }}>
               <Tap onPress={() => setSalidaId(null)} style={{ flex: 1 }}>
@@ -754,6 +808,32 @@ const styles = StyleSheet.create({
   },
   msgErr: {
     backgroundColor: "#FEF2F2",
+  },
+  resumenCard: {
+    marginTop: 12,
+    padding: 14,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "rgba(14,14,15,0.1)",
+    backgroundColor: "#fff",
+    gap: 4,
+  },
+  resumenKicker: {
+    fontSize: 11,
+    fontFamily: AuthUI.font.semibold,
+    color: AuthUI.textMuted,
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+  },
+  resumenNombre: {
+    fontSize: 18,
+    fontFamily: AuthUI.font.semibold,
+    color: AuthUI.text,
+  },
+  resumenLine: {
+    fontSize: 13,
+    fontFamily: AuthUI.font.regular,
+    color: AuthUI.textMuted,
   },
   modalBackdrop: {
     flex: 1,

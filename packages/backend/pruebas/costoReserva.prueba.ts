@@ -80,3 +80,23 @@ test("sin unidadTiempo se asume por dia, que es lo mas comun", () => {
   const c = calcularCosto({ precioPorDia: 50000 }, "10:00", "12:00");
   assert.equal(c.alquiler, 50000);
 });
+
+test("si la modalidad no tiene precio, usa el que sí está puesto", () => {
+  /* "Por día" con solo precio por hora: antes salía en cero y la reserva
+   * no copiaba el valor de la zona. */
+  const porHoraEnDia = calcularCosto(
+    { unidadTiempo: "dia", precioPorHora: 20000 },
+    "10:00",
+    "13:00",
+  );
+  assert.equal(porHoraEnDia.alquiler, 60000);
+  assert.equal(porHoraEnDia.sinTarifa, false);
+
+  const porDiaEnHora = calcularCosto(
+    { unidadTiempo: "hora", precioPorDia: 150000 },
+    "10:00",
+    "13:00",
+  );
+  assert.equal(porDiaEnHora.alquiler, 150000);
+  assert.equal(porDiaEnHora.sinTarifa, false);
+});

@@ -24,6 +24,48 @@ import { cn } from "@/lib/utils";
 type Vis = Doc<"visitantes">;
 type FiltroActividad = "activo" | "esperando_aprobacion" | "finalizado";
 
+type ResumenScan = {
+  accion: "ingreso" | "ya_activo" | "salida";
+  id: string;
+  nombre: string;
+  documento: string;
+  tipoDocumento: string;
+  tipo: Vis["tipo"];
+  placa: string | null;
+  unidadNumero: string | null;
+  anfitrionNombre: string | null;
+};
+
+function ResumenAccesoCard({ r, className }: { r: ResumenScan; className?: string }) {
+  return (
+    <div className={cn("rounded-xl border border-border bg-muted/40 p-4 text-sm", className)}>
+      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+        {r.accion === "salida" ? "Salida" : r.accion === "ya_activo" ? "Ya está adentro" : "Ingreso"}
+      </p>
+      <p className="mt-1 text-lg font-semibold text-foreground">{r.nombre}</p>
+      <p className="text-xs text-muted-foreground">{r.tipoDocumento} {r.documento}</p>
+      <dl className="mt-3 space-y-1.5">
+        <div className="flex justify-between gap-3">
+          <dt className="text-muted-foreground">Va a</dt>
+          <dd className="font-medium text-foreground">
+            {r.unidadNumero ? `Unidad ${r.unidadNumero}` : "—"}
+          </dd>
+        </div>
+        <div className="flex justify-between gap-3">
+          <dt className="text-muted-foreground">Anfitrión</dt>
+          <dd className="font-medium text-foreground">{r.anfitrionNombre ?? "—"}</dd>
+        </div>
+        {r.placa && (
+          <div className="flex justify-between gap-3">
+            <dt className="text-muted-foreground">Placa</dt>
+            <dd className="font-medium text-foreground">{r.placa}</dd>
+          </div>
+        )}
+      </dl>
+    </div>
+  );
+}
+
 const TIPO_LABEL: Record<Vis["tipo"], string> = {
   visitante: "Visitante", empresa: "Empresa", domicilio: "Domicilio",
 };
@@ -336,21 +378,37 @@ function EscanearTab() {
   const salida = useMutation(api.guardia.registrarSalida);
   const [pausado, setPausado] = useState(false);
   const [mensaje, setMensaje] = useState<{ tone: "ok" | "error"; texto: string } | null>(null);
-  const [salidaPendiente, setSalidaPendiente] = useState<string | null>(null);
+  const [resumen, setResumen] = useState<ResumenScan | null>(null);
+  const [salidaPendiente, setSalidaPendiente] = useState<ResumenScan | null>(null);
   const [manual, setManual] = useState("");
   const [busy, setBusy] = useState(false);
 
   async function procesar(idRaw: string) {
     const id = parseQr(idRaw);
     if (!id || busy) return;
-    setBusy(true); setPausado(true); setMensaje(null);
+    setBusy(true); setPausado(true); setMensaje(null); setResumen(null);
     try {
-      await ingreso({ id: id as Id<"visitantes"> });
-      setMensaje({ tone: "ok", texto: "Ingreso registrado. Bienvenido." });
+      const result = await ingreso({ id: id as Id<"visitantes"> });
+      if (result.accion === "ya_activo") {
+        setSalidaPendiente(result);
+      } else {
+        setResumen(result);
+        setMensaje({ tone: "ok", texto: "Ingreso registrado." });
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : "";
       if (msg.includes("YA_ACTIVO")) {
-        setSalidaPendiente(id);
+        setSalidaPendiente({
+          accion: "ya_activo",
+          id,
+          nombre: "Visitante",
+          documento: "",
+          tipoDocumento: "CC",
+          tipo: "visitante",
+          placa: null,
+          unidadNumero: null,
+          anfitrionNombre: null,
+        });
       } else if (msg.includes("expiró") || msg.includes("ya no es válido") || msg.includes("Genera un QR")) {
         setMensaje({ tone: "error", texto: msg });
       } else if (msg.includes("fecha futura") || msg.includes("autorizado")) {
@@ -371,8 +429,9 @@ function EscanearTab() {
     if (!salidaPendiente) return;
     setBusy(true);
     try {
-      await salida({ id: salidaPendiente as Id<"visitantes"> });
-      setMensaje({ tone: "ok", texto: "Salida registrada. ¡Hasta pronto!" });
+      const result = await salida({ id: salidaPendiente.id as Id<"visitantes"> });
+      setResumen({ ...result, accion: "salida" });
+      setMensaje({ tone: "ok", texto: "Salida registrada." });
     } catch {
       setMensaje({ tone: "error", texto: "No se pudo registrar la salida." });
     } finally {
@@ -406,6 +465,7 @@ function EscanearTab() {
             <strong className="text-foreground">para hoy</strong>. Primer escaneo = ingreso;
             si ya está adentro, puedes registrar la salida. Los QR de días pasados no sirven.
           </p>
+          {resumen && <ResumenAccesoCard r={resumen} className="mt-3" />}
           {mensaje && (
             <p className={cn(
               "mt-3 rounded-lg p-3 text-sm font-medium",
@@ -441,7 +501,8 @@ function EscanearTab() {
             </>
           }
         >
-          <p className="text-sm text-muted-foreground">
+          <ResumenAccesoCard r={salidaPendiente} />
+          <p className="mt-3 text-sm text-muted-foreground">
             Este visitante ya tiene un ingreso activo. ¿Deseas registrar su salida?
           </p>
         </Modal>
