@@ -195,3 +195,106 @@ export const rolAsignacionValidator = v.union(
 );
 
 export type RolAsignacion = "supervisor" | "guardia";
+
+// ─────────────────────────────────────────────────────────────
+// INVENTARIO DE LA COMPAÑÍA
+//
+// Los elementos físicos que la empresa entrega a su gente: radios, linternas,
+// chalecos, bastones. Pertenecen a la COMPAÑÍA, no al conjunto: sobreviven a
+// perder un contrato y se mueven de una portería a otra.
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * CONDICIÓN del elemento. NO es dónde está ni quién lo tiene.
+ *
+ * La distinción es la decisión estructural del módulo. La tentación es meter
+ * aquí "asignado" o "en conjunto", y entonces un radio averiado que además
+ * está prestado a un guarda no se puede representar: hay que elegir una de
+ * las dos verdades y se pierde la otra. La custodia se derivará de filas con
+ * vigencia —como hace `asignaciones` con el personal—, y este enum se queda
+ * hablando solo del estado físico del aparato.
+ *
+ * Un único valor hoy a propósito. `averiado`, `mantenimiento` y `perdido`
+ * son las siguientes y entran añadiendo un literal, que en Convex es un
+ * cambio retrocompatible: las filas existentes siguen validando. Declararlos
+ * ahora sería peor —serían estados a los que ninguna operación lleva, y el
+ * primero que los usara descubriría que nadie decidió qué significan para el
+ * resto del sistema—.
+ */
+export const estadoItemValidator = v.union(v.literal("disponible"));
+
+export type EstadoItem = "disponible";
+
+/**
+ * Los eventos del historial de un elemento.
+ *
+ * Enum y no texto libre: sobre texto libre no se puede filtrar, ni contar, ni
+ * pintar un icono distinto, ni construir después "todo lo que le pasó a este
+ * radio en la portería norte". La descripción legible va aparte y se compone
+ * al escribir.
+ *
+ * Solo los cuatro que alguna operación produce hoy. Los de asignación
+ * —`ITEM_ASSIGNED_TO_CONDOMINIUM`, `ITEM_ASSIGNED_TO_GUARD`, `ITEM_RETURNED`—
+ * y los de condición —`ITEM_DAMAGED`, `ITEM_MAINTENANCE`— entran igual que los
+ * estados: añadiendo un literal, sin tocar lo escrito.
+ */
+export const tipoNovedadItemValidator = v.union(
+  v.literal("ITEM_CREATED"),
+  v.literal("ITEM_UPDATED"),
+  v.literal("ITEM_ARCHIVED"),
+  /** Alta por carga masiva. Se separa de `ITEM_CREATED` porque responde a
+   *  "¿esto lo tecleó alguien o entró en el Excel de marzo?", que es la
+   *  primera pregunta cuando aparecen doscientos elementos iguales. */
+  v.literal("ITEM_IMPORTED"),
+
+  /**
+   * La custodia: el elemento sale a un conjunto y vuelve.
+   *
+   * Dos literales y no uno con un campo "direccion" porque son dos hechos
+   * distintos que se leen distinto en la linea de tiempo, y porque filtrar
+   * "todo lo que salio y no ha vuelto" tiene que poder hacerse por el tipo.
+   *
+   * El conjunto va en `inventarioNovedades.condominioId`, que la tarea 1 dejo
+   * declarado justamente para esto.
+   */
+  v.literal("ITEM_ASSIGNED_TO_CONDOMINIUM"),
+  v.literal("ITEM_RETURNED_FROM_CONDOMINIUM"),
+
+  /**
+   * La custodia INTERNA del conjunto: el supervisor entrega el elemento a un
+   * guarda y se lo recibe de vuelta.
+   *
+   * Son otro nivel, no otro valor del mismo: mientras un guarda lo tiene, el
+   * elemento SIGUE asignado al conjunto. Por eso hay cuatro literales y no
+   * dos con un campo "a quién": la linea de tiempo tiene que poder decir
+   * "salió a la portería" y "se lo quedó Juan" como dos hechos distintos.
+   */
+  v.literal("ITEM_ASSIGNED_TO_GUARD"),
+  v.literal("ITEM_RETURNED_BY_GUARD"),
+
+  /**
+   * Una nota sobre el elemento. NO cambia su estado.
+   *
+   * "El radio presenta interferencia" es una observación, no un diagnóstico:
+   * convertirla automáticamente en `averiado` haría que cualquiera pudiera
+   * sacar material de circulación con una frase, y que el estado dejara de
+   * significar lo que dice. Quien decide que un radio está averiado es una
+   * operación propia, y todavía no existe.
+   *
+   * Va al MISMO historial y no a una bitácora aparte: el modelo de la tarea 1
+   * ya lo soporta entero —conjunto, guarda, actor, descripción, fecha— y una
+   * segunda auditoría partiría en dos la historia del elemento.
+   */
+  v.literal("ITEM_NOTE"),
+);
+
+export type TipoNovedadItem =
+  | "ITEM_CREATED"
+  | "ITEM_UPDATED"
+  | "ITEM_ARCHIVED"
+  | "ITEM_IMPORTED"
+  | "ITEM_ASSIGNED_TO_CONDOMINIUM"
+  | "ITEM_RETURNED_FROM_CONDOMINIUM"
+  | "ITEM_ASSIGNED_TO_GUARD"
+  | "ITEM_RETURNED_BY_GUARD"
+  | "ITEM_NOTE";

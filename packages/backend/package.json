@@ -43,6 +43,10 @@
     "./importarVehiculos": {
       "types": "./convex/lib/importarVehiculos.ts",
       "default": "./convex/lib/importarVehiculos.ts"
+    },
+    "./inventario": {
+      "types": "./convex/lib/inventario.ts",
+      "default": "./convex/lib/inventario.ts"
     }
   },
   "dependencies": {

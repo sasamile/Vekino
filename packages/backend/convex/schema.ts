@@ -11,6 +11,8 @@ import {
   companiaRoleValidator,
   estadoCompaniaValidator,
   rolAsignacionValidator,
+  estadoItemValidator,
+  tipoNovedadItemValidator,
 } from "./model/roles";
 
 /**
@@ -2533,4 +2535,359 @@ export default defineSchema({
     .index("by_user_condominio", ["userId", "condominioId"])
     .index("by_condominio_rol", ["condominioId", "rol"])
     .index("by_compania", ["companiaId"]),
+  // ─────────────────────────────────────────────────────────────
+  // INVENTARIO DE LA COMPAÑÍA
+  //
+  // Los elementos físicos de la empresa de vigilancia: radios, linternas,
+  // chalecos, bastones. Cuelgan de la COMPAÑÍA y no del conjunto, por lo
+  // mismo que `companiaMiembros`: existen antes de tener contratos, se mueven
+  // de una portería a otra y sobreviven a perderlas todas.
+  //
+  // Dos ejes que NO se mezclan:
+  //   - `estado`      → cómo está el aparato (condición física).
+  //   - `archivadoEn` → si el REGISTRO sigue de alta.
+  // Un radio averiado sigue estando de alta; uno archivado pudo archivarse
+  // estando perfecto. Meterlo todo en un solo enum obliga a elegir cuál de
+  // las dos verdades se guarda, y la otra se pierde.
+  //
+  // Lo que deliberadamente NO está todavía: dónde está y quién lo tiene. Eso
+  // es custodia, no atributo, y va a ser una tabla con vigencia calcada de
+  // `asignaciones` —no un campo aquí— para poder responder dónde estaba un
+  // elemento en una fecha dada y no solo dónde está hoy.
+  // ─────────────────────────────────────────────────────────────
+
+  inventarioItems: defineTable({
+    /** El tenant. Toda lectura y toda escritura pasa por él. */
+    companiaId: v.id("companiasSeguridad"),
+
+    nombre: v.string(),
+
+    /**
+     * El serial grabado en el aparato. Único de hecho por compañía entre los
+     * NO archivados; Convex no tiene UNIQUE, así que se comprueba en código
+     * leyendo por `by_compania_serial`, igual que `companiasSeguridad.nit` y
+     * `users.email`. La mutación es una transacción serializable, así que
+     * leer-comprobar-escribir dentro de ella es atómico de verdad.
+     *
+     * OPCIONAL, y no por descuido: media bodega de una compañía de vigilancia
+     * no tiene serial —chalecos, botas, conos, bastones—. Exigirlo obliga a
+     * inventar "N/A" o "SIN-SERIAL-7", que además de ser basura choca contra
+     * la propia regla de unicidad que se quiere proteger. Sin serial no hay
+     * nada que comprobar; con serial, no se repite.
+     *
+     * Se guarda normalizado —mayúsculas, sin espacios— por `normalizarSerial`:
+     * el mismo aparato tecleado dos veces con distinta caja es exactamente el
+     * error que la unicidad existe para atrapar.
+     */
+    serial: v.optional(v.string()),
+
+    descripcion: v.optional(v.string()),
+
+    /**
+     * URL pública en S3, como `companiasSeguridad.logo` y las fotos de las
+     * novedades de portería. No es `_storage`: el proyecto sube a S3 desde
+     * antes y todo lo nuevo sigue por ahí.
+     */
+    fotoUrl: v.optional(v.string()),
+
+    /** Condición física. Ver `estadoItemValidator` en model/roles.ts. */
+    estado: estadoItemValidator,
+
+    /**
+     * El archivo (soft delete). Nunca se borra una fila: el historial de un
+     * elemento dado de baja es justo el que se consulta cuando aparece un
+     * faltante meses después.
+     *
+     * Timestamp opcional y no booleano, igual que `vehiculos.archivadoEn`:
+     * "archivado" sin fecha no responde desde cuándo, que es lo primero que
+     * se pregunta. Y con quién al lado, igual que `companiasSeguridad`.
+     */
+    archivadoEn: v.optional(v.number()),
+    archivadoPorUserId: v.optional(v.id("users")),
+
+    creadoPorUserId: v.id("users"),
+    actualizadoPorUserId: v.optional(v.id("users")),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    /* Sin `by_compania` a secas: es prefijo de los dos de abajo, así que no
+     * responde ninguna consulta que ellos no respondan, y Convex lo mantendría
+     * en cada escritura para nada. */
+    /* La comprobación de duplicados. Por (compañía, serial) y no por serial a
+     * secas: dos empresas distintas pueden tener el mismo número grabado y
+     * eso no es conflicto de nadie. */
+    .index("by_compania_serial", ["companiaId", "serial"])
+    /* Activos y archivados son dos listados distintos y se separan EN LA BASE,
+     * no filtrando en memoria: la pantalla de archivados de una compañía con
+     * miles de elementos no puede costar leerlos todos. */
+    .index("by_compania_archivado", ["companiaId", "archivadoEn"]),
+
+  /**
+   * EL HISTORIAL DE UN ELEMENTO. Append-only: nunca se edita ni se borra.
+   *
+   * Misma forma que `minutaEventos` y por el mismo motivo: hay un único sitio
+   * que escribe aquí —`model/inventarioNovedad.ts:logNovedadItem`— y las
+   * mutaciones lo llaman. Repartir el registro por cada mutación garantiza
+   * que la sexta se olvide.
+   *
+   * `tipo` es un enum y no una cadena suelta: sobre texto libre no se filtra,
+   * no se cuenta y no se pinta distinto. La frase legible va en `descripcion`
+   * y se compone al escribir; el dato duro va en `tipo` y `cambios`.
+   */
+  inventarioNovedades: defineTable({
+    itemId: v.id("inventarioItems"),
+
+    /**
+     * Denormalizado desde el item. El proyecto ya lo hace en `asignaciones`
+     * con `condominioId`, por lo mismo: toda tabla de negocio tiene que poder
+     * indexarse por su tenant sin saltar a la tabla padre.
+     */
+    companiaId: v.id("companiasSeguridad"),
+
+    tipo: tipoNovedadItemValidator,
+
+    /** Frase legible ya compuesta. Es lo que se pinta en la línea de tiempo. */
+    descripcion: v.string(),
+
+    /**
+     * QUÉ cambió exactamente, campo por campo.
+     *
+     * Sin esto, "Item editado" no dice nada útil: el motivo por el que se
+     * mira un historial es saber quién le cambió el serial, no que alguien lo
+     * tocó. Valores como texto ya formateado —no tipados— porque se pintan,
+     * no se recalculan, y así el registro sobrevive a que un campo cambie de
+     * tipo más adelante.
+     */
+    cambios: v.optional(
+      v.array(
+        v.object({
+          campo: v.string(),
+          antes: v.optional(v.string()),
+          despues: v.optional(v.string()),
+        }),
+      ),
+    ),
+
+    /**
+     * PREPARADOS Y SIN USAR. No los escribe nada todavía.
+     *
+     * Están aquí porque añadir un campo opcional a una tabla con filas es
+     * gratis en Convex, pero declararlos desde el principio documenta hacia
+     * dónde va el módulo y evita que la asignación a conjuntos termine
+     * inventándose su propio historial paralelo.
+     *
+     * Con ellos, "¿quién recibió este radio, en qué conjunto y cuándo lo
+     * devolvió?" se responde recorriendo `by_item`, sin tabla nueva.
+     */
+    condominioId: v.optional(v.id("condominios")),
+    guardaUserId: v.optional(v.id("users")),
+
+    actorUserId: v.id("users"),
+    /* Copiado, no solo referenciado: el mismo criterio que
+     * `guardiaNovedadReportes.reportadoPorNombre`. Si la persona se da de baja
+     * o cambia de nombre, el historial tiene que seguir diciendo quién obró. */
+    actorNombre: v.string(),
+
+    /* Sin `updatedAt`: una novedad ocurrió, no se reescribe. */
+    createdAt: v.number(),
+  })
+    /* La línea de tiempo de un elemento: la ruta caliente del detalle, y la
+     * única forma en que se lee esta tabla. Un índice por compañía se
+     * mantendría en cada novedad —la escritura más frecuente del módulo— sin
+     * que nadie lo consulte. */
+    .index("by_item", ["itemId"]),
+  /**
+   * LA CUSTODIA: dónde está un elemento y desde cuándo.
+   *
+   * Tabla propia y no un `condominioId` dentro de `inventarioItems`, porque un
+   * campo solo sabe dónde está HOY: el día que el radio vuelve y sale a otro
+   * conjunto, la respuesta anterior se pierde y con ella la pregunta que de
+   * verdad se hace —"¿por dónde ha pasado esto?"—.
+   *
+   * ── Por qué NO cuelga del contrato ──────────────────────────────────
+   * `asignaciones` (el personal) cuelga de `companiaContratos` para que
+   * terminar un contrato corte el acceso de toda su gente sin escribir una
+   * fila. Aquí sería un error copiarlo: terminar un contrato NO devuelve
+   * físicamente el radio. Si la custodia caducara con el contrato, el sistema
+   * diría que está en la bodega mientras sigue en la portería, y el faltante
+   * se volvería invisible justo cuando hay que reclamarlo.
+   *
+   * El contrato decide si se PUEDE entregar —solo a un conjunto que la
+   * compañía atiende hoy— y se guarda para poder preguntar después qué se
+   * quedó sin devolver al terminarlo. Pero solo un acto explícito de
+   * devolución cierra una custodia.
+   *
+   * ── Por qué no hay `vigenciaHasta` ──────────────────────────────────
+   * No existe fecha pactada de devolución de un radio. Y si se declarara,
+   * habría dos fuentes de verdad para "¿está aquí?" —la fecha y el hecho— que
+   * acabarían discrepando; el índice `by_item_devuelto`, que es lo que hace
+   * que la custodia activa se resuelva en UNA lectura y sin ambigüedad,
+   * seguiría solo a una de las dos. Un único final: `devueltaEn`.
+   *
+   * Nunca se borra ni se reescribe una fila cerrada: el ciclo
+   * compañía → A → compañía → B deja dos filas, no una editada.
+   * ─────────────────────────────────────────────────────────────
+   */
+  inventarioAsignaciones: defineTable({
+    itemId: v.id("inventarioItems"),
+
+    /**
+     * Denormalizado desde el elemento, igual que `asignaciones.condominioId`
+     * y por lo mismo: toda tabla de negocio tiene que poder indexarse por su
+     * tenant sin saltar a la tabla padre. Además cierra el aislamiento — leer
+     * una custodia no obliga a cargar el item para saber de quién es.
+     */
+    companiaId: v.id("companiasSeguridad"),
+
+    condominioId: v.id("condominios"),
+
+    /**
+     * El contrato bajo el que salió. NO la termina, y por eso no hay índice
+     * por él: es rastro, no autorización. Responde "¿qué nos quedamos sin
+     * devolver cuando se acabó ese contrato?", que es la primera pregunta al
+     * cerrar una relación comercial.
+     *
+     * Opcional porque la plataforma puede obrar sin contrato de por medio, y
+     * porque un contrato borrado no debe impedir cerrar la custodia.
+     */
+    contratoId: v.optional(v.id("companiaContratos")),
+
+    /** Cuándo salió, y quién la entregó. */
+    asignadaEn: v.number(),
+    asignadaPorUserId: v.id("users"),
+    /** Lo que dijo quien la entregó. Opcional. */
+    observacionAsignacion: v.optional(v.string()),
+
+    /**
+     * EL ÚNICO FINAL. Ausente = el elemento sigue en ese conjunto.
+     *
+     * Timestamp y no booleano, igual que `inventarioItems.archivadoEn`:
+     * "devuelto" sin fecha no responde desde cuándo, que es lo primero que se
+     * pregunta al cuadrar un inventario.
+     */
+    devueltaEn: v.optional(v.number()),
+    devueltaPorUserId: v.optional(v.id("users")),
+    observacionDevolucion: v.optional(v.string()),
+
+    /* Sin `updatedAt`: una custodia se abre y se cierra, no se reescribe. */
+    createdAt: v.number(),
+  })
+    /* El historial de un elemento, del más reciente al más antiguo. */
+    .index("by_item", ["itemId"])
+    /**
+     * LA RUTA CALIENTE. `.eq("devueltaEn", undefined)` da la custodia activa
+     * de un elemento en una sola lectura, y es lo que convierte "como máximo
+     * una activa" en una regla comprobable en vez de en una esperanza. Mismo
+     * truco que `inventarioItems.by_compania_archivado`.
+     */
+    .index("by_item_devuelta", ["itemId", "devueltaEn"])
+    /**
+     * Qué tiene HOY una compañía en un conjunto.
+     *
+     * Lleva `companiaId` delante a propósito. Un índice solo por conjunto
+     * mezcla el material de las dos empresas que pueden cubrir la misma
+     * portería, y filtrar después de acotar la lectura daría cero elementos a
+     * quien sí tiene material allí — el peor resultado posible en la pantalla
+     * con la que se reclama un faltante.
+     */
+    .index("by_compania_condominio_devuelta", [
+      "companiaId",
+      "condominioId",
+      "devueltaEn",
+    ])
+    /* Todo lo que la compañía tiene fuera. Sostiene el listado sin N+1: una
+     * lectura da la custodia de todos los elementos de la página. */
+    .index("by_compania_devuelta", ["companiaId", "devueltaEn"]),
+  /**
+   * LA CUSTODIA INTERNA: qué guarda tiene el elemento dentro del conjunto.
+   *
+   * ── Por qué CUELGA de `inventarioAsignaciones` ──────────────────────
+   * Es el mismo mecanismo con el que `asignaciones` cuelga de
+   * `companiaContratos`, y la tarea 2 lo dejó prometido a propósito: cerrar la
+   * custodia del conjunto invalida la del guarda sin escribir una sola fila,
+   * sin cascada que ejecutar y sin custodias huérfanas que sigan diciendo que
+   * alguien tiene un radio de un conjunto que ya devolvió todo.
+   *
+   * La alternativa —colgar del elemento y guardar el conjunto al lado— dejaba
+   * dos verdades sobre dónde está la cosa, que es exactamente lo que este
+   * módulo existe para no tener.
+   *
+   * ── Lo que NO es ────────────────────────────────────────────────────
+   * NO es `compañía → guarda`. El elemento sigue asignado al conjunto
+   * mientras un guarda lo tiene; ésta es una custodia ANIDADA dentro de
+   * aquélla, no una que la sustituya. Por eso son dos tablas y no una con un
+   * campo "tipo de destinatario": con una sola, un elemento en el conjunto A
+   * en manos de Juan tendría dos filas activas y la regla "una custodia
+   * activa" dejaría de poder comprobarse.
+   *
+   * ── La relación laboral NO la cierra ────────────────────────────────
+   * Que a Juan se le acabe la asignación al conjunto no devuelve el radio,
+   * igual que terminar un contrato no lo devuelve a la bodega. La asignación
+   * laboral decide si puede RECIBIR material nuevo; esta fila dice dónde está
+   * físicamente, y solo se cierra con una devolución explícita. Un guarda sin
+   * asignación y con custodia abierta es un pendiente que hay que resolver, y
+   * la pantalla del supervisor lo señala en vez de esconderlo.
+   * ─────────────────────────────────────────────────────────────
+   */
+  inventarioCustodiaGuardas: defineTable({
+    /** La custodia del conjunto de la que depende. La que manda. */
+    inventarioAsignacionId: v.id("inventarioAsignaciones"),
+
+    /**
+     * Denormalizados desde la asignación padre, igual que en `asignaciones` y
+     * por lo mismo: poder indexar por elemento, por tenant y por conjunto sin
+     * saltar a la tabla de arriba en cada lectura.
+     */
+    itemId: v.id("inventarioItems"),
+    companiaId: v.id("companiasSeguridad"),
+    condominioId: v.id("condominios"),
+
+    /**
+     * Quién lo tiene. Es un `users` y no un `companiaMiembros` porque la
+     * identidad del guarda nunca se bifurcó en este proyecto —lo dice el
+     * schema de vigilancia— y porque la custodia sigue siendo suya aunque se
+     * le dé de baja como miembro: lo que hay que poder responder es "quién
+     * tiene el radio", no "quién lo tenía mientras estuvo contratado".
+     */
+    guardaUserId: v.id("users"),
+
+    entregadaEn: v.number(),
+    /** El supervisor que se lo entregó. */
+    entregadaPorUserId: v.id("users"),
+    observacionEntrega: v.optional(v.string()),
+
+    /**
+     * EL ÚNICO FINAL. Ausente = el guarda todavía lo tiene.
+     *
+     * Mismo criterio que `inventarioAsignaciones.devueltaEn` y que
+     * `inventarioItems.archivadoEn`: un timestamp opcional, nunca un booleano,
+     * porque "devuelto" sin fecha no responde desde cuándo.
+     */
+    devueltaEn: v.optional(v.number()),
+    /** El supervisor que se lo recibió. */
+    devueltaPorUserId: v.optional(v.id("users")),
+    observacionDevolucion: v.optional(v.string()),
+
+    /* Sin `updatedAt`: una custodia se abre y se cierra, no se reescribe. */
+    createdAt: v.number(),
+  })
+    /* El historial de manos por las que pasó un elemento. */
+    .index("by_item", ["itemId"])
+    /**
+     * LA RUTA CALIENTE, y la que sostiene DOS reglas a la vez: que un elemento
+     * no pueda estar en manos de dos guardas, y que el conjunto no pueda
+     * devolverlo a la compañía mientras alguien lo tenga. Una lectura.
+     */
+    .index("by_item_devuelta", ["itemId", "devueltaEn"])
+    /**
+     * Todo lo que está repartido hoy en una portería. Con la compañía DELANTE:
+     * dos empresas pueden cubrir el mismo conjunto, y acotar la lectura por
+     * conjunto para filtrar después por compañía se lleva las filas de la otra
+     * — el error que la tarea 2 ya pagó una vez.
+     */
+    .index("by_compania_condominio_devuelta", [
+      "companiaId",
+      "condominioId",
+      "devueltaEn",
+    ]),
 });

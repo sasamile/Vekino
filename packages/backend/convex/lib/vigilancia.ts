@@ -179,6 +179,31 @@ export const CAPACIDADES = [
    * terminar le habria dejado tambien contratar conjuntos a su antojo.
    */
   "seguridad.terminar",
+
+  /**
+   * Ver el inventario de la propia compania.
+   *
+   * Separada de gestionar porque el dia que el supervisor necesite consultar
+   * que radios hay antes de pedir uno, se le da esta y no la otra: mirar la
+   * bodega no es poder darla de baja. Hoy no la tiene nadie mas que el
+   * administrador, pero la costura ya esta hecha.
+   */
+  "inventario.ver",
+  /** Crear, editar, archivar e importar elementos del inventario. */
+  "inventario.gestionar",
+  /**
+   * Entregar a un guarda el material que el conjunto ya tiene, y recibirlo.
+   *
+   * Separada de `inventario.gestionar` y no reutilizada: aquella es de
+   * COMPANIA ENTERA —quien la tiene puede crear, editar, archivar e importar
+   * todo el inventario— y esto es la custodia interna de UN conjunto. Darle
+   * la de compania al supervisor para que pudiera repartir radios le habria
+   * abierto la bodega completa de la empresa.
+   *
+   * Vive en `POR_ROL_ASIGNACION`, que es por conjunto, asi que el supervisor
+   * de la zona norte no reparte material en la zona sur.
+   */
+  "inventario.custodiar",
 ] as const;
 
 export type Capacidad = (typeof CAPACIDADES)[number];
@@ -216,12 +241,31 @@ const POR_ROL_CONJUNTO: Record<string, readonly Capacidad[]> = {
  */
 const POR_ROL_ASIGNACION: Record<string, readonly Capacidad[]> = {
   guardia: ["porteria.operar", "porteria.ver"],
-  supervisor: ["porteria.ver", "seguridad.asignar"],
+  supervisor: ["porteria.ver", "seguridad.asignar", "inventario.custodiar"],
 };
 
 /** Lo que habilita pertenecer a una compania, sin mirar conjunto alguno. */
+/*
+ * El administrador de compania NO recibe `inventario.custodiar`.
+ *
+ * Conserva la consulta —`inventarioAsignaciones.porCondominio` dice que hay
+ * en cada porteria y quien lo tiene— pero repartir material dentro de un
+ * conjunto es del supervisor, que es quien esta alli. Darselo "por si acaso"
+ * habria hecho que dos personas con criterios distintos movieran el mismo
+ * material sin coordinarse.
+ */
 const POR_ROL_COMPANIA: Record<string, readonly Capacidad[]> = {
-  admin_compania: ["seguridad.personal", "seguridad.asignar", "seguridad.terminar"],
+  admin_compania: [
+    "seguridad.personal",
+    "seguridad.asignar",
+    "seguridad.terminar",
+    /* El inventario es de la empresa y lo lleva quien la administra. El
+     * supervisor y el guarda no aparecen aqui a proposito: entregar y recibir
+     * elementos es la tarea 3, y darles permiso antes de que exista ese flujo
+     * les abriria hoy el CRUD entero de la bodega. */
+    "inventario.ver",
+    "inventario.gestionar",
+  ],
   supervisor: [],
   guardia: [],
 };
