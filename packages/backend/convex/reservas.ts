@@ -612,19 +612,28 @@ export const reporte = query({
     desde: v.string(),
     /** "2026-08-31". Inclusive. */
     hasta: v.string(),
+    /** Solo las reservas en este estado. Sin él, todas (como siempre). */
+    estado: v.optional(estadoValidator),
   },
   handler: async (ctx, args) => {
     await requireCondominioRole(ctx, args.condominioId, [...ADMIN_ROLES]);
 
+    /* Las fechas son "AAAA-MM-DD", asi que comparar como texto ya ordena
+     * bien. No hace falta convertirlas ni preocuparse por zonas horarias.
+     * El rango va en el indice: antes se traia todo el historico del
+     * conjunto para descartarlo en memoria. */
     const reservas = await ctx.db
       .query("reservas")
-      .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
+      .withIndex("by_condominio_fecha", (q) =>
+        q.eq("condominioId", args.condominioId).gte("fecha", args.desde).lte("fecha", args.hasta),
+      )
       .collect();
 
-    /* Las fechas son "AAAA-MM-DD", asi que comparar como texto ya ordena
-     * bien. No hace falta convertirlas ni preocuparse por zonas horarias. */
+    /* El estado se filtra ANTES de estimar valores y buscar depositos, para
+     * no gastar lecturas en filas que no van al reporte. El resumen de abajo
+     * se calcula sobre lo que queda, con la misma regla de siempre. */
     const enRango = reservas
-      .filter((r) => r.fecha >= args.desde && r.fecha <= args.hasta)
+      .filter((r) => !args.estado || r.estado === args.estado)
       .sort((a, b) => a.fecha.localeCompare(b.fecha) || a.horaInicio.localeCompare(b.horaInicio));
 
     const conVals = await conValores(ctx, args.condominioId, enRango);

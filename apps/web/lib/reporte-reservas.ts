@@ -2,12 +2,14 @@
  * El reporte de reservas en una sola representación, para CSV y para Excel.
  *
  * Las dos descargas salen de aquí para que no puedan divergir: mismas
- * reservas, mismas columnas, mismo orden y mismos textos. Lo único que el
- * Excel añade es el bloque de resumen, y sus cifras NO se recalculan: son las
+ * reservas (ya filtradas por fecha y estado en `reservas.reporte`), mismas
+ * columnas, mismo orden y mismos textos. Lo único que el Excel añade es el
+ * bloque de resumen, y sus cifras NO se recalculan: son las
  * del `resumen` que devuelve `reservas.reporte`, las mismas que enseña el
  * modal. Una segunda suma aquí sería una segunda regla de negocio que tarde o
  * temprano no cuadra con la primera.
  */
+import type { Doc } from "@vekino/backend/dataModel";
 import type {
   ColumnaReporte,
   IndicadorReporte,
@@ -41,6 +43,22 @@ export type ResumenReporteReservas = {
   depositoRecibido: number;
 };
 
+/** Los estados de una reserva, tal como los define `schema.ts`. */
+export type EstadoReserva = Doc<"reservas">["estado"];
+
+/**
+ * Etiqueta de cada estado, en el orden del esquema.
+ *
+ * El tipo obliga a que estén exactamente los del esquema: si se añade uno
+ * allá y no aquí, esto deja de compilar en lugar de desaparecer del filtro.
+ */
+export const ETIQUETA_ESTADO_RESERVA: Record<EstadoReserva, string> = {
+  pendiente: "Pendiente",
+  aprobada: "Aprobada",
+  rechazada: "Rechazada",
+  cancelada: "Cancelada",
+};
+
 export const ESTADO_DEPOSITO: Record<string, string> = {
   registrado: "Sin devolver",
   devuelto: "Devuelto",
@@ -59,9 +77,9 @@ export const COLUMNAS_REPORTE_RESERVAS: readonly ColumnaReporte[] = [
   { encabezado: "Inicio", tipo: "hora" },
   { encabezado: "Fin", tipo: "hora" },
   { encabezado: "Zona" },
-  { encabezado: "Casa" },
+  { encabezado: "Casa", alinear: "centro" },
   { encabezado: "Solicitante" },
-  { encabezado: "Estado" },
+  { encabezado: "Estado", alinear: "centro" },
   { encabezado: "Valor reserva", tipo: "moneda" },
   { encabezado: "Alquiler cobrado", tipo: "moneda" },
   { encabezado: "Deposito esperado", tipo: "moneda" },
@@ -115,8 +133,8 @@ export function csvReporteReservas(filas: readonly FilaReporteReserva[]): string
 /**
  * Los cuatro indicadores del resumen, tomados tal cual del servidor.
  *
- * - Número de reservas → `total`: todas las del rango, en cualquier estado,
- *   que son las filas del reporte.
+ * - Número de reservas → `total`: las filas del reporte, o sea las del rango
+ *   y del estado filtrado (todas si no se filtró).
  * - Alquiler pactado estimado → `alquilerEsperado`: el "Alquiler pactado" del
  *   modal. Excluye canceladas y rechazadas, y usa la tarifa actual de la zona
  *   cuando la reserva no guardó su valor.
@@ -130,12 +148,19 @@ export function indicadoresResumenReservas(r: ResumenReporteReservas): Indicador
     { etiqueta: "Número de reservas", valor: r.total, tipo: "entero" },
     { etiqueta: "Alquiler pactado estimado", valor: r.alquilerEsperado, tipo: "moneda" },
     { etiqueta: "Depósito recibido", valor: r.depositoRecibido, tipo: "moneda" },
-    { etiqueta: "Total ingresos", valor: r.alquilerRecibido, tipo: "moneda" },
+    { etiqueta: "Total ingresos", valor: r.alquilerRecibido, tipo: "moneda", destacado: true },
   ];
 }
 
-export function nombreArchivoReporteReservas(desde: string, hasta: string, extension: "csv" | "xlsx") {
-  return `Reservas_${desde}_a_${hasta}.${extension}`;
+/** Con un estado filtrado se añade al nombre; sin él queda el nombre de siempre. */
+export function nombreArchivoReporteReservas(
+  desde: string,
+  hasta: string,
+  extension: "csv" | "xlsx",
+  estado?: EstadoReserva | null,
+) {
+  const sufijo = estado ? `_${estado}` : "";
+  return `Reservas_${desde}_a_${hasta}${sufijo}.${extension}`;
 }
 
 export function opcionesXlsxReporteReservas(args: {
@@ -143,21 +168,25 @@ export function opcionesXlsxReporteReservas(args: {
   resumen: ResumenReporteReservas;
   desde: string;
   hasta: string;
+  /** El estado por el que se filtró en el modal. Sin él, todas. */
+  estado?: EstadoReserva | null;
 }): OpcionesXlsxReporte {
+  const estado = args.estado ? ETIQUETA_ESTADO_RESERVA[args.estado] : "Todos";
   return {
-    nombreArchivo: nombreArchivoReporteReservas(args.desde, args.hasta, "xlsx"),
+    nombreArchivo: nombreArchivoReporteReservas(args.desde, args.hasta, "xlsx", args.estado),
     hoja: "Reservas",
     resumen: {
       titulo: "Resumen de reservas",
-      subtitulo: `Del ${args.desde} al ${args.hasta}`,
+      subtitulo: `Del ${args.desde} al ${args.hasta}  ·  Estado: ${estado}`,
       indicadores: indicadoresResumenReservas(args.resumen),
       notas: [
-        "Alquiler pactado y depósito no cuentan reservas canceladas ni rechazadas.",
+        "Alquiler pactado, depósito recibido y total ingresos no cuentan reservas canceladas ni rechazadas.",
         "Total ingresos es el alquiler cobrado registrado; el depósito es una garantía reembolsable y no se suma.",
       ],
     },
     tabla: {
       titulo: "Reporte de reservas",
+      nombreTabla: "TablaReservas",
       columnas: COLUMNAS_REPORTE_RESERVAS,
       filas: filasReporteReservas(args.filas),
     },

@@ -154,6 +154,7 @@ describe("el alquiler se cobra en oficina", () => {
     });
 
     // Ordenadas por fecha: la del 16 (sin observaciones) y luego la del 18.
+    expect(reporte.filas.map((f) => f.fecha)).toEqual(["2026-09-16", "2026-09-18"]);
     expect(reporte.filas.map((f) => f.observaciones)).toEqual([null, "Cumpleaños, 30 personas"]);
     expect(reporte.resumen.total).toBe(2);
   });
@@ -338,5 +339,102 @@ describe("el depósito lo registra la administración sin pasar por portería", 
     expect(reporte.filas[0]?.depositoEstado).toBe("no_devuelto");
     expect(reporte.filas[0]?.depositoRetencion).toBe("Se dañó el mesón del BBQ");
     expect(reporte.resumen.depositosRetenidos).toBe(1);
+  });
+});
+
+describe("el reporte se filtra por estado", () => {
+  const RANGO = { desde: "2026-09-01", hasta: "2026-09-30" };
+
+  async function reservar(
+    t: ReturnType<typeof convexTest>,
+    s: Awaited<ReturnType<typeof escenario>>,
+    fecha: string,
+  ) {
+    return await como(t, "admin").mutation(api.reservas.create, {
+      condominioId: s.condominioId,
+      unidadId: s.unidadId,
+      zonaId: s.salon,
+      fecha,
+      horaInicio: "15:00",
+      horaFin: "18:00",
+    });
+  }
+
+  test("el filtro deja solo ese estado y el resumen conserva la regla de canceladas y rechazadas", async () => {
+    const t = convexTest(schema, modules);
+    const s = await escenario(t);
+
+    const aprobada = await crearAprobada(t, s); // 2026-09-16
+    await como(t, "admin").mutation(api.reservas.registrarDeposito, { id: aprobada, monto: 60000 });
+
+    /* Una cancelada CON cobro y depósito anotados: es la que prueba que la
+     * regla sigue en pie aunque el filtro la deje sola en el reporte. */
+    const cancelada = await reservar(t, s, "2026-09-18");
+    await como(t, "admin").mutation(api.reservas.registrarPagoAlquiler, { id: cancelada, monto: 260000 });
+    await como(t, "admin").mutation(api.reservas.registrarDeposito, { id: cancelada, monto: 60000 });
+    await como(t, "admin").mutation(api.reservas.updateEstado, { id: cancelada, estado: "cancelada" });
+
+    await reservar(t, s, "2026-09-20"); // pendiente
+    await reservar(t, s, "2026-10-02"); // fuera del rango
+
+    const consultar = (estado?: "pendiente" | "aprobada" | "rechazada" | "cancelada") =>
+      como(t, "admin").query(api.reservas.reporte, { condominioId: s.condominioId, ...RANGO, estado });
+
+    // Sin filtro: lo de siempre.
+    const todas = await consultar();
+    expect(todas.filas.map((f) => f.estado)).toEqual(["aprobada", "cancelada", "pendiente"]);
+    expect(todas.resumen.total).toBe(3);
+    expect(todas.resumen.alquilerEsperado).toBe(520000);
+    expect(todas.resumen.alquilerRecibido).toBe(0);
+    expect(todas.resumen.depositoRecibido).toBe(60000);
+
+    const canceladas = await consultar("cancelada");
+    expect(canceladas.filas.map((f) => f.estado)).toEqual(["cancelada"]);
+    expect(canceladas.filas[0]?.pagoAlquilerMonto).toBe(260000);
+    expect(canceladas.filas[0]?.depositoRecibido).toBe(60000);
+    expect(canceladas.resumen.total).toBe(1);
+    expect(canceladas.resumen.alquilerEsperado).toBe(0);
+    expect(canceladas.resumen.alquilerRecibido).toBe(0);
+    expect(canceladas.resumen.depositoRecibido).toBe(0);
+
+    const aprobadas = await consultar("aprobada");
+    expect(aprobadas.filas.map((f) => f.fecha)).toEqual(["2026-09-16"]);
+    expect(aprobadas.resumen.total).toBe(1);
+    expect(aprobadas.resumen.alquilerEsperado).toBe(260000);
+    expect(aprobadas.resumen.depositoRecibido).toBe(60000);
+
+    const pendientes = await consultar("pendiente");
+    expect(pendientes.filas.map((f) => f.fecha)).toEqual(["2026-09-20"]);
+    expect(pendientes.resumen.alquilerEsperado).toBe(260000);
+    expect(pendientes.resumen.depositoRecibido).toBe(0);
+
+    const rechazadas = await consultar("rechazada");
+    expect(rechazadas.filas).toEqual([]);
+    expect(rechazadas.resumen.total).toBe(0);
+  });
+
+  test("el rango de fechas sigue siendo inclusivo en los dos extremos", async () => {
+    const t = convexTest(schema, modules);
+    const s = await escenario(t);
+    for (const fecha of ["2026-08-31", "2026-09-01", "2026-09-30", "2026-10-01"]) {
+      await reservar(t, s, fecha);
+    }
+    const reporte = await como(t, "admin").query(api.reservas.reporte, {
+      condominioId: s.condominioId,
+      ...RANGO,
+    });
+    expect(reporte.filas.map((f) => f.fecha)).toEqual(["2026-09-01", "2026-09-30"]);
+  });
+
+  test("un estado que no existe se rechaza", async () => {
+    const t = convexTest(schema, modules);
+    const s = await escenario(t);
+    await expect(
+      como(t, "admin").query(api.reservas.reporte, {
+        condominioId: s.condominioId,
+        ...RANGO,
+        estado: "archivada" as never,
+      }),
+    ).rejects.toThrow();
   });
 });

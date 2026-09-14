@@ -11,6 +11,7 @@ import {
   csvReporteReservas,
   filasReporteReservas,
   indicadoresResumenReservas,
+  nombreArchivoReporteReservas,
   opcionesXlsxReporteReservas,
   type FilaReporteReserva,
 } from "../../../apps/web/lib/reporte-reservas.ts";
@@ -22,7 +23,11 @@ import {
  * aquí se compara contra el generador de ANTES, copiado tal cual estaba en el
  * componente. El Excel se abre de verdad —se descomprime y se leen las
  * celdas— para comprobar que el resumen va arriba, que la tabla es la misma
- * del CSV y que cifras, fechas y horas son números con formato, no texto.
+ * del CSV, que cifras, fechas y horas son números con formato y que la tabla
+ * es una tabla de Excel con filtro en sus encabezados (Estado incluido).
+ *
+ * El filtro por estado se aplica en el servidor y se prueba en
+ * `cajaReserva.test.ts`; aquí solo cómo se refleja en el archivo.
  */
 
 const FILAS: FilaReporteReserva[] = [
@@ -131,6 +136,15 @@ test("las observaciones con comas, comillas y saltos de línea no corren columna
   assert.ok(csv.split("\n")[0]!.endsWith(',"Observaciones"'));
 });
 
+test("sin estado el archivo se llama como siempre; con estado lo lleva en el nombre", () => {
+  assert.equal(nombreArchivoReporteReservas("2026-09-01", "2026-09-30", "csv"), "Reservas_2026-09-01_a_2026-09-30.csv");
+  assert.equal(nombreArchivoReporteReservas("2026-09-01", "2026-09-30", "csv", null), "Reservas_2026-09-01_a_2026-09-30.csv");
+  assert.equal(
+    nombreArchivoReporteReservas("2026-09-01", "2026-09-30", "xlsx", "cancelada"),
+    "Reservas_2026-09-01_a_2026-09-30_cancelada.xlsx",
+  );
+});
+
 // ─────────────────────────────────────────────────────────────
 // Resumen
 // ─────────────────────────────────────────────────────────────
@@ -174,17 +188,25 @@ const desescapar = (s: string) =>
 
 async function abrir(bytes: Uint8Array) {
   const zip = await JSZip.loadAsync(bytes);
-  const sheet = await zip.file("xl/worksheets/sheet1.xml")!.async("string");
-  const estilos = await zip.file("xl/styles.xml")!.async("string");
-  const workbook = await zip.file("xl/workbook.xml")!.async("string");
+  const leer = async (ruta: string) => (await zip.file(ruta)?.async("string")) ?? null;
+  const sheet = (await leer("xl/worksheets/sheet1.xml"))!;
+  const estilos = (await leer("xl/styles.xml"))!;
+  const workbook = (await leer("xl/workbook.xml"))!;
+  const tipos = (await leer("[Content_Types].xml"))!;
+  const sst = (await leer("xl/sharedStrings.xml"))!;
+  const tabla = await leer("xl/tables/table1.xml");
+  const relsHoja = await leer("xl/worksheets/_rels/sheet1.xml.rels");
+
+  const cadenas = [...sst.matchAll(/<si><t[^>]*>([\s\S]*?)<\/t><\/si>/g)].map((m) => desescapar(m[1]!));
 
   const celdas = new Map<string, Celda>();
-  const re = /<c r="([A-Z]+\d+)" s="(\d+)"(?: t="inlineStr")?(?:\/>|>([\s\S]*?)<\/c>)/g;
+  const re = /<c r="([A-Z]+\d+)" s="(\d+)"( t="s")?(?:\/>|>([\s\S]*?)<\/c>)/g;
   for (const m of sheet.matchAll(re)) {
-    const interior = m[3] ?? "";
-    const v = /<v>([^<]*)<\/v>/.exec(interior)?.[1];
-    const t = /<t[^>]*>([\s\S]*?)<\/t>/.exec(interior)?.[1];
-    celdas.set(m[1]!, { s: Number(m[2]), v, texto: t === undefined ? undefined : desescapar(t) });
+    const v = /<v>([^<]*)<\/v>/.exec(m[4] ?? "")?.[1];
+    celdas.set(
+      m[1]!,
+      m[3] ? { s: Number(m[2]), texto: cadenas[Number(v)] } : { s: Number(m[2]), v },
+    );
   }
 
   const propios = new Map<number, string>();
@@ -206,7 +228,7 @@ async function abrir(bytes: Uint8Array) {
     return -1;
   };
 
-  return { celdas, formatoDe, filaDe, sheet, workbook, estilos };
+  return { celdas, formatoDe, filaDe, sheet, workbook, estilos, tipos, tabla, relsHoja };
 }
 
 const LETRAS = "ABCDEFGHIJKLMN";
@@ -219,17 +241,19 @@ test("el Excel pone el resumen arriba y la tabla completa debajo", async () => {
     hasta: "2026-09-30",
   });
   assert.equal(opts.nombreArchivo, "Reservas_2026-09-01_a_2026-09-30.xlsx");
-  const { celdas, formatoDe, filaDe, sheet, workbook } = await abrir(await construirXlsxReporte(opts));
+  const { celdas, formatoDe, filaDe, sheet } = await abrir(await construirXlsxReporte(opts));
 
   const rResumen = filaDe("Resumen de reservas");
   const rTabla = filaDe("Reporte de reservas");
   const rCabecera = filaDe("Fecha");
   assert.equal(rResumen, 1);
   assert.ok(rResumen < rTabla && rTabla < rCabecera, "el resumen va antes que la tabla");
-  assert.equal(rCabecera, rTabla + 1);
-  /* Hay al menos una fila en blanco entre la última línea del resumen y el
-     título de la tabla. */
+  assert.equal(celdas.get("A2")?.texto, "Del 2026-09-01 al 2026-09-30  ·  Estado: Todos");
+  // Separación: la fila anterior al título de la tabla está vacía.
   assert.ok(![...celdas.keys()].some((ref) => Number(ref.replace(/^[A-Z]+/, "")) === rTabla - 1));
+  // Los dos títulos de sección llevan la raya de lado a lado.
+  assert.equal(celdas.get(`N${rResumen}`)?.s, celdas.get(`A${rResumen}`)?.s);
+  assert.equal(celdas.get(`N${rTabla}`)?.s, celdas.get(`A${rTabla}`)?.s);
 
   // Indicadores: número con formato, en la columna D y dentro del bloque.
   const esperados: Array<[string, number, string]> = [
@@ -249,6 +273,8 @@ test("el Excel pone el resumen arriba y la tabla completa debajo", async () => {
     assert.equal(formatoDe(c.s), formato);
     assert.ok(sheet.includes(`<mergeCell ref="A${r}:C${r}"/>`));
   }
+  // Total ingresos se distingue de los otros indicadores.
+  assert.notEqual(celdas.get(`D${filaDe("Total ingresos")}`)!.s, celdas.get(`D${filaDe("Depósito recibido")}`)!.s);
 
   // Cabecera de la tabla, igual a la del CSV.
   const cabeceraCsv = csvReporteReservas(FILAS).split("\n")[0]!.split(",").map((s) => s.slice(1, -1));
@@ -291,25 +317,68 @@ test("el Excel pone el resumen arriba y la tabla completa debajo", async () => {
   });
   // La casa "0012" sigue siendo texto: no pierde los ceros.
   assert.equal(celdas.get(`E${rCabecera + 2}`)?.texto, "0012");
+  // La fila con observación de dos líneas es más alta que una de una línea.
+  const alto = (r: number) => Number(new RegExp(`<row r="${r}" ht="([\\d.]+)"`).exec(sheet)![1]);
+  assert.ok(alto(rCabecera + 1) > alto(rCabecera + 2));
   // Nada después de la última reserva.
   assert.equal(celdas.has(`A${rCabecera + 1 + FILAS.length}`), false);
+});
 
-  // Filtro sobre la tabla, y la cabecera se repite al imprimir.
-  const ultima = rCabecera + FILAS.length;
-  assert.ok(sheet.includes(`<autoFilter ref="A${rCabecera}:N${ultima}"/>`));
-  assert.ok(workbook.includes(`'Reservas'!$A$${rCabecera}:$N$${ultima}`));
+test("la tabla principal es una tabla de Excel con filtro, Estado incluido", async () => {
+  const opts = opcionesXlsxReporteReservas({ filas: FILAS, resumen: RESUMEN, desde: "2026-09-01", hasta: "2026-09-30" });
+  const { filaDe, sheet, workbook, tipos, tabla, relsHoja, estilos } = await abrir(await construirXlsxReporte(opts));
+  const rCabecera = filaDe("Fecha");
+  const ref = `A${rCabecera}:N${rCabecera + FILAS.length}`;
+
+  assert.ok(tabla, "existe xl/tables/table1.xml");
+  assert.ok(tabla.includes(`ref="${ref}"`));
+  assert.ok(tabla.includes(`<autoFilter ref="${ref}"/>`), "la tabla trae los botones de filtro");
+  assert.ok(tabla.includes(`displayName="TablaReservas"`));
+  const nombres = [...tabla.matchAll(/<tableColumn id="\d+" name="([^"]*)"\/>/g)].map((m) => desescapar(m[1]!));
+  assert.deepEqual(nombres, COLUMNAS_REPORTE_RESERVAS.map((c) => c.encabezado));
+  assert.ok(nombres.includes("Estado"));
+
+  // Enlazada desde la hoja y declarada en el paquete.
+  assert.ok(sheet.includes(`<tablePart r:id="rId1"/>`));
+  assert.ok(relsHoja?.includes(`Target="../tables/table1.xml"`));
+  assert.ok(tipos.includes(`PartName="/xl/tables/table1.xml"`));
+  // Un filtro suelto en la hoja chocaría con el de la tabla.
+  assert.ok(!sheet.includes("<autoFilter"));
+  assert.ok(!workbook.includes("_FilterDatabase"));
+  // El estilo de la tabla existe en la hoja de estilos.
+  const estilo = /<tableStyleInfo name="([^"]+)"/.exec(tabla)![1]!;
+  assert.ok(estilos.includes(`<tableStyle name="${estilo}"`));
+  // La cabecera se repite al imprimir.
   assert.ok(workbook.includes(`'Reservas'!$${rCabecera}:$${rCabecera}`));
 });
 
-test("sin reservas el Excel se arma igual, sin filtro", async () => {
+test("el Excel dice por qué estado se filtró", async () => {
+  const opts = opcionesXlsxReporteReservas({
+    filas: FILAS.filter((f) => f.estado === "cancelada"),
+    resumen: { total: 1, alquilerEsperado: 0, alquilerRecibido: 0, depositoRecibido: 0 },
+    desde: "2026-09-01",
+    hasta: "2026-09-30",
+    estado: "cancelada",
+  });
+  assert.equal(opts.nombreArchivo, "Reservas_2026-09-01_a_2026-09-30_cancelada.xlsx");
+  const { celdas, filaDe } = await abrir(await construirXlsxReporte(opts));
+  assert.equal(celdas.get("A2")?.texto, "Del 2026-09-01 al 2026-09-30  ·  Estado: Cancelada");
+  const rCabecera = filaDe("Fecha");
+  assert.equal(celdas.get(`G${rCabecera + 1}`)?.texto, "cancelada");
+  assert.equal(celdas.has(`A${rCabecera + 2}`), false);
+});
+
+test("sin reservas el Excel se arma igual, sin tabla ni filtro", async () => {
   const opts = opcionesXlsxReporteReservas({
     filas: [],
     resumen: { total: 0, alquilerEsperado: 0, alquilerRecibido: 0, depositoRecibido: 0 },
     desde: "2026-09-01",
     hasta: "2026-09-30",
   });
-  const { sheet, workbook, filaDe } = await abrir(await construirXlsxReporte(opts));
+  const { sheet, workbook, filaDe, tabla, tipos } = await abrir(await construirXlsxReporte(opts));
   assert.ok(filaDe("Fecha") > 0);
-  assert.ok(!sheet.includes("<autoFilter"));
+  assert.equal(tabla, null);
+  assert.ok(!sheet.includes("<autoFilter") && !sheet.includes("<tableParts"));
+  assert.ok(!tipos.includes("/xl/tables/"));
   assert.ok(!workbook.includes("_FilterDatabase"));
 });

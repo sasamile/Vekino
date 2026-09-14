@@ -7,12 +7,14 @@ import type { Id } from "@vekino/backend/dataModel";
 import { Download, FileSpreadsheet, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
+import { Input, Select } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { descargarXlsxReporte } from "@/lib/excel-reporte";
 import {
   ESTADO_DEPOSITO,
+  ETIQUETA_ESTADO_RESERVA,
+  type EstadoReserva,
   csvReporteReservas,
   nombreArchivoReporteReservas,
   opcionesXlsxReporteReservas,
@@ -48,10 +50,20 @@ export function ReporteReservasPanel({
   const inicial = mesActual();
   const [desde, setDesde] = useState(inicial.desde);
   const [hasta, setHasta] = useState(inicial.hasta);
+  const [estado, setEstado] = useState<"" | EstadoReserva>("");
   const [generandoExcel, setGenerandoExcel] = useState(false);
   const [errorExcel, setErrorExcel] = useState<string | null>(null);
 
-  const data = useQuery(api.reservas.reporte, { condominioId, desde, hasta });
+  /* El estado se filtra en el servidor: filas y resumen llegan ya sobre ese
+     conjunto, y de ahí salen el modal, el CSV y el Excel. Al cambiarlo, `data`
+     vuelve a `undefined` hasta que llega lo nuevo, así que no se puede
+     descargar el conjunto anterior por accidente. */
+  const data = useQuery(api.reservas.reporte, {
+    condominioId,
+    desde,
+    hasta,
+    estado: estado || undefined,
+  });
 
   /* CSV y Excel salen de `lib/reporte-reservas`: mismas filas y columnas, para
      que las dos descargas no puedan decir cosas distintas. */
@@ -63,7 +75,7 @@ export function ReporteReservasPanel({
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = nombreArchivoReporteReservas(desde, hasta, "csv");
+    a.download = nombreArchivoReporteReservas(desde, hasta, "csv", estado || null);
     a.click();
     URL.revokeObjectURL(url);
   }
@@ -74,7 +86,13 @@ export function ReporteReservasPanel({
     setErrorExcel(null);
     try {
       await descargarXlsxReporte(
-        opcionesXlsxReporteReservas({ filas: data.filas, resumen: data.resumen, desde, hasta }),
+        opcionesXlsxReporteReservas({
+          filas: data.filas,
+          resumen: data.resumen,
+          desde,
+          hasta,
+          estado: estado || null,
+        }),
       );
     } catch {
       setErrorExcel("No se pudo generar el Excel. Intenta de nuevo.");
@@ -95,6 +113,19 @@ export function ReporteReservasPanel({
         <div className="space-y-1.5">
           <label className="block text-xs font-medium text-foreground">Hasta</label>
           <Input type="date" value={hasta} onChange={(e) => setHasta(e.target.value)} />
+        </div>
+        <div className="space-y-1.5">
+          <label className="block text-xs font-medium text-foreground">Estado</label>
+          <Select
+            value={estado}
+            onChange={(e) => setEstado(e.target.value as "" | EstadoReserva)}
+            className="w-40"
+          >
+            <option value="">Todos los estados</option>
+            {(Object.keys(ETIQUETA_ESTADO_RESERVA) as EstadoReserva[]).map((k) => (
+              <option key={k} value={k}>{ETIQUETA_ESTADO_RESERVA[k]}</option>
+            ))}
+          </Select>
         </div>
         <Button size="sm" variant="outline" onClick={descargarCsv} disabled={sinFilas}>
           <Download className="h-4 w-4" /> Descargar CSV
@@ -118,7 +149,7 @@ export function ReporteReservasPanel({
         </div>
       ) : data.filas.length === 0 ? (
         <p className="py-10 text-center text-sm text-muted-foreground">
-          No hubo reservas en ese rango.
+          No hubo reservas{estado ? ` ${ETIQUETA_ESTADO_RESERVA[estado].toLowerCase()}s` : ""} en ese rango.
         </p>
       ) : (
         <>
@@ -128,6 +159,11 @@ export function ReporteReservasPanel({
             <Dato valor={cop(data.resumen.alquilerRecibido)} etiqueta="Alquiler cobrado" />
             <Dato valor={cop(data.resumen.depositoRecibido)} etiqueta="Depósito recibido" />
           </div>
+          {(estado === "cancelada" || estado === "rechazada") && (
+            <p className="text-sm text-muted-foreground">
+              Las reservas canceladas y rechazadas no suman alquiler, depósito ni ingresos en los totales.
+            </p>
+          )}
           {(data.resumen.alquilerSinRegistrar > 0 || data.resumen.depositoSinRegistrar > 0) && (
             <p className="text-sm text-muted-foreground">
               {[
