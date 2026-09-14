@@ -51,6 +51,7 @@ import type * as lib_expoPush from "../lib/expoPush.js";
 import type * as lib_fechaTexto from "../lib/fechaTexto.js";
 import type * as lib_guiasVekino from "../lib/guiasVekino.js";
 import type * as lib_horarios from "../lib/horarios.js";
+import type * as lib_importarVehiculos from "../lib/importarVehiculos.js";
 import type * as lib_inventario from "../lib/inventario.js";
 import type * as lib_livekitJwt from "../lib/livekitJwt.js";
 import type * as lib_mensajesAcceso from "../lib/mensajesAcceso.js";
@@ -164,6 +165,7 @@ declare const fullApi: ApiFromModules<{
   "lib/fechaTexto": typeof lib_fechaTexto;
   "lib/guiasVekino": typeof lib_guiasVekino;
   "lib/horarios": typeof lib_horarios;
+  "lib/importarVehiculos": typeof lib_importarVehiculos;
   "lib/inventario": typeof lib_inventario;
   "lib/livekitJwt": typeof lib_livekitJwt;
   "lib/mensajesAcceso": typeof lib_mensajesAcceso;

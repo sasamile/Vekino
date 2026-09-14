@@ -169,11 +169,8 @@ function Contenido({
           <thead>
             <tr className="border-b border-border bg-brand/[0.07] text-left text-xs text-muted-foreground">
               <th className="px-3 py-2 font-medium">Factura</th>
-              <th className="px-3 py-2 font-medium">Concepto</th>
-              <th className="hidden px-3 py-2 font-medium sm:table-cell">Vence</th>
+              <th className="hidden px-3 py-2 font-medium sm:table-cell">Fecha de vencimiento</th>
               <th className="px-3 py-2 text-right font-medium">Valor</th>
-              <th className="hidden px-3 py-2 text-right font-medium md:table-cell">Abonado</th>
-              <th className="px-3 py-2 text-right font-medium">Saldo</th>
               <th className="px-3 py-2 font-medium">Estado</th>
             </tr>
           </thead>
@@ -199,37 +196,11 @@ function Contenido({
                     Emitida {fmtFecha(f.fechaEmision)}
                   </p>
                 </td>
-                <td className="px-3 py-2 text-foreground">{f.concepto}</td>
                 <td className="hidden px-3 py-2 tabular-nums text-foreground sm:table-cell">
                   {fmtFecha(f.fechaVencimiento)}
                 </td>
                 <td className="px-3 py-2 text-right font-medium tabular-nums text-foreground">
                   {cop(f.totalAPagar)}
-                </td>
-                <td className="hidden px-3 py-2 text-right tabular-nums md:table-cell">
-                  {f.abonado == null ? (
-                    <span className="text-muted-foreground">—</span>
-                  ) : (
-                    cop(f.abonado)
-                  )}
-                </td>
-                <td className="px-3 py-2 text-right tabular-nums">
-                  {f.saldoPendiente == null ? (
-                    /* La última de la cadena aún no tiene una factura
-                       siguiente que diga cuánto quedó debiendo. */
-                    <span
-                      className="text-muted-foreground"
-                      title="Se sabrá con la factura del mes siguiente."
-                    >
-                      —
-                    </span>
-                  ) : f.saldoPendiente > 0 ? (
-                    <span className="font-medium text-red-600 dark:text-red-400">
-                      {cop(f.saldoPendiente)}
-                    </span>
-                  ) : (
-                    <span className="text-muted-foreground">{cop(0)}</span>
-                  )}
                 </td>
                 <td className="px-3 py-2">
                   <Badge tone={ESTADO_TONE[f.estado]}>{ESTADO_LABEL[f.estado]}</Badge>
@@ -239,15 +210,6 @@ function Contenido({
           </tbody>
         </table>
       </div>
-
-      <p className="text-[11px] text-muted-foreground">
-        Estos saldos <strong className="font-medium">no se suman</strong>: cada
-        factura absorbe lo que quedó debiendo la anterior, así que el saldo de
-        una factura vieja ya está dentro de las siguientes. Sirven para ver
-        cómo se llegó hasta aquí. Lo que se debe hoy es el saldo pendiente
-        actual. Lo abonado sale del saldo que declara la factura del mes
-        siguiente, el mismo criterio con el que Finanzas concilia.
-      </p>
     </div>
   );
 }

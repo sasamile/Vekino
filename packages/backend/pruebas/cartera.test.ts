@@ -480,7 +480,7 @@ describe("estado de cuenta bajo demanda", () => {
     expect(cuenta!.cartera.diasMora).toBe(17);
   });
 
-  test("distingue pagada, abonada y pendiente con el saldo de la siguiente", async () => {
+  test("trae factura, vencimiento, valor y estado; no concepto, abono ni saldo", async () => {
     const t = convexTest(schema, modules);
     const s = await escenario(t);
     const cuenta = await como(t, "adminA").query(api.facturas.estadoCuentaUnidad, {
@@ -489,34 +489,18 @@ describe("estado de cuenta bajo demanda", () => {
     });
     const porPeriodo = new Map(cuenta!.facturas.map((f) => [f.periodo, f]));
 
+    expect(porPeriodo.get("2026-01")!.estado).toBe("pagada");
+    expect(porPeriodo.get("2026-02")!.estado).toBe("abonada");
+    expect(porPeriodo.get("2026-03")!.estado).toBe("pendiente");
+
     const enero = porPeriodo.get("2026-01")!;
-    expect(enero.estado).toBe("pagada");
-    expect(enero.saldoPendiente).toBe(0);
-    expect(enero.abonado).toBe(300000);
-
-    /* De febrero quedaron debiendo 100.000: marzo los arrastra. */
-    const febrero = porPeriodo.get("2026-02")!;
-    expect(febrero.estado).toBe("abonada");
-    expect(febrero.saldoPendiente).toBe(100000);
-    expect(febrero.abonado).toBe(200000);
-
-    /* Marzo es la última: nadie la ha juzgado todavía. */
-    const marzo = porPeriodo.get("2026-03")!;
-    expect(marzo.estado).toBe("pendiente");
-    expect(marzo.saldoPendiente).toBeNull();
-    expect(marzo.abonado).toBeNull();
-  });
-
-  test("el concepto sale de la factura, no de un texto inventado", async () => {
-    const t = convexTest(schema, modules);
-    const s = await escenario(t);
-    const cuenta = await como(t, "adminA").query(api.facturas.estadoCuentaUnidad, {
-      condominioId: s.condoA,
-      unidadId: s.cadena,
-    });
-    const enero = cuenta!.facturas.find((f) => f.periodo === "2026-01")!;
-    expect(enero.concepto).toBe("Administración de enero");
     expect(enero.numeroFactura).toBe("F-2026-01");
+    expect(typeof enero.fechaVencimiento).toBe("number");
+    expect(typeof enero.totalAPagar).toBe("number");
+    /* El modal ya no los muestra: no se calculan ni viajan. */
+    expect(enero).not.toHaveProperty("concepto");
+    expect(enero).not.toHaveProperty("abonado");
+    expect(enero).not.toHaveProperty("saldoPendiente");
   });
 
   test("una unidad sin facturas responde vacío, no error", async () => {

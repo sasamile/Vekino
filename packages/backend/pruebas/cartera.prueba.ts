@@ -2,7 +2,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   carteraDeUnidad,
-  conceptoPrincipal,
   diasDesde,
   estadoCuentaDeCadena,
   saldoAnteriorDe,
@@ -301,20 +300,22 @@ test("caso 7 — el historial sigue estando, factura por factura", () => {
   );
 });
 
-test("el abono sale del saldo que declara la factura SIGUIENTE", () => {
-  /* Enero se pago entero (febrero no arrastra nada). De febrero quedaron
-   * debiendo 100.000 (marzo los arrastra): abono 200.000 de 300.000. */
+test("cada factura trae el estado de la conciliacion, sin concepto, abono ni saldo", () => {
+  /* La pantalla ya no los muestra: no se derivan para nadie. */
   const filas = estadoCuentaDeCadena([
     enCadena("2026-01", "pagada", 300000, 0, 90),
     enCadena("2026-02", "abonada", 300000, 0, 60),
     enCadena("2026-03", "pendiente", 400000, 100000, 30),
   ]);
-
-  assert.equal(filas[0]!.saldoPendiente, 0, "enero quedo saldado");
-  assert.equal(filas[0]!.abonado, 300000);
-
-  assert.equal(filas[1]!.saldoPendiente, 100000, "febrero quedo debiendo 100.000");
-  assert.equal(filas[1]!.abonado, 200000);
+  assert.deepEqual(
+    filas.map((f) => f.estado),
+    ["pagada", "abonada", "pendiente"],
+  );
+  for (const f of filas) {
+    assert.equal("concepto" in f, false);
+    assert.equal("abonado" in f, false);
+    assert.equal("saldoPendiente" in f, false);
+  }
 });
 
 test("el historial no trae dias de mora por factura", () => {
@@ -328,53 +329,6 @@ test("el historial no trae dias de mora por factura", () => {
   for (const f of filas) {
     assert.equal("diasVencida" in f, false);
   }
-});
-
-test("la ultima de la cadena no dice cero: dice que no se sabe", () => {
-  /* Todavia no existe la factura siguiente que la juzgue. Un cero afirmaria
-   * que esta pagada. */
-  const filas = estadoCuentaDeCadena([
-    enCadena("2026-01", "pagada", 300000, 0),
-    enCadena("2026-02", "pendiente", 300000, 0),
-  ]);
-  assert.equal(filas[1]!.saldoPendiente, null);
-  assert.equal(filas[1]!.abonado, null);
-});
-
-test("con intereses lo arrastrado supera el mes, y el abono no se va a negativo", () => {
-  const filas = estadoCuentaDeCadena([
-    enCadena("2026-01", "vencida", 300000, 0, 90),
-    enCadena("2026-02", "pendiente", 620000, 320000, 30),
-  ]);
-  assert.equal(filas[0]!.saldoPendiente, 320000, "se muestra la deuda real, no recortada");
-  assert.equal(filas[0]!.abonado, 0);
-});
-
-test("el concepto es la linea que mas pesa, venga del codigo que venga", () => {
-  /* El importador de PDF pone la administracion en el 2 y el alta manual en
-   * el 1. Mirar el monto acierta con las dos. */
-  assert.equal(
-    conceptoPrincipal(
-      [
-        { codigo: 3, concepto: "Intereses mora", saldoAnterior: 0, actual: 12000, total: 12000 },
-        { codigo: 2, concepto: "Administración de marzo", saldoAnterior: 0, actual: 300000, total: 300000 },
-      ],
-      "01-marzo-2026",
-    ),
-    "Administración de marzo",
-  );
-  assert.equal(
-    conceptoPrincipal(
-      [{ codigo: 1, concepto: "Administración de abril", saldoAnterior: 0, actual: 274000, total: 274000 }],
-      "01-abril-2026",
-    ),
-    "Administración de abril",
-  );
-});
-
-test("sin lineas, el concepto cae al periodo en vez de inventarse uno", () => {
-  /* Las facturas migradas llegaron sin lineas. */
-  assert.equal(conceptoPrincipal([], "01-marzo-2026"), "01-marzo-2026");
 });
 
 // ─────────────────────────────────────────────────────────────

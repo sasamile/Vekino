@@ -946,10 +946,8 @@ export const carteraPorUnidad = query({
  * casas de la página para que se mire una sería traer treinta veces más de lo
  * que se va a leer.
  *
- * No calcula nada nuevo. El estado de cada factura lo puso la conciliación,
- * el abono sale del saldo anterior de la factura siguiente —el mismo número
- * con el que la conciliación decide— y la mora sale del vencimiento. Aquí
- * sólo se ordena la cadena y se traduce.
+ * No calcula nada nuevo. El estado de cada factura lo puso la conciliación y
+ * la mora sale del vencimiento. Aquí sólo se ordena la cadena y se traduce.
  *
  * Devuelve `null` si la unidad no es de este condominio, en vez de lanzar:
  * quien pregunta ya demostró que administra ESTE conjunto, y un id que no

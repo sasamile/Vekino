@@ -257,61 +257,21 @@ export function carteraDeUnidad(
 // Estado de cuenta: la misma cadena, factura por factura
 // ─────────────────────────────────────────────────────────────
 
-/**
- * El concepto que resume la factura.
- *
- * Se elige la linea que mas pesa en el mes y no un codigo fijo, porque el
- * codigo no significa lo mismo segun de donde venga la factura: el importador
- * de PDF pone la administracion en el 2 y el alta manual la pone en el 1.
- * Mirar el monto acierta con las dos, y con las que vengan.
- */
-export function conceptoPrincipal(
-  lineas: readonly LineaFactura[],
-  periodoLabel: string,
-): string {
-  let mejor: LineaFactura | null = null;
-  for (const l of lineas) {
-    if (l.actual <= 0) continue;
-    if (!mejor || l.actual > mejor.actual) mejor = l;
-  }
-  /* Las facturas migradas llegaron sin lineas. El periodo no es un concepto,
-   * pero es cierto, que es mas de lo que seria inventarse uno. */
-  return mejor?.concepto ?? periodoLabel;
-}
-
 export type FacturaCadena = FacturaCartera & { periodoLabel: string };
 
 export type FilaEstadoCuenta = {
   periodo: string;
   periodoLabel: string;
-  concepto: string;
   estado: EstadoFactura;
   fechaVencimiento: number;
   totalAPagar: number;
-  /** Lo que quedo debiendo. `null` en la ultima: nadie la ha juzgado aun. */
-  saldoPendiente: number | null;
-  /** Lo que alcanzo a pagar. `null` por lo mismo. */
-  abonado: number | null;
 };
 
 /**
- * Cuanto pago y cuanto quedo debiendo cada factura de una unidad.
- *
- * ── De donde sale el abono ───────────────────────────────────────────────
- * No hay un campo "abonado" en la base, y no hace falta inventarlo: la
- * factura del mes siguiente ya lo dice. Su saldo anterior ES lo que quedo
- * debiendo la anterior, y es exactamente el numero con el que la conciliacion
- * decide si aquella quedo pagada, abonada o vencida. Lo que se paga sale de
- * restar: total menos lo que sigue debiendo.
- *
- * ── La ultima no se sabe ─────────────────────────────────────────────────
- * La ultima de la cadena todavia no tiene una factura siguiente que la juzgue,
- * asi que su saldo es desconocido, no cero. Se devuelve `null` para que la
- * pantalla ponga un guion en vez de afirmar algo que nadie ha comprobado.
+ * Las facturas de una unidad, una por una, tal como las dejo la conciliacion.
  *
  * ── Esto es historial, no deuda ──────────────────────────────────────────
- * Estos saldos NO se suman: el de cada factura ya lo absorbio la siguiente.
- * Sirven para auditar como se llego hasta aqui. Cuanto se debe hoy lo dice
+ * Sirve para auditar como se llego hasta aqui. Cuanto se debe hoy lo dice
  * `carteraDeUnidad`, y sale de una sola factura: la vigente.
  *
  * Por lo mismo no se devuelven dias de vencida por factura. Ver "116 dias"
@@ -319,30 +279,20 @@ export type FilaEstadoCuenta = {
  * cuando son la misma deuda contada dos veces. La mora es una y esta en
  * `carteraDeUnidad`.
  *
+ * Tampoco se devuelven concepto, abono ni saldo por factura: el estado de
+ * cuenta ya no los muestra. Si quedo pagada, abonada o vencida lo dice el
+ * estado que puso la conciliacion.
+ *
  * `cadena` debe venir ordenada del periodo mas viejo al mas nuevo.
  */
 export function estadoCuentaDeCadena(
   cadena: readonly FacturaCadena[],
 ): FilaEstadoCuenta[] {
-  return cadena.map((f, i) => {
-    const siguiente = cadena[i + 1];
-    const saldoPendiente = siguiente ? saldoAnteriorDe(siguiente) : null;
-
-    /* Sin tope por arriba a proposito: con intereses, lo que se arrastra
-     * puede superar el total del mes, y la conciliacion ya cuenta con ello.
-     * Recortarlo mostraria una deuda menor que la real. */
-    const abonado =
-      saldoPendiente == null ? null : Math.max(0, f.totalAPagar - saldoPendiente);
-
-    return {
-      periodo: f.periodo,
-      periodoLabel: f.periodoLabel,
-      concepto: conceptoPrincipal(f.lineas, f.periodoLabel),
-      estado: f.estado,
-      fechaVencimiento: f.fechaVencimiento,
-      totalAPagar: f.totalAPagar,
-      saldoPendiente,
-      abonado,
-    };
-  });
+  return cadena.map((f) => ({
+    periodo: f.periodo,
+    periodoLabel: f.periodoLabel,
+    estado: f.estado,
+    fechaVencimiento: f.fechaVencimiento,
+    totalAPagar: f.totalAPagar,
+  }));
 }
