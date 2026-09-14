@@ -59,12 +59,20 @@ test("normalizarTexto deja undefined y no cadenas vacias", () => {
 test("el encabezado se compara sin tildes, sin signos y en minusculas", () => {
   assert.equal(normalizarEncabezado("Descripción"), "descripcion");
   assert.equal(normalizarEncabezado(" SERIAL "), "serial");
-  assert.equal(normalizarEncabezado("Foto (URL)"), "fotourl");
+  assert.equal(normalizarEncabezado("Nombre *"), "nombre");
 });
 
 test("Excel puede autocorregir la plantilla y la carga sigue funcionando", () => {
-  const cols = mapearColumnas(["Nombre", "Serial", "Descripción", "Foto (URL)"]);
-  assert.deepEqual(cols, { nombre: 0, serial: 1, descripcion: 2, fotoUrl: 3 });
+  const cols = mapearColumnas(["Nombre", "Serial", "Descripción"]);
+  assert.deepEqual(cols, { nombre: 0, serial: 1, descripcion: 2 });
+});
+
+test("una plantilla antigua con la columna de foto se sigue leyendo, sin la foto", () => {
+  /* La plantilla ya no trae "Foto (URL)": la foto se sube desde la ficha del
+   * elemento. Quien tenga descargada la vieja no debe ver fallar la carga; la
+   * columna cae en "las de mas" y se ignora. */
+  const cols = mapearColumnas(["Nombre", "Serial", "Descripcion", "Foto (URL)"]);
+  assert.deepEqual(cols, { nombre: 0, serial: 1, descripcion: 2 });
 });
 
 test("las columnas de mas se ignoran y el orden no importa", () => {
@@ -78,7 +86,6 @@ test("una columna que falta se reporta como ausente, no revienta", () => {
   const cols = mapearColumnas(["Nombre"]);
   assert.equal(cols.nombre, 0);
   assert.equal(cols.serial, null);
-  assert.equal(cols.fotoUrl, null);
 });
 
 // ─────────────────────────────────────────────────────────────
@@ -194,21 +201,14 @@ test("los textos demasiado largos se rechazan por su campo", () => {
   ]);
 });
 
-test("una foto que no es URL se rechaza", () => {
-  const informe = validarImportacion(
-    [{ nombre: "Radio", fotoUrl: "C:\\fotos\\radio.jpg" }],
-    sinSeriales,
-  );
-  const fila = informe.filas[0];
-  assert.ok(
-    fila.estado === "invalida" &&
-      fila.motivos.some((m) => m.codigo === "FOTO_URL_INVALIDA"),
-  );
-});
-
 test("una fila puede acumular varios motivos a la vez", () => {
   const informe = validarImportacion(
-    [{ serial: "s".repeat(MAX_SERIAL + 1), fotoUrl: "no-es-url" }],
+    [
+      {
+        serial: "s".repeat(MAX_SERIAL + 1),
+        descripcion: "d".repeat(MAX_DESCRIPCION + 1),
+      },
+    ],
     sinSeriales,
   );
   const fila = informe.filas[0];
@@ -217,7 +217,7 @@ test("una fila puede acumular varios motivos a la vez", () => {
   assert.deepEqual(new Set(fila.motivos.map((m) => m.codigo)), new Set([
     "FALTA_NOMBRE",
     "SERIAL_MUY_LARGO",
-    "FOTO_URL_INVALIDA",
+    "DESCRIPCION_MUY_LARGA",
   ]));
 });
 

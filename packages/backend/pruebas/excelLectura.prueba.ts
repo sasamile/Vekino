@@ -107,20 +107,13 @@ async function comoLoEscribeExcel(): Promise<Blob> {
 
 test("la plantilla que se descarga se puede volver a leer", async () => {
   const archivo = await comoLoEscribeVekino(
-    ["Nombre", "Serial", "Descripcion", "Foto (URL)"],
-    [["Radio Motorola", "VK-1042", "Con bateria", ""]],
+    ["Nombre", "Serial", "Descripcion"],
+    [["Radio Motorola", "VK-1042", "Con bateria"]],
   );
   const hoja = await leerXlsx(archivo);
 
-  assert.deepEqual(hoja.encabezados, [
-    "Nombre",
-    "Serial",
-    "Descripcion",
-    "Foto (URL)",
-  ]);
-  assert.deepEqual(hoja.filas, [
-    ["Radio Motorola", "VK-1042", "Con bateria", ""],
-  ]);
+  assert.deepEqual(hoja.encabezados, ["Nombre", "Serial", "Descripcion"]);
+  assert.deepEqual(hoja.filas, [["Radio Motorola", "VK-1042", "Con bateria"]]);
 });
 
 test("las celdas que Excel omite NO corren las demas de columna", async () => {

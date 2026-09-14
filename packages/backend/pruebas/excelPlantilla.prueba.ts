@@ -64,7 +64,6 @@ test("la plantilla que se descarga se vuelve a leer entera", async () => {
     nombre: 0,
     serial: 1,
     descripcion: 2,
-    fotoUrl: 3,
   });
 });
 
@@ -108,16 +107,16 @@ test("lo que el usuario escribe debajo conserva su número de fila", async () =>
       filasEjemplo: [],
       filas: [
         [],
-        ["Radio A", "VK-1", "", ""],
-        ["Radio B", "VK-2", "", ""],
+        ["Radio A", "VK-1", ""],
+        ["Radio B", "VK-2", ""],
       ],
     }),
   );
 
   assert.equal(hoja.filas.length, 3);
-  assert.deepEqual(hoja.filas[0], ["", "", "", ""]);
-  assert.deepEqual(hoja.filas[1], ["Radio A", "VK-1", "", ""]);
-  assert.deepEqual(hoja.filas[2], ["Radio B", "VK-2", "", ""]);
+  assert.deepEqual(hoja.filas[0], ["", "", ""]);
+  assert.deepEqual(hoja.filas[1], ["Radio A", "VK-1", ""]);
+  assert.deepEqual(hoja.filas[2], ["Radio B", "VK-2", ""]);
 });
 
 test("una columna sin valor no corre a la siguiente", async () => {
@@ -128,15 +127,10 @@ test("una columna sin valor no corre a la siguiente", async () => {
     await comoBlob({
       ...opcionesDeLaPlantilla(0),
       filasEjemplo: [],
-      filas: [["Radio", "", "Con descripción", "https://x.test/a.jpg"]],
+      filas: [["Radio", "", "Con descripción"]],
     }),
   );
-  assert.deepEqual(hoja.filas[0], [
-    "Radio",
-    "",
-    "Con descripción",
-    "https://x.test/a.jpg",
-  ]);
+  assert.deepEqual(hoja.filas[0], ["Radio", "", "Con descripción"]);
 });
 
 // ─────────────────────────────────────────────────────────────
@@ -242,7 +236,7 @@ test("la cabecera queda inmovilizada y el area util anotada", async () => {
   assert.match(hoja, /<pane ySplit="1"[^>]*state="frozen"\/>/);
   assert.match(hoja, /<col min="1" max="1" width="30"/);
   /* 1 cabecera + 1 ejemplo + 40 en blanco. */
-  assert.match(hoja, /<dimension ref="A1:D42"\/>/);
+  assert.match(hoja, /<dimension ref="A1:C42"\/>/);
   /* Los globos no validan nada: `type="none"`. Una regla de verdad aquí sería
    * una segunda fuente de verdad frente a la del servidor. */
   assert.match(hoja, /<dataValidation type="none"/);

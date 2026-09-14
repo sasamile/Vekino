@@ -683,7 +683,6 @@ const filaValidator = v.object({
   nombre: v.optional(v.string()),
   serial: v.optional(v.string()),
   descripcion: v.optional(v.string()),
-  fotoUrl: v.optional(v.string()),
 });
 
 function exigirArchivoUsable(filas: readonly unknown[]) {
@@ -788,7 +787,6 @@ export const importar = mutation({
         nombre: item.nombre,
         ...(item.serial ? { serial: item.serial } : {}),
         ...(item.descripcion ? { descripcion: item.descripcion } : {}),
-        ...(item.fotoUrl ? { fotoUrl: item.fotoUrl } : {}),
         estado: "disponible",
         creadoPorUserId: user._id,
         createdAt: ahora,

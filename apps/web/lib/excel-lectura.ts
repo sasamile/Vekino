@@ -8,7 +8,7 @@
  * bundle del navegador para eso no sale a cuenta.
  *
  * Lo que NO hace, a propósito: fórmulas, fechas, formatos, varias hojas. Una
- * plantilla de inventario son cuatro columnas de texto.
+ * plantilla de inventario son tres columnas de texto.
  */
 import JSZip from "jszip";
 

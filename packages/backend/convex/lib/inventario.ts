@@ -65,7 +65,7 @@ export const MAX_OBSERVACION = 500;
  */
 export const MAX_FOTO_URL = 2048;
 
-/** Una referencia de foto utilizable. La misma regla que aplica la carga masiva. */
+/** Una referencia de foto utilizable. La misma regla al crear y al editar. */
 export function esUrlDeFoto(valor: string): boolean {
   return /^https?:\/\//i.test(valor) && valor.length <= MAX_FOTO_URL;
 }
@@ -113,12 +113,6 @@ export const COLUMNAS_PLANTILLA = [
     requerida: false,
     ejemplo: "Radio de dos vias, bateria de repuesto incluida",
   },
-  {
-    clave: "fotoUrl",
-    encabezado: "Foto (URL)",
-    requerida: false,
-    ejemplo: "",
-  },
 ] as const;
 
 export type ClaveColumna = (typeof COLUMNAS_PLANTILLA)[number]["clave"];
@@ -162,9 +156,6 @@ export function mapearColumnas(
     salida[col.clave] = porNombre.get(normalizarEncabezado(col.encabezado)) ?? null;
   }
   /* Alias tolerantes para lo que la gente escribe de verdad. */
-  if (salida.fotoUrl == null) {
-    salida.fotoUrl = porNombre.get("foto") ?? porNombre.get("url") ?? null;
-  }
   if (salida.descripcion == null) {
     salida.descripcion = porNombre.get("detalle") ?? null;
   }
@@ -184,8 +175,6 @@ export const MOTIVOS = {
     "Ese serial aparece más de una vez en este archivo.",
   SERIAL_YA_EXISTE:
     "Ya hay un elemento activo con ese serial en el inventario.",
-  FOTO_URL_INVALIDA:
-    "La foto debe ser una URL que empiece por http:// o https:// y no superar 2048 caracteres.",
 } as const;
 
 export type CodigoMotivo = keyof typeof MOTIVOS;
@@ -202,7 +191,6 @@ export type FilaCruda = {
   nombre?: string;
   serial?: string;
   descripcion?: string;
-  fotoUrl?: string;
 };
 
 /** Lo que se inserta si la fila pasa. Ya normalizado. */
@@ -210,7 +198,6 @@ export type ItemImportable = {
   nombre: string;
   serial?: string;
   descripcion?: string;
-  fotoUrl?: string;
 };
 
 export type FilaValidada =
@@ -237,8 +224,7 @@ function esFilaVacia(f: FilaCruda): boolean {
   return (
     !normalizarTexto(f.nombre) &&
     !normalizarTexto(f.serial) &&
-    !normalizarTexto(f.descripcion) &&
-    !normalizarTexto(f.fotoUrl)
+    !normalizarTexto(f.descripcion)
   );
 }
 
@@ -312,13 +298,6 @@ export function validarImportacion(
       anotar("DESCRIPCION_MUY_LARGA", "Descripcion");
     }
 
-    const fotoUrl = normalizarTexto(cruda.fotoUrl);
-    /* La MISMA función que usan `crear` y `editar`: el campo tenía dos reglas
-     * distintas según por dónde entrara, y la del formulario era ninguna. */
-    if (fotoUrl && !esUrlDeFoto(fotoUrl)) {
-      anotar("FOTO_URL_INVALIDA", "Foto (URL)");
-    }
-
     if (motivos.length > 0) {
       invalidas += 1;
       filas.push({ fila, estado: "invalida", motivos, datos: cruda });
@@ -333,7 +312,6 @@ export function validarImportacion(
         nombre: nombre!,
         ...(serial ? { serial } : {}),
         ...(descripcion ? { descripcion } : {}),
-        ...(fotoUrl ? { fotoUrl } : {}),
       },
     });
   });

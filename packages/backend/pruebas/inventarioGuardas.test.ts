@@ -1566,7 +1566,7 @@ describe("endurecimiento: defectos encontrados en la auditoria final", () => {
     ).toContain("no pertenece a tu compañía");
   });
 
-  test("D4: la foto se valida igual venga del formulario o del Excel", async () => {
+  test("D4: la foto se valida igual al crear y al editar", async () => {
     /* El mismo campo tenia dos reglas segun por donde entrara, y la del
      * formulario era ninguna: un data: de novecientos kilobytes cabia en el
      * documento y hacia que el LISTADO entero dejara de caber en una

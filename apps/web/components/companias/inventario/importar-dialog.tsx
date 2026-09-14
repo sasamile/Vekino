@@ -140,11 +140,6 @@ const PRESENTACION: Record<
     ancho: 46,
     ayuda: `Opcional. Detalles útiles para identificarlo. Máximo ${MAX_DESCRIPCION} caracteres.`,
   },
-  fotoUrl: {
-    ancho: 38,
-    ayuda:
-      "Opcional. Dirección de una imagen que empiece por http:// o https://",
-  },
 };
 
 function Contenido({
@@ -239,7 +234,6 @@ function Contenido({
         nombre: celda(f, cols.nombre),
         serial: celda(f, cols.serial),
         descripcion: celda(f, cols.descripcion),
-        fotoUrl: celda(f, cols.fotoUrl),
       }));
 
       /* Los dos límites se comprueban aquí ADEMÁS de en el servidor: no por
