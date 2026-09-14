@@ -32,7 +32,7 @@ import JSZip from "jszip";
  * como constantes porque un .xlsx se abre en Excel, donde no hay CSS, pero se
  * dejan anotados para que al retocar el tema se sepa que esto también existe.
  */
-const COLOR = {
+export const COLOR = {
   /** `--primary`: casi negro. Cabecera de columna obligatoria. */
   tinta: "FF181B18",
   /** Un escalón más claro. Cabecera de columna opcional. */
@@ -127,7 +127,7 @@ export type OpcionesXlsx = {
  * dejaría el archivo entero sin abrir. Mejor perder un carácter invisible que
  * el libro.
  */
-function xmlEscape(s: string) {
+export function xmlEscape(s: string) {
   return s
     .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, "")
     .replace(/&/g, "&amp;")
@@ -150,7 +150,7 @@ function attrEscape(s: string) {
     .replace(/\t/g, "&#9;");
 }
 
-function colLetter(i: number) {
+export function colLetter(i: number) {
   let n = i;
   let s = "";
   while (n >= 0) {
@@ -174,7 +174,7 @@ function celda(ref: string, valor: Valor, estilo: number) {
 }
 
 /** Nombre de hoja admisible: Excel prohíbe `[]:*?/\` y más de 31 caracteres. */
-function nombreDeHoja(bruto: string) {
+export function nombreDeHoja(bruto: string) {
   /* Los saltos de línea y tabuladores entran también: no son nombres de
    * hoja válidos, y colados en el atributo dejarían el libro sin abrir. */
   const limpio = bruto.replace(/[[\]:*?/\\\s]+/g, " ").trim();

@@ -650,6 +650,9 @@ export const reporte = query({
           depositoRecibido: dep?.monto ?? null,
           depositoEstado: dep?.estado ?? null,
           depositoRetencion: dep?.estado === "no_devuelto" ? (dep.observacionesSalida ?? null) : null,
+          /* Lo que se escribió al pedir la reserva. Viene en el mismo
+           * documento: no cuesta ninguna lectura más. */
+          observaciones: r.observaciones ?? null,
           ingresoValidadoAt: r.ingresoValidadoAt ?? null,
           salidaValidadaAt: r.salidaValidadaAt ?? null,
         };

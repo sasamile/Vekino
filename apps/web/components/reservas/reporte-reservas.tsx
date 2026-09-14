@@ -10,6 +10,13 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
+import { descargarXlsxReporte } from "@/lib/excel-reporte";
+import {
+  ESTADO_DEPOSITO,
+  csvReporteReservas,
+  nombreArchivoReporteReservas,
+  opcionesXlsxReporteReservas,
+} from "@/lib/reporte-reservas";
 import { cop } from "@/lib/utils";
 
 /**
@@ -33,12 +40,6 @@ function mesActual() {
   };
 }
 
-const ESTADO_DEPOSITO: Record<string, string> = {
-  registrado: "Sin devolver",
-  devuelto: "Devuelto",
-  no_devuelto: "Retenido",
-};
-
 export function ReporteReservasPanel({
   condominioId,
 }: {
@@ -47,43 +48,42 @@ export function ReporteReservasPanel({
   const inicial = mesActual();
   const [desde, setDesde] = useState(inicial.desde);
   const [hasta, setHasta] = useState(inicial.hasta);
+  const [generandoExcel, setGenerandoExcel] = useState(false);
+  const [errorExcel, setErrorExcel] = useState<string | null>(null);
 
   const data = useQuery(api.reservas.reporte, { condominioId, desde, hasta });
 
+  /* CSV y Excel salen de `lib/reporte-reservas`: mismas filas y columnas, para
+     que las dos descargas no puedan decir cosas distintas. */
   function descargarCsv() {
     if (!data) return;
-    const cab = [
-      "Fecha", "Inicio", "Fin", "Zona", "Casa", "Solicitante",
-      "Estado", "Valor reserva", "Alquiler cobrado", "Deposito esperado",
-      "Deposito recibido", "Estado deposito", "Retencion",
-    ];
-    /* Se escapa con comillas: los nombres de zona traen comas ("Salón, primer
-       piso") y sin esto el archivo sale con las columnas corridas. */
-    const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-    const filas = data.filas.map((f) => [
-      f.fecha, f.horaInicio, f.horaFin, f.zonaNombre, f.unidadNumero,
-      f.solicitanteNombre, f.estado,
-      f.valorReserva ?? "",
-      f.pagoAlquilerMonto ?? "",
-      f.depositoRequerido ?? "",
-      f.depositoRecibido ?? "",
-      f.depositoEstado
-        ? ESTADO_DEPOSITO[f.depositoEstado] ?? f.depositoEstado
-        : f.depositoRequerido
-          ? "Sin registrar"
-          : "",
-      f.depositoRetencion ?? "",
-    ]);
-    const csv = [cab, ...filas].map((r) => r.map(esc).join(",")).join("\n");
+    const csv = csvReporteReservas(data.filas);
     // BOM para que Excel abra los acentos bien.
-    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" });
+    const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `Reservas_${desde}_a_${hasta}.csv`;
+    a.download = nombreArchivoReporteReservas(desde, hasta, "csv");
     a.click();
     URL.revokeObjectURL(url);
   }
+
+  async function descargarExcel() {
+    if (!data) return;
+    setGenerandoExcel(true);
+    setErrorExcel(null);
+    try {
+      await descargarXlsxReporte(
+        opcionesXlsxReporteReservas({ filas: data.filas, resumen: data.resumen, desde, hasta }),
+      );
+    } catch {
+      setErrorExcel("No se pudo generar el Excel. Intenta de nuevo.");
+    } finally {
+      setGenerandoExcel(false);
+    }
+  }
+
+  const sinFilas = !data || data.filas.length === 0;
 
   return (
     <div className="space-y-4">
@@ -96,10 +96,21 @@ export function ReporteReservasPanel({
           <label className="block text-xs font-medium text-foreground">Hasta</label>
           <Input type="date" value={hasta} onChange={(e) => setHasta(e.target.value)} />
         </div>
-        <Button size="sm" variant="outline" onClick={descargarCsv} disabled={!data || data.filas.length === 0}>
+        <Button size="sm" variant="outline" onClick={descargarCsv} disabled={sinFilas}>
           <Download className="h-4 w-4" /> Descargar CSV
         </Button>
+        <Button size="sm" variant="outline" onClick={descargarExcel} disabled={sinFilas || generandoExcel}>
+          {generandoExcel ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <FileSpreadsheet className="h-4 w-4" />
+          )}{" "}
+          Descargar Excel
+        </Button>
       </div>
+      {errorExcel && (
+        <p className="text-sm text-red-600 dark:text-red-400">{errorExcel}</p>
+      )}
 
       {data === undefined ? (
         <div className="flex justify-center py-10">

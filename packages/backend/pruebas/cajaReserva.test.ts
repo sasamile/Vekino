@@ -133,6 +133,31 @@ describe("el alquiler se cobra en oficina", () => {
     expect(reporte.resumen.depositoSinRegistrar).toBe(1);
   });
 
+  test("el reporte trae las observaciones que se escribieron al reservar", async () => {
+    const t = convexTest(schema, modules);
+    const s = await escenario(t);
+    await como(t, "admin").mutation(api.reservas.create, {
+      condominioId: s.condominioId,
+      unidadId: s.unidadId,
+      zonaId: s.salon,
+      fecha: "2026-09-18",
+      horaInicio: "15:00",
+      horaFin: "18:00",
+      observaciones: "  Cumpleaños, 30 personas  ",
+    });
+    await crearAprobada(t, s);
+
+    const reporte = await como(t, "admin").query(api.reservas.reporte, {
+      condominioId: s.condominioId,
+      desde: "2026-09-01",
+      hasta: "2026-09-30",
+    });
+
+    // Ordenadas por fecha: la del 16 (sin observaciones) y luego la del 18.
+    expect(reporte.filas.map((f) => f.observaciones)).toEqual([null, "Cumpleaños, 30 personas"]);
+    expect(reporte.resumen.total).toBe(2);
+  });
+
   test("la administración registra el cobro y el reporte lo cuenta", async () => {
     const t = convexTest(schema, modules);
     const s = await escenario(t);
