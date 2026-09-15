@@ -30,7 +30,8 @@ import {
 import { ReporteReservasModal } from "@/components/reservas/reporte-reservas";
 import { ResumenCosto } from "@/components/reservas/resumen-costo";
 import { EstadoCuentaModal } from "@/components/reservas/estado-cuenta-modal";
-import { CajaReservaModal } from "@/components/reservas/caja-reserva-modal";
+import { CajaReservaModal, type ReservaCaja } from "@/components/reservas/caja-reserva-modal";
+import { ETIQUETA_ESTADO_DEPOSITO } from "@/components/reservas/incidentes-deposito";
 
 const PAGE_SIZE = 30;
 
@@ -109,12 +110,12 @@ type ReservaRow = {
   pagoAlquilerAt?: number | null;
   pagoAlquilerPorNombre?: string | null;
   pagoAlquilerNotas?: string | null;
-  depositoCaja?: {
-    _id: Id<"guardiaReservaDepositos">;
-    monto: number;
-    estado: "registrado" | "devuelto" | "no_devuelto";
-    observacionesSalida: string | null;
-  } | null;
+  condominioId: Id<"condominios">;
+  depositoCaja?: ReservaCaja["depositoCaja"];
+  incidentes?: ReservaCaja["incidentes"];
+  incidentesAbiertos?: boolean;
+  liquidacion?: ReservaCaja["liquidacion"];
+  liquidado?: ReservaCaja["liquidado"];
 };
 
 /* Los precios y el depósito estaban fuera de este tipo, y ese recorte era
@@ -480,9 +481,8 @@ function CeldaValores({ reserva }: { reserva: ReservaRow }) {
       : null
     : depositoCaja.estado === "registrado"
       ? "Recibido"
-      : depositoCaja.estado === "devuelto"
-        ? "Devuelto"
-        : "Retenido";
+      : ETIQUETA_ESTADO_DEPOSITO[depositoCaja.estado];
+  const porValorar = reserva.liquidacion?.pendientes ?? 0;
 
   return (
     <TD>
@@ -516,11 +516,18 @@ function CeldaValores({ reserva }: { reserva: ReservaRow }) {
               "text-[11px]",
               depositoCaja?.estado === "no_devuelto"
                 ? "text-red-600 dark:text-red-400"
-                : "text-muted-foreground",
+                : depositoCaja?.estado === "devuelto_parcial"
+                  ? "text-amber-700 dark:text-amber-400"
+                  : "text-muted-foreground",
             )}
             title={depositoCaja?.observacionesSalida ?? undefined}
           >
             {estadoDeposito}
+          </p>
+        )}
+        {porValorar > 0 && (
+          <p className="text-[11px] font-medium text-amber-700 dark:text-amber-400">
+            {porValorar === 1 ? "1 incidente por valorar" : `${porValorar} incidentes por valorar`}
           </p>
         )}
       </div>

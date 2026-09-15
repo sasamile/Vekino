@@ -14,8 +14,9 @@ import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import { useMutation, useQuery, useAction, Authenticated } from "convex/react";
+import type { FunctionReturnType } from "convex/server";
 import { api } from "@vekino/backend/api";
-import type { Doc, Id } from "@vekino/backend/dataModel";
+import type { Id } from "@vekino/backend/dataModel";
 import { useCondominio } from "@/context/condominio-context";
 import { ScreenBackground, GlassCard, GlassBadge } from "@/components/ui/glass";
 import { Tap } from "@/components/ui/tap";
@@ -23,9 +24,9 @@ import { AuthUI } from "@/lib/auth-ui";
 import { C } from "@/lib/theme";
 import { uploadLocalFile } from "@/lib/guardia-upload";
 
-type ReservaRow = Doc<"reservas"> & {
-  deposito: Doc<"guardiaReservaDepositos"> | null;
-};
+type ReservaRow = FunctionReturnType<typeof api.guardia.listReservasControl>[number];
+
+const pesos = (n: number) => `$${n.toLocaleString("es-CO")}`;
 
 export default function GuardiaReservasScreen() {
   return (
@@ -47,24 +48,36 @@ function Inner() {
   const validarSalida = useMutation(api.guardia.validarSalidaReserva);
   const registrarDeposito = useMutation(api.guardia.registrarDepositoReserva);
   const resolverDeposito = useMutation(api.guardia.resolverDepositoReserva);
+  const reportarIncidente = useMutation(api.guardia.reportarIncidenteReserva);
   const generateUploadUrl = useAction(api.files.generateUploadUrl);
 
   const [filtro, setFiltro] = useState<"hoy" | "todas">("hoy");
-  const [depositoReserva, setDepositoReserva] = useState<ReservaRow | null>(null);
-  const [resolverDep, setResolverDep] = useState<ReservaRow | null>(null);
+  /* Ids y no filas: la devolución tiene que ver lo que la administración
+   * valore mientras el modal está abierto. */
+  const [depositoId, setDepositoId] = useState<Id<"reservas"> | null>(null);
+  const [devolverId, setDevolverId] = useState<Id<"reservas"> | null>(null);
+  const [incidenteId, setIncidenteId] = useState<Id<"reservas"> | null>(null);
   const [monto, setMonto] = useState("");
   const [obs, setObs] = useState("");
   const [foto, setFoto] = useState<{ uri: string; mime: string } | null>(null);
-  const [devuelto, setDevuelto] = useState(true);
   const [busy, setBusy] = useState(false);
 
   const hoy = new Date().toISOString().slice(0, 10);
 
   const list = useMemo(() => {
     const rows = (reservas ?? []) as ReservaRow[];
-    if (filtro === "hoy") return rows.filter((r) => r.fecha === hoy);
+    /* Un depósito que quedó en custodia de otro día sigue siendo trabajo de hoy. */
+    if (filtro === "hoy") {
+      return rows.filter((r) => r.fecha === hoy || r.deposito?.estado === "registrado");
+    }
     return rows;
   }, [reservas, filtro, hoy]);
+
+  const buscar = (id: Id<"reservas"> | null) =>
+    id ? ((reservas ?? []) as ReservaRow[]).find((r) => r._id === id) ?? null : null;
+  const depositoReserva = buscar(depositoId);
+  const devolverReserva = buscar(devolverId);
+  const incidenteReserva = buscar(incidenteId);
 
   if (isLoading) {
     return (
@@ -85,6 +98,12 @@ function Inner() {
     );
   }
 
+  function limpiar() {
+    setMonto("");
+    setObs("");
+    setFoto(null);
+  }
+
   async function pickFoto() {
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!perm.granted) {
@@ -100,6 +119,12 @@ function Inner() {
     setFoto({ uri: a.uri, mime: a.mimeType ?? "image/jpeg" });
   }
 
+  async function subirFoto(carpeta: string) {
+    if (!foto) return undefined;
+    const uploaded = await uploadLocalFile(generateUploadUrl, foto.uri, foto.mime, carpeta);
+    return uploaded.url;
+  }
+
   async function onIngreso(r: ReservaRow) {
     try {
       await validarIngreso({ reservaId: r._id });
@@ -112,15 +137,7 @@ function Inner() {
     try {
       await validarSalida({ reservaId: r._id });
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "No se pudo validar.";
-      if (msg.includes("depósito")) {
-        setResolverDep(r);
-        setObs("");
-        setFoto(null);
-        setDevuelto(true);
-      } else {
-        Alert.alert("Error", msg);
-      }
+      Alert.alert("Error", e instanceof Error ? e.message : "No se pudo validar.");
     }
   }
 
@@ -133,26 +150,15 @@ function Inner() {
     }
     setBusy(true);
     try {
-      let fotoUrl: string | undefined;
-      if (foto) {
-        const uploaded = await uploadLocalFile(
-          generateUploadUrl,
-          foto.uri,
-          foto.mime,
-          `condominios/guardia/${depositoReserva.condominioId}/depositos`,
-        );
-        fotoUrl = uploaded.url;
-      }
+      const fotoUrl = await subirFoto(`condominios/guardia/${depositoReserva.condominioId}/depositos`);
       await registrarDeposito({
         reservaId: depositoReserva._id,
         monto: montoNum,
         observaciones: obs || undefined,
         fotoUrl,
       });
-      setDepositoReserva(null);
-      setMonto("");
-      setObs("");
-      setFoto(null);
+      setDepositoId(null);
+      limpiar();
     } catch (e) {
       Alert.alert("Error", e instanceof Error ? e.message : "No se pudo registrar.");
     } finally {
@@ -160,42 +166,63 @@ function Inner() {
     }
   }
 
-  async function submitResolver() {
-    if (!resolverDep?.deposito) return;
-    if (!devuelto && (!obs.trim() || !foto)) {
-      Alert.alert(
-        "Evidencia requerida",
-        "Si no se devuelve el depósito, observaciones y foto son obligatorias.",
-      );
+  async function submitIncidente() {
+    if (!incidenteReserva) return;
+    if (!obs.trim()) {
+      Alert.alert("Falta la descripción", "Describe qué pasó.");
       return;
     }
     setBusy(true);
     try {
-      let fotoUrl: string | undefined;
-      if (foto) {
-        const uploaded = await uploadLocalFile(
-          generateUploadUrl,
-          foto.uri,
-          foto.mime,
-          `condominios/guardia/${resolverDep.condominioId}/depositos`,
-        );
-        fotoUrl = uploaded.url;
-      }
-      await resolverDeposito({
-        depositoId: resolverDep.deposito._id,
-        devuelto,
-        observaciones: obs || undefined,
-        fotoUrl,
+      const url = await subirFoto(`condominios/guardia/${incidenteReserva.condominioId}/incidentes`);
+      await reportarIncidente({
+        reservaId: incidenteReserva._id,
+        descripcion: obs.trim(),
+        fotos: url ? [{ url }] : undefined,
       });
-      setResolverDep(null);
-      setObs("");
-      setFoto(null);
+      setIncidenteId(null);
+      limpiar();
     } catch (e) {
-      Alert.alert("Error", e instanceof Error ? e.message : "No se pudo resolver.");
+      Alert.alert("Error", e instanceof Error ? e.message : "No se pudo reportar.");
     } finally {
       setBusy(false);
     }
   }
+
+  async function submitDevolucion() {
+    const r = devolverReserva;
+    const l = r?.liquidacion;
+    if (!r?.deposito || !l) return;
+    if (!l.puedeLiquidar) {
+      Alert.alert(
+        "Incidentes por valorar",
+        "La administración debe valorar o descartar los incidentes antes de devolver el depósito.",
+      );
+      return;
+    }
+    if (l.razonObligatoria && !obs.trim()) {
+      Alert.alert("Razón requerida", "Hubo incidentes: indica la razón de la devolución.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const fotoUrl = await subirFoto(`condominios/guardia/${r.condominioId}/depositos`);
+      await resolverDeposito({
+        depositoId: r.deposito._id,
+        saldoEsperado: l.saldoDevolucion,
+        observaciones: obs.trim() || undefined,
+        fotoUrl,
+      });
+      setDevolverId(null);
+      limpiar();
+    } catch (e) {
+      Alert.alert("Error", e instanceof Error ? e.message : "No se pudo devolver.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const liq = devolverReserva?.liquidacion ?? null;
 
   return (
     <View style={{ flex: 1 }}>
@@ -253,7 +280,13 @@ function Inner() {
                 {list.map((r) => {
                   const ingreso = !!r.ingresoValidadoAt;
                   const salida = !!r.salidaValidadaAt;
-                  const depPendiente = r.deposito?.estado === "registrado";
+                  const enCustodia = r.deposito?.estado === "registrado";
+                  const pendientes = r.liquidacion?.pendientes ?? 0;
+                  const puedeDevolver = enCustodia && (salida || pendientes === 0);
+                  const abrirDevolucion = () => {
+                    limpiar();
+                    setDevolverId(r._id);
+                  };
                   return (
                     <GlassCard key={r._id} style={styles.card}>
                       <Text style={styles.zona}>{r.zonaNombre}</Text>
@@ -274,8 +307,14 @@ function Inner() {
                         ) : ingreso ? (
                           <GlassBadge label="En uso" tone="blue" />
                         ) : null}
-                        {depPendiente ? (
-                          <GlassBadge label="Depósito pendiente" tone="orange" />
+                        {enCustodia ? (
+                          <GlassBadge label="Depósito en custodia" tone="orange" />
+                        ) : null}
+                        {pendientes > 0 ? (
+                          <GlassBadge
+                            label={pendientes === 1 ? "1 incidente por valorar" : `${pendientes} por valorar`}
+                            tone="yellow"
+                          />
                         ) : null}
                       </View>
 
@@ -290,29 +329,44 @@ function Inner() {
                             </Tap>
                             <Tap
                               onPress={() => {
-                                setDepositoReserva(r);
-                                setMonto(
-                                  r.depositoRequerido ? String(r.depositoRequerido) : "",
-                                );
-                                setObs("");
-                                setFoto(null);
+                                limpiar();
+                                setMonto(r.depositoRequerido ? String(r.depositoRequerido) : "");
+                                setDepositoId(r._id);
                               }}
                               style={[styles.btn, styles.btnOutline]}
                             >
                               <Text style={styles.btnOutlineText}>Con depósito</Text>
                             </Tap>
                           </>
-                        ) : !salida ? (
-                          <Tap
-                            onPress={() => onSalida(r)}
-                            style={[styles.btn, styles.btnPrimary]}
-                          >
-                            <Text style={styles.btnPrimaryText}>
-                              {depPendiente ? "Resolver depósito / salida" : "Validar salida"}
-                            </Text>
-                          </Tap>
                         ) : (
-                          <Text style={styles.done}>Control completo</Text>
+                          <>
+                            {!salida && !puedeDevolver ? (
+                              /* Con incidentes por valorar la salida no espera;
+                               * el depósito se queda en portería. */
+                              <Tap onPress={() => onSalida(r)} style={[styles.btn, styles.btnPrimary]}>
+                                <Text style={styles.btnPrimaryText}>Validar salida</Text>
+                              </Tap>
+                            ) : null}
+                            {puedeDevolver ? (
+                              <Tap onPress={abrirDevolucion} style={[styles.btn, styles.btnPrimary]}>
+                                <Text style={styles.btnPrimaryText}>Devolver depósito</Text>
+                              </Tap>
+                            ) : null}
+                            {r.incidentesAbiertos ? (
+                              <Tap
+                                onPress={() => {
+                                  limpiar();
+                                  setIncidenteId(r._id);
+                                }}
+                                style={[styles.btn, styles.btnOutline]}
+                              >
+                                <Text style={styles.btnOutlineText}>Reportar incidente</Text>
+                              </Tap>
+                            ) : null}
+                            {salida && !enCustodia ? (
+                              <Text style={styles.done}>Control completo</Text>
+                            ) : null}
+                          </>
                         )}
                       </View>
                     </GlassCard>
@@ -331,7 +385,7 @@ function Inner() {
       >
         <SafeAreaView style={{ flex: 1, backgroundColor: C.bg }}>
           <View style={styles.modalHead}>
-            <Tap onPress={() => !busy && setDepositoReserva(null)}>
+            <Tap onPress={() => !busy && setDepositoId(null)}>
               <Text style={styles.cancel}>Cancelar</Text>
             </Tap>
             <Text style={styles.modalTitle}>Depósito</Text>
@@ -364,76 +418,120 @@ function Inner() {
                 placeholderTextColor={AuthUI.textMuted}
               />
             </Field>
-            <Tap onPress={pickFoto}>
-              <GlassCard style={styles.fotoBtn}>
-                <Ionicons name="camera-outline" size={20} color={AuthUI.text} />
-                <Text style={styles.fotoLabel}>
-                  {foto ? "Foto lista" : "Foto (opcional)"}
-                </Text>
-              </GlassCard>
-            </Tap>
+            <FotoBoton foto={!!foto} etiqueta="Foto (opcional)" onPress={pickFoto} />
           </ScrollView>
         </SafeAreaView>
       </Modal>
 
-      <Modal visible={!!resolverDep} animationType="slide" presentationStyle="pageSheet">
+      <Modal visible={!!incidenteReserva} animationType="slide" presentationStyle="pageSheet">
         <SafeAreaView style={{ flex: 1, backgroundColor: C.bg }}>
           <View style={styles.modalHead}>
-            <Tap onPress={() => !busy && setResolverDep(null)}>
+            <Tap onPress={() => !busy && setIncidenteId(null)}>
               <Text style={styles.cancel}>Cancelar</Text>
             </Tap>
-            <Text style={styles.modalTitle}>Resolver depósito</Text>
-            <Tap onPress={submitResolver} disabled={busy}>
+            <Text style={styles.modalTitle}>Reportar incidente</Text>
+            <Tap onPress={submitIncidente} disabled={busy}>
               <Text style={[styles.save, busy && { opacity: 0.5 }]}>
+                {busy ? "…" : "Reportar"}
+              </Text>
+            </Tap>
+          </View>
+          <ScrollView contentContainerStyle={{ padding: 16, gap: 12 }}>
+            <Text style={styles.modalHint}>
+              {incidenteReserva?.zonaNombre} · Unidad {incidenteReserva?.unidadNumero}
+            </Text>
+            <Field label="¿Qué pasó? *">
+              <TextInput
+                style={[styles.input, { minHeight: 90, textAlignVertical: "top" }]}
+                value={obs}
+                onChangeText={setObs}
+                multiline
+                placeholder="Se rompió una silla, quedó una mancha…"
+                placeholderTextColor={AuthUI.textMuted}
+              />
+            </Field>
+            <FotoBoton foto={!!foto} etiqueta="Foto (opcional)" onPress={pickFoto} />
+            <Text style={styles.note}>
+              La administración revisará el incidente y decidirá cuánto descontar del depósito.
+            </Text>
+          </ScrollView>
+        </SafeAreaView>
+      </Modal>
+
+      <Modal visible={!!devolverReserva} animationType="slide" presentationStyle="pageSheet">
+        <SafeAreaView style={{ flex: 1, backgroundColor: C.bg }}>
+          <View style={styles.modalHead}>
+            <Tap onPress={() => !busy && setDevolverId(null)}>
+              <Text style={styles.cancel}>Cancelar</Text>
+            </Tap>
+            <Text style={styles.modalTitle}>Devolver depósito</Text>
+            <Tap onPress={submitDevolucion} disabled={busy || !liq?.puedeLiquidar}>
+              <Text style={[styles.save, (busy || !liq?.puedeLiquidar) && { opacity: 0.5 }]}>
                 {busy ? "…" : "Confirmar"}
               </Text>
             </Tap>
           </View>
           <ScrollView contentContainerStyle={{ padding: 16, gap: 12 }}>
             <Text style={styles.modalHint}>
-              ${resolverDep?.deposito?.monto?.toLocaleString("es-CO") ?? "—"} ·{" "}
-              {resolverDep?.zonaNombre}
+              {devolverReserva?.zonaNombre} · Unidad {devolverReserva?.unidadNumero}
             </Text>
-            <View style={styles.tabs}>
-              <Tap
-                onPress={() => setDevuelto(true)}
-                style={[styles.tab, devuelto && styles.tabActive]}
-              >
-                <Text style={[styles.tabText, devuelto && styles.tabTextActive]}>
-                  Devuelto
-                </Text>
-              </Tap>
-              <Tap
-                onPress={() => setDevuelto(false)}
-                style={[styles.tab, !devuelto && styles.tabActive]}
-              >
-                <Text style={[styles.tabText, !devuelto && styles.tabTextActive]}>
-                  No devuelto
-                </Text>
-              </Tap>
-            </View>
-            <Field label={devuelto ? "Observaciones" : "Observaciones *"}>
-              <TextInput
-                style={[styles.input, { minHeight: 80, textAlignVertical: "top" }]}
-                value={obs}
-                onChangeText={setObs}
-                multiline
-                placeholder="Detalle…"
-                placeholderTextColor={AuthUI.textMuted}
-              />
-            </Field>
-            <Tap onPress={pickFoto}>
-              <GlassCard style={styles.fotoBtn}>
-                <Ionicons name="camera-outline" size={20} color={AuthUI.text} />
-                <Text style={styles.fotoLabel}>
-                  {foto
-                    ? "Evidencia lista"
-                    : devuelto
-                      ? "Foto (opcional)"
-                      : "Foto de evidencia *"}
+            {liq ? (
+              <GlassCard style={{ padding: 14, gap: 6 }}>
+                <Fila etiqueta="Depósito recibido" valor={pesos(liq.deposito)} />
+                {liq.valorados > 0 ? (
+                  <Fila etiqueta={`Incidentes valorados (${liq.valorados})`} valor={pesos(liq.totalIncidentes)} />
+                ) : null}
+                <Fila
+                  etiqueta="Descuento aplicado"
+                  valor={liq.totalDescuento > 0 ? `− ${pesos(liq.totalDescuento)}` : pesos(0)}
+                />
+                <Fila etiqueta="Saldo a devolver" valor={pesos(liq.saldoDevolucion)} fuerte />
+              </GlassCard>
+            ) : null}
+            {liq && liq.excedenteNoCubierto > 0 ? (
+              <Text style={styles.note}>
+                Los incidentes superan el depósito en {pesos(liq.excedenteNoCubierto)}. Esa diferencia
+                se resuelve por fuera del sistema.
+              </Text>
+            ) : null}
+            {liq && liq.pendientes > 0 ? (
+              <Text style={styles.warning}>
+                Hay incidentes pendientes de valoración. El depósito no se puede devolver hasta que la
+                administración los valore o descarte.
+              </Text>
+            ) : null}
+            {(devolverReserva?.incidentes ?? []).map((i) => (
+              <GlassCard key={i._id} style={{ padding: 12, gap: 4 }}>
+                <Text style={styles.incDesc}>{i.descripcion}</Text>
+                <Text style={styles.meta}>
+                  {i.estado === "pendiente"
+                    ? "Pendiente de valoración"
+                    : i.estado === "descartado"
+                      ? "Descartado"
+                      : `Valorado ${pesos(i.valor ?? 0)}`}
+                  {" · "}Reportó {i.reportadoPorNombre}
                 </Text>
               </GlassCard>
-            </Tap>
+            ))}
+            {liq?.puedeLiquidar ? (
+              <>
+                <Field label={liq.razonObligatoria ? "Razón de la devolución *" : "Razón de la devolución (opcional)"}>
+                  <TextInput
+                    style={[styles.input, { minHeight: 80, textAlignVertical: "top" }]}
+                    value={obs}
+                    onChangeText={setObs}
+                    multiline
+                    placeholder={
+                      liq.totalDescuento > 0
+                        ? `Devolución parcial. Se descontaron ${pesos(liq.totalDescuento)}.`
+                        : "Opcional"
+                    }
+                    placeholderTextColor={AuthUI.textMuted}
+                  />
+                </Field>
+                <FotoBoton foto={!!foto} etiqueta="Foto de la entrega (opcional)" onPress={pickFoto} />
+              </>
+            ) : null}
           </ScrollView>
         </SafeAreaView>
       </Modal>
@@ -447,6 +545,26 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <Text style={styles.fieldLabel}>{label}</Text>
       {children}
     </View>
+  );
+}
+
+function Fila({ etiqueta, valor, fuerte }: { etiqueta: string; valor: string; fuerte?: boolean }) {
+  return (
+    <View style={{ flexDirection: "row", justifyContent: "space-between", gap: 12 }}>
+      <Text style={fuerte ? styles.filaFuerte : styles.meta}>{etiqueta}</Text>
+      <Text style={fuerte ? styles.filaFuerte : styles.filaValor}>{valor}</Text>
+    </View>
+  );
+}
+
+function FotoBoton({ foto, etiqueta, onPress }: { foto: boolean; etiqueta: string; onPress: () => void }) {
+  return (
+    <Tap onPress={onPress}>
+      <GlassCard style={styles.fotoBtn}>
+        <Ionicons name="camera-outline" size={20} color={AuthUI.text} />
+        <Text style={styles.fotoLabel}>{foto ? "Foto lista" : etiqueta}</Text>
+      </GlassCard>
+    </Tap>
   );
 }
 
@@ -524,4 +642,15 @@ const styles = StyleSheet.create({
   },
   fotoBtn: { padding: 14, flexDirection: "row", alignItems: "center", gap: 10 },
   fotoLabel: { fontSize: 14, color: AuthUI.text },
+  note: { fontSize: 12, color: AuthUI.textMuted },
+  warning: {
+    fontSize: 12,
+    color: "#b45309",
+    backgroundColor: "rgba(245, 158, 11, 0.12)",
+    padding: 10,
+    borderRadius: 10,
+  },
+  incDesc: { fontSize: 14, color: AuthUI.text },
+  filaValor: { fontSize: 13, color: AuthUI.text },
+  filaFuerte: { fontSize: 14, color: AuthUI.text, fontFamily: AuthUI.font.semibold },
 });

@@ -59,10 +59,13 @@ export const ETIQUETA_ESTADO_RESERVA: Record<EstadoReserva, string> = {
   cancelada: "Cancelada",
 };
 
+/* "Devuelto parcial" viene de los incidentes: el depósito descontó una parte.
+   Su razón va en la misma columna "Retencion", sin añadir columnas al CSV. */
 export const ESTADO_DEPOSITO: Record<string, string> = {
   registrado: "Sin devolver",
   devuelto: "Devuelto",
   no_devuelto: "Retenido",
+  devuelto_parcial: "Devuelto parcial",
 };
 
 /**

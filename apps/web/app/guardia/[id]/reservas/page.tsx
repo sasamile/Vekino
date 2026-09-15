@@ -3,11 +3,12 @@
 import { useState } from "react";
 import { useParams } from "next/navigation";
 import { useQuery, useMutation } from "convex/react";
+import type { FunctionReturnType } from "convex/server";
 import {
-  CalendarCheck, Clock, Home, Loader2, LogIn, LogOut, Wallet, Camera, ShieldAlert,
+  AlertTriangle, CalendarCheck, Clock, Home, Loader2, LogIn, LogOut, Wallet, Camera, ShieldAlert,
 } from "lucide-react";
 import { api } from "@vekino/backend/api";
-import type { Id, Doc } from "@vekino/backend/dataModel";
+import type { Id } from "@vekino/backend/dataModel";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -17,10 +18,16 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Input, Textarea } from "@/components/ui/input";
 import { PageContainer } from "@/components/layout/page-container";
 import { PageHeader } from "@/components/layout/page-header";
-import { cn } from "@/lib/utils";
+import { cn, cop } from "@/lib/utils";
 import { useUploadToS3 } from "@/hooks/use-upload-s3";
+import {
+  DesgloseDeposito,
+  ETIQUETA_ESTADO_DEPOSITO,
+  FormularioIncidente,
+  IncidenteDetalle,
+} from "@/components/reservas/incidentes-deposito";
 
-type Reserva = Doc<"reservas"> & { deposito: Doc<"guardiaReservaDepositos"> | null };
+type Reserva = FunctionReturnType<typeof api.guardia.listReservasControl>[number];
 
 function fmtFecha(fecha: string) {
   const [y, m, d] = fecha.split("-").map(Number);
@@ -33,15 +40,22 @@ export default function GuardiaReservasPage() {
   const condominioId = params.id as Id<"condominios">;
   const reservas = useQuery(api.guardia.listReservasControl, { condominioId });
 
-  const [depositoDe, setDepositoDe] = useState<Reserva | null>(null);
-  const [resolverDe, setResolverDe] = useState<Reserva | null>(null);
+  /* Se guarda el id y no la fila: el modal tiene que ver los incidentes que
+     la administración valore mientras está abierto, no una copia vieja. */
+  const [depositoDe, setDepositoDe] = useState<Id<"reservas"> | null>(null);
+  const [devolverDe, setDevolverDe] = useState<Id<"reservas"> | null>(null);
+  const [incidenteDe, setIncidenteDe] = useState<Id<"reservas"> | null>(null);
+  const buscar = (id: Id<"reservas"> | null) => (id ? reservas?.find((r) => r._id === id) ?? null : null);
+  const filaDeposito = buscar(depositoDe);
+  const filaDevolver = buscar(devolverDe);
+  const filaIncidente = buscar(incidenteDe);
 
   return (
     <PageContainer>
       <div className="space-y-6">
         <PageHeader
           title="Control de reservas"
-          description="Valida ingresos y salidas de zonas comunes; controla depósitos"
+          description="Valida ingresos y salidas de zonas comunes; controla depósitos e incidentes"
         />
 
       {reservas === undefined ? (
@@ -54,25 +68,27 @@ export default function GuardiaReservasPage() {
             <ReservaCard
               key={r._id}
               r={r}
-              onDeposito={() => setDepositoDe(r)}
-              onResolver={() => setResolverDe(r)}
+              onDeposito={() => setDepositoDe(r._id)}
+              onDevolver={() => setDevolverDe(r._id)}
+              onIncidente={() => setIncidenteDe(r._id)}
             />
           ))}
         </div>
       )}
 
-      {depositoDe && <DepositoModal reserva={depositoDe} onClose={() => setDepositoDe(null)} />}
-      {resolverDe && resolverDe.deposito && (
-        <ResolverModal reserva={resolverDe} deposito={resolverDe.deposito} onClose={() => setResolverDe(null)} />
+      {filaDeposito && <DepositoModal reserva={filaDeposito} onClose={() => setDepositoDe(null)} />}
+      {filaDevolver && filaDevolver.deposito && (
+        <DevolverModal reserva={filaDevolver} onClose={() => setDevolverDe(null)} />
       )}
+      {filaIncidente && <IncidenteModal reserva={filaIncidente} onClose={() => setIncidenteDe(null)} />}
       </div>
     </PageContainer>
   );
 }
 
 function ReservaCard({
-  r, onDeposito, onResolver,
-}: { r: Reserva; onDeposito: () => void; onResolver: () => void }) {
+  r, onDeposito, onDevolver, onIncidente,
+}: { r: Reserva; onDeposito: () => void; onDevolver: () => void; onIncidente: () => void }) {
   const validarIngreso = useMutation(api.guardia.validarIngresoReserva);
   const validarSalida = useMutation(api.guardia.validarSalidaReserva);
   const [busy, setBusy] = useState(false);
@@ -80,7 +96,9 @@ function ReservaCard({
 
   const sinIngreso = !r.ingresoValidadoAt;
   const enCurso = !!r.ingresoValidadoAt && !r.salidaValidadaAt;
-  const depositoPendiente = r.deposito?.estado === "registrado";
+  const depositoEnCustodia = r.deposito?.estado === "registrado";
+  const pendientes = r.liquidacion?.pendientes ?? 0;
+  const incidentesActivos = r.incidentes.filter((i) => i.estado !== "descartado").length;
 
   async function accion(fn: () => Promise<unknown>) {
     setBusy(true); setError(null);
@@ -88,6 +106,12 @@ function ReservaCard({
     catch (e) { setError(e instanceof Error ? e.message : "Error"); }
     finally { setBusy(false); }
   }
+
+  const botonSalida = (
+    <Button size="sm" variant="outline" onClick={() => accion(() => validarSalida({ reservaId: r._id }))} disabled={busy}>
+      {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogOut className="h-4 w-4" />} Validar salida
+    </Button>
+  );
 
   return (
     <Card className="p-4">
@@ -105,17 +129,22 @@ function ReservaCard({
             {r.deposito && (
               <span className={cn(
                 "rounded-md px-2 py-0.5 text-[11px] font-semibold",
-                depositoPendiente ? "bg-amber-500/10 text-amber-600"
+                depositoEnCustodia ? "bg-amber-500/10 text-amber-600"
                   : r.deposito.estado === "devuelto" ? "bg-emerald-500/10 text-emerald-600"
                   : "bg-red-500/10 text-red-600",
               )}>
-                Depósito ${r.deposito.monto.toLocaleString("es-CO")} · {depositoPendiente ? "en portería" : r.deposito.estado === "devuelto" ? "devuelto" : "NO devuelto"}
+                Depósito {cop(r.deposito.monto)} · {depositoEnCustodia ? "en portería" : ETIQUETA_ESTADO_DEPOSITO[r.deposito.estado].toLowerCase()}
               </span>
             )}
             {!r.deposito && r.depositoRequerido ? (
               <span className="rounded-md bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
-                Depósito {r.depositoRequerido.toLocaleString("es-CO", { style: "currency", currency: "COP", maximumFractionDigits: 0 })}
+                Depósito {cop(r.depositoRequerido)}
               </span>
+            ) : null}
+            {pendientes > 0 ? (
+              <Badge tone="warning">{pendientes === 1 ? "1 incidente por valorar" : `${pendientes} incidentes por valorar`}</Badge>
+            ) : incidentesActivos > 0 ? (
+              <Badge tone="destructive">{incidentesActivos === 1 ? "1 incidente" : `${incidentesActivos} incidentes`}</Badge>
             ) : null}
           </div>
           <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
@@ -140,16 +169,22 @@ function ReservaCard({
               )}
             </>
           )}
-          {enCurso && (
-            depositoPendiente ? (
-              <Button size="sm" variant="outline" onClick={onResolver} disabled={busy}>
-                <Wallet className="h-4 w-4" /> Resolver depósito
-              </Button>
-            ) : (
-              <Button size="sm" variant="outline" onClick={() => accion(() => validarSalida({ reservaId: r._id }))} disabled={busy}>
-                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogOut className="h-4 w-4" />} Validar salida
-              </Button>
-            )
+          {/* Con incidentes por valorar la salida física no espera: el depósito
+              se queda en portería hasta que la administración decida. */}
+          {enCurso && (depositoEnCustodia && pendientes === 0 ? (
+            <Button size="sm" variant="outline" onClick={onDevolver} disabled={busy}>
+              <Wallet className="h-4 w-4" /> Devolver depósito
+            </Button>
+          ) : botonSalida)}
+          {!!r.salidaValidadaAt && depositoEnCustodia && (
+            <Button size="sm" variant="outline" onClick={onDevolver} disabled={busy}>
+              <Wallet className="h-4 w-4" /> Devolver depósito
+            </Button>
+          )}
+          {!sinIngreso && r.incidentesAbiertos && (
+            <Button size="sm" variant="ghost" onClick={onIncidente} disabled={busy}>
+              <AlertTriangle className="h-4 w-4" /> Reportar incidente
+            </Button>
           )}
         </div>
       </div>
@@ -212,7 +247,7 @@ function DepositoModal({ reserva, onClose }: { reserva: Reserva; onClose: () => 
           <Input type="number" min={1} value={monto} onChange={(e) => setMonto(e.target.value)} placeholder="Ej. 100000" />
           {reserva.depositoRequerido ? (
             <p className="text-[11px] text-muted-foreground">
-              Configurado en la zona: {reserva.depositoRequerido.toLocaleString("es-CO", { style: "currency", currency: "COP", maximumFractionDigits: 0 })}
+              Configurado en la zona: {cop(reserva.depositoRequerido)}
             </p>
           ) : null}
         </div>
@@ -232,22 +267,44 @@ function DepositoModal({ reserva, onClose }: { reserva: Reserva; onClose: () => 
   );
 }
 
-/* ───────── Resolver depósito (+ valida salida) ───────── */
-function ResolverModal({
-  reserva, deposito, onClose,
-}: { reserva: Reserva; deposito: Doc<"guardiaReservaDepositos">; onClose: () => void }) {
+/* ───────── Reportar incidente (sin valor) ───────── */
+function IncidenteModal({ reserva, onClose }: { reserva: Reserva; onClose: () => void }) {
+  const reportar = useMutation(api.guardia.reportarIncidenteReserva);
+  return (
+    <Modal
+      open onClose={onClose}
+      title="Reportar incidente"
+      description={`${reserva.zonaNombre} · Unidad ${reserva.unidadNumero} · ${reserva.solicitanteNombre}`}
+    >
+      <FormularioIncidente
+        conValor={false}
+        carpeta={`condominios/guardia/${reserva.condominioId}/incidentes`}
+        onCancelar={onClose}
+        onGuardar={async (datos) => {
+          await reportar({ reservaId: reserva._id, descripcion: datos.descripcion, fotos: datos.fotos });
+          onClose();
+        }}
+      />
+    </Modal>
+  );
+}
+
+/* ───────── Devolver depósito (+ valida salida si faltaba) ───────── */
+function DevolverModal({ reserva, onClose }: { reserva: Reserva; onClose: () => void }) {
   const resolver = useMutation(api.guardia.resolverDepositoReserva);
   const uploadFile = useUploadToS3();
-  const [devuelto, setDevuelto] = useState(true);
-  const [observaciones, setObservaciones] = useState("");
+  const [razon, setRazon] = useState("");
   const [foto, setFoto] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const valido = devuelto || (observaciones.trim().length > 0 && foto !== null);
+  const deposito = reserva.deposito!;
+  const l = reserva.liquidacion;
+  const faltaRazon = !!l?.razonObligatoria && !razon.trim();
+  const valido = !!l && l.puedeLiquidar && !faltaRazon;
 
   async function confirmar() {
-    if (!valido) return;
+    if (!l || !valido) return;
     setBusy(true); setError(null);
     try {
       let fotoUrl: string | undefined;
@@ -258,10 +315,15 @@ function ResolverModal({
         );
         fotoUrl = uploaded.url;
       }
-      await resolver({ depositoId: deposito._id, devuelto, observaciones: observaciones || undefined, fotoUrl });
+      await resolver({
+        depositoId: deposito._id,
+        saldoEsperado: l.saldoDevolucion,
+        observaciones: razon.trim() || undefined,
+        fotoUrl,
+      });
       onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "No se pudo resolver.");
+      setError(e instanceof Error ? e.message : "No se pudo devolver.");
       setBusy(false);
     }
   }
@@ -269,51 +331,52 @@ function ResolverModal({
   return (
     <Modal
       open onClose={onClose}
-      title="Resolver depósito"
-      description={`$${deposito.monto.toLocaleString("es-CO")} · ${reserva.zonaNombre} · Unidad ${reserva.unidadNumero}. Se valida la salida.`}
+      title="Devolver depósito"
+      description={`${reserva.zonaNombre} · Unidad ${reserva.unidadNumero}${reserva.salidaValidadaAt ? "" : ". Se valida la salida."}`}
       footer={
         <>
           <Button variant="ghost" size="sm" onClick={onClose} disabled={busy}>Cancelar</Button>
           <Button size="sm" onClick={confirmar} disabled={!valido || busy}>
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogOut className="h-4 w-4" />} Resolver y validar salida
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wallet className="h-4 w-4" />}
+            {l ? `Devolver ${cop(l.saldoDevolucion)}` : "Devolver"}
           </Button>
         </>
       }
     >
       <div className="space-y-4">
-        <div className="grid grid-cols-2 gap-2">
-          <button
-            onClick={() => setDevuelto(true)}
-            className={cn(
-              "rounded-xl border p-3 text-sm font-semibold transition-colors",
-              devuelto ? "border-emerald-600 bg-emerald-600 text-white" : "border-border text-foreground hover:bg-accent",
-            )}
-          >
-            Devuelto
-          </button>
-          <button
-            onClick={() => setDevuelto(false)}
-            className={cn(
-              "rounded-xl border p-3 text-sm font-semibold transition-colors",
-              !devuelto ? "border-red-600 bg-red-600 text-white" : "border-border text-foreground hover:bg-accent",
-            )}
-          >
-            No devuelto
-          </button>
-        </div>
-        <div className="space-y-1.5">
-          <label className="block text-xs font-medium text-foreground">
-            Observaciones {!devuelto && <span className="text-red-600">*</span>}
-          </label>
-          <Textarea value={observaciones} onChange={(e) => setObservaciones(e.target.value)} rows={2} placeholder={devuelto ? "Opcional" : "¿Por qué no se devuelve? (daños, faltantes…)"} />
-        </div>
-        <div className="space-y-1.5">
-          <label className="flex items-center gap-1.5 text-xs font-medium text-foreground">
-            <Camera className="h-3.5 w-3.5" /> Foto de evidencia {!devuelto && <span className="text-red-600">*</span>}
-          </label>
-          <Input type="file" accept="image/*" capture="environment" onChange={(e) => setFoto(e.target.files?.[0] ?? null)} />
-        </div>
-        {!devuelto && <p className="rounded-lg bg-amber-500/10 p-2.5 text-xs text-amber-700">Si el depósito NO se devuelve, la observación y la foto son obligatorias.</p>}
+        {l && <DesgloseDeposito liquidacion={l} />}
+        {reserva.incidentes.length > 0 && (
+          <div className="space-y-2">
+            <p className="text-xs font-medium text-foreground">Incidentes</p>
+            {reserva.incidentes.map((i) => <IncidenteDetalle key={i._id} incidente={i} />)}
+          </div>
+        )}
+        {l?.puedeLiquidar && (
+          <>
+            <div className="space-y-1.5">
+              <label className="block text-xs font-medium text-foreground">
+                Razón de la devolución{" "}
+                {l.razonObligatoria ? <span className="text-red-600">*</span> : <span className="text-muted-foreground">(opcional)</span>}
+              </label>
+              <Textarea
+                value={razon}
+                onChange={(e) => setRazon(e.target.value)}
+                rows={2}
+                placeholder={
+                  l.totalDescuento > 0
+                    ? `Devolución parcial por daños. Se descontaron ${cop(l.totalDescuento)} del depósito.`
+                    : "Opcional"
+                }
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+                <Camera className="h-3.5 w-3.5" /> Foto de la entrega (opcional)
+              </label>
+              <Input type="file" accept="image/*" capture="environment" onChange={(e) => setFoto(e.target.files?.[0] ?? null)} />
+            </div>
+          </>
+        )}
         {error && <p className="text-sm text-destructive">{error}</p>}
       </div>
     </Modal>

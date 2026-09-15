@@ -11,6 +11,15 @@ import {
   seSolapan,
 } from "./lib/horarios";
 import { calcularCosto } from "./lib/costoReserva";
+import { montosDeDepositoResuelto } from "./lib/depositoReserva";
+import {
+  cajaDeposito,
+  crearIncidente,
+  depositoDeReserva,
+  incidentesDeReserva,
+  liquidarYDevolver,
+  revisarIncidente,
+} from "./model/depositoReserva";
 import {
   requireCondominioRole,
   requireAppUser,
@@ -341,17 +350,14 @@ async function conValores<T extends Doc<"reservas">>(
   });
 }
 
-/** Cruza cada reserva con lo que realmente se cobró. */
+/** Cruza cada reserva con lo que realmente se cobró, su depósito e incidentes. */
 async function conCaja<T extends Doc<"reservas">>(
   ctx: QueryCtx,
   filas: Array<T & { valorReserva?: number | null; depositoRequerido?: number; valoresEstimados?: boolean }>,
 ) {
   return await Promise.all(
     filas.map(async (r) => {
-      const dep = await ctx.db
-        .query("guardiaReservaDepositos")
-        .withIndex("by_reserva", (q) => q.eq("reservaId", r._id))
-        .first();
+      const dep = await depositoDeReserva(ctx, r._id);
       return {
         ...r,
         pagoAlquilerMonto: r.pagoAlquilerMonto ?? null,
@@ -364,8 +370,11 @@ async function conCaja<T extends Doc<"reservas">>(
               monto: dep.monto,
               estado: dep.estado,
               observacionesSalida: dep.observacionesSalida ?? null,
+              resueltoPorNombre: dep.resueltoPorNombre ?? null,
+              fechaResolucion: dep.fechaResolucion ?? null,
             }
           : null,
+        ...(await cajaDeposito(ctx, r._id, dep)),
       };
     }),
   );
@@ -546,6 +555,7 @@ export const registrarDeposito = mutation({
       observacionesIngreso: args.observaciones?.trim() || undefined,
       estado: "registrado",
       recibidoPorNombre: user.name,
+      recibidoPorUserId: user._id,
       fechaRegistro: Date.now(),
     });
     await ctx.db.patch(args.id, { updatedAt: Date.now() });
@@ -553,32 +563,112 @@ export const registrarDeposito = mutation({
 });
 
 /**
- * Devuelve el depósito o lo retiene (daños, faltantes).
+ * Devuelve el depósito desde oficina.
  *
- * En oficina la foto no es obligatoria: a veces se anota después. La razón
- * sí, si se retiene — sin ella el reporte no explica por qué no se devolvió.
+ * Ya no hay "retener": lo que se descuenta sale de los incidentes valorados
+ * y lo calcula el servidor (`model/depositoReserva.ts`). Si hubo incidentes,
+ * la razón es obligatoria. A diferencia de portería, no valida la salida.
+ *
+ * `devuelto` queda solo por compatibilidad de forma: `false` se rechaza.
  */
 export const resolverDeposito = mutation({
   args: {
     depositoId: v.id("guardiaReservaDepositos"),
-    devuelto: v.boolean(),
+    /** @deprecated La retención a criterio ya no existe; `false` se rechaza. */
+    devuelto: v.optional(v.boolean()),
+    /** Razón de la devolución. */
     observaciones: v.optional(v.string()),
+    /** El saldo que se estaba mostrando; debe coincidir con el calculado. */
+    saldoEsperado: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const dep = await ctx.db.get(args.depositoId);
     if (!dep) throw new Error("Depósito no encontrado.");
     const { user } = await requireCondominioRole(ctx, dep.condominioId, [...ADMIN_ROLES]);
-    if (dep.estado !== "registrado") throw new Error("El depósito ya fue resuelto.");
-    if (!args.devuelto && !args.observaciones?.trim()) {
-      throw new Error("Si se retiene el depósito, indica el motivo (daños, faltantes…).");
-    }
-    await ctx.db.patch(args.depositoId, {
-      estado: args.devuelto ? "devuelto" : "no_devuelto",
-      observacionesSalida: args.observaciones?.trim() || undefined,
-      resueltoPorNombre: user.name,
-      fechaResolucion: Date.now(),
+    return await liquidarYDevolver(ctx, {
+      deposito: dep,
+      user,
+      devuelto: args.devuelto,
+      razon: args.observaciones,
+      saldoEsperado: args.saldoEsperado,
     });
-    await ctx.db.patch(dep.reservaId, { updatedAt: Date.now() });
+  },
+});
+
+// ─── Incidentes de la reserva (administración) ────────────────
+
+/**
+ * La administración registra un incidente, con o sin valor.
+ *
+ * Con valor queda `valorado` y descuenta de una vez; sin él queda `pendiente`
+ * igual que si lo hubiera reportado portería.
+ */
+export const registrarIncidente = mutation({
+  args: {
+    reservaId: v.id("reservas"),
+    descripcion: v.string(),
+    valor: v.optional(v.number()),
+    fotos: v.optional(
+      v.array(v.object({ url: v.string(), nombre: v.optional(v.string()) })),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const reserva = await ctx.db.get(args.reservaId);
+    if (!reserva) throw new Error("Reserva no encontrada.");
+    const { user } = await requireCondominioRole(ctx, reserva.condominioId, [...ADMIN_ROLES]);
+    return await crearIncidente(ctx, {
+      reserva,
+      user,
+      origen: "administracion",
+      descripcion: args.descripcion,
+      fotos: args.fotos,
+      valor: args.valor,
+    });
+  },
+});
+
+/**
+ * Le pone (o corrige) el valor a un incidente.
+ *
+ * Es la decisión económica que portería no toma: sirve para los reportados
+ * por el guarda y para corregir uno ya valorado o descartado, mientras el
+ * depósito no se haya liquidado.
+ */
+export const valorarIncidente = mutation({
+  args: {
+    incidenteId: v.id("reservaIncidentes"),
+    valor: v.number(),
+    nota: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const incidente = await ctx.db.get(args.incidenteId);
+    if (!incidente) throw new Error("Incidente no encontrado.");
+    const { user } = await requireCondominioRole(ctx, incidente.condominioId, [...ADMIN_ROLES]);
+    await revisarIncidente(ctx, {
+      incidente,
+      user,
+      decision: { tipo: "valorar", valor: args.valor },
+      nota: args.nota,
+    });
+  },
+});
+
+/** La administración revisa un incidente y decide que no descuenta nada. */
+export const descartarIncidente = mutation({
+  args: {
+    incidenteId: v.id("reservaIncidentes"),
+    nota: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const incidente = await ctx.db.get(args.incidenteId);
+    if (!incidente) throw new Error("Incidente no encontrado.");
+    const { user } = await requireCondominioRole(ctx, incidente.condominioId, [...ADMIN_ROLES]);
+    await revisarIncidente(ctx, {
+      incidente,
+      user,
+      decision: { tipo: "descartar" },
+      nota: args.nota,
+    });
   },
 });
 
@@ -588,11 +678,12 @@ export const remove = mutation({
     const existing = await ctx.db.get(args.id);
     if (!existing) throw new Error("Reserva no encontrada.");
     await requireCondominioRole(ctx, existing.condominioId, [...ADMIN_ROLES]);
-    const dep = await ctx.db
-      .query("guardiaReservaDepositos")
-      .withIndex("by_reserva", (q) => q.eq("reservaId", args.id))
-      .first();
+    const dep = await depositoDeReserva(ctx, args.id);
     if (dep) await ctx.db.delete(dep._id);
+    /* Sin la reserva, un incidente no se asocia a nada: se van con ella. */
+    for (const i of await incidentesDeReserva(ctx, args.id)) {
+      await ctx.db.delete(i._id);
+    }
     await ctx.db.delete(args.id);
   },
 });
@@ -639,10 +730,10 @@ export const reporte = query({
     const conVals = await conValores(ctx, args.condominioId, enRango);
     const filas = await Promise.all(
       conVals.map(async (r) => {
-        const dep = await ctx.db
-          .query("guardiaReservaDepositos")
-          .withIndex("by_reserva", (q) => q.eq("reservaId", r._id))
-          .first();
+        const dep = await depositoDeReserva(ctx, r._id);
+        /* Los resueltos antes de los incidentes no guardan cifras: se deducen
+         * del estado, como siempre se leyeron. */
+        const montos = dep ? montosDeDepositoResuelto(dep) : null;
         return {
           _id: r._id,
           fecha: r.fecha,
@@ -658,7 +749,14 @@ export const reporte = query({
           valoresEstimados: r.valoresEstimados,
           depositoRecibido: dep?.monto ?? null,
           depositoEstado: dep?.estado ?? null,
-          depositoRetencion: dep?.estado === "no_devuelto" ? (dep.observacionesSalida ?? null) : null,
+          depositoDescontado: montos?.descontado ?? null,
+          depositoDevuelto: montos?.devuelto ?? null,
+          /* La razón de lo que no se devolvió: la retención de antes o la
+           * devolución parcial/total por incidentes de ahora. */
+          depositoRetencion:
+            dep && (dep.estado === "no_devuelto" || dep.estado === "devuelto_parcial")
+              ? (dep.observacionesSalida ?? null)
+              : null,
           /* Lo que se escribió al pedir la reserva. Viene en el mismo
            * documento: no cuesta ninguna lectura más. */
           observaciones: r.observaciones ?? null,
@@ -689,6 +787,10 @@ export const reporte = query({
         ).length,
         depositosSinDevolver: filas.filter((f) => f.depositoEstado === "registrado").length,
         depositosRetenidos: filas.filter((f) => f.depositoEstado === "no_devuelto").length,
+        depositosDevueltosParcial: filas.filter((f) => f.depositoEstado === "devuelto_parcial").length,
+        /* Lo que los incidentes descontaron de depósitos ya liquidados. El
+         * excedente sobre el depósito no está aquí: no es del sistema. */
+        depositoDescontado: filas.reduce((s, f) => s + (f.depositoDescontado ?? 0), 0),
       },
     };
   },

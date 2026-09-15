@@ -189,6 +189,12 @@ export function ReporteReservasPanel({
               {data.resumen.depositosRetenidos} depósito{data.resumen.depositosRetenidos === 1 ? "" : "s"} retenido{data.resumen.depositosRetenidos === 1 ? "" : "s"}.
             </p>
           )}
+          {data.resumen.depositosDevueltosParcial > 0 && (
+            <p className="text-sm text-amber-700 dark:text-amber-400">
+              {data.resumen.depositosDevueltosParcial} depósito{data.resumen.depositosDevueltosParcial === 1 ? "" : "s"} devuelto{data.resumen.depositosDevueltosParcial === 1 ? "" : "s"} parcialmente
+              {" "}· {cop(data.resumen.depositoDescontado)} descontado{data.resumen.depositoDescontado === 1 ? "" : "s"} por incidentes.
+            </p>
+          )}
 
           <div className="max-h-[55vh] overflow-auto rounded-xl border border-border">
             <Table>
@@ -284,7 +290,8 @@ function CeldaDeposito({
         <span className="block text-xs text-muted-foreground">
           {estado ? ESTADO_DEPOSITO[estado] ?? estado : ""}
         </span>
-        {estado === "no_devuelto" && retencion ? (
+        {/* El servidor solo manda la razón cuando no se devolvió todo. */}
+        {retencion ? (
           <span className="block text-xs text-red-600 dark:text-red-400">{retencion}</span>
         ) : null}
       </>

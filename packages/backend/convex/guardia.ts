@@ -22,6 +22,12 @@ import { displayNameFromUser } from "./model/displayName";
 import { resolveMediaUrl, resolveMediaUrlList } from "./model/files";
 import { calcularCosto } from "./lib/costoReserva";
 import { normalizarPlaca } from "./lib/placa";
+import {
+  cajaDeposito,
+  crearIncidente,
+  depositoDeReserva,
+  liquidarYDevolver,
+} from "./model/depositoReserva";
 
 /** Roles que pueden operar la portería. */
 const GUARD_ROLES = ["guardia", "administrador", "junta_directiva"] as const;
@@ -1183,10 +1189,7 @@ export const listReservasControl = query({
     const aprobadas = reservas.filter((r) => r.estado === "aprobada");
     return await Promise.all(
       aprobadas.map(async (r) => {
-        const deposito = await ctx.db
-          .query("guardiaReservaDepositos")
-          .withIndex("by_reserva", (q) => q.eq("reservaId", r._id))
-          .first();
+        const deposito = await depositoDeReserva(ctx, r._id);
         let depositoRequerido = r.depositoRequerido;
         let valorReserva = r.valorReserva;
         if (depositoRequerido == null || valorReserva == null) {
@@ -1202,9 +1205,50 @@ export const listReservasControl = query({
           valorReserva,
           depositoRequerido,
           deposito: deposito ?? null,
+          ...(await cajaDeposito(ctx, r._id, deposito)),
         };
       }),
     );
+  },
+});
+
+/**
+ * Portería reporta un incidente de la reserva: descripción y foto.
+ *
+ * NO recibe valor. El guarda cuenta lo que vio; cuánto se descuenta lo decide
+ * la administración (`reservas.valorarIncidente`). El incidente queda
+ * `pendiente` y, mientras lo esté, el depósito no se puede devolver.
+ */
+export const reportarIncidenteReserva = mutation({
+  args: {
+    reservaId: v.id("reservas"),
+    descripcion: v.string(),
+    fotos: v.optional(
+      v.array(v.object({ url: v.string(), nombre: v.optional(v.string()) })),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const r = await ctx.db.get(args.reservaId);
+    if (!r) throw new Error("Reserva no encontrada.");
+    const { user } = await requireCondominioRole(ctx, r.condominioId, [...GUARD_ROLES]);
+    const id = await crearIncidente(ctx, {
+      reserva: r,
+      user,
+      origen: "porteria",
+      descripcion: args.descripcion,
+      fotos: args.fotos,
+    });
+    await logMinuta(ctx, {
+      condominioId: r.condominioId,
+      modulo: "reservas",
+      tipo: "Incidente Reportado",
+      unidad: r.unidadNumero,
+      resumen: `Incidente en ${r.zonaNombre} · ${r.solicitanteNombre}: ${args.descripcion.trim()}. Pendiente de valoración.`,
+      estado: "abierto",
+      actorUserId: user._id,
+      actorNombre: user.name,
+    });
+    return id;
   },
 });
 
@@ -1261,6 +1305,7 @@ export const registrarDepositoReserva = mutation({
       fotoIngresoUrl: args.fotoUrl,
       estado: "registrado",
       recibidoPorNombre: user.name,
+      recibidoPorUserId: user._id,
       fechaRegistro: now,
     });
     await ctx.db.patch(args.reservaId, { ingresoValidadoAt: now, updatedAt: now });
@@ -1278,8 +1323,12 @@ export const registrarDepositoReserva = mutation({
 });
 
 /**
- * Valida la salida de una reserva. Si hay depósito pendiente ("registrado"),
- * la salida se bloquea hasta resolverlo.
+ * Valida la salida de una reserva.
+ *
+ * Con el depósito en custodia la salida se bloquea hasta devolverlo, SALVO
+ * que haya incidentes esperando valoración: el residente no se queda
+ * esperando a la administración para irse. En ese caso la salida física se
+ * valida y el depósito sigue en portería hasta que se valoren y se devuelva.
  */
 export const validarSalidaReserva = mutation({
   args: { reservaId: v.id("reservas") },
@@ -1287,12 +1336,14 @@ export const validarSalidaReserva = mutation({
     const r = await ctx.db.get(args.reservaId);
     if (!r) throw new Error("Reserva no encontrada.");
     const { user } = await requireCondominioRole(ctx, r.condominioId, [...GUARD_ROLES]);
-    const deposito = await ctx.db
-      .query("guardiaReservaDepositos")
-      .withIndex("by_reserva", (q) => q.eq("reservaId", args.reservaId))
-      .first();
+    const deposito = await depositoDeReserva(ctx, args.reservaId);
+    let enCustodia = false;
     if (deposito && deposito.estado === "registrado") {
-      throw new Error("Hay un depósito pendiente: debes resolverlo (devuelto o no devuelto) antes de validar la salida.");
+      const { liquidacion } = await cajaDeposito(ctx, args.reservaId, deposito);
+      if (!liquidacion || liquidacion.pendientes === 0) {
+        throw new Error("Hay un depósito pendiente: debes devolverlo antes de validar la salida.");
+      }
+      enCustodia = true;
     }
     await ctx.db.patch(args.reservaId, { salidaValidadaAt: Date.now(), updatedAt: Date.now() });
     await logMinuta(ctx, {
@@ -1300,8 +1351,10 @@ export const validarSalidaReserva = mutation({
       modulo: "reservas",
       tipo: "Salida Validada",
       unidad: r.unidadNumero,
-      resumen: `Salida validada: ${r.zonaNombre} · ${r.solicitanteNombre}.`,
-      estado: "cerrado",
+      resumen: enCustodia
+        ? `Salida validada: ${r.zonaNombre} · ${r.solicitanteNombre}. El depósito queda en custodia hasta valorar los incidentes.`
+        : `Salida validada: ${r.zonaNombre} · ${r.solicitanteNombre}.`,
+      estado: enCustodia ? "abierto" : "cerrado",
       actorUserId: user._id,
       actorNombre: user.name,
     });
@@ -1309,49 +1362,70 @@ export const validarSalidaReserva = mutation({
 });
 
 /**
- * Resuelve el depósito: devuelto o no devuelto. Si NO se devuelve, las
- * observaciones y la foto de evidencia son obligatorias. Valida la salida.
+ * Devuelve el depósito en portería y valida la salida si faltaba.
+ *
+ * El monto lo calcula el servidor con los incidentes valorados; el guarda no
+ * decide cuánto se retiene. No se puede devolver con incidentes pendientes.
+ * La razón es obligatoria si hubo incidentes; la foto, opcional.
+ *
+ * `devuelto` queda solo por las apps ya instaladas: `false` se rechaza.
  */
 export const resolverDepositoReserva = mutation({
   args: {
     depositoId: v.id("guardiaReservaDepositos"),
-    devuelto: v.boolean(),
+    /** @deprecated La retención a criterio ya no existe; `false` se rechaza. */
+    devuelto: v.optional(v.boolean()),
+    /** Razón de la devolución. */
     observaciones: v.optional(v.string()),
     fotoStorageId: v.optional(v.id("_storage")),
     fotoUrl: v.optional(v.string()),
+    /** El saldo que se estaba mostrando; debe coincidir con el calculado. */
+    saldoEsperado: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const dep = await ctx.db.get(args.depositoId);
     if (!dep) throw new Error("Depósito no encontrado.");
     const { user } = await requireCondominioRole(ctx, dep.condominioId, [...GUARD_ROLES]);
-    if (dep.estado !== "registrado") throw new Error("El depósito ya fue resuelto.");
-    if (!args.devuelto && (!args.observaciones?.trim() || (!args.fotoStorageId && !args.fotoUrl))) {
-      throw new Error("Si el depósito NO se devuelve, las observaciones y la foto de evidencia son obligatorias.");
-    }
+    const liq = await liquidarYDevolver(ctx, {
+      deposito: dep,
+      user,
+      devuelto: args.devuelto,
+      razon: args.observaciones,
+      saldoEsperado: args.saldoEsperado,
+      fotoUrl: args.fotoUrl,
+      fotoStorageId: args.fotoStorageId,
+    });
 
     const r = await ctx.db.get(dep.reservaId);
-    const now = Date.now();
-    await ctx.db.patch(args.depositoId, {
-      estado: args.devuelto ? "devuelto" : "no_devuelto",
-      observacionesSalida: args.observaciones?.trim() || undefined,
-      fotoSalidaStorageId: args.fotoStorageId,
-      fotoSalidaUrl: args.fotoUrl,
-      resueltoPorNombre: user.name,
-      fechaResolucion: now,
-    });
     if (r) {
-      await ctx.db.patch(dep.reservaId, { salidaValidadaAt: now, updatedAt: now });
+      const now = Date.now();
+      /* Si la salida ya se validó —se fue con incidentes pendientes—, se
+       * conserva la hora en que de verdad salió. */
+      if (!r.salidaValidadaAt) {
+        await ctx.db.patch(dep.reservaId, { salidaValidadaAt: now, updatedAt: now });
+      }
+      const pesos = (n: number) => `$${n.toLocaleString("es-CO")}`;
+      const razon = args.observaciones?.trim();
       await logMinuta(ctx, {
         condominioId: dep.condominioId,
         modulo: "reservas",
-        tipo: args.devuelto ? "Depósito Devuelto" : "Depósito No Devuelto",
+        tipo:
+          liq.estadoResultante === "devuelto"
+            ? "Depósito Devuelto"
+            : liq.estadoResultante === "devuelto_parcial"
+              ? "Depósito Devuelto Parcialmente"
+              : "Depósito Descontado Totalmente",
         unidad: r.unidadNumero,
-        resumen: `Depósito de $${dep.monto.toLocaleString("es-CO")} ${args.devuelto ? "devuelto" : "NO devuelto"} · ${r.zonaNombre}${args.observaciones ? `. Obs: ${args.observaciones.trim()}` : "."}`,
+        resumen:
+          `Depósito de ${pesos(dep.monto)} · ${r.zonaNombre}: devuelto ${pesos(liq.saldoDevolucion)}` +
+          (liq.totalDescuento > 0 ? `, descontado ${pesos(liq.totalDescuento)} por incidentes` : "") +
+          (razon ? `. Razón: ${razon}` : "."),
         estado: "cerrado",
         actorUserId: user._id,
         actorNombre: user.name,
       });
     }
+    return liq;
   },
 });
 

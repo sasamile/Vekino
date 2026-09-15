@@ -1852,9 +1852,15 @@ export default defineSchema({
     .index("by_vehiculo", ["vehiculoId"]),
 
   /**
-   * Depósito / garantía de una reserva de zona común, controlado en portería.
+   * Depósito / garantía de una reserva de zona común.
+   *
    * La salida de la reserva NO se puede validar mientras el depósito siga
-   * "registrado" (hay que resolverlo: devuelto o no devuelto con evidencia).
+   * "registrado", salvo que haya incidentes esperando valoración: la salida
+   * física no espera a la administración, pero el dinero sí.
+   *
+   * La devolución la calcula `lib/depositoReserva.ts` a partir de los
+   * incidentes (`reservaIncidentes`); ya no hay "retener" a criterio de quien
+   * resuelve.
    */
   guardiaReservaDepositos: defineTable({
     condominioId: v.id("condominios"),
@@ -1865,16 +1871,85 @@ export default defineSchema({
     fotoIngresoUrl: v.optional(v.string()),
     estado: v.union(
       v.literal("registrado"),
+      /** Se devolvió completo. */
       v.literal("devuelto"),
-      v.literal("no_devuelto")
+      /**
+       * Se devolvió $0. En los depósitos anteriores a los incidentes era la
+       * retención a criterio; desde entonces solo se llega con incidentes
+       * valorados que cubren todo el depósito.
+       */
+      v.literal("no_devuelto"),
+      /** Se devolvió una parte: los incidentes valorados descontaron el resto. */
+      v.literal("devuelto_parcial"),
     ),
+    /** Razón de la devolución. Obligatoria cuando hubo incidentes. */
     observacionesSalida: v.optional(v.string()),
     fotoSalidaStorageId: v.optional(v.id("_storage")), // legacy
     fotoSalidaUrl: v.optional(v.string()),
     recibidoPorNombre: v.string(),
+    recibidoPorUserId: v.optional(v.id("users")),
     resueltoPorNombre: v.optional(v.string()),
+    resueltoPorUserId: v.optional(v.id("users")),
     fechaRegistro: v.number(),
     fechaResolucion: v.optional(v.number()),
+    /**
+     * La liquidación congelada al devolver.
+     *
+     * Se guarda y no se recalcula al leer: es lo que se entregó en mano, y un
+     * incidente tocado después (no debería poder pasar, pero) no puede cambiar
+     * lo que dice el comprobante. Vacíos en los depósitos resueltos antes de
+     * que existieran los incidentes; `montosDeDepositoResuelto` los deduce
+     * del estado.
+     */
+    totalIncidentes: v.optional(v.number()),
+    montoDescontado: v.optional(v.number()),
+    montoDevuelto: v.optional(v.number()),
+  })
+    .index("by_reserva", ["reservaId"])
+    .index("by_condominio", ["condominioId"]),
+
+  /**
+   * Incidente ocurrido durante una reserva: un daño, un faltante.
+   *
+   * Separa quién lo VE de quién le pone PRECIO. Portería lo reporta sin valor
+   * y queda `pendiente`; la administración lo valora o lo descarta. Solo los
+   * `valorado` descuentan del depósito, y como máximo lo que el depósito
+   * alcanza: el excedente no se registra como deuda en ningún lado.
+   *
+   * No es una `guardiaNovedadReportes`: allí "cobrada" significa pasarle el
+   * cobro a la unidad, que es justo lo que un incidente no debe hacer.
+   *
+   * Cuando el depósito de la reserva se liquida, sus incidentes quedan
+   * congelados.
+   */
+  reservaIncidentes: defineTable({
+    condominioId: v.id("condominios"),
+    reservaId: v.id("reservas"),
+    descripcion: v.string(),
+    fotos: v.optional(
+      v.array(v.object({ url: v.string(), nombre: v.optional(v.string()) })),
+    ),
+    estado: v.union(
+      v.literal("pendiente"),
+      v.literal("valorado"),
+      v.literal("descartado"),
+    ),
+    /** Pesos. Solo lo pone la administración; solo cuenta si está `valorado`. */
+    valor: v.optional(v.number()),
+    /**
+     * Por dónde entró, que no es lo mismo que el rol: un administrador también
+     * puede operar la portería.
+     */
+    origen: v.union(v.literal("porteria"), v.literal("administracion")),
+    reportadoPorUserId: v.id("users"),
+    reportadoPorNombre: v.string(),
+    /** Quién decidió el valor o el descarte, y cuándo. */
+    revisadoPorUserId: v.optional(v.id("users")),
+    revisadoPorNombre: v.optional(v.string()),
+    revisadoEn: v.optional(v.number()),
+    notaRevision: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
   })
     .index("by_reserva", ["reservaId"])
     .index("by_condominio", ["condominioId"]),

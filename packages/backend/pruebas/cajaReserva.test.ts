@@ -302,7 +302,10 @@ describe("el depósito lo registra la administración sin pasar por portería", 
     expect(otra.page[0]?.depositoCaja?.estado).toBe("devuelto");
   });
 
-  test("retener exige el motivo", async () => {
+  /* CAMBIO DE COMPORTAMIENTO: antes la oficina podía "retener" el depósito con
+   * solo escribir un motivo. Ahora la retención sale de incidentes valorados
+   * (ver `incidentesReserva.test.ts`) y la vía directa se rechaza. */
+  test("ya no se retiene a criterio: el descuento sale de un incidente", async () => {
     const t = convexTest(schema, modules);
     const s = await escenario(t);
     const id = await crearAprobada(t, s);
@@ -322,12 +325,18 @@ describe("el depósito lo registra la administración sin pasar por portería", 
       como(t, "admin").mutation(api.reservas.resolverDeposito, {
         depositoId: depositoId!,
         devuelto: false,
+        observaciones: "Se dañó el mesón del BBQ",
       }),
-    ).rejects.toThrow(/motivo/);
+    ).rejects.toThrow(/retener/);
 
+    await como(t, "admin").mutation(api.reservas.registrarIncidente, {
+      reservaId: id,
+      descripcion: "Se dañó el mesón del BBQ",
+      valor: 60000,
+    });
     await como(t, "admin").mutation(api.reservas.resolverDeposito, {
       depositoId: depositoId!,
-      devuelto: false,
+      saldoEsperado: 0,
       observaciones: "Se dañó el mesón del BBQ",
     });
 
