@@ -14,6 +14,7 @@ import { descargarXlsxReporte } from "@/lib/excel-reporte";
 import {
   ESTADO_DEPOSITO,
   ETIQUETA_ESTADO_RESERVA,
+  ETIQUETA_VALOR_INCIDENTES,
   type EstadoReserva,
   csvReporteReservas,
   nombreArchivoReporteReservas,
@@ -153,11 +154,12 @@ export function ReporteReservasPanel({
         </p>
       ) : (
         <>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-5">
             <Dato valor={String(data.resumen.total)} etiqueta="Reservas" />
             <Dato valor={cop(data.resumen.alquilerEsperado)} etiqueta="Alquiler pactado" />
             <Dato valor={cop(data.resumen.alquilerRecibido)} etiqueta="Alquiler cobrado" />
             <Dato valor={cop(data.resumen.depositoRecibido)} etiqueta="Depósito recibido" />
+            <Dato valor={cop(data.resumen.valorIncidentes)} etiqueta={ETIQUETA_VALOR_INCIDENTES} />
           </div>
           {(estado === "cancelada" || estado === "rechazada") && (
             <p className="text-sm text-muted-foreground">

@@ -11,7 +11,7 @@ import {
   seSolapan,
 } from "./lib/horarios";
 import { calcularCosto } from "./lib/costoReserva";
-import { montosDeDepositoResuelto } from "./lib/depositoReserva";
+import { montosDeDepositoResuelto, valorDeIncidentes } from "./lib/depositoReserva";
 import {
   cajaDeposito,
   crearIncidente,
@@ -734,8 +734,14 @@ export const reporte = query({
         /* Los resueltos antes de los incidentes no guardan cifras: se deducen
          * del estado, como siempre se leyeron. */
         const montos = dep ? montosDeDepositoResuelto(dep) : null;
+        /* Se leen los incidentes y no `dep.totalIncidentes`: una reserva sin
+         * depósito o con el depósito aún en custodia también puede tenerlos. */
+        const incidentes = await incidentesDeReserva(ctx, r._id);
         return {
           _id: r._id,
+          /* Lo que valen los incidentes de ESTA reserva, sin tope. No es el
+           * depósito ni lo descontado (`depositoDescontado`). */
+          valorIncidentes: valorDeIncidentes(incidentes),
           fecha: r.fecha,
           horaInicio: r.horaInicio,
           horaFin: r.horaFin,
@@ -791,6 +797,11 @@ export const reporte = query({
         /* Lo que los incidentes descontaron de depósitos ya liquidados. El
          * excedente sobre el depósito no está aquí: no es del sistema. */
         depositoDescontado: filas.reduce((s, f) => s + (f.depositoDescontado ?? 0), 0),
+        /* Suma de la columna "Valor de incidentes" de las filas del reporte
+         * (rango y estado ya filtrados). Sobre TODAS las filas, como
+         * `depositoDescontado`: un daño no deja de haber ocurrido porque la
+         * reserva se cancele después. Sin tope: no es un ingreso. */
+        valorIncidentes: filas.reduce((s, f) => s + f.valorIncidentes, 0),
       },
     };
   },

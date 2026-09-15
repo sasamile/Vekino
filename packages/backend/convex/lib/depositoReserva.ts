@@ -52,6 +52,26 @@ export function esValorIncidenteValido(valor: number): boolean {
   return Number.isFinite(valor) && valor > 0;
 }
 
+/**
+ * Lo que valen los incidentes de una reserva: la suma de los valorados.
+ *
+ * SIN tope: es el daño que la administración valoró, no lo que el depósito
+ * alcanzó a cubrir (eso es `totalDescuento`). Los pendientes todavía no
+ * tienen valor y los descartados no cuentan. La usan la liquidación y el
+ * reporte, para que las dos digan la misma cifra.
+ */
+export function valorDeIncidentes(incidentes: readonly IncidenteLiquidable[]): number {
+  let total = 0;
+  for (const i of incidentes) {
+    if (i.estado !== "valorado") continue;
+    /* Un valor corrupto no puede sumar negativo y "devolver" mas de lo que
+     * se recibio. */
+    const v = i.valor ?? 0;
+    if (Number.isFinite(v) && v > 0) total += v;
+  }
+  return total;
+}
+
 export function liquidarDeposito(
   deposito: number,
   incidentes: readonly IncidenteLiquidable[],
@@ -61,18 +81,12 @@ export function liquidarDeposito(
   let pendientes = 0;
   let valorados = 0;
   let descartados = 0;
-  let totalIncidentes = 0;
   for (const i of incidentes) {
     if (i.estado === "pendiente") pendientes++;
     else if (i.estado === "descartado") descartados++;
-    else {
-      valorados++;
-      /* Un valor corrupto no puede sumar negativo y "devolver" mas de lo que
-       * se recibio. */
-      const v = i.valor ?? 0;
-      if (Number.isFinite(v) && v > 0) totalIncidentes += v;
-    }
+    else valorados++;
   }
+  const totalIncidentes = valorDeIncidentes(incidentes);
 
   const totalDescuento = Math.min(totalIncidentes, base);
   const saldoDevolucion = base - totalDescuento;

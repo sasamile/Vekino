@@ -751,6 +751,90 @@ describe("los depósitos históricos no se rompen", () => {
     expect(reporte.resumen.depositoDescontado).toBe(10000);
   });
 
+  test("el reporte trae el valor de incidentes por reserva y su total, respetando los filtros", async () => {
+    const t = convexTest(schema, modules);
+    const s = await escenario(t);
+    const RANGO = { desde: "2026-09-01", hasta: "2026-09-30" };
+
+    /* A: dos valorados, uno pendiente y uno descartado → solo cuentan los valorados. */
+    const a = await reservaConDeposito(t, s, "2026-09-16");
+    for (const valor of [10000, 15000]) {
+      await como(t, "admin").mutation(api.reservas.registrarIncidente, {
+        reservaId: a.reservaId,
+        descripcion: `Daño de ${valor}`,
+        valor,
+      });
+    }
+    await como(t, "guarda").mutation(api.guardia.reportarIncidenteReserva, {
+      reservaId: a.reservaId,
+      descripcion: "Sin valorar",
+    });
+    const descartado = await como(t, "guarda").mutation(api.guardia.reportarIncidenteReserva, {
+      reservaId: a.reservaId,
+      descripcion: "No procede",
+    });
+    await como(t, "admin").mutation(api.reservas.descartarIncidente, { incidenteId: descartado });
+
+    /* B: incidente mayor al depósito, ya liquidado → vale 100.000 aunque se descontaron 60.000. */
+    const b = await reservaConDeposito(t, s, "2026-09-18");
+    await como(t, "admin").mutation(api.reservas.registrarIncidente, {
+      reservaId: b.reservaId,
+      descripcion: "Mesón roto",
+      valor: 100000,
+    });
+    await como(t, "admin").mutation(api.reservas.resolverDeposito, {
+      depositoId: b.depositoId,
+      saldoEsperado: 0,
+      observaciones: "Daño mayor al depósito",
+    });
+
+    /* C: sin incidentes → 0, no vacío. */
+    const c = await reservaConDeposito(t, s, "2026-09-20");
+
+    /* D: fuera del rango → no entra al total. */
+    const d = await reservaConDeposito(t, s, "2026-10-02");
+    await como(t, "admin").mutation(api.reservas.registrarIncidente, {
+      reservaId: d.reservaId,
+      descripcion: "Fuera del rango",
+      valor: 7000,
+    });
+
+    const reporte = await como(t, "admin").query(api.reservas.reporte, {
+      condominioId: s.condominioId,
+      ...RANGO,
+    });
+    const porId = new Map(reporte.filas.map((f) => [f._id, f]));
+    expect(porId.get(a.reservaId)?.valorIncidentes).toBe(25000);
+    expect(porId.get(b.reservaId)?.valorIncidentes).toBe(100000);
+    expect(porId.get(b.reservaId)?.depositoDescontado).toBe(DEPOSITO);
+    expect(porId.get(c.reservaId)?.valorIncidentes).toBe(0);
+    expect(porId.has(d.reservaId)).toBe(false);
+    expect(reporte.resumen.valorIncidentes).toBe(125000);
+    /* El total es exactamente la suma de la columna: no hay una segunda regla. */
+    expect(reporte.resumen.valorIncidentes).toBe(
+      reporte.filas.reduce((s2, f) => s2 + f.valorIncidentes, 0),
+    );
+    /* Lo existente no cambia por los incidentes. */
+    expect(reporte.resumen.depositoRecibido).toBe(DEPOSITO * 3);
+    expect(reporte.resumen.depositoDescontado).toBe(DEPOSITO);
+
+    /* Con filtro de estado, solo las filas filtradas suman. */
+    await como(t, "admin").mutation(api.reservas.updateEstado, { id: c.reservaId, estado: "cancelada" });
+    const canceladas = await como(t, "admin").query(api.reservas.reporte, {
+      condominioId: s.condominioId,
+      ...RANGO,
+      estado: "cancelada",
+    });
+    expect(canceladas.filas.map((f) => f._id)).toEqual([c.reservaId]);
+    expect(canceladas.resumen.valorIncidentes).toBe(0);
+    const aprobadas = await como(t, "admin").query(api.reservas.reporte, {
+      condominioId: s.condominioId,
+      ...RANGO,
+      estado: "aprobada",
+    });
+    expect(aprobadas.resumen.valorIncidentes).toBe(125000);
+  });
+
   test("borrar la reserva se lleva sus incidentes", async () => {
     const t = convexTest(schema, modules);
     const s = await escenario(t);

@@ -19,7 +19,7 @@ import {
 /**
  * EL REPORTE DE RESERVAS EN CSV Y EN EXCEL.
  *
- * El CSV ya se usaba: se le añade una columna al final y nada más, así que
+ * El CSV ya se usaba: se le añaden columnas al final y nada más, así que
  * aquí se compara contra el generador de ANTES, copiado tal cual estaba en el
  * componente. El Excel se abre de verdad —se descomprime y se leen las
  * celdas— para comprobar que el resumen va arriba, que la tabla es la misma
@@ -46,6 +46,7 @@ const FILAS: FilaReporteReserva[] = [
     depositoEstado: null,
     depositoRetencion: null,
     observaciones: 'Cumpleaños, llevan "decoración"\nsegunda línea & <más>',
+    valorIncidentes: 0,
   },
   {
     fecha: "2026-09-20",
@@ -62,6 +63,8 @@ const FILAS: FilaReporteReserva[] = [
     depositoEstado: "no_devuelto",
     depositoRetencion: "Se dañó el mesón",
     observaciones: null,
+    /* Mayor que el depósito: la columna dice lo valorado, no lo descontado. */
+    valorIncidentes: 80000,
   },
   {
     fecha: "2026-09-25",
@@ -78,6 +81,7 @@ const FILAS: FilaReporteReserva[] = [
     depositoEstado: null,
     depositoRetencion: null,
     observaciones: "",
+    valorIncidentes: 0,
   },
 ];
 
@@ -87,6 +91,7 @@ const RESUMEN = {
   alquilerEsperado: 410000,
   alquilerRecibido: 150000,
   depositoRecibido: 50000,
+  valorIncidentes: 80000,
 };
 
 /** El generador del CSV tal como estaba en `reporte-reservas.tsx`. */
@@ -123,17 +128,18 @@ function csvDeAntes(filas: FilaReporteReserva[]) {
 // CSV
 // ─────────────────────────────────────────────────────────────
 
-test("el CSV es el de antes con Observaciones añadida al final", () => {
+test("el CSV es el de antes con Observaciones y Valor de incidentes añadidas al final", () => {
   const { lineas, esc } = csvDeAntes(FILAS);
   const obs = ["Observaciones", ...FILAS.map((f) => f.observaciones)];
-  const esperado = lineas.map((l, i) => `${l},${esc(obs[i])}`).join("\n");
+  const inc = ["Valor de incidentes", ...FILAS.map((f) => f.valorIncidentes)];
+  const esperado = lineas.map((l, i) => `${l},${esc(obs[i])},${esc(inc[i])}`).join("\n");
   assert.equal(csvReporteReservas(FILAS), esperado);
 });
 
 test("las observaciones con comas, comillas y saltos de línea no corren columnas", () => {
   const csv = csvReporteReservas(FILAS);
   assert.ok(csv.includes('"Cumpleaños, llevan ""decoración""\nsegunda línea & <más>"'));
-  assert.ok(csv.split("\n")[0]!.endsWith(',"Observaciones"'));
+  assert.ok(csv.split("\n")[0]!.endsWith(',"Observaciones","Valor de incidentes"'));
 });
 
 test("sin estado el archivo se llama como siempre; con estado lo lleva en el nombre", () => {
@@ -156,6 +162,7 @@ test("el resumen toma las cifras del servidor, sin recalcularlas", () => {
       ["Número de reservas", 3, "entero"],
       ["Alquiler pactado estimado", 410000, "moneda"],
       ["Depósito recibido", 50000, "moneda"],
+      ["Valor de incidentes", 80000, "moneda"],
       ["Total ingresos", 150000, "moneda"],
     ],
   );
@@ -231,7 +238,7 @@ async function abrir(bytes: Uint8Array) {
   return { celdas, formatoDe, filaDe, sheet, workbook, estilos, tipos, tabla, relsHoja };
 }
 
-const LETRAS = "ABCDEFGHIJKLMN";
+const LETRAS = "ABCDEFGHIJKLMNO";
 
 test("el Excel pone el resumen arriba y la tabla completa debajo", async () => {
   const opts = opcionesXlsxReporteReservas({
@@ -252,14 +259,15 @@ test("el Excel pone el resumen arriba y la tabla completa debajo", async () => {
   // Separación: la fila anterior al título de la tabla está vacía.
   assert.ok(![...celdas.keys()].some((ref) => Number(ref.replace(/^[A-Z]+/, "")) === rTabla - 1));
   // Los dos títulos de sección llevan la raya de lado a lado.
-  assert.equal(celdas.get(`N${rResumen}`)?.s, celdas.get(`A${rResumen}`)?.s);
-  assert.equal(celdas.get(`N${rTabla}`)?.s, celdas.get(`A${rTabla}`)?.s);
+  assert.equal(celdas.get(`O${rResumen}`)?.s, celdas.get(`A${rResumen}`)?.s);
+  assert.equal(celdas.get(`O${rTabla}`)?.s, celdas.get(`A${rTabla}`)?.s);
 
   // Indicadores: número con formato, en la columna D y dentro del bloque.
   const esperados: Array<[string, number, string]> = [
     ["Número de reservas", 3, "#,##0"],
     ["Alquiler pactado estimado", 410000, '"$ "#,##0'],
     ["Depósito recibido", 50000, '"$ "#,##0'],
+    ["Valor de incidentes", 80000, '"$ "#,##0'],
     ["Total ingresos", 150000, '"$ "#,##0'],
   ];
   let anterior = rResumen;
@@ -280,7 +288,7 @@ test("el Excel pone el resumen arriba y la tabla completa debajo", async () => {
   const cabeceraCsv = csvReporteReservas(FILAS).split("\n")[0]!.split(",").map((s) => s.slice(1, -1));
   const cabeceraXlsx = COLUMNAS_REPORTE_RESERVAS.map((_, j) => celdas.get(`${LETRAS[j]}${rCabecera}`)?.texto);
   assert.deepEqual(cabeceraXlsx, cabeceraCsv);
-  assert.equal(cabeceraXlsx.at(-1), "Observaciones");
+  assert.equal(cabeceraXlsx.at(-1), "Valor de incidentes");
 
   // Filas: mismas reservas y mismos valores que el CSV, con su tipo de Excel.
   const valores = filasReporteReservas(FILAS);
@@ -315,6 +323,10 @@ test("el Excel pone el resumen arriba y la tabla completa debajo", async () => {
       }
     });
   });
+  // Sin incidentes la celda es un 0 con formato de moneda, no una celda vacía.
+  assert.equal(celdas.get(`O${rCabecera + 1}`)?.v, "0");
+  assert.equal(formatoDe(celdas.get(`O${rCabecera + 1}`)!.s), '"$ "#,##0');
+  assert.equal(Number(celdas.get(`O${rCabecera + 2}`)?.v), 80000);
   // La casa "0012" sigue siendo texto: no pierde los ceros.
   assert.equal(celdas.get(`E${rCabecera + 2}`)?.texto, "0012");
   // La fila con observación de dos líneas es más alta que una de una línea.
@@ -328,7 +340,7 @@ test("la tabla principal es una tabla de Excel con filtro, Estado incluido", asy
   const opts = opcionesXlsxReporteReservas({ filas: FILAS, resumen: RESUMEN, desde: "2026-09-01", hasta: "2026-09-30" });
   const { filaDe, sheet, workbook, tipos, tabla, relsHoja, estilos } = await abrir(await construirXlsxReporte(opts));
   const rCabecera = filaDe("Fecha");
-  const ref = `A${rCabecera}:N${rCabecera + FILAS.length}`;
+  const ref = `A${rCabecera}:O${rCabecera + FILAS.length}`;
 
   assert.ok(tabla, "existe xl/tables/table1.xml");
   assert.ok(tabla.includes(`ref="${ref}"`));
@@ -355,7 +367,7 @@ test("la tabla principal es una tabla de Excel con filtro, Estado incluido", asy
 test("el Excel dice por qué estado se filtró", async () => {
   const opts = opcionesXlsxReporteReservas({
     filas: FILAS.filter((f) => f.estado === "cancelada"),
-    resumen: { total: 1, alquilerEsperado: 0, alquilerRecibido: 0, depositoRecibido: 0 },
+    resumen: { total: 1, alquilerEsperado: 0, alquilerRecibido: 0, depositoRecibido: 0, valorIncidentes: 0 },
     desde: "2026-09-01",
     hasta: "2026-09-30",
     estado: "cancelada",
@@ -371,7 +383,7 @@ test("el Excel dice por qué estado se filtró", async () => {
 test("sin reservas el Excel se arma igual, sin tabla ni filtro", async () => {
   const opts = opcionesXlsxReporteReservas({
     filas: [],
-    resumen: { total: 0, alquilerEsperado: 0, alquilerRecibido: 0, depositoRecibido: 0 },
+    resumen: { total: 0, alquilerEsperado: 0, alquilerRecibido: 0, depositoRecibido: 0, valorIncidentes: 0 },
     desde: "2026-09-01",
     hasta: "2026-09-30",
   });
