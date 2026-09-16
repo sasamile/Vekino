@@ -4,12 +4,18 @@ import { useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
-import { Download, Loader2, Settings2 } from "lucide-react";
+import { Download, Loader2, Search, Settings2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
+import { Select } from "@/components/ui/input";
+import {
+  filtrar,
+  resumir,
+  type Estado,
+} from "@vekino/backend/filtroAporte";
 import { cn, cop } from "@/lib/utils";
 
 /**
@@ -44,9 +50,18 @@ export function ReporteAportePanel({
   const inicial = rangoPorDefecto();
   const [desde, setDesde] = useState(inicial.desde);
   const [hasta, setHasta] = useState(inicial.hasta);
+  const [busqueda, setBusqueda] = useState("");
+  const [estado, setEstado] = useState<Estado>("todas");
   const [config, setConfig] = useState(false);
 
   const data = useQuery(api.aporte.reporte, { condominioId, desde, hasta });
+
+  /* El filtro se aplica aquí, no en el servidor: son un par de cientos de
+   * filas y así responde mientras se escribe, sin una consulta por tecla. */
+  const filas = data ? filtrar(data.filas, busqueda, estado) : [];
+  const resumen = resumir(filas);
+  const periodos = data?.periodosDisponibles ?? [];
+  const filtrando = busqueda.trim() !== "" || estado !== "todas";
 
   function descargar() {
     if (!data) return;
@@ -54,12 +69,12 @@ export function ReporteAportePanel({
     /* Comillas siempre: los nombres traen comas y sin esto las columnas se
        corren al abrirlo en Excel. */
     const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-    const filas = data.filas.map((f) => [
+    const filasCsv = filas.map((f) => [
       f.unidadNumero, f.unidadTorre ?? "", f.residenteNombre,
       f.placas.join(" / "), f.meses, f.desde ?? "", f.hasta ?? "",
       f.valorTotal, f.enMora ? "En mora" : "Al día",
     ]);
-    const csv = [cab, ...filas].map((r) => r.map(esc).join(",")).join("\n");
+    const csv = [cab, ...filasCsv].map((r) => r.map(esc).join(",")).join("\n");
     const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -72,18 +87,69 @@ export function ReporteAportePanel({
   return (
     <div className="space-y-4">
         <div className="flex flex-wrap items-end gap-3">
+          {/* Solo los meses que existen. La facturación tiene huecos —no hay
+              julio de 2026— y con campos de mes libres es fácil escoger un
+              rango vacío y creer que el reporte está roto. */}
           <div className="space-y-1.5">
             <label className="block text-xs font-medium text-foreground">Desde</label>
-            <Input type="month" value={desde} onChange={(e) => setDesde(e.target.value)} />
+            <Select value={desde} onChange={(e) => setDesde(e.target.value)} className="w-36">
+              {periodos.length === 0 && <option value={desde}>{desde}</option>}
+              {periodos.map((p) => (
+                <option key={p} value={p}>{p}</option>
+              ))}
+            </Select>
           </div>
           <div className="space-y-1.5">
             <label className="block text-xs font-medium text-foreground">Hasta</label>
-            <Input type="month" value={hasta} onChange={(e) => setHasta(e.target.value)} />
+            <Select value={hasta} onChange={(e) => setHasta(e.target.value)} className="w-36">
+              {periodos.length === 0 && <option value={hasta}>{hasta}</option>}
+              {periodos.map((p) => (
+                <option key={p} value={p}>{p}</option>
+              ))}
+            </Select>
           </div>
+
+          <div className="space-y-1.5">
+            <label className="block text-xs font-medium text-foreground">Estado</label>
+            <Select
+              value={estado}
+              onChange={(e) => setEstado(e.target.value as Estado)}
+              className="w-44"
+            >
+              <option value="todas">Todas</option>
+              <option value="al_dia">Al día</option>
+              <option value="en_mora">En mora</option>
+              <option value="sin_vehiculo">Sin vehículo</option>
+            </Select>
+          </div>
+
+          <div className="min-w-[200px] flex-1 space-y-1.5">
+            <label className="block text-xs font-medium text-foreground">Buscar</label>
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={busqueda}
+                onChange={(e) => setBusqueda(e.target.value)}
+                placeholder="Casa, residente o placa"
+                className="pl-9 pr-9"
+              />
+              {busqueda && (
+                <button
+                  type="button"
+                  onClick={() => setBusqueda("")}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:bg-accent"
+                  aria-label="Limpiar"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+          </div>
+
           <Button variant="outline" size="sm" onClick={() => setConfig(true)}>
             <Settings2 className="h-4 w-4" /> Tarifas
           </Button>
-          <Button size="sm" variant="outline" onClick={descargar} disabled={!data || data.filas.length === 0}>
+          <Button size="sm" variant="outline" onClick={descargar} disabled={filas.length === 0}>
             <Download className="h-4 w-4" /> Descargar CSV
           </Button>
         </div>
@@ -92,16 +158,38 @@ export function ReporteAportePanel({
           <div className="flex justify-center py-10">
             <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
           </div>
-        ) : data.filas.length === 0 ? (
-          <p className="py-10 text-center text-sm text-muted-foreground">
-            Ninguna factura de ese rango trae aporte voluntario.
-          </p>
+        ) : filas.length === 0 ? (
+          /* Se distingue «no hay nada» de «el filtro no deja pasar nada»:
+             son problemas distintos y la salida tambien. */
+          <div className="py-10 text-center">
+            <p className="text-sm text-muted-foreground">
+              {filtrando
+                ? "Ninguna casa coincide con el filtro."
+                : `Ninguna factura entre ${desde} y ${hasta} trae aporte voluntario.`}
+            </p>
+            {filtrando && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="mt-3"
+                onClick={() => { setBusqueda(""); setEstado("todas"); }}
+              >
+                Quitar filtros
+              </Button>
+            )}
+          </div>
         ) : (
           <>
+            {/* Los totales son de lo que se ve. Si al filtrar por mora el total
+                siguiera siendo el de todas, el numero de arriba contradiria la
+                tabla de abajo. */}
             <div className="grid grid-cols-3 gap-3">
-              <Dato valor={String(data.resumen.casas)} etiqueta="Casas con aporte" />
-              <Dato valor={cop(data.resumen.valorTotal)} etiqueta="Total facturado" />
-              <Dato valor={String(data.resumen.enMora)} etiqueta="En mora" alerta={data.resumen.enMora > 0} />
+              <Dato
+                valor={String(resumen.casas)}
+                etiqueta={filtrando ? `Casas (de ${data.resumen.casas})` : "Casas con aporte"}
+              />
+              <Dato valor={cop(resumen.valorTotal)} etiqueta="Total facturado" />
+              <Dato valor={String(resumen.enMora)} etiqueta="En mora" alerta={resumen.enMora > 0} />
             </div>
 
             <div className="max-h-[55vh] overflow-auto rounded-xl border border-border">
@@ -110,7 +198,7 @@ export function ReporteAportePanel({
                   <TR><TH>Casa</TH><TH>Placas</TH><TH>Meses</TH><TH>Total</TH></TR>
                 </THead>
                 <TBody>
-                  {data.filas.map((f) => (
+                  {filas.map((f) => (
                     <TR key={f.unidadId}>
                       <TD>
                         <span className="flex items-center gap-2">
@@ -143,9 +231,9 @@ export function ReporteAportePanel({
               </Table>
             </div>
 
-            {data.resumen.sinVehiculo > 0 && (
+            {resumen.sinVehiculo > 0 && estado !== "sin_vehiculo" && (
               <p className="text-[13px] text-amber-700 dark:text-amber-400">
-                {data.resumen.sinVehiculo} casas pagan aporte pero no tienen
+                {resumen.sinVehiculo} casas pagan aporte pero no tienen
                 ningún vehículo registrado. El guarda no las va a encontrar
                 buscando por placa.
               </p>

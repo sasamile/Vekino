@@ -50,6 +50,7 @@ import type * as lib_emailApoderado from "../lib/emailApoderado.js";
 import type * as lib_emailCredenciales from "../lib/emailCredenciales.js";
 import type * as lib_expoPush from "../lib/expoPush.js";
 import type * as lib_fechaTexto from "../lib/fechaTexto.js";
+import type * as lib_filtroAporte from "../lib/filtroAporte.js";
 import type * as lib_guiasVekino from "../lib/guiasVekino.js";
 import type * as lib_horarios from "../lib/horarios.js";
 import type * as lib_importarVehiculos from "../lib/importarVehiculos.js";
@@ -166,6 +167,7 @@ declare const fullApi: ApiFromModules<{
   "lib/emailCredenciales": typeof lib_emailCredenciales;
   "lib/expoPush": typeof lib_expoPush;
   "lib/fechaTexto": typeof lib_fechaTexto;
+  "lib/filtroAporte": typeof lib_filtroAporte;
   "lib/guiasVekino": typeof lib_guiasVekino;
   "lib/horarios": typeof lib_horarios;
   "lib/importarVehiculos": typeof lib_importarVehiculos;

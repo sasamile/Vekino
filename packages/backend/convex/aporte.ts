@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { mutation, query } from "./_generated/server";
+import { internalQuery, mutation, query } from "./_generated/server";
 import type { QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { requireCondominioRole } from "./model/authz";
@@ -222,6 +222,15 @@ export const reporte = query({
       a.unidadNumero.localeCompare(b.unidadNumero, undefined, { numeric: true }),
     );
 
+    /* Los meses que EXISTEN, no los del calendario.
+     *
+     * La facturacion tiene huecos —en Ciudad del Campo no hay julio de 2026—
+     * y con dos campos de mes libres es facil escoger un rango vacio y creer
+     * que el reporte esta roto. Ofreciendo solo los meses con factura, eso no
+     * puede pasar. */
+    const periodosDisponibles = [...new Set(facturas.map((f) => f.periodo))]
+      .sort((a, b) => b.localeCompare(a));
+
     return {
       filas,
       resumen: {
@@ -230,6 +239,7 @@ export const reporte = query({
         enMora: filas.filter((f) => f.enMora).length,
         sinVehiculo: filas.filter((f) => f.placas.length === 0).length,
       },
+      periodosDisponibles,
       tarifas,
     };
   },
@@ -259,5 +269,53 @@ export const configurar = mutation({
       },
       updatedAt: Date.now(),
     });
+  },
+});
+
+/**
+ * Que traen las facturas por concepto de aporte, periodo por periodo.
+ *
+ * Existe porque el reporte salia vacio y no habia forma de saber si el
+ * problema era el rango de fechas, la deteccion del concepto o que las
+ * facturas simplemente no lo traen. Responde eso de un vistazo.
+ */
+export const diagnostico = internalQuery({
+  args: { condominioId: v.id("condominios") },
+  handler: async (ctx, args) => {
+    const facturas = await ctx.db
+      .query("facturas")
+      .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
+      .collect();
+
+    const porPeriodo = new Map<
+      string,
+      { facturas: number; conAporte: number; total: number }
+    >();
+    const conceptos = new Map<string, number>();
+
+    for (const f of facturas) {
+      const e = porPeriodo.get(f.periodo) ?? { facturas: 0, conAporte: 0, total: 0 };
+      e.facturas += 1;
+      const monto = aporteDeFactura(f.lineas);
+      if (monto > 0) {
+        e.conAporte += 1;
+        e.total += monto;
+      }
+      porPeriodo.set(f.periodo, e);
+      for (const l of f.lineas) {
+        const k = `${l.codigo} · ${l.concepto}`;
+        conceptos.set(k, (conceptos.get(k) ?? 0) + 1);
+      }
+    }
+
+    return {
+      totalFacturas: facturas.length,
+      periodos: [...porPeriodo.entries()]
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([periodo, d]) => ({ periodo, ...d })),
+      conceptos: [...conceptos.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .map(([concepto, veces]) => ({ concepto, veces })),
+    };
   },
 });

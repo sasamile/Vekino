@@ -47,6 +47,10 @@
     "./inventario": {
       "types": "./convex/lib/inventario.ts",
       "default": "./convex/lib/inventario.ts"
+    },
+    "./filtroAporte": {
+      "types": "./convex/lib/filtroAporte.ts",
+      "default": "./convex/lib/filtroAporte.ts"
     }
   },
   "dependencies": {
