@@ -67,6 +67,7 @@ import type * as lib_ronda from "../lib/ronda.js";
 import type * as lib_telefono from "../lib/telefono.js";
 import type * as lib_vigilancia from "../lib/vigilancia.js";
 import type * as lib_ycloud from "../lib/ycloud.js";
+import type * as limpieza from "../limpieza.js";
 import type * as memberships from "../memberships.js";
 import type * as migrations from "../migrations.js";
 import type * as model_acceso from "../model/acceso.js";
@@ -184,6 +185,7 @@ declare const fullApi: ApiFromModules<{
   "lib/telefono": typeof lib_telefono;
   "lib/vigilancia": typeof lib_vigilancia;
   "lib/ycloud": typeof lib_ycloud;
+  limpieza: typeof limpieza;
   memberships: typeof memberships;
   migrations: typeof migrations;
   "model/acceso": typeof model_acceso;
