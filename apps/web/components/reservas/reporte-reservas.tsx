@@ -154,16 +154,15 @@ export function ReporteReservasPanel({
         </p>
       ) : (
         <>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-5">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <Dato valor={String(data.resumen.total)} etiqueta="Reservas" />
             <Dato valor={cop(data.resumen.alquilerEsperado)} etiqueta="Alquiler pactado" />
             <Dato valor={cop(data.resumen.alquilerRecibido)} etiqueta="Alquiler cobrado" />
-            <Dato valor={cop(data.resumen.depositoRecibido)} etiqueta="Depósito recibido" />
             <Dato valor={cop(data.resumen.valorIncidentes)} etiqueta={ETIQUETA_VALOR_INCIDENTES} />
           </div>
           {(estado === "cancelada" || estado === "rechazada") && (
             <p className="text-sm text-muted-foreground">
-              Las reservas canceladas y rechazadas no suman alquiler, depósito ni ingresos en los totales.
+              Las reservas canceladas y rechazadas no suman alquiler ni ingresos en los totales.
             </p>
           )}
           {(data.resumen.alquilerSinRegistrar > 0 || data.resumen.depositoSinRegistrar > 0) && (

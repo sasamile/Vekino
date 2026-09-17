@@ -23,6 +23,11 @@ export type IncidenteLiquidable = {
   valor?: number | null;
 };
 
+/** Lo que hace falta de un incidente para contar qué pasó. */
+export type IncidenteDescrito = {
+  descripcion?: string | null;
+};
+
 export type EstadoDepositoLiquidado = "devuelto" | "devuelto_parcial" | "no_devuelto";
 
 export type Liquidacion = {
@@ -70,6 +75,24 @@ export function valorDeIncidentes(incidentes: readonly IncidenteLiquidable[]): n
     if (Number.isFinite(v) && v > 0) total += v;
   }
   return total;
+}
+
+/**
+ * Las descripciones de los incidentes de una reserva, en una sola celda.
+ *
+ * Acompaña a `valorDeIncidentes` en el reporte: aquella dice cuánto y esta
+ * qué pasó. Van TODOS, no solo los valorados: un incidente pendiente o
+ * descartado también ocurrió, y quien lee el reporte necesita saber de qué se
+ * le habla aunque no descuente un peso. Cadena vacía cuando no hubo ninguno,
+ * que es como el reporte deja las celdas sin información.
+ */
+export function descripcionDeIncidentes(incidentes: readonly IncidenteDescrito[]): string {
+  /* Entre un incidente y el siguiente dentro de la misma celda. */
+  const separador = " · ";
+  return incidentes
+    .map((i) => (i.descripcion ?? "").trim())
+    .filter((d) => d !== "")
+    .join(separador);
 }
 
 export function liquidarDeposito(

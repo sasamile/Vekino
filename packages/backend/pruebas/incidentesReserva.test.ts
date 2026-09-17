@@ -815,8 +815,16 @@ describe("los depósitos históricos no se rompen", () => {
       reporte.filas.reduce((s2, f) => s2 + f.valorIncidentes, 0),
     );
     /* Lo existente no cambia por los incidentes. */
-    expect(reporte.resumen.depositoRecibido).toBe(DEPOSITO * 3);
     expect(reporte.resumen.depositoDescontado).toBe(DEPOSITO);
+
+    /* La descripción acompaña al valor: dice de QUÉ se habla. Van los cuatro
+       incidentes de A, también el pendiente y el descartado, que no suman. */
+    expect(porId.get(a.reservaId)?.descripcionIncidentes).toBe(
+      "Daño de 10000 · Daño de 15000 · Sin valorar · No procede",
+    );
+    expect(porId.get(b.reservaId)?.descripcionIncidentes).toBe("Mesón roto");
+    /* Sin incidentes es cadena vacía, que es la celda en blanco del reporte. */
+    expect(porId.get(c.reservaId)?.descripcionIncidentes).toBe("");
 
     /* Con filtro de estado, solo las filas filtradas suman. */
     await como(t, "admin").mutation(api.reservas.updateEstado, { id: c.reservaId, estado: "cancelada" });

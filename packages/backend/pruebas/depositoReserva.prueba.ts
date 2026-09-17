@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  descripcionDeIncidentes,
   esValorIncidenteValido,
   liquidarDeposito,
   montosDeDepositoResuelto,
@@ -111,5 +112,42 @@ test("los depósitos históricos se leen por su estado", () => {
       montoDescontado: 10000,
     }),
     { devuelto: 50000, descontado: 10000 },
+  );
+});
+
+// ─────────────────────────────────────────────────────────────
+// Lo que se cuenta de los incidentes en el reporte
+// ─────────────────────────────────────────────────────────────
+
+test("sin incidentes la descripción queda vacía", () => {
+  assert.equal(descripcionDeIncidentes([]), "");
+});
+
+test("varios incidentes se unen en una sola celda, en orden", () => {
+  assert.equal(
+    descripcionDeIncidentes([
+      { descripcion: "Silla rota" },
+      { descripcion: "Vidrio del salón" },
+    ]),
+    "Silla rota · Vidrio del salón",
+  );
+});
+
+test("la descripción NO filtra por estado: cuenta lo que pasó, no lo que se cobró", () => {
+  /* El pendiente todavía no vale nada y el descartado no vale nada nunca, pero
+     los dos ocurrieron: quien lee el reporte necesita saberlo. */
+  assert.equal(
+    descripcionDeIncidentes([
+      { descripcion: "Sin valorar" },
+      { descripcion: "No procede" },
+    ]),
+    "Sin valorar · No procede",
+  );
+});
+
+test("una descripción en blanco no deja un separador suelto", () => {
+  assert.equal(
+    descripcionDeIncidentes([{ descripcion: "  " }, { descripcion: " Mesón roto " }]),
+    "Mesón roto",
   );
 });

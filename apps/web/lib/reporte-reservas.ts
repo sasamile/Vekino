@@ -35,6 +35,12 @@ export type FilaReporteReserva = {
   observaciones: string | null;
   /** Suma de los incidentes valorados de ESTA reserva. 0 si no tuvo. */
   valorIncidentes: number;
+  /**
+   * Qué pasó en esos incidentes, ya unido por `descripcionDeIncidentes`.
+   * Están TODOS (también pendientes y descartados), así que puede traer texto
+   * con `valorIncidentes` en 0. Vacío si la reserva no tuvo ninguno.
+   */
+  descripcionIncidentes: string;
 };
 
 /** Los totales de `reservas.reporte` que van al resumen del Excel. */
@@ -42,7 +48,6 @@ export type ResumenReporteReservas = {
   total: number;
   alquilerEsperado: number;
   alquilerRecibido: number;
-  depositoRecibido: number;
   valorIncidentes: number;
 };
 
@@ -52,6 +57,15 @@ export type ResumenReporteReservas = {
  * valoró, y cuando supera el depósito solo se descuenta hasta el depósito.
  */
 export const ETIQUETA_VALOR_INCIDENTES = "Valor de incidentes";
+
+/**
+ * Nombre de la columna con el texto de los incidentes.
+ *
+ * En singular y con tilde, tal como se pidió, aunque el resto de encabezados
+ * vayan sin tildes por el CSV de siempre: es una columna nueva, no hay macro
+ * ni fórmula que la lea todavía.
+ */
+export const ETIQUETA_DESCRIPCION_INCIDENTE = "Descripción del incidente";
 
 /** Los estados de una reserva, tal como los define `schema.ts`. */
 export type EstadoReserva = Doc<"reservas">["estado"];
@@ -82,7 +96,8 @@ export const ESTADO_DEPOSITO: Record<string, string> = {
  * Las columnas, en el orden del CSV de siempre.
  *
  * Los encabezados se dejan sin tilde porque así los tiene el CSV que ya se
- * descarga, y alguien puede estar leyéndolo con una macro o una fórmula.
+ * descarga, y alguien puede estar leyéndolo con una macro o una fórmula; las
+ * columnas nuevas no cargan con esa regla (ver `ETIQUETA_DESCRIPCION_INCIDENTE`).
  * `Observaciones` va al final para no correr ninguna columna existente.
  */
 export const COLUMNAS_REPORTE_RESERVAS: readonly ColumnaReporte[] = [
@@ -102,6 +117,7 @@ export const COLUMNAS_REPORTE_RESERVAS: readonly ColumnaReporte[] = [
   { encabezado: "Observaciones" },
   /* Al final, igual que Observaciones: ninguna columna existente se corre. */
   { encabezado: ETIQUETA_VALOR_INCIDENTES, tipo: "moneda" },
+  { encabezado: ETIQUETA_DESCRIPCION_INCIDENTE },
 ];
 
 /**
@@ -132,6 +148,8 @@ export function filasReporteReservas(filas: readonly FilaReporteReserva[]): Valo
     f.observaciones ?? null,
     /* Cero y no vacío: "no tuvo incidentes" es un dato, no una celda en blanco. */
     f.valorIncidentes ?? 0,
+    /* Aquí sí en blanco, como Observaciones: no hay nada que contar. */
+    f.descripcionIncidentes || null,
   ]);
 }
 
@@ -155,7 +173,6 @@ export function csvReporteReservas(filas: readonly FilaReporteReserva[]): string
  * - Alquiler pactado estimado → `alquilerEsperado`: el "Alquiler pactado" del
  *   modal. Excluye canceladas y rechazadas, y usa la tarifa actual de la zona
  *   cuando la reserva no guardó su valor.
- * - Depósito recibido → `depositoRecibido`.
  * - Valor de incidentes → `valorIncidentes`: la suma de la columna del mismo
  *   nombre. Tampoco entra en Total ingresos: es lo valorado, y del depósito
  *   solo se descuenta hasta su monto.
@@ -167,7 +184,6 @@ export function indicadoresResumenReservas(r: ResumenReporteReservas): Indicador
   return [
     { etiqueta: "Número de reservas", valor: r.total, tipo: "entero" },
     { etiqueta: "Alquiler pactado estimado", valor: r.alquilerEsperado, tipo: "moneda" },
-    { etiqueta: "Depósito recibido", valor: r.depositoRecibido, tipo: "moneda" },
     { etiqueta: ETIQUETA_VALOR_INCIDENTES, valor: r.valorIncidentes, tipo: "moneda" },
     { etiqueta: "Total ingresos", valor: r.alquilerRecibido, tipo: "moneda", destacado: true },
   ];
@@ -201,9 +217,10 @@ export function opcionesXlsxReporteReservas(args: {
       subtitulo: `Del ${args.desde} al ${args.hasta}  ·  Estado: ${estado}`,
       indicadores: indicadoresResumenReservas(args.resumen),
       notas: [
-        "Alquiler pactado, depósito recibido y total ingresos no cuentan reservas canceladas ni rechazadas.",
+        "Alquiler pactado y total ingresos no cuentan reservas canceladas ni rechazadas.",
         "Total ingresos es el alquiler cobrado registrado; el depósito es una garantía reembolsable y no se suma.",
         "Valor de incidentes suma los incidentes valorados de las reservas del reporte; no es un ingreso: del depósito solo se descuenta hasta su monto.",
+        "Descripción del incidente trae todos los incidentes de la reserva, incluidos los pendientes de valorar y los descartados, que no suman al valor.",
       ],
     },
     tabla: {

@@ -11,7 +11,11 @@ import {
   seSolapan,
 } from "./lib/horarios";
 import { calcularCosto } from "./lib/costoReserva";
-import { montosDeDepositoResuelto, valorDeIncidentes } from "./lib/depositoReserva";
+import {
+  descripcionDeIncidentes,
+  montosDeDepositoResuelto,
+  valorDeIncidentes,
+} from "./lib/depositoReserva";
 import {
   cajaDeposito,
   crearIncidente,
@@ -742,6 +746,11 @@ export const reporte = query({
           /* Lo que valen los incidentes de ESTA reserva, sin tope. No es el
            * depósito ni lo descontado (`depositoDescontado`). */
           valorIncidentes: valorDeIncidentes(incidentes),
+          /* Qué pasó, al lado de cuánto costó. Van TODOS los incidentes de la
+           * reserva —también los pendientes y los descartados—: el valor solo
+           * suma los valorados, pero el reporte tiene que poder explicar de
+           * qué habla. Vacío cuando no hubo ninguno. */
+          descripcionIncidentes: descripcionDeIncidentes(incidentes),
           fecha: r.fecha,
           horaInicio: r.horaInicio,
           horaFin: r.horaFin,
@@ -784,7 +793,6 @@ export const reporte = query({
         alquilerEsperado: cobrables.reduce((s, f) => s + (f.valorReserva ?? 0), 0),
         alquilerRecibido: cobrables.reduce((s, f) => s + (f.pagoAlquilerMonto ?? 0), 0),
         depositoEsperado: cobrables.reduce((s, f) => s + (f.depositoRequerido ?? 0), 0),
-        depositoRecibido: cobrables.reduce((s, f) => s + (f.depositoRecibido ?? 0), 0),
         alquilerSinRegistrar: cobrables.filter(
           (f) => f.valorReserva != null && f.pagoAlquilerMonto == null,
         ).length,

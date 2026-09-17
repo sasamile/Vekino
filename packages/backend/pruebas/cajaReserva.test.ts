@@ -395,7 +395,6 @@ describe("el reporte se filtra por estado", () => {
     expect(todas.resumen.total).toBe(3);
     expect(todas.resumen.alquilerEsperado).toBe(520000);
     expect(todas.resumen.alquilerRecibido).toBe(0);
-    expect(todas.resumen.depositoRecibido).toBe(60000);
 
     const canceladas = await consultar("cancelada");
     expect(canceladas.filas.map((f) => f.estado)).toEqual(["cancelada"]);
@@ -404,18 +403,15 @@ describe("el reporte se filtra por estado", () => {
     expect(canceladas.resumen.total).toBe(1);
     expect(canceladas.resumen.alquilerEsperado).toBe(0);
     expect(canceladas.resumen.alquilerRecibido).toBe(0);
-    expect(canceladas.resumen.depositoRecibido).toBe(0);
 
     const aprobadas = await consultar("aprobada");
     expect(aprobadas.filas.map((f) => f.fecha)).toEqual(["2026-09-16"]);
     expect(aprobadas.resumen.total).toBe(1);
     expect(aprobadas.resumen.alquilerEsperado).toBe(260000);
-    expect(aprobadas.resumen.depositoRecibido).toBe(60000);
 
     const pendientes = await consultar("pendiente");
     expect(pendientes.filas.map((f) => f.fecha)).toEqual(["2026-09-20"]);
     expect(pendientes.resumen.alquilerEsperado).toBe(260000);
-    expect(pendientes.resumen.depositoRecibido).toBe(0);
 
     const rechazadas = await consultar("rechazada");
     expect(rechazadas.filas).toEqual([]);
