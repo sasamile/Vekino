@@ -6,6 +6,12 @@ import {
   montosDeDepositoResuelto,
   type Liquidacion,
 } from "../lib/depositoReserva";
+import {
+  rolActorDeposito,
+  type OrigenDeposito,
+  type RolActorDeposito,
+} from "./roles";
+import { hasPlatformRole } from "./authz";
 
 /**
  * Incidentes y liquidación del depósito de una reserva.
@@ -29,6 +35,25 @@ type Ctx = QueryCtx | MutationCtx;
 export const MAX_FOTOS_INCIDENTE = 6;
 
 export type FotoIncidente = { url: string; nombre?: string };
+
+/**
+ * Con qué rol queda registrado quien opera, para la auditoría del depósito.
+ *
+ * Se resuelve aquí y no en cada endpoint para que portería y oficina sellen
+ * lo mismo: el rol que la persona tenía en el conjunto CUANDO hizo esto, que
+ * es el que queda. Ver `rolActorDeposito` para el porqué de congelarlo.
+ */
+export function rolDeQuienOpera(
+  user: Doc<"users">,
+  membership: Doc<"memberships"> | null,
+  origen: OrigenDeposito,
+): RolActorDeposito {
+  return rolActorDeposito({
+    roles: membership?.isActive ? membership.roles : undefined,
+    esPlataforma: hasPlatformRole(user, "superadmin", "admin"),
+    origen,
+  });
+}
 
 export async function depositoDeReserva(ctx: Ctx, reservaId: Id<"reservas">) {
   return await ctx.db
@@ -172,6 +197,10 @@ export async function liquidarYDevolver(
   args: {
     deposito: Doc<"guardiaReservaDepositos">;
     user: Doc<"users">;
+    /** Para sellar el rol de quien devuelve. Ver `rolDeQuienOpera`. */
+    membership: Doc<"memberships"> | null;
+    /** La ventanilla desde la que se devuelve. */
+    origen: OrigenDeposito;
     devuelto?: boolean;
     razon?: string;
     saldoEsperado?: number;
@@ -221,6 +250,8 @@ export async function liquidarYDevolver(
     fotoSalidaUrl: args.fotoUrl,
     resueltoPorNombre: user.name,
     resueltoPorUserId: user._id,
+    resueltoPorRol: rolDeQuienOpera(user, args.membership, args.origen),
+    resueltoOrigen: args.origen,
     fechaResolucion: ahora,
     totalIncidentes: liq.totalIncidentes,
     montoDescontado: liq.totalDescuento,

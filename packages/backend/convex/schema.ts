@@ -13,6 +13,8 @@ import {
   rolAsignacionValidator,
   estadoItemValidator,
   tipoNovedadItemValidator,
+  rolActorDepositoValidator,
+  origenDepositoValidator,
 } from "./model/roles";
 
 /**
@@ -1888,8 +1890,21 @@ export default defineSchema({
     fotoSalidaUrl: v.optional(v.string()),
     recibidoPorNombre: v.string(),
     recibidoPorUserId: v.optional(v.id("users")),
+    /**
+     * Con qué rol y por qué ventanilla se actuó, sellado en el momento.
+     *
+     * Existe porque el nombre solo no basta para auditar: el rol de hoy de esa
+     * persona no es necesariamente el que tenía al recibir el dinero, y
+     * deducirlo al leer sería inventar el pasado. Vacíos en los depósitos
+     * anteriores a estos campos, que la auditoría muestra como "sin registrar"
+     * en vez de rellenar.
+     */
+    recibidoPorRol: v.optional(rolActorDepositoValidator),
+    recibidoOrigen: v.optional(origenDepositoValidator),
     resueltoPorNombre: v.optional(v.string()),
     resueltoPorUserId: v.optional(v.id("users")),
+    resueltoPorRol: v.optional(rolActorDepositoValidator),
+    resueltoOrigen: v.optional(origenDepositoValidator),
     fechaRegistro: v.number(),
     fechaResolucion: v.optional(v.number()),
     /**
@@ -1906,7 +1921,10 @@ export default defineSchema({
     montoDevuelto: v.optional(v.number()),
   })
     .index("by_reserva", ["reservaId"])
-    .index("by_condominio", ["condominioId"]),
+    .index("by_condominio", ["condominioId"])
+    /* La auditoría pregunta por rango de fechas; sin esto leería el histórico
+       entero del conjunto para quedarse con un mes. */
+    .index("by_condominio_registro", ["condominioId", "fechaRegistro"]),
 
   /**
    * Incidente ocurrido durante una reserva: un daño, un faltante.

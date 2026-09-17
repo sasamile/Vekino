@@ -5,7 +5,7 @@ import { useParams } from "next/navigation";
 import { usePaginatedQuery, useQuery, useMutation } from "convex/react";
 import {
   CalendarCheck, Plus, Pencil, Trash2, Loader2, CheckCircle, XCircle,
-  Settings, MapPin, Clock, FileSpreadsheet, ChevronRight, Wallet,
+  Settings, MapPin, Clock, FileSpreadsheet, ChevronRight, Wallet, ShieldCheck,
 } from "lucide-react";
 import type { FunctionReturnType } from "convex/server";
 import { api } from "@vekino/backend/api";
@@ -28,6 +28,7 @@ import {
   type ZonaEditable,
 } from "@/components/reservas/crear-espacio-modal";
 import { ReporteReservasModal } from "@/components/reservas/reporte-reservas";
+import { AuditoriaDepositosModal } from "@/components/reservas/auditoria-depositos";
 import { ResumenCosto } from "@/components/reservas/resumen-costo";
 import { EstadoCuentaModal } from "@/components/reservas/estado-cuenta-modal";
 import { CajaReservaModal, type ReservaCaja } from "@/components/reservas/caja-reserva-modal";
@@ -168,6 +169,7 @@ export default function ReservasPage() {
   );
 
   const [reporteAbierto, setReporteAbierto] = useState(false);
+  const [auditoriaAbierta, setAuditoriaAbierta] = useState(false);
   const loading = status === "LoadingFirstPage";
   const canLoadMore = status === "CanLoadMore";
   const loadingMore = status === "LoadingMore";
@@ -220,9 +222,19 @@ export default function ReservasPage() {
           title="Reservas"
           description="Reservas de zonas comunes del conjunto"
           action={
-            <Button variant="outline" size="sm" onClick={() => setReporteAbierto(true)}>
-              <FileSpreadsheet className="h-4 w-4" /> Reporte
-            </Button>
+            <>
+              {/* "Auditoría de depósitos" y no "Depósitos": lo que abre no
+                  administra garantías —eso se hace reserva por reserva en la
+                  caja—, sino que enseña qué pasó con cada una y quién la
+                  tocó. Con el nombre corto, quien busca dónde registrar un
+                  depósito entraría aquí. */}
+              <Button variant="outline" size="sm" onClick={() => setAuditoriaAbierta(true)}>
+                <ShieldCheck className="h-4 w-4" /> Auditoría de depósitos
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => setReporteAbierto(true)}>
+                <FileSpreadsheet className="h-4 w-4" /> Reporte
+              </Button>
+            </>
           }
         />
 
@@ -422,6 +434,12 @@ export default function ReservasPage() {
       {deleteTarget && <DeleteDialog id={deleteTarget} onClose={() => setDeleteTarget(null)} />}
       {reporteAbierto && (
         <ReporteReservasModal condominioId={condominioId} onClose={() => setReporteAbierto(false)} />
+      )}
+      {auditoriaAbierta && (
+        <AuditoriaDepositosModal
+          condominioId={condominioId}
+          onClose={() => setAuditoriaAbierta(false)}
+        />
       )}
       {cuentaAbierta && (
         <EstadoCuentaModal

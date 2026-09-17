@@ -46,6 +46,77 @@ export const operationalRoleValidator = v.union(
   v.literal("representante_asamblea"),
 );
 
+// ─────────────────────────────────────────────────────────────
+// QUIÉN TOCÓ UN DEPÓSITO DE RESERVA
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * De mayor a menor responsabilidad. El primero que se tenga, gana.
+ *
+ * El orden NO es la ventanilla: un administrador que opera la portería sigue
+ * siendo administrador, y eso es lo que una auditoría tiene que poder decir.
+ * Por dónde entró se guarda aparte (`origen`), que es la otra mitad.
+ */
+const JERARQUIA_ACTOR_DEPOSITO = [
+  "administrador",
+  "junta_directiva",
+  "contadora",
+  "guardia",
+] as const satisfies readonly OperationalRole[];
+
+/**
+ * Con qué autoridad actuó quien recibió o devolvió un depósito.
+ *
+ * Se GUARDA en el momento de la acción y no se deduce al leer: quien recibió
+ * un depósito siendo guarda y hoy administra el conjunto lo recibió como
+ * guarda, y una auditoría que dijera lo contrario estaría inventando el
+ * pasado. Por eso los depósitos anteriores a este campo lo dejan vacío en
+ * lugar de rellenarlo con el rol de hoy.
+ *
+ * "plataforma" es el staff de Vekino, que entra a cualquier conjunto por
+ * soporte: no es un rol del conjunto y no debe leerse como uno.
+ */
+export type RolActorDeposito =
+  | (typeof JERARQUIA_ACTOR_DEPOSITO)[number]
+  | "plataforma";
+
+export const rolActorDepositoValidator = v.union(
+  v.literal("administrador"),
+  v.literal("junta_directiva"),
+  v.literal("contadora"),
+  v.literal("guardia"),
+  v.literal("plataforma"),
+);
+
+/** Por qué ventanilla entró la acción. Hermano de `reservaIncidentes.origen`. */
+export type OrigenDeposito = "porteria" | "administracion";
+
+export const origenDepositoValidator = v.union(
+  v.literal("porteria"),
+  v.literal("administracion"),
+);
+
+/**
+ * El rol con el que alguien actúa sobre un depósito, resuelto al escribir.
+ *
+ * Total a propósito: siempre devuelve uno de los literales del validador, así
+ * que nunca puede tumbar la escritura que audita. Sin membresía solo se llega
+ * de dos formas —staff de plataforma, o guarda de una compañía de vigilancia,
+ * que no tiene fila en `memberships`—, y la ventanilla las desempata.
+ */
+export function rolActorDeposito(args: {
+  roles?: readonly OperationalRole[];
+  esPlataforma: boolean;
+  origen: OrigenDeposito;
+}): RolActorDeposito {
+  const roles = args.roles ?? [];
+  for (const rol of JERARQUIA_ACTOR_DEPOSITO) {
+    if (roles.includes(rol)) return rol;
+  }
+  if (args.esPlataforma) return "plataforma";
+  return args.origen === "porteria" ? "guardia" : "plataforma";
+}
+
 /** Vínculo de una persona con una unidad concreta. */
 export const vinculoUnidadValidator = v.union(
   v.literal("propietario"),

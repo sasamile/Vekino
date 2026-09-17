@@ -13,6 +13,7 @@ import {
 import { calcularCosto } from "./lib/costoReserva";
 import {
   descripcionDeIncidentes,
+  liquidarDeposito,
   montosDeDepositoResuelto,
   valorDeIncidentes,
 } from "./lib/depositoReserva";
@@ -23,6 +24,7 @@ import {
   incidentesDeReserva,
   liquidarYDevolver,
   revisarIncidente,
+  rolDeQuienOpera,
 } from "./model/depositoReserva";
 import {
   requireCondominioRole,
@@ -31,6 +33,7 @@ import {
   getMembership,
   misUnidadIds,
 } from "./model/authz";
+import { ventanaDiaBogota } from "./model/visitantes";
 
 const ADMIN_ROLES = ["administrador", "junta_directiva", "contadora"] as const;
 
@@ -542,7 +545,7 @@ export const registrarDeposito = mutation({
   handler: async (ctx, args) => {
     const r = await ctx.db.get(args.id);
     if (!r) throw new Error("Reserva no encontrada.");
-    const { user } = await requireCondominioRole(ctx, r.condominioId, [...ADMIN_ROLES]);
+    const { user, membership } = await requireCondominioRole(ctx, r.condominioId, [...ADMIN_ROLES]);
     if (!Number.isFinite(args.monto) || args.monto <= 0) {
       throw new Error("El monto del depósito debe ser mayor a 0.");
     }
@@ -560,6 +563,8 @@ export const registrarDeposito = mutation({
       estado: "registrado",
       recibidoPorNombre: user.name,
       recibidoPorUserId: user._id,
+      recibidoPorRol: rolDeQuienOpera(user, membership, "administracion"),
+      recibidoOrigen: "administracion",
       fechaRegistro: Date.now(),
     });
     await ctx.db.patch(args.id, { updatedAt: Date.now() });
@@ -588,10 +593,12 @@ export const resolverDeposito = mutation({
   handler: async (ctx, args) => {
     const dep = await ctx.db.get(args.depositoId);
     if (!dep) throw new Error("Depósito no encontrado.");
-    const { user } = await requireCondominioRole(ctx, dep.condominioId, [...ADMIN_ROLES]);
+    const { user, membership } = await requireCondominioRole(ctx, dep.condominioId, [...ADMIN_ROLES]);
     return await liquidarYDevolver(ctx, {
       deposito: dep,
       user,
+      membership,
+      origen: "administracion",
       devuelto: args.devuelto,
       razon: args.observaciones,
       saldoEsperado: args.saldoEsperado,
@@ -810,6 +817,166 @@ export const reporte = query({
          * `depositoDescontado`: un daño no deja de haber ocurrido porque la
          * reserva se cancele después. Sin tope: no es un ingreso. */
         valorIncidentes: filas.reduce((s, f) => s + f.valorIncidentes, 0),
+      },
+    };
+  },
+});
+
+/**
+ * AUDITORÍA DE DEPÓSITOS: qué pasó con cada garantía, y quién la tocó.
+ *
+ * Una fila por DEPÓSITO —no por reserva—: lo que se audita es el dinero, y
+ * una reserva sin depósito no tiene nada que auditar. De ahí que no salga de
+ * `reporte`, que recorre reservas.
+ *
+ * Nada se recalcula al leer. Las cifras de un depósito ya liquidado son las
+ * congeladas al entregarlo (`montosDeDepositoResuelto`), y quién lo recibió o
+ * lo devolvió es lo que se selló en ese momento: si el rol no se guardó
+ * —depósitos anteriores a `recibidoPorRol`— sale `null` y la pantalla lo dice.
+ * Rellenarlo con el rol que esa persona tiene hoy sería inventar el pasado.
+ *
+ * El único cálculo es la proyección de lo que se devolvería HOY, y solo para
+ * los que siguen en custodia: va aparte, marcada como previsión.
+ */
+const criterioFechaValidator = v.union(
+  /** El depósito se recibió dentro del rango. */
+  v.literal("recepcion"),
+  /** Se devolvió dentro del rango. */
+  v.literal("devolucion"),
+  /** Cualquiera de las dos cosas ocurrió dentro del rango. */
+  v.literal("cualquiera"),
+);
+
+export const auditoriaDepositos = query({
+  args: {
+    condominioId: v.id("condominios"),
+    /** "2026-08-01". Inclusive, día civil de Bogotá. */
+    desde: v.string(),
+    /** "2026-08-31". Inclusive. */
+    hasta: v.string(),
+    /** Qué fecha tiene que caer en el rango. Sin él, cualquiera de las dos. */
+    criterio: v.optional(criterioFechaValidator),
+  },
+  handler: async (ctx, args) => {
+    /* El mismo permiso que el reporte de reservas: leer la caja del conjunto.
+     * Va por `condominioId` y el índice filtra por él, así que cambiar el
+     * parámetro no enseña los depósitos de otro conjunto: enseña un error. */
+    await requireCondominioRole(ctx, args.condominioId, [...ADMIN_ROLES]);
+    if (args.desde > args.hasta) {
+      throw new Error("La fecha inicial no puede ser posterior a la final.");
+    }
+    const criterio = args.criterio ?? "cualquiera";
+    const { inicio } = ventanaDiaBogota(args.desde);
+    const { fin } = ventanaDiaBogota(args.hasta);
+
+    /* El índice acota por fecha de RECEPCIÓN, la única que todo depósito
+     * tiene. Filtrando por ella el rango cierra por los dos lados; en los
+     * otros dos criterios solo puede cerrar por arriba —un depósito devuelto
+     * en septiembre pudo recibirse en julio—, pero eso ya evita leer lo
+     * posterior al rango, que en un conjunto con años de histórico es la
+     * mitad de la tabla. */
+    const depositos = await ctx.db
+      .query("guardiaReservaDepositos")
+      .withIndex("by_condominio_registro", (q) =>
+        criterio === "recepcion"
+          ? q
+              .eq("condominioId", args.condominioId)
+              .gte("fechaRegistro", inicio)
+              .lte("fechaRegistro", fin)
+          : q.eq("condominioId", args.condominioId).lte("fechaRegistro", fin),
+      )
+      .collect();
+
+    const enRango = depositos.filter((d) => {
+      const recibido = d.fechaRegistro >= inicio && d.fechaRegistro <= fin;
+      const devuelto =
+        d.fechaResolucion != null && d.fechaResolucion >= inicio && d.fechaResolucion <= fin;
+      if (criterio === "recepcion") return recibido;
+      if (criterio === "devolucion") return devuelto;
+      return recibido || devuelto;
+    });
+
+    const filas = (
+      await Promise.all(
+        enRango
+          .sort((a, b) => b.fechaRegistro - a.fechaRegistro)
+          .map(async (d) => {
+            const r = await ctx.db.get(d.reservaId);
+            /* Cinturón: el índice ya es por conjunto, pero la fila se arma
+             * con datos de la reserva y esos tienen que ser del mismo. */
+            if (!r || r.condominioId !== args.condominioId) return null;
+            const incidentes = await incidentesDeReserva(ctx, d.reservaId);
+            const montos = montosDeDepositoResuelto(d);
+            const enCustodia = d.estado === "registrado";
+            return {
+              _id: d._id,
+              reservaId: d.reservaId,
+              fecha: r.fecha,
+              horaInicio: r.horaInicio,
+              horaFin: r.horaFin,
+              zonaNombre: r.zonaNombre,
+              unidadNumero: r.unidadNumero,
+              solicitanteNombre: r.solicitanteNombre,
+              estadoReserva: r.estado,
+              /** Lo que se recibió. Nunca cambia. */
+              monto: d.monto,
+              estado: d.estado,
+              fechaRegistro: d.fechaRegistro,
+              recibidoPorNombre: d.recibidoPorNombre,
+              recibidoPorRol: d.recibidoPorRol ?? null,
+              recibidoOrigen: d.recibidoOrigen ?? null,
+              observacionesIngreso: d.observacionesIngreso ?? null,
+              fechaResolucion: d.fechaResolucion ?? null,
+              resueltoPorNombre: d.resueltoPorNombre ?? null,
+              resueltoPorRol: d.resueltoPorRol ?? null,
+              resueltoOrigen: d.resueltoOrigen ?? null,
+              /** La razón de la devolución; obligatoria cuando hubo incidentes. */
+              motivoDevolucion: d.observacionesSalida ?? null,
+              /** Lo entregado y lo descontado de verdad. Vacíos si sigue en custodia. */
+              devuelto: montos?.devuelto ?? null,
+              descontado: montos?.descontado ?? null,
+              /** Lo que el conjunto todavía tiene en la mano. */
+              enCustodia: enCustodia ? d.monto : 0,
+              /**
+               * Lo que se devolvería HOY si se liquidara. Previsión, no
+               * historia: solo para los que siguen en custodia.
+               */
+              saldoPrevisto: enCustodia
+                ? liquidarDeposito(d.monto, incidentes).saldoDevolucion
+                : null,
+              /**
+               * Las cifras del liquidado salen del propio depósito o se
+               * deducen del estado. Los anteriores a los incidentes no las
+               * guardaron: la pantalla lo advierte en vez de fingir precisión.
+               */
+              cifrasCongeladas: d.montoDevuelto != null,
+              valorIncidentes: valorDeIncidentes(incidentes),
+              descripcionIncidentes: descripcionDeIncidentes(incidentes),
+              incidentes: incidentes.length,
+            };
+          }),
+      )
+    ).filter((f) => f !== null);
+
+    return {
+      filas,
+      resumen: {
+        total: filas.length,
+        /* Lo recibido: la suma de los depósitos del rango, se hayan devuelto
+         * o no. No es un ingreso —es una garantía—, y por eso no se cruza con
+         * los totales del reporte de reservas. */
+        recibido: filas.reduce((s2, f) => s2 + f.monto, 0),
+        enCustodia: filas.reduce((s2, f) => s2 + f.enCustodia, 0),
+        devuelto: filas.reduce((s2, f) => s2 + (f.devuelto ?? 0), 0),
+        descontado: filas.reduce((s2, f) => s2 + (f.descontado ?? 0), 0),
+        valorIncidentes: filas.reduce((s2, f) => s2 + f.valorIncidentes, 0),
+        conIncidentes: filas.filter((f) => f.incidentes > 0).length,
+        /* Cuántas filas no pueden decir con qué rol se actuó: son las
+         * anteriores a que el rol se guardara. La pantalla lo declara en vez
+         * de dejar que se lea como "nadie las tocó". */
+        sinRolRegistrado: filas.filter(
+          (f) => !f.recibidoPorRol || (f.fechaResolucion != null && !f.resueltoPorRol),
+        ).length,
       },
     };
   },

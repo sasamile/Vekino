@@ -27,6 +27,7 @@ import {
   crearIncidente,
   depositoDeReserva,
   liquidarYDevolver,
+  rolDeQuienOpera,
 } from "./model/depositoReserva";
 
 /** Roles que pueden operar la portería. */
@@ -1286,7 +1287,7 @@ export const registrarDepositoReserva = mutation({
   handler: async (ctx, args) => {
     const r = await ctx.db.get(args.reservaId);
     if (!r) throw new Error("Reserva no encontrada.");
-    const { user } = await requireCondominioRole(ctx, r.condominioId, [...GUARD_ROLES]);
+    const { user, membership } = await requireCondominioRole(ctx, r.condominioId, [...GUARD_ROLES]);
     if (args.monto <= 0) throw new Error("El monto del depósito debe ser mayor a 0.");
 
     const existente = await ctx.db
@@ -1306,6 +1307,8 @@ export const registrarDepositoReserva = mutation({
       estado: "registrado",
       recibidoPorNombre: user.name,
       recibidoPorUserId: user._id,
+      recibidoPorRol: rolDeQuienOpera(user, membership, "porteria"),
+      recibidoOrigen: "porteria",
       fechaRegistro: now,
     });
     await ctx.db.patch(args.reservaId, { ingresoValidadoAt: now, updatedAt: now });
@@ -1385,10 +1388,12 @@ export const resolverDepositoReserva = mutation({
   handler: async (ctx, args) => {
     const dep = await ctx.db.get(args.depositoId);
     if (!dep) throw new Error("Depósito no encontrado.");
-    const { user } = await requireCondominioRole(ctx, dep.condominioId, [...GUARD_ROLES]);
+    const { user, membership } = await requireCondominioRole(ctx, dep.condominioId, [...GUARD_ROLES]);
     const liq = await liquidarYDevolver(ctx, {
       deposito: dep,
       user,
+      membership,
+      origen: "porteria",
       devuelto: args.devuelto,
       razon: args.observaciones,
       saldoEsperado: args.saldoEsperado,
