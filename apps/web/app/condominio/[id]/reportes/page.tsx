@@ -25,7 +25,7 @@ import { DonutChart } from "@/components/charts/donut-chart";
 import { HBars } from "@/components/charts/h-bars";
 import { CHART } from "@/components/charts/chart-colors";
 import { cn, cop, num } from "@/lib/utils";
-import { ReporteAportePanel } from "@/components/vehiculos/reporte-aporte";
+import { CobrosParqueaderoPanel } from "@/components/vehiculos/cobros-parqueadero";
 import { ReporteReservasPanel } from "@/components/reservas/reporte-reservas";
 
 const MES_LARGO = [
@@ -123,7 +123,7 @@ export default function ReportesPage() {
         </div>
 
         {tab === "parqueaderos" ? (
-          <ReporteAportePanel condominioId={condominioId} />
+          <CobrosParqueaderoPanel condominioId={condominioId} />
         ) : tab === "reservas" ? (
           <ReporteReservasPanel condominioId={condominioId} />
         ) : loading ? (

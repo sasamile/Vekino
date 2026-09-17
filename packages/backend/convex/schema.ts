@@ -1770,6 +1770,33 @@ export default defineSchema({
     turnoId: v.optional(v.id("guardiaTurnos")),
     /** Ronda durante la cual se reporto, si habia una en curso. */
     rondaId: v.optional(v.id("guardiaRondas")),
+
+    /**
+     * Estado del cobro de este reporte.
+     *
+     * Un reporte de vehiculo con evidencia es, casi siempre, plata por
+     * cobrar: la casa parqueo sin aporte y hay que pasarle el cargo. Sin
+     * llevar el estado, la administracion tiene que acordarse de cual ya paso
+     * a la factura, y entre doscientos reportes eso termina en cobros
+     * repetidos o en cobros que nunca se hicieron.
+     *
+     * Ausente se lee como "pendiente": los reportes que existian antes de que
+     * esto se llevara siguen contando como por cobrar.
+     */
+    cobroEstado: v.optional(
+      v.union(
+        v.literal("pendiente"),
+        v.literal("facturado"),
+        v.literal("descartado"),
+      ),
+    ),
+    /** Periodo de la factura donde quedo el cargo. "2026-10". */
+    cobroPeriodo: v.optional(v.string()),
+    cobroMonto: v.optional(v.number()),
+    cobradoPorNombre: v.optional(v.string()),
+    cobradoEn: v.optional(v.number()),
+    /** Por que se descarto, cuando se descarta. */
+    cobroNota: v.optional(v.string()),
     titulo: v.string(),
     descripcion: v.string(),
     prioridad: v.union(v.literal("baja"), v.literal("media"), v.literal("alta")),

@@ -1912,6 +1912,10 @@ export const reportarNovedad = mutation({
       condominioId: args.condominioId,
       turnoId: turno?._id,
       rondaId: ronda?._id,
+      /* Nace pendiente de cobrar cuando senala un vehiculo: es plata por
+       * cobrarle a una casa, y hasta que alguien diga lo contrario sigue
+       * debiendose. */
+      cobroEstado: vehiculoId ? ("pendiente" as const) : undefined,
       titulo,
       descripcion,
       prioridad: args.prioridad,
