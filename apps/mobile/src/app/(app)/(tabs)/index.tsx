@@ -24,7 +24,7 @@ import {
 import { SoftHomeHeader } from "@/components/ui/soft-home-header";
 import { Tap } from "@/components/ui/tap";
 import { cop, fmtPeriodo, formatDisplayName, greetingName } from "@/lib/utils";
-import { tarjetaFacturas } from "@/lib/resumen-facturas";
+import { estadoVisible, tarjetaFacturas } from "@/lib/resumen-facturas";
 import { useCondominio } from "@/context/condominio-context";
 import { C } from "@/lib/theme";
 import { AuthUI } from "@/lib/auth-ui";
@@ -44,12 +44,14 @@ const ESTADO_TONE: Record<
   pagada: "green",
   vencida: "red",
   abonada: "blue",
+  en_revision: "blue",
 };
 const ESTADO_LABEL: Record<string, string> = {
   pendiente: "Pendiente",
   pagada: "Pagada",
   vencida: "Vencida",
   abonada: "Abonada",
+  en_revision: "En revisión",
 };
 
 const ESTADO_ICON: Record<
@@ -73,6 +75,11 @@ const ESTADO_ICON: Record<
   },
   abonada: {
     name: "wallet-outline",
+    bg: SoftUI.infoSoft,
+    fg: SoftUI.blue,
+  },
+  en_revision: {
+    name: "search-outline",
     bg: SoftUI.infoSoft,
     fg: SoftUI.blue,
   },
@@ -489,8 +496,9 @@ function ResidentHome({
               ) : (
                 <View style={{ gap: SoftUI.space.md }}>
                   {facturas.slice(0, 3).map((f) => {
+                    const estado = estadoVisible(f);
                     const iconMeta =
-                      ESTADO_ICON[f.estado] ?? ESTADO_ICON.abonada;
+                      ESTADO_ICON[estado] ?? ESTADO_ICON.abonada;
                     return (
                       <Tap
                         key={f._id}
@@ -520,8 +528,8 @@ function ResidentHome({
                             </Text>
                             <View style={{ marginTop: 6 }}>
                               <GlassBadge
-                                label={ESTADO_LABEL[f.estado] ?? f.estado}
-                                tone={ESTADO_TONE[f.estado] ?? "neutral"}
+                                label={ESTADO_LABEL[estado] ?? estado}
+                                tone={ESTADO_TONE[estado] ?? "neutral"}
                               />
                             </View>
                           </View>

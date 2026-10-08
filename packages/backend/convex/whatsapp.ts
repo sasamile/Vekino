@@ -1139,8 +1139,19 @@ export const procesarEntrante = internalAction({
           `Vence: ${fechaLarga(factura.fechaVencimiento, timezone)}`,
         ];
         /* Es la vigente: si no se puede pagar es porque ya está saldada
-         * (pagada, saldo a favor o sin saldo). No se busca otra anterior. */
-        if (motivoNoPagable([factura], factura) !== null) {
+         * (pagada, saldo a favor o sin saldo), o porque su lectura está en
+         * revisión. No se busca otra anterior. */
+        const noPagable = motivoNoPagable([factura], factura);
+        if (noPagable === "en_revision") {
+          await enviar(
+            msgTexto(
+              to,
+              `📄 Tu factura de ${factura.periodoLabel || factura.periodo} está *en revisión* por la administración. Cuando la confirmen podrás verla y pagarla aquí. Si tienes dudas, escribe *menú*.`,
+            ),
+          );
+          return;
+        }
+        if (noPagable !== null) {
           await enviar(msgTexto(to, `${lineas.join("\n")}\n\n✅ Estás al día. ¡Gracias!`));
           return;
         }
@@ -1191,8 +1202,9 @@ export const procesarEntrante = internalAction({
                   ? "Esa factura ya no está vigente: su saldo quedó incluido en tu factura más reciente. Escribe *menú* y elige *Estado de cuenta* para verla y pagarla."
                   : motivo.includes(MENSAJE_NO_PAGABLE.sin_saldo)
                     ? "Esa factura no tiene saldo por pagar. ✅"
-                    : motivo.includes(MENSAJE_NO_PAGABLE.vigente_ambigua)
-                      ? "No puedo generar el pago en línea de esa factura. Comunícate con la administración para revisarla."
+                    : motivo.includes(MENSAJE_NO_PAGABLE.vigente_ambigua) ||
+                        motivo.includes(MENSAJE_NO_PAGABLE.en_revision)
+                      ? "No puedo generar el pago en línea de esa factura: está en revisión por la administración."
                       : "😕 No pude generar el enlace de pago en este momento. Intenta más tarde o escribe *menú*.",
             ),
           );

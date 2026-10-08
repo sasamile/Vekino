@@ -6,9 +6,22 @@ import { paginationOptsValidator } from "convex/server";
 import { requireCondominioRole, requireAppUser, getCurrentAppUser } from "./model/authz";
 import {
   carteraDeUnidad,
+  enRevision,
   estadoCuentaDeCadena,
-  saldoAnteriorDe,
+  veredictoConciliacion,
 } from "./lib/cartera";
+import {
+  PERIODO_VALIDO,
+  estadoDeCarga,
+  motivosValidos,
+  rechazoDePeriodo,
+  validarLectura,
+  type MotivoRechazo,
+} from "./lib/lecturaFactura";
+import { planificarReproceso, type PlanUnidad } from "./lib/reproceso";
+
+/** Quien sube y confirma facturas: los mismos roles de `bulkUpsert`. */
+const CARGA_ROLES = ["administrador", "contadora"] as const;
 
 /**
  * Quien puede ver la cartera del conjunto.
@@ -48,6 +61,7 @@ function formatApto(numero: string, torre?: string | null): string {
 // Valores de líneas en la factura
 const lineValidator = v.object({
   codigo: v.number(),
+  codigoTexto: v.optional(v.string()),
   concepto: v.string(),
   saldoAnterior: v.number(),
   actual: v.number(),
@@ -66,15 +80,19 @@ const lineValidator = v.object({
 // Se recorre la cadena completa por unidad (1ª → 2ª → 3ª…): cada factura juzga
 // a la inmediatamente anterior. La última de la cadena no se toca (aún no hay
 // factura siguiente que la juzgue).
+//
+// El "saldo anterior" es el que imprime el documento (fila Totales) cuando lo
+// trae, y la suma de las líneas si no (`saldoAnteriorDe`). Y un par en el que
+// alguna de las dos facturas está en revisión (lectura dudosa) no se juzga:
+// con un documento que no cuadra no se decide si la anterior se pagó. La
+// anterior conserva el estado que tenía: si no lo tenía, sigue sin veredicto.
 // ─────────────────────────────────────────────────────────────
-
-/** Tolerancia en pesos para considerar una deuda como saldada (redondeos). */
-const TOLERANCIA_PAGO = 1;
 
 /**
  * Recorre la cadena de facturas de una unidad (orden ascendente por período)
- * y ajusta el estado de cada factura según el saldo anterior de la siguiente.
- * Devuelve el conteo de cambios aplicados.
+ * y ajusta el estado de cada factura según el saldo anterior de la siguiente
+ * (`veredictoConciliacion`, `lib/cartera.ts`). Devuelve el conteo de cambios
+ * aplicados.
  */
 async function conciliarCadenaUnidad(
   ctx: MutationCtx,
@@ -95,14 +113,8 @@ async function conciliarCadenaUnidad(
 
   for (let i = 1; i < cadena.length; i++) {
     const anterior = cadena[i - 1]!;
-    const siguiente = cadena[i]!;
-    const deuda = saldoAnteriorDe(siguiente);
-
-    let estado: Doc<"facturas">["estado"];
-    if (anterior.totalAPagar < 0 && deuda <= TOLERANCIA_PAGO) estado = "saldo_a_favor";
-    else if (deuda <= TOLERANCIA_PAGO) estado = "pagada";
-    else if (deuda < anterior.totalAPagar - TOLERANCIA_PAGO) estado = "abonada";
-    else estado = "vencida";
+    const estado = veredictoConciliacion(anterior, cadena[i]!);
+    if (estado === null) continue;
 
     if (anterior.estado !== estado) {
       await ctx.db.patch(anterior._id, { estado, updatedAt: now });
@@ -498,6 +510,15 @@ const facturaInputValidator = v.object({
   ),
   pdfUrl: v.optional(v.string()),
   legacyId: v.optional(v.string()),
+  /** Saldo anterior que imprime el documento (fila Totales), si lo trae. */
+  saldoAnteriorDocumento: v.optional(v.number()),
+  /**
+   * Motivos de lectura dudosa que vio el parser en el PDF y que no se pueden
+   * comprobar con los números (no estaba el total, la hoja era de
+   * continuación…). Solo pueden AGREGAR dudas: lo que el backend comprueba
+   * por su cuenta no depende de esto.
+   */
+  motivosLectura: v.optional(v.array(v.string())),
 });
 
 /**
@@ -542,11 +563,30 @@ export const permisoSubida = query({
  * Inserta o actualiza un lote de facturas desde la UI (subida de PDF bulk).
  * Idempotente por (condominioId, unidadId, periodo).
  * Con skipExisting=true solo inserta facturas nuevas (no pisa las que ya existen).
+ *
+ * ── No confía en lo que manda el navegador ──────────────────────────────
+ * Valida cada factura por su cuenta (`lib/lecturaFactura.ts`), aunque la
+ * ruta de confirmación ya lo haya hecho:
+ *
+ *   · RECHAZA (no la guarda; devuelve el motivo) la factura cuyo propio
+ *     documento dice otro período (`periodo_no_coincide`), la de un período
+ *     mal formado o la de una unidad de otro conjunto. Guardarla sería
+ *     guardar una identidad que el documento contradice.
+ *   · MARCA "en revisión" la que no cuadra (Σ líneas ≠ total, saldo anterior
+ *     de las líneas ≠ el del documento, sin líneas, período ilegible, o lo
+ *     que avise el parser). Entra igual —es la vigente de su unidad y no
+ *     puede faltar—, pero no se paga, no concilia y no decide "al día" ni
+ *     "mora" hasta que se corrija o se confirme (`confirmarLectura`).
+ *
+ * Una lectura correcta que llega después (re-subida con "actualizar") quita
+ * la marca.
  */
 export const bulkUpsert = mutation({
   args: {
     facturas: v.array(facturaInputValidator),
     skipExisting: v.optional(v.boolean()),
+    /** La importación (PDF confirmado) a la que pertenece el lote, si la hay. */
+    importacionId: v.optional(v.id("importaciones")),
   },
   handler: async (ctx, args) => {
     /* Sesión primero. Sin esto, un lote VACÍO no pasaba por ninguna
@@ -561,19 +601,46 @@ export const bulkUpsert = mutation({
      * podría colar en el mismo lote facturas de otro. */
     const conjuntos = new Set(args.facturas.map((f) => f.condominioId));
     for (const condominioId of conjuntos) {
-      await requireCondominioRole(ctx, condominioId, [
-        "administrador",
-        "contadora",
-      ]);
+      await requireCondominioRole(ctx, condominioId, [...CARGA_ROLES]);
+    }
+
+    const importacion = args.importacionId ? await ctx.db.get(args.importacionId) : null;
+    if (args.importacionId) {
+      if (!importacion || [...conjuntos].some((c) => c !== importacion.condominioId)) {
+        throw new Error("La importación no corresponde a este conjunto.");
+      }
+      if (importacion.estado !== "en_curso") throw new Error("La importación ya se cerró.");
     }
 
     const now = Date.now();
     let inserted = 0;
     let updated = 0;
     let skipped = 0;
+    let marcadas = 0;
+    const rechazos: { indice: number; unidadId: Id<"unidades">; motivo: MotivoRechazo }[] = [];
     const unidadesAfectadas = new Map<Id<"unidades">, Id<"condominios">>();
 
-    for (const f of args.facturas) {
+    for (const [indice, entrada] of args.facturas.entries()) {
+      const { motivosLectura, ...f } = entrada;
+
+      /* Identidad: la unidad es de este conjunto, y el período es el que dice
+       * el propio documento. Si no, la factura no se guarda. */
+      const unidad = await ctx.db.get(f.unidadId);
+      const rechazo: MotivoRechazo | null =
+        !unidad || unidad.condominioId !== f.condominioId
+          ? "unidad_ajena"
+          : rechazoDePeriodo(f.periodo, f.periodoLabel);
+      if (rechazo) {
+        rechazos.push({ indice, unidadId: f.unidadId, motivo: rechazo });
+        continue;
+      }
+
+      /* Lectura: lo que el backend comprueba con los números, más lo que el
+       * parser vio en el PDF. Cualquier motivo deja la factura en revisión. */
+      const motivos = motivosValidos([...validarLectura(f), ...(motivosLectura ?? [])]);
+      const lecturaDudosa = motivos.length > 0 ? { motivos, marcadaAt: now } : undefined;
+      const estadoCarga = lecturaDudosa ? ("pendiente" as const) : estadoDeCarga(f);
+
       const existing = await ctx.db
         .query("facturas")
         .withIndex("by_condominio_periodo", (q) =>
@@ -588,7 +655,11 @@ export const bulkUpsert = mutation({
           // Aun sin re-insertar, la factura existente puede juzgar a la anterior
           unidadesAfectadas.set(f.unidadId, f.condominioId);
         } else {
-          // Preserva el estado de pago; solo actualiza datos financieros y PDF
+          /* Preserva el estado que vino de un pago o de la conciliación; solo
+           * el de carga (pendiente / saldo a favor) se recalcula con la nueva
+           * lectura. La marca de lectura dudosa se reemplaza por la nueva: una
+           * lectura correcta la quita. */
+          const deCarga = existing.estado === "pendiente" || existing.estado === "saldo_a_favor";
           await ctx.db.patch(existing._id, {
             numeroFactura: f.numeroFactura,
             numeroInterno: f.numeroInterno,
@@ -600,18 +671,30 @@ export const bulkUpsert = mutation({
             saldoAFavor: f.saldoAFavor,
             totalAPagar: f.totalAPagar,
             totalConDescuento: f.totalConDescuento,
+            saldoAnteriorDocumento: f.saldoAnteriorDocumento,
+            lecturaDudosa,
             pdfUrl: f.pdfUrl,
+            ...(deCarga ? { estado: estadoCarga } : {}),
+            ...(args.importacionId ? { importacionId: args.importacionId } : {}),
             updatedAt: now,
           });
           updated++;
+          if (lecturaDudosa) marcadas++;
           unidadesAfectadas.set(f.unidadId, f.condominioId);
         }
       } else {
-        // Un totalAPagar negativo es saldo a favor del residente, sin importar
-        // qué estado haya mandado el caller (la UI de subida manda "pendiente" a ciegas).
-        const estado = f.totalAPagar < 0 ? "saldo_a_favor" : f.estado;
-        await ctx.db.insert("facturas", { ...f, estado, createdAt: now, updatedAt: now });
+        /* El estado lo decide la lectura, no el que mande quien llama (la UI
+         * de subida mandaba "pendiente" a ciegas). */
+        await ctx.db.insert("facturas", {
+          ...f,
+          estado: estadoCarga,
+          ...(lecturaDudosa ? { lecturaDudosa } : {}),
+          ...(args.importacionId ? { importacionId: args.importacionId } : {}),
+          createdAt: now,
+          updatedAt: now,
+        });
         inserted++;
+        if (lecturaDudosa) marcadas++;
         unidadesAfectadas.set(f.unidadId, f.condominioId);
       }
     }
@@ -625,7 +708,260 @@ export const bulkUpsert = mutation({
       conciliacion.vencidas += c.vencidas;
     }
 
-    return { inserted, updated, skipped, conciliacion };
+    if (importacion) {
+      await ctx.db.patch(importacion._id, {
+        insertadas: importacion.insertadas + inserted,
+        actualizadas: importacion.actualizadas + updated,
+        omitidas: importacion.omitidas + skipped,
+        marcadas: importacion.marcadas + marcadas,
+        rechazadas: importacion.rechazadas + rechazos.length,
+        rechazos: [
+          ...importacion.rechazos,
+          ...rechazos.map((r) => ({ unidadId: r.unidadId, motivo: r.motivo })),
+        ],
+      });
+    }
+
+    return {
+      inserted,
+      updated,
+      skipped,
+      marcadas,
+      rechazadas: rechazos.length,
+      rechazos,
+      conciliacion,
+    };
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// Importaciones: la confirmación de un PDF, de punta a punta
+//
+// /api/facturas/confirmar vuelve a leer el PDF en el servidor, comprueba que
+// es el mismo de la vista previa (hash) y entonces:
+//   1. `iniciarImportacion` registra la carga y dice qué pasará con cada
+//      factura (insertar, actualizar, omitir, rechazar);
+//   2. la ruta publica en S3 SOLO las que se insertan o actualizan, con una
+//      llave propia de la importación (nunca se pisa un PDF publicado);
+//   3. `bulkUpsert` guarda, enlazando cada factura a la importación;
+//   4. `finalizarImportacion` la cierra con sus conteos.
+// El hash hace idempotente la confirmación: el mismo archivo para el mismo
+// período se carga una sola vez, aunque se pulse dos veces.
+// ─────────────────────────────────────────────────────────────
+
+/** Una confirmación que lleva más que esto "en curso" se da por abandonada. */
+const IMPORTACION_ABANDONADA_MS = 10 * 60 * 1000;
+
+function resumenImportacion(i: Doc<"importaciones">) {
+  return {
+    importacionId: i._id,
+    estado: i.estado,
+    documentos: i.documentos,
+    insertadas: i.insertadas,
+    actualizadas: i.actualizadas,
+    omitidas: i.omitidas,
+    marcadas: i.marcadas,
+    rechazadas: i.rechazadas,
+    rechazos: i.rechazos,
+  };
+}
+
+export const iniciarImportacion = mutation({
+  args: {
+    condominioId: v.id("condominios"),
+    periodo: v.string(),
+    archivo: v.string(),
+    hash: v.string(),
+    soloNuevas: v.boolean(),
+    documentos: v.number(),
+    /** Las facturas leídas que tienen unidad, con la etiqueta de su documento. */
+    candidatas: v.array(
+      v.object({
+        indice: v.number(),
+        unidadId: v.id("unidades"),
+        periodoLabel: v.string(),
+      }),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireCondominioRole(ctx, args.condominioId, [...CARGA_ROLES]);
+    if (!PERIODO_VALIDO.test(args.periodo)) throw new Error("El período debe tener la forma AAAA-MM.");
+    if (!/^[0-9a-f]{64}$/.test(args.hash)) throw new Error("La huella del archivo no es válida.");
+
+    const ahora = Date.now();
+    const previa = (
+      await ctx.db
+        .query("importaciones")
+        .withIndex("by_condominio_hash", (q) =>
+          q.eq("condominioId", args.condominioId).eq("hash", args.hash),
+        )
+        .collect()
+    ).find((i) => i.periodo === args.periodo);
+
+    if (previa?.estado === "completada") {
+      return {
+        tipo: "repetida" as const,
+        importacionId: previa._id,
+        resultado: resumenImportacion(previa),
+        plan: [],
+      };
+    }
+    if (previa?.estado === "en_curso" && ahora - previa.createdAt < IMPORTACION_ABANDONADA_MS) {
+      return {
+        tipo: "en_curso" as const,
+        importacionId: previa._id,
+        resultado: resumenImportacion(previa),
+        plan: [],
+      };
+    }
+
+    /* Nueva, o una anterior que falló o quedó a medias: se retoma la MISMA
+     * importación, así las llaves de S3 que ya se hubieran publicado se
+     * reconocen en vez de duplicarse. */
+    const datos = {
+      archivo: args.archivo.slice(0, 200),
+      userId: user._id,
+      userNombre: user.name,
+      soloNuevas: args.soloNuevas,
+      estado: "en_curso" as const,
+      documentos: args.documentos,
+      insertadas: 0,
+      actualizadas: 0,
+      omitidas: 0,
+      marcadas: 0,
+      rechazadas: 0,
+      rechazos: [] as Doc<"importaciones">["rechazos"],
+      createdAt: ahora,
+    };
+    let importacionId: Id<"importaciones">;
+    if (previa) {
+      await ctx.db.patch(previa._id, { ...datos, error: undefined, completadaAt: undefined });
+      importacionId = previa._id;
+    } else {
+      importacionId = await ctx.db.insert("importaciones", {
+        ...datos,
+        condominioId: args.condominioId,
+        periodo: args.periodo,
+        hash: args.hash,
+      });
+    }
+
+    const plan: { indice: number; accion: "insertar" | "actualizar" | "omitir" | "rechazar"; motivo?: MotivoRechazo }[] = [];
+    for (const c of args.candidatas) {
+      const unidad = await ctx.db.get(c.unidadId);
+      const rechazo: MotivoRechazo | null =
+        !unidad || unidad.condominioId !== args.condominioId
+          ? "unidad_ajena"
+          : rechazoDePeriodo(args.periodo, c.periodoLabel);
+      if (rechazo) {
+        plan.push({ indice: c.indice, accion: "rechazar", motivo: rechazo });
+        continue;
+      }
+      const existente = await ctx.db
+        .query("facturas")
+        .withIndex("by_condominio_periodo", (q) =>
+          q.eq("condominioId", args.condominioId).eq("periodo", args.periodo),
+        )
+        .filter((q) => q.eq(q.field("unidadId"), c.unidadId))
+        .first();
+      plan.push({
+        indice: c.indice,
+        accion: existente ? (args.soloNuevas ? "omitir" : "actualizar") : "insertar",
+      });
+    }
+
+    return { tipo: "nueva" as const, importacionId, resultado: null, plan };
+  },
+});
+
+export const finalizarImportacion = mutation({
+  args: {
+    importacionId: v.id("importaciones"),
+    estado: v.union(v.literal("completada"), v.literal("fallida")),
+    error: v.optional(v.string()),
+    /** Facturas que no llegaron al backend: sin unidad emparejada. */
+    sinUnidad: v.optional(v.array(v.number())),
+  },
+  handler: async (ctx, args) => {
+    const importacion = await ctx.db.get(args.importacionId);
+    if (!importacion) throw new Error("Importación no encontrada.");
+    await requireCondominioRole(ctx, importacion.condominioId, [...CARGA_ROLES]);
+    if (importacion.estado !== "en_curso") return resumenImportacion(importacion);
+    const sinUnidad = args.sinUnidad ?? [];
+    await ctx.db.patch(args.importacionId, {
+      estado: args.estado,
+      error: args.error?.slice(0, 500),
+      rechazadas: importacion.rechazadas + sinUnidad.length,
+      rechazos: [
+        ...importacion.rechazos,
+        ...sinUnidad.map((indice) => ({ indice, motivo: "sin_unidad" })),
+      ],
+      completadaAt: Date.now(),
+    });
+    return resumenImportacion((await ctx.db.get(args.importacionId))!);
+  },
+});
+
+/**
+ * Facturas en revisión del conjunto: lecturas dudosas sin confirmar, con su
+ * motivo. Es la lista de trabajo de Finanzas.
+ */
+export const listEnRevision = query({
+  args: { condominioId: v.id("condominios") },
+  handler: async (ctx, args) => {
+    await requireCondominioRole(ctx, args.condominioId, [...CARTERA_ROLES]);
+    const facturas = await ctx.db
+      .query("facturas")
+      .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
+      .collect();
+    const enCurso = facturas.filter((f) => enRevision(f));
+    const unidades = new Map<Id<"unidades">, Doc<"unidades"> | null>();
+    for (const f of enCurso) {
+      if (!unidades.has(f.unidadId)) unidades.set(f.unidadId, await ctx.db.get(f.unidadId));
+    }
+    return enCurso
+      .map((f) => ({
+        _id: f._id,
+        periodo: f.periodo,
+        numeroFactura: f.numeroFactura,
+        unidadNumero: unidades.get(f.unidadId)?.numero ?? f.apto ?? "—",
+        unidadTorre: unidades.get(f.unidadId)?.torre ?? null,
+        residenteNombre: f.residenteNombre,
+        totalAPagar: f.totalAPagar,
+        motivos: f.lecturaDudosa?.motivos ?? [],
+        marcadaAt: f.lecturaDudosa?.marcadaAt ?? f.updatedAt,
+        pdfUrl: f.pdfUrl ?? null,
+      }))
+      .sort((a, b) => b.periodo.localeCompare(a.periodo) || a.unidadNumero.localeCompare(b.unidadNumero));
+  },
+});
+
+/**
+ * La administración revisó el PDF y da por buena la lectura, aunque no
+ * cuadre (por ejemplo, el documento de la contabilidad viene así). Queda
+ * registrado quién y cuándo; los motivos originales se conservan. Desde ese
+ * momento la factura se paga y concilia como cualquier otra.
+ */
+export const confirmarLectura = mutation({
+  args: { facturaId: v.id("facturas") },
+  handler: async (ctx, args) => {
+    const factura = await ctx.db.get(args.facturaId);
+    if (!factura) throw new Error("Factura no encontrada.");
+    const { user } = await requireCondominioRole(ctx, factura.condominioId, [...CARGA_ROLES]);
+    if (!factura.lecturaDudosa) throw new Error("La factura no tiene una lectura en revisión.");
+    if (factura.lecturaDudosa.confirmada) return args.facturaId;
+    const now = Date.now();
+    await ctx.db.patch(args.facturaId, {
+      lecturaDudosa: {
+        ...factura.lecturaDudosa,
+        confirmada: { userId: user._id, nombre: user.name, at: now },
+      },
+      /* Entró `pendiente` por ser dudosa; ahora sus números valen. */
+      ...(factura.estado === "pendiente" ? { estado: estadoDeCarga(factura) } : {}),
+      updatedAt: now,
+    });
+    await conciliarCadenaUnidad(ctx, factura.condominioId, factura.unidadId);
+    return args.facturaId;
   },
 });
 
@@ -663,6 +999,102 @@ export const reconciliar = mutation({
       facturas: facturas.length,
       ...totales,
     };
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// Re-procesamiento de lo ya cargado con el parser nuevo (Fase 2)
+// ─────────────────────────────────────────────────────────────
+
+/** La lectura nueva del PDF ya publicado de una factura (`FacturaLeida`, web). */
+const lecturaNuevaValidator = v.object({
+  facturaId: v.id("facturas"),
+  vrAdmon: v.number(),
+  lineas: v.array(lineValidator),
+  saldoAFavor: v.number(),
+  totalAPagar: v.number(),
+  totalConDescuento: v.optional(v.number()),
+  saldoAnteriorDocumento: v.optional(v.number()),
+  periodoLabel: v.string(),
+  motivos: v.array(v.string()),
+});
+
+/**
+ * Aplica a facturas YA CARGADAS la lectura del parser nuevo de su propio PDF
+ * y vuelve a conciliar sus cadenas: el plan de `lib/reproceso.ts`, unidad por
+ * unidad (toda la cadena de cada unidad tocada).
+ *
+ * Por defecto NO escribe (`dryRun: true`): devuelve el plan —qué cambiaría en
+ * cada factura y cómo quedaría cada unidad para la administración y para el
+ * residente—. Con `dryRun: false` escribe exactamente ese plan.
+ *
+ * Es `internalMutation`: ningún cliente la puede llamar; solo `convex run`,
+ * por lotes de pocas unidades (lee pagos y comprobantes de cada factura). Se
+ * aplica SOLO con autorización explícita, después de revisar el informe con
+ * la administración (docs/audits/FASE-2-FACTURACION.md, PASO 12).
+ *
+ * No toca facturas con un pago aprobado o un comprobante aprobado (F-02 es de
+ * la Fase 3), ni las que su propio documento dice que son de otro período.
+ */
+export const reprocesarLecturas = internalMutation({
+  args: {
+    condominioId: v.id("condominios"),
+    lecturas: v.array(lecturaNuevaValidator),
+    dryRun: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const dryRun = args.dryRun ?? true;
+    const ahora = Date.now();
+    const lecturas = new Map(args.lecturas.map(({ facturaId, ...l }) => [facturaId as string, l]));
+
+    const unidades = new Set<Id<"unidades">>();
+    const ajenas: Id<"facturas">[] = [];
+    for (const { facturaId } of args.lecturas) {
+      const f = await ctx.db.get(facturaId);
+      if (!f || f.condominioId !== args.condominioId) ajenas.push(facturaId);
+      else unidades.add(f.unidadId);
+    }
+
+    const planes: PlanUnidad[] = [];
+    for (const unidadId of unidades) {
+      const cadena = (
+        await ctx.db
+          .query("facturas")
+          .withIndex("by_unidad", (q) => q.eq("unidadId", unidadId))
+          .collect()
+      ).filter((f) => f.condominioId === args.condominioId);
+
+      const conEvidencia = new Set<string>();
+      for (const f of cadena) {
+        const pago = await ctx.db
+          .query("pagos")
+          .withIndex("by_factura", (q) => q.eq("facturaId", f._id))
+          .filter((q) => q.eq(q.field("estado"), "aprobada"))
+          .first();
+        const comprobante = await ctx.db
+          .query("soportesPago")
+          .withIndex("by_factura", (q) => q.eq("facturaId", f._id))
+          .filter((q) => q.eq(q.field("estado"), "aprobado"))
+          .first();
+        if (pago || comprobante) conEvidencia.add(f._id);
+      }
+
+      const plan = planificarReproceso({ cadena, lecturas, conEvidencia, ahora });
+      if (!dryRun) {
+        for (const pf of plan.facturas) {
+          if (pf.cambios.length === 0) continue;
+          /* La marca conservada trae el `userId` de quien confirmó tal como
+           * está en la base; las nuevas no traen confirmación. */
+          await ctx.db.patch(pf.facturaId as Id<"facturas">, {
+            ...(pf.parche as Partial<Doc<"facturas">>),
+            updatedAt: ahora,
+          });
+        }
+      }
+      planes.push(plan);
+    }
+
+    return { dryRun, ajenas, unidades: planes };
   },
 });
 

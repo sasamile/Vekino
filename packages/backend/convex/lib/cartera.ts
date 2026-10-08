@@ -37,6 +37,8 @@ export type EstadoFactura =
 
 export type LineaFactura = {
   codigo: number;
+  /** Codigo no numerico del documento (`CI`, `NCC`); entonces `codigo` es 0. */
+  codigoTexto?: string;
   concepto: string;
   /** Lo que esta linea arrastra del periodo anterior. */
   saldoAnterior: number;
@@ -44,6 +46,17 @@ export type LineaFactura = {
   actual: number;
   /** `saldoAnterior + actual`. */
   total: number;
+};
+
+/**
+ * Marca de una factura cuya lectura no se pudo tomar como cierta (el PDF no
+ * cuadra, no trae el total, no se le leyo el periodo...). Ver
+ * `lib/lecturaFactura.ts`. Mientras no la confirme la administracion, la
+ * factura esta "en revision" (`enRevision`).
+ */
+export type LecturaDudosa = {
+  motivos: readonly string[];
+  confirmada?: unknown;
 };
 
 /**
@@ -61,6 +74,9 @@ export type FacturaCartera = {
   /** La deuda acumulada que reclama esta factura. */
   totalAPagar: number;
   lineas: readonly LineaFactura[];
+  /** El saldo anterior que imprime el documento (fila Totales), si lo trae. */
+  saldoAnteriorDocumento?: number;
+  lecturaDudosa?: LecturaDudosa | null;
 };
 
 /**
@@ -70,9 +86,63 @@ export type FacturaCartera = {
  * con ella decide el estado; el estado de cuenta, que con ella dice cuanto
  * quedo debiendo cada mes; y el saldo vigente. Es la misma cuenta; tenerla
  * repetida era la manera de que un dia dejaran de coincidir.
+ *
+ * Si el documento imprime su propio saldo anterior (la fila Totales de
+ * Ciudad del Campo) manda ese: las lineas pueden venir incompletas —una hoja
+ * de continuacion— o sin la fila de un credito, y entonces su suma no es lo
+ * que la contabilidad dijo que se debia.
  */
-export function saldoAnteriorDe(f: { lineas: readonly LineaFactura[] }): number {
-  return f.lineas.reduce((s, l) => s + l.saldoAnterior, 0);
+export function saldoAnteriorDe(f: {
+  lineas: readonly LineaFactura[];
+  saldoAnteriorDocumento?: number;
+}): number {
+  return f.saldoAnteriorDocumento ?? f.lineas.reduce((s, l) => s + l.saldoAnterior, 0);
+}
+
+/**
+ * Si la factura esta en revision: su lectura se marco como dudosa y nadie de
+ * la administracion la ha confirmado. Con ella no se paga, no se concilia y
+ * no se decide "al dia" ni "mora".
+ */
+export function enRevision(f: { lecturaDudosa?: LecturaDudosa | null }): boolean {
+  return !!f.lecturaDudosa && !f.lecturaDudosa.confirmada;
+}
+
+/** Tolerancia en pesos para considerar una deuda como saldada (redondeos). */
+export const TOLERANCIA_PAGO = 1;
+
+/**
+ * El veredicto de la conciliacion sobre una factura, a partir de la factura
+ * SIGUIENTE de su cadena: su saldo anterior dice cuanto quedo debiendo la
+ * unidad.
+ *
+ *   saldo anterior == 0                 -> la anterior quedo PAGADA (o en saldo
+ *                                          a favor, si su total era negativo)
+ *   0 < saldo anterior < total anterior -> ABONADA (pago parcial)
+ *   saldo anterior >= total anterior    -> VENCIDA (no pago; con intereses
+ *                                          puede venir aun mayor)
+ *
+ * `null` si el par no se puede juzgar: alguna de las dos esta en revision, y
+ * con un documento que no cuadra no se decide si la anterior se pago.
+ *
+ * Es la regla de `conciliarCadenaUnidad` (`facturas.ts`) y la del
+ * re-procesamiento (`lib/reproceso.ts`): una sola, para que lo que se simula
+ * sea lo que se aplica.
+ */
+export function veredictoConciliacion(
+  anterior: { totalAPagar: number; lecturaDudosa?: LecturaDudosa | null },
+  siguiente: {
+    lineas: readonly LineaFactura[];
+    saldoAnteriorDocumento?: number;
+    lecturaDudosa?: LecturaDudosa | null;
+  },
+): EstadoFactura | null {
+  if (enRevision(anterior) || enRevision(siguiente)) return null;
+  const deuda = saldoAnteriorDe(siguiente);
+  if (anterior.totalAPagar < 0 && deuda <= TOLERANCIA_PAGO) return "saldo_a_favor";
+  if (deuda <= TOLERANCIA_PAGO) return "pagada";
+  if (deuda < anterior.totalAPagar - TOLERANCIA_PAGO) return "abonada";
+  return "vencida";
 }
 
 /**
@@ -88,8 +158,12 @@ export function saldoAnteriorDe(f: { lineas: readonly LineaFactura[] }): number 
  * Se quito: nombraba un saldo anterior que YA esta dentro del saldo vigente,
  * porque cada factura absorbe lo que quedo debiendo la anterior. Era contar
  * dos veces con palabras.
+ *
+ * `en_revision` no es un estado de deuda: es "no se puede decir". La factura
+ * vigente —o la que decide la mora— tiene una lectura dudosa, y afirmar "al
+ * dia" o "en mora" con ella seria afirmar lo que el documento no permite.
  */
-export type EstadoCartera = "sin_facturas" | "al_dia" | "pendiente" | "en_mora";
+export type EstadoCartera = "sin_facturas" | "al_dia" | "pendiente" | "en_mora" | "en_revision";
 
 export type CarteraUnidad = {
   estado: EstadoCartera;
@@ -198,7 +272,12 @@ export function facturaVigente<F extends { periodo: string }>(
 }
 
 /** Por que no se puede pagar una factura. */
-export type MotivoNoPagable = "pagada" | "historica" | "vigente_ambigua" | "sin_saldo";
+export type MotivoNoPagable =
+  | "pagada"
+  | "historica"
+  | "vigente_ambigua"
+  | "en_revision"
+  | "sin_saldo";
 
 /**
  * Si una factura se puede pagar hoy y, si no, por que.
@@ -208,11 +287,19 @@ export type MotivoNoPagable = "pagada" | "historica" | "vigente_ambigua" | "sin_
  * posterior. Es la regla del backend de pagos y la de los botones "Pagar",
  * para que lo que se ofrece y lo que se acepta no dejen de coincidir.
  *
+ * Tampoco una vigente en revision: su total salio de una lectura dudosa del
+ * PDF, y cobrarlo seria cobrar un numero que nadie ha verificado.
+ *
  * `cadena` son TODAS las facturas de la unidad, `factura` incluida.
  */
 export function motivoNoPagable(
   cadena: readonly { periodo: string }[],
-  factura: { periodo: string; estado: EstadoFactura; totalAPagar: number },
+  factura: {
+    periodo: string;
+    estado: EstadoFactura;
+    totalAPagar: number;
+    lecturaDudosa?: LecturaDudosa | null;
+  },
 ): MotivoNoPagable | null {
   if (factura.estado === "pagada") return "pagada";
   const ultimas = delUltimoPeriodo(cadena);
@@ -220,6 +307,7 @@ export function motivoNoPagable(
     return "historica";
   }
   if (ultimas.length > 1) return "vigente_ambigua";
+  if (enRevision(factura)) return "en_revision";
   if (!sinPagar(factura.estado) || factura.totalAPagar <= 0) return "sin_saldo";
   return null;
 }
@@ -234,6 +322,8 @@ export const MENSAJE_NO_PAGABLE: Readonly<Record<MotivoNoPagable, string>> = {
     "Esta factura ya no está vigente: su saldo quedó incluido en la factura más reciente de la unidad.",
   vigente_ambigua:
     "Esta factura no se puede pagar en línea: la unidad tiene más de una factura del mismo período. Comunícate con la administración.",
+  en_revision:
+    "Esta factura está en revisión: la administración debe verificar su lectura antes de que se pueda pagar.",
   sin_saldo: "Esta factura no tiene saldo por pagar.",
 };
 
@@ -286,6 +376,12 @@ export const MENSAJE_NO_PAGABLE: Readonly<Record<MotivoNoPagable, string>> = {
  * Es una contencion sobre los estados que hoy pone la conciliacion: la Fase
  * 3 de la auditoria reemplaza esta inferencia por el modelo estructural de
  * obligaciones y pagos.
+ *
+ * ── Lecturas dudosas ─────────────────────────────────────────────────────
+ * Si la vigente esta en revision (`enRevision`), o lo esta el periodo que
+ * decidiria la mora, el estado es `en_revision`: ni "al dia" ni "mora" se
+ * pueden afirmar con un documento cuyos numeros no cuadran. El saldo se
+ * informa igual, como referencia para quien revisa.
  */
 export function carteraDeUnidad(
   facturas: readonly FacturaCartera[],
@@ -325,6 +421,8 @@ export function carteraDeUnidad(
     estado: saldoActual > 0 ? "pendiente" : "al_dia",
   };
 
+  if (ultimas.some(enRevision)) return { ...base, estado: "en_revision" };
+
   /* Los periodos que ya vencieron, del mas viejo al mas nuevo. Se ordena por
    * vencimiento y no por el orden en que entraron a la base: lo que define
    * "el ultimo" es la fecha de la obligacion, no cuando alguien la cargo. El
@@ -353,6 +451,9 @@ export function carteraDeUnidad(
   );
   if (cubierto || saldoActual === 0) return base;
 
+  /* El periodo que decidiria la mora tiene una lectura dudosa: no se sabe. */
+  if (enRevision(ultimoVencido)) return { ...base, estado: "en_revision" };
+
   return {
     ...base,
     estado: "en_mora",
@@ -378,14 +479,17 @@ export type UnidadResidente<F> = {
 };
 
 export type ResumenResidente<F> = {
-  /** El de la unidad que peor esta: en mora, pendiente, al dia, sin facturas. */
+  /**
+   * El de la unidad que peor esta: en mora, en revision, pendiente, al dia,
+   * sin facturas.
+   */
   estado: EstadoCartera;
   unidades: UnidadResidente<F>[];
   /** A lo sumo una por unidad: su vigente, cuando se puede pagar. */
   pagables: F[];
 };
 
-const PEOR_PRIMERO: readonly EstadoCartera[] = ["en_mora", "pendiente", "al_dia"];
+const PEOR_PRIMERO: readonly EstadoCartera[] = ["en_mora", "en_revision", "pendiente", "al_dia"];
 
 /**
  * El estado de cuenta del residente, con la MISMA regla de la administracion.

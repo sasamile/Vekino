@@ -50,6 +50,9 @@ function mensajeParaElResidente(e: unknown): string {
   if (/más de una factura del mismo período/i.test(crudo)) {
     return "Esta factura no se puede pagar en línea. Comunícate con la administración.";
   }
+  if (/está en revisión/i.test(crudo)) {
+    return "Esta factura está en revisión por la administración. Podrás pagarla cuando la confirmen.";
+  }
   if (/Failed to fetch|NetworkError|network/i.test(crudo)) {
     return "No hay conexión con la pasarela. Revisa tu internet e intenta de nuevo.";
   }

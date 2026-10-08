@@ -1,4 +1,9 @@
-import { resumenResidente, type FacturaCartera } from "@vekino/backend/cartera";
+import {
+  enRevision,
+  resumenResidente,
+  type FacturaCartera,
+  type LecturaDudosa,
+} from "@vekino/backend/cartera";
 
 /**
  * LA TARJETA DE FACTURAS DEL RESIDENTE EN EL MÓVIL (inicio y pestaña Facturas).
@@ -37,4 +42,14 @@ export function tarjetaFacturas<F extends FacturaCartera & { unidadId: string }>
     /** A lo sumo una por unidad. */
     pagables,
   };
+}
+
+/**
+ * El estado que se le muestra al residente en la lista y en el detalle. Una
+ * factura cuya lectura la administración todavía no verificó se ve "en
+ * revisión", diga lo que diga el estado guardado: no se paga hasta que la
+ * confirmen (Fase 2, docs/audits/FASE-2-FACTURACION.md).
+ */
+export function estadoVisible(f: { estado: string; lecturaDudosa?: LecturaDudosa | null }): string {
+  return enRevision(f) ? "en_revision" : f.estado;
 }

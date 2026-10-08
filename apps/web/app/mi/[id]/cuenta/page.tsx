@@ -5,7 +5,7 @@ import { useParams } from "next/navigation";
 import { useQuery, useAction } from "convex/react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
-import { resumenResidente } from "@vekino/backend/cartera";
+import { enRevision, resumenResidente } from "@vekino/backend/cartera";
 import {
   Download,
   ArrowRight,
@@ -62,6 +62,8 @@ type Factura = {
   fechaVencimiento: number;
   pdfUrl?: string;
   lineas: LineaFactura[];
+  /** Lectura dudosa del PDF (Fase 2): en revisión mientras no se confirme. */
+  lecturaDudosa?: { motivos: string[]; confirmada?: unknown } | null;
   unidadNumero?: string;
   unidadTipo?: string;
   unidadTorre?: string | null;
@@ -178,6 +180,7 @@ export default function MisFacturas() {
           loading={facturas === undefined}
           estaAlDia={estaAlDia}
           enMora={enMora}
+          enRevision={resumen.estado === "en_revision"}
           conteo={pagables.length}
           deuda={deudaTotal}
           multiUnidad={multiUnidad && unidadFiltro === ""}
@@ -247,6 +250,7 @@ function ResumenActual({
   loading,
   estaAlDia,
   enMora,
+  enRevision,
   conteo,
   deuda,
   multiUnidad,
@@ -256,6 +260,8 @@ function ResumenActual({
   estaAlDia: boolean;
   /** Mora ACTUAL según la cartera, no "alguna factura vencida en el historial". */
   enMora: boolean;
+  /** La factura vigente tiene una lectura dudosa: ni al día ni en mora. */
+  enRevision: boolean;
   conteo: number;
   deuda: number;
   multiUnidad: boolean;
@@ -265,12 +271,16 @@ function ResumenActual({
     ? ("success" as const)
     : enMora
       ? ("destructive" as const)
-      : ("warning" as const);
+      : enRevision
+        ? ("info" as const)
+        : ("warning" as const);
   const badgeLabel = estaAlDia
     ? "Al día"
     : enMora
       ? "Vencida"
-      : "Pendiente";
+      : enRevision
+        ? "En revisión"
+        : "Pendiente";
 
   return (
     <LiquidGlassCard className="relative flex min-h-[180px] w-full flex-col justify-between overflow-hidden p-5 sm:p-6">
@@ -499,6 +509,7 @@ function FacturaRow({
               {periodo}
             </span>
             {meta && <Badge tone={meta.tone}>{meta.label}</Badge>}
+            {enRevision(factura) && <Badge tone="info">En revisión</Badge>}
             {isPagada && (
               <span className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground">
                 <CheckCircle2 className="h-3.5 w-3.5" /> Pagada

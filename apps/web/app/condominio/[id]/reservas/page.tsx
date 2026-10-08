@@ -67,18 +67,21 @@ const CARTERA_TONE: Record<EstadoCartera, React.ComponentProps<typeof Badge>["to
   al_dia: "success",
   pendiente: "warning",
   en_mora: "destructive",
+  en_revision: "neutral",
 };
 const CARTERA_LABEL: Record<EstadoCartera, string> = {
   sin_facturas: "Sin facturas",
   al_dia: "Al día",
   pendiente: "Pendiente",
   en_mora: "En mora",
+  en_revision: "En revisión",
 };
 const CARTERA_HINT: Record<EstadoCartera, string> = {
   sin_facturas: "La unidad no tiene facturas cargadas.",
   al_dia: "Sin saldo pendiente.",
   pendiente: "Debe, pero no está incumpliendo: la obligación vigente no ha vencido o el último período vencido quedó cubierto.",
   en_mora: "El último período vencido sigue sin pago ni abono.",
+  en_revision: "La lectura del PDF de su factura no cuadra: hasta que Finanzas la revise no se puede decir si está al día o en mora.",
 };
 
 function fmtFecha(s: string) {

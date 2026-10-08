@@ -4,7 +4,7 @@ import { internal } from "./_generated/api";
 import { textoAccesoWhatsApp } from "./lib/mensajesAcceso";
 import type { Id } from "./_generated/dataModel";
 import { GUIAS_VEKINO } from "./lib/guiasVekino";
-import { motivoNoPagable } from "./lib/cartera";
+import { enRevision, motivoNoPagable } from "./lib/cartera";
 
 /**
  * El agente de WhatsApp.
@@ -311,6 +311,8 @@ async function ejecutar(
           numeroFactura: f.numeroFactura,
           periodo: f.periodoLabel,
           estado: f.estado,
+          /* Lectura dudosa del PDF: el monto no está verificado. */
+          enRevision: enRevision(f),
           totalAPagar: pesos.format(conDescuento ? f.totalConDescuento : f.totalAPagar),
           aplicaDescuentoProntoPago: conDescuento,
           venceEl: new Date(f.fechaVencimiento).toISOString().slice(0, 10),
@@ -328,6 +330,13 @@ async function ejecutar(
          * busca una anterior, cuyo saldo ya va dentro de esta. */
         const noPagable = motivoNoPagable([f], f);
         if (noPagable === "pagada") return { yaPagada: true };
+        if (noPagable === "en_revision") {
+          return {
+            enRevision: true,
+            queDecir:
+              "Su factura está en revisión por la administración; todavía no se puede pagar en línea. No inventes montos ni fechas.",
+          };
+        }
         if (noPagable) return { alDia: true, sinSaldoPorPagar: true };
         const pago = await ctx.runAction(internal.pagos.crearPagoFacturaBot, {
           facturaId: f._id,

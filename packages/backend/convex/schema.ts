@@ -298,6 +298,9 @@ export default defineSchema({
     lineas: v.array(
       v.object({
         codigo: v.number(), // 1-7
+        // Código del documento que no es numérico ("CI" anticipo de cliente,
+        // "NCC" nota crédito cliente, en Ciudad del Campo). Entonces `codigo` es 0.
+        codigoTexto: v.optional(v.string()),
         concepto: v.string(), // "Administración de marzo", "Intereses mora", etc
         saldoAnterior: v.number(),
         actual: v.number(),
@@ -309,6 +312,30 @@ export default defineSchema({
     saldoAFavor: v.number(),
     totalAPagar: v.number(), // sin descuento (pago del 16 al 30)
     totalConDescuento: v.optional(v.number()), // pago del 1 al 15
+    // Saldo anterior que imprime el propio documento (fila "Totales" de
+    // Ciudad del Campo). Si existe, la conciliación lo usa en vez de sumar las
+    // líneas, que pueden venir incompletas. Ver lib/cartera.ts, saldoAnteriorDe.
+    saldoAnteriorDocumento: v.optional(v.number()),
+
+    // Lectura dudosa: el PDF no cuadra, no trae el total o no se le leyó el
+    // período. Mientras no se confirme, la factura está "en revisión": no se
+    // paga, no concilia y no decide "al día" ni "mora" (lib/lecturaFactura.ts).
+    lecturaDudosa: v.optional(
+      v.object({
+        motivos: v.array(v.string()),
+        marcadaAt: v.number(),
+        confirmada: v.optional(
+          v.object({
+            userId: v.id("users"),
+            nombre: v.string(),
+            at: v.number(),
+          }),
+        ),
+      }),
+    ),
+
+    // Carga (PDF confirmado) que la creó o la actualizó por última vez.
+    importacionId: v.optional(v.id("importaciones")),
 
     // Fechas
     fechaEmision: v.number(), // timestamp
@@ -337,6 +364,50 @@ export default defineSchema({
     .index("by_condominio_periodo", ["condominioId", "periodo"])
     .index("by_estado", ["estado"])
     .index("by_legacyId", ["legacyId"]),
+
+  // ─────────────────────────────────────────────────────────────
+  // Importaciones de facturas: una por PDF confirmado en Finanzas.
+  //
+  // La vista previa (/api/facturas/upload) no escribe nada. Al confirmar
+  // (/api/facturas/confirmar) se registra aquí la carga —archivo, hash,
+  // período, quién y cuándo—, se publican en S3 solo los PDF de las facturas
+  // que se insertan o actualizan, con una llave propia de esta importación, y
+  // cada factura queda enlazada a ella (`facturas.importacionId`). El hash
+  // hace la confirmación idempotente: el mismo archivo para el mismo período
+  // no se carga dos veces.
+  // ─────────────────────────────────────────────────────────────
+  importaciones: defineTable({
+    condominioId: v.id("condominios"),
+    periodo: v.string(), // "AAAA-MM"
+    archivo: v.string(), // nombre del PDF subido
+    hash: v.string(), // SHA-256 del PDF, en hexadecimal
+    userId: v.id("users"),
+    userNombre: v.optional(v.string()),
+    soloNuevas: v.boolean(),
+    estado: v.union(
+      v.literal("en_curso"),
+      v.literal("completada"),
+      v.literal("fallida"),
+    ),
+    documentos: v.number(), // facturas leídas del PDF
+    insertadas: v.number(),
+    actualizadas: v.number(),
+    omitidas: v.number(),
+    marcadas: v.number(), // entraron "en revisión" (lectura dudosa)
+    rechazadas: v.number(), // no se guardaron (período contradictorio, sin unidad…)
+    rechazos: v.array(
+      v.object({
+        indice: v.optional(v.number()),
+        unidadId: v.optional(v.id("unidades")),
+        motivo: v.string(),
+      }),
+    ),
+    error: v.optional(v.string()),
+    createdAt: v.number(),
+    completadaAt: v.optional(v.number()),
+  })
+    .index("by_condominio", ["condominioId"])
+    .index("by_condominio_hash", ["condominioId", "hash"]),
 
   // ─────────────────────────────────────────────────────────────
   // Pagos — Pasarela de Pagos Aval (AV Villas / PSE, tarjeta, Pagos Aval)

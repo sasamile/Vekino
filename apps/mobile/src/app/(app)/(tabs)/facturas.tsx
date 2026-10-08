@@ -31,26 +31,30 @@ import {
   GlassSection,
 } from "@/components/ui/glass";
 import { cop, fmtPeriodo } from "@/lib/utils";
-import { tarjetaFacturas } from "@/lib/resumen-facturas";
+import { estadoVisible, tarjetaFacturas } from "@/lib/resumen-facturas";
 import { AuthUI } from "@/lib/auth-ui";
 import { SoftUI, softShadow } from "@/lib/soft-ui";
 
 type Estado = "pendiente" | "pagada" | "vencida" | "abonada" | "saldo_a_favor";
+/** Lo que se muestra: el estado guardado, o "en revisión" si la lectura no se ha verificado. */
+type EstadoVisible = Estado | "en_revision";
 
-const ESTADO_TONE: Record<Estado, "yellow" | "green" | "red" | "neutral" | "blue"> = {
+const ESTADO_TONE: Record<EstadoVisible, "yellow" | "green" | "red" | "neutral" | "blue"> = {
   pendiente: "yellow",
   pagada: "green",
   vencida: "red",
   abonada: "blue",
   saldo_a_favor: "blue",
+  en_revision: "blue",
 };
 
-const ESTADO_LABEL: Record<Estado, string> = {
+const ESTADO_LABEL: Record<EstadoVisible, string> = {
   pendiente: "Pendiente",
   pagada: "Pagada",
   vencida: "Vencida",
   abonada: "Abonada",
   saldo_a_favor: "Saldo a favor",
+  en_revision: "En revisión",
 };
 
 const ESTADO_ICON: Record<
@@ -74,6 +78,7 @@ const ESTADO_ICON: Record<
     bg: SoftUI.infoSoft,
     fg: SoftUI.blue,
   },
+  en_revision: { name: "search-outline", bg: SoftUI.infoSoft, fg: SoftUI.blue },
 };
 
 type FacturaRow = {
@@ -96,6 +101,7 @@ type FacturaRow = {
     actual: number;
     total: number;
   }[];
+  lecturaDudosa?: { motivos: string[]; confirmada?: unknown };
 };
 
 export default function FacturasScreen() {
@@ -191,7 +197,8 @@ function FacturaListCard({
   showResident?: boolean;
 }) {
   const { theme } = useCondominio();
-  const iconMeta = ESTADO_ICON[f.estado] ?? ESTADO_ICON.abonada;
+  const estado = estadoVisible(f);
+  const iconMeta = ESTADO_ICON[estado] ?? ESTADO_ICON.abonada;
   return (
     <Tap onPress={onPress}>
       <GlassCard style={styles.facturaCard}>
@@ -213,8 +220,8 @@ function FacturaListCard({
           </Text>
           <View style={{ marginTop: 6, flexDirection: "row", alignItems: "center", gap: 8 }}>
             <GlassBadge
-              label={ESTADO_LABEL[f.estado as Estado] ?? f.estado}
-              tone={ESTADO_TONE[f.estado as Estado] ?? "neutral"}
+              label={ESTADO_LABEL[estado as EstadoVisible] ?? estado}
+              tone={ESTADO_TONE[estado as EstadoVisible] ?? "neutral"}
             />
             {!showResident && (
               <Text style={styles.facturaDue}>
@@ -226,7 +233,7 @@ function FacturaListCard({
               </Text>
             )}
           </View>
-          {!showResident && f.totalConDescuento && f.estado === "pendiente" ? (
+          {!showResident && f.totalConDescuento && estado === "pendiente" ? (
             <View style={styles.descuentoRow}>
               <Ionicons name="pricetag" size={12} color={SoftUI.success} />
               <Text style={styles.descuentoText}>
@@ -1240,8 +1247,8 @@ function FacturaDetalleModal({
               ) : null}
             </View>
             <GlassBadge
-              label={ESTADO_LABEL[detalle.estado as Estado] ?? detalle.estado}
-              tone={ESTADO_TONE[detalle.estado as Estado] ?? "neutral"}
+              label={ESTADO_LABEL[estadoVisible(detalle) as EstadoVisible] ?? detalle.estado}
+              tone={ESTADO_TONE[estadoVisible(detalle) as EstadoVisible] ?? "neutral"}
             />
           </View>
 

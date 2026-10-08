@@ -286,6 +286,8 @@ function detalleFactura(
   if (motivo === "historica" && sinPagar(f.estado)) {
     return "Su saldo pasó a la factura siguiente";
   }
-  if (motivo === "vigente_ambigua") return "En revisión de la administración";
+  if (motivo === "vigente_ambigua" || motivo === "en_revision") {
+    return "En revisión de la administración";
+  }
   return "Sin saldo por pagar";
 }

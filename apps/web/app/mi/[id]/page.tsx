@@ -397,7 +397,8 @@ function DeudaAlert({
   }
 
   /* Debe, pero ninguna vigente se puede pagar: la unidad tiene dos facturas
-   * del mismo período y la administración debe revisarlas. */
+   * del mismo período, o la lectura del PDF de su vigente está en revisión
+   * (Fase 2), y la administración debe revisarlas. */
   if (facturasParaPagar.length === 0) {
     return (
       <LiquidGlassCard className="flex items-center gap-3 px-4 py-3.5">

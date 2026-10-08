@@ -45,6 +45,10 @@
       "types": "./convex/lib/cartera.ts",
       "default": "./convex/lib/cartera.ts"
     },
+    "./lecturaFactura": {
+      "types": "./convex/lib/lecturaFactura.ts",
+      "default": "./convex/lib/lecturaFactura.ts"
+    },
     "./costoReserva": {
       "types": "./convex/lib/costoReserva.ts",
       "default": "./convex/lib/costoReserva.ts"

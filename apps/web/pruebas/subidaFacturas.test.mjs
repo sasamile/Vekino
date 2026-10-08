@@ -113,15 +113,21 @@ describe("F07 · /api/facturas/upload exige sesión y permiso sobre el conjunto"
     expect(subidas).toEqual([]);
   });
 
-  test("con permiso, el comportamiento de siempre: pregunta por ESE conjunto, lee el PDF y lo publica", async () => {
+  /*
+   * Hasta la Fase 1 esta prueba exigía que la vista previa publicara el PDF
+   * en S3 (`…/2026-09/unidad-999.pdf`). La Fase 2 lo prohíbe —F07-s3-antes-de-
+   * confirmar, #78 de la Fase 0— y mueve la publicación a /api/facturas/confirmar
+   * (ver confirmarFacturas.test.mjs). Lo demás se mantiene: pregunta por ESE
+   * conjunto y lee el PDF.
+   */
+  test("con permiso: pregunta por ESE conjunto y lee el PDF, sin publicar nada (S3 solo al confirmar)", async () => {
     const { status, cuerpo } = await subir();
     expect(status).toBe(200);
     expect(consultas).toEqual([
       { nombre: "facturas:permisoSubida", args: { condominioLegacyId: "conjunto-de-prueba" } },
     ]);
     expect(cuerpo.invoices).toHaveLength(1);
-    expect(subidas.map((s) => s.Key)).toEqual([
-      "condominios/facturas/conjunto-de-prueba/2026-09/unidad-999.pdf",
-    ]);
+    expect(cuerpo.hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(subidas).toEqual([]);
   });
 });

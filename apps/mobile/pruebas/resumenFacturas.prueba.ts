@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { tarjetaFacturas } from "../src/lib/resumen-facturas.ts";
+import { estadoVisible, tarjetaFacturas } from "../src/lib/resumen-facturas.ts";
 
 /**
  * LA TARJETA DE FACTURAS DEL MÓVIL (inicio y pestaña Facturas).
@@ -99,4 +99,32 @@ test("sin facturas: al día, como antes", () => {
   const t = tarjetaFacturas([], AHORA);
   assert.equal(t.titulo, "Estás al día");
   assert.equal(t.porPagar, 0);
+});
+
+// ─── Fase 2: lectura en revisión (docs/audits/FASE-2-FACTURACION.md) ─────────
+
+const DUDOSA = { lecturaDudosa: { motivos: ["total_no_leido"] } };
+
+test("vigente con el total no leído: 'en revisión', ni 'al día' ni nada por pagar", () => {
+  /* Antes: el total ilegible se guardaba en $0 y la tarjeta decía "Estás al día". */
+  const t = tarjetaFacturas(
+    [factura("2026-08", "pagada", 289_000), { ...factura("2026-09", "pendiente", 0), ...DUDOSA }],
+    AHORA,
+  );
+  assert.equal(t.titulo, "Factura en revisión");
+  assert.equal(t.alDia, false);
+  assert.equal(t.porPagar, 0);
+  assert.deepEqual(t.pagables, []);
+});
+
+test("la lista y el detalle muestran 'en revisión' hasta que la administración confirme", () => {
+  assert.equal(estadoVisible({ ...factura("2026-09", "pendiente", 289_000), ...DUDOSA }), "en_revision");
+  assert.equal(
+    estadoVisible({
+      ...factura("2026-09", "pendiente", 289_000),
+      lecturaDudosa: { motivos: ["total_no_leido"], confirmada: { at: 1 } },
+    }),
+    "pendiente",
+  );
+  assert.equal(estadoVisible(factura("2026-08", "vencida", 300_000)), "vencida");
 });

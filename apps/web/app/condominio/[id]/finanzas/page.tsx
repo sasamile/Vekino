@@ -26,6 +26,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { usePersistedPeriodo } from "@/hooks/use-persisted-periodo";
 import { cop } from "@/lib/utils";
 import { periodoDe } from "@vekino/backend/periodos";
+import { MENSAJE_LECTURA, type MotivoLectura } from "@vekino/backend/lecturaFactura";
 
 const PAGE_SIZE = 30;
 
@@ -135,7 +136,6 @@ export default function FinanzasPage() {
           key={uploadKey}
           condominioId={condominioId}
           condominioLegacyId={condominioData.condominio.legacyId}
-          currentPeriodo={periodoActivo}
           onDone={() => setUploadKey((k) => k + 1)}
         />
       )}
@@ -179,6 +179,8 @@ export default function FinanzasPage() {
             </button>
           </div>
         )}
+
+        <EnRevision condominioId={condominioId} />
 
         {/* KPIs */}
         {resumen ? (
@@ -287,9 +289,14 @@ export default function FinanzasPage() {
                         />
                       </TD>
                       <TD>
-                        <Badge tone={ESTADO_TONE[f.estado] ?? "neutral"}>
-                          {ESTADO_LABEL[f.estado] ?? f.estado}
-                        </Badge>
+                        <div className="flex flex-wrap items-center gap-1">
+                          <Badge tone={ESTADO_TONE[f.estado] ?? "neutral"}>
+                            {ESTADO_LABEL[f.estado] ?? f.estado}
+                          </Badge>
+                          {f.lecturaDudosa && !f.lecturaDudosa.confirmada ? (
+                            <Badge tone="warning">En revisión</Badge>
+                          ) : null}
+                        </div>
                       </TD>
                       <TD className="text-right font-medium tabular-nums text-foreground">
                         {cop(f.totalAPagar)}
@@ -386,16 +393,18 @@ export default function FinanzasPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {facturaDetalle.lineas.map((l) => (
+                {/* Los créditos (anticipos, notas crédito, saldo a favor) son
+                    negativos: se muestran, no se esconden como "—". */}
+                {facturaDetalle.lineas.map((l, i) => (
                   <tr
-                    key={l.codigo}
-                    className={`even:bg-brand/[0.035] ${l.total > 0 ? "" : "text-muted-foreground/60"}`}
+                    key={i}
+                    className={`even:bg-brand/[0.035] ${l.total !== 0 ? "" : "text-muted-foreground/60"}`}
                   >
                     <td className="px-4 py-2">{l.concepto}</td>
-                    <td className="px-4 py-2 text-right tabular-nums">{l.saldoAnterior > 0 ? cop(l.saldoAnterior) : "—"}</td>
-                    <td className="px-4 py-2 text-right tabular-nums">{l.actual > 0 ? cop(l.actual) : "—"}</td>
-                    <td className={`px-4 py-2 text-right font-medium tabular-nums ${l.total > 0 ? "text-foreground" : ""}`}>
-                      {l.total > 0 ? cop(l.total) : "—"}
+                    <td className="px-4 py-2 text-right tabular-nums">{l.saldoAnterior !== 0 ? cop(l.saldoAnterior) : "—"}</td>
+                    <td className="px-4 py-2 text-right tabular-nums">{l.actual !== 0 ? cop(l.actual) : "—"}</td>
+                    <td className={`px-4 py-2 text-right font-medium tabular-nums ${l.total !== 0 ? "text-foreground" : ""}`}>
+                      {l.total !== 0 ? cop(l.total) : "—"}
                     </td>
                   </tr>
                 ))}
@@ -427,6 +436,79 @@ export default function FinanzasPage() {
         </Modal>
       )}
     </PageContainer>
+  );
+}
+
+/**
+ * Facturas en revisión: lecturas del PDF que no cuadran (o sin total, o sin
+ * período legible). No se pueden pagar ni deciden la cartera hasta que se
+ * vuelva a subir una lectura correcta o la administración la confirme.
+ */
+function EnRevision({ condominioId }: { condominioId: Id<"condominios"> }) {
+  const filas = useQuery(api.facturas.listEnRevision, { condominioId });
+  const confirmar = useMutation(api.facturas.confirmarLectura);
+  const [confirmando, setConfirmando] = useState<Id<"facturas"> | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  if (!filas || filas.length === 0) return null;
+
+  async function onConfirmar(id: Id<"facturas">) {
+    if (!window.confirm("¿Revisaste el PDF y los valores son correctos? La factura quedará disponible para pago.")) return;
+    setConfirmando(id);
+    setError(null);
+    try {
+      await confirmar({ facturaId: id });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudo confirmar.");
+    } finally {
+      setConfirmando(null);
+    }
+  }
+
+  return (
+    <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4">
+      <div className="mb-2 flex items-center gap-2">
+        <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400" aria-hidden />
+        <p className="text-sm font-semibold text-foreground">
+          {filas.length} factura{filas.length === 1 ? "" : "s"} en revisión
+        </p>
+      </div>
+      <p className="mb-3 text-xs text-muted-foreground">
+        Su PDF no cuadra o no se pudo leer completo. No se pueden pagar hasta que subas una lectura correcta
+        (con "actualizar") o confirmes que los valores están bien.
+      </p>
+      {error && <p className="mb-2 text-xs text-red-600 dark:text-red-400">{error}</p>}
+      <div className="max-h-72 space-y-2 overflow-auto">
+        {filas.map((f) => (
+          <div key={f._id} className="flex flex-wrap items-start justify-between gap-2 rounded-lg border border-border bg-card px-3 py-2 text-sm">
+            <div className="min-w-0">
+              <p className="font-medium text-foreground">
+                {formatPeriodoLabel(f.periodo)} · Unidad {[f.unidadTorre, f.unidadNumero].filter(Boolean).join(" ")}
+                <span className="ml-2 font-normal tabular-nums text-muted-foreground">{cop(f.totalAPagar)}</span>
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {f.motivos.map((m) => MENSAJE_LECTURA[m as MotivoLectura] ?? m).join(" ")}
+              </p>
+            </div>
+            <div className="flex items-center gap-1">
+              {f.pdfUrl && (
+                <a
+                  href={f.pdfUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  aria-label="Abrir PDF"
+                >
+                  <ExternalLink className="h-4 w-4" />
+                </a>
+              )}
+              <Button variant="outline" size="sm" disabled={confirmando === f._id} onClick={() => onConfirmar(f._id)}>
+                {confirmando === f._id ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : "Confirmar lectura"}
+              </Button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 

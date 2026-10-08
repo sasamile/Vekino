@@ -54,6 +54,25 @@ persona). "git" = PDF del commit `a0cf84b^` (`migrate/.tmp-descuento/<_id>.pdf`)
 | `arboleda-control.pdf` | git `js71zect2nbcam2wazhvh3gmts8av6fv` (junio 2026) | Periodo `01-junio-2026` · TOTAL A PAGAR $15,760 | Control del formato Arboleda. |
 | `arboleda-saldo-a-favor.pdf` | S3 `js7316tymssvwcdq9zr7fj0br98egkzw` (septiembre 2026) | Periodo `01-septiembre-2026` (una línea más abajo que en junio) · TOTAL A PAGAR **$(376,000)** | F-15: total entre paréntesis y período mal capturado. |
 
+### Agregados en la Fase 2 (2026-10-08)
+
+Mismo método y mismas dos verificaciones, con el parser de la Fase 2
+(`app/api/facturas/parser.ts`): ningún fragmento reemplazado aparece en el
+fixture, y la lectura del original y la del anonimizado son idénticas salvo
+casa, nombre y consecutivo. Todos salen de S3 (solo lectura). Los usa
+`pruebas/ingestionFacturas.test.mjs`
+(`docs/audits/FASE-2-FACTURACION.md`).
+
+| Fixture | Origen | Lo que dice el documento | Para qué sirve |
+|---|---|---|---|
+| `cdc-total-no-leido.pdf` | S3 `js75vmspeh702057dh1b8g6b4h8cwrzx` (agosto 2026) | Solo la **primera hoja** de una cuenta de varias: filas de saldo anterior (3.609.800) y del mes, **sin** fila Totales ni "Pague sin descuento" | Total no leído: sale en revisión (`total_no_leido`), nunca en $0. En producción quedó con total 0 y estado `vencida` (es una de las 16 de agosto). |
+| `cdc-consolidado-con-continuacion.pdf` | S3 `js73rdn6bprc0bqcv3tcdvk38n8e0ewt` (2 hojas) + `js700p17bz40svgfh0166g828s8e0eed` (1 hoja), septiembre 2026, concatenados | Casa 999: saldo anterior 5.298.200, total 5.705.200 (la fila Totales está en la **segunda** hoja). Casa 998: total 999.000 | Agrupación de páginas en un PDF consolidado: la hoja de continuación es de la factura anterior. |
+| `arboleda-septiembre.pdf` | S3 `js703jc8gcm1tat2d0n5t091w58eh58f` (septiembre 2026) | Periodo `01-septiembre-2026` dos renglones debajo de "Periodo:" · TOTAL A PAGAR $778,843 | El formato de septiembre de Arboleda con un total positivo (control del período). |
+| `cdc-sin-fila-de-cuota.pdf` | S3 `js7am68c1k1xkta3tqdxp73hzn8e1k4f` (septiembre 2026) | Sin fila `*` del mes: solo `SF CI ANTICIPO DE CLIENTE` −105.000 · total −105.000 · "Fecha Septi. 01 / 2026" | El período sale de la "Fecha" del documento. En producción quedó con `periodoLabel` vacío. |
+
+En el corpus (2.792 PDF) no hay otros códigos de crédito además de `CI`
+(494 filas) y `NCC` (32 filas); los dos ya tienen fixture.
+
 Los PDFs de CDC dicen además: *"PARA BENEFICIARSE DEL DESCUENTO POR PRONTO PAGO
 DE $40.000 SOBRE LA CUOTA DE ADMINISTRACIÓN, DEBE PAGAR LA TOTALIDAD DEL ESTADO
 DE CUENTA HASTA EL DIA 15 DEL PRESENTE MES"*. Es la base de la prueba F-06 del
