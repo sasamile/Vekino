@@ -50,6 +50,8 @@ export type Emparejamiento = {
   modo: ModoEmparejado | null;
   /** "T II · 604" — cuando la unidad no se leyó tal cual del identificador. */
   detalle?: string;
+  /** El mismo identificador aparece en más de un documento del PDF. */
+  repetido?: boolean;
 };
 
 const ROMANOS: Record<string, number> = {
@@ -160,6 +162,21 @@ export function emparejarLote(
   }));
   const tomadas = new Set<string>();
 
+  /* El mismo identificador en dos documentos: dos estados de cuenta para la
+   * misma casa (pasó con la 802 de Ciudad del Campo en septiembre de 2026).
+   * Antes se quedaba con la unidad el primero y el segundo salía "sin
+   * unidad", sin decir por qué. Ahora ninguno se empareja —elegir uno es
+   * adivinar— y su unidad queda reservada para que no la tome otro. */
+  const veces = new Map<string, number>();
+  for (const id of ids) if (id) veces.set(id, (veces.get(id) ?? 0) + 1);
+  const repetidos = new Set<number>();
+  ids.forEach((id, i) => {
+    if (!id || (veces.get(id) ?? 0) < 2) return;
+    repetidos.add(i);
+    resultado[i] = { unidadId: null, modo: null, detalle: "documento repetido en el PDF", repetido: true };
+    for (const c of candidatos[i]!) tomadas.add(c.unidad._id);
+  });
+
   /* Propagación: fijamos los que tienen una sola lectura, liberamos esa
    * unidad del resto y repetimos. Cada vuelta puede destrabar la siguiente.
    * El tope de vueltas es la cantidad de facturas: más que eso significaría
@@ -168,7 +185,7 @@ export function emparejarLote(
     let cambio = false;
 
     for (let i = 0; i < ids.length; i++) {
-      if (resultado[i]!.unidadId) continue;
+      if (resultado[i]!.unidadId || repetidos.has(i)) continue;
 
       const libres = candidatos[i]!.filter((c) => !tomadas.has(c.unidad._id));
       if (libres.length !== 1) continue;

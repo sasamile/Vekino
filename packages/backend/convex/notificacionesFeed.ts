@@ -7,7 +7,12 @@ import {
   getMembership,
   misUnidadIds,
 } from "./model/authz";
-import { motivoNoPagable, sinPagar, type MotivoNoPagable } from "./lib/cartera";
+import {
+  montoAPagarHoy,
+  motivoNoPagable,
+  sinPagar,
+  type MotivoNoPagable,
+} from "./lib/cartera";
 
 /**
  * Bandeja de novedades del residente.
@@ -276,15 +281,23 @@ function formatoCOP(valor: number): string {
   return `$ ${conPuntos}`;
 }
 
-/** La línea de una factura en la campana, según si hoy se puede pagar. */
+/**
+ * La línea de una factura en la campana, según si hoy se puede pagar. El
+ * monto "por pagar" es el de hoy: con descuento solo dentro de su plazo
+ * (`montoAPagarHoy`, Fase 3).
+ */
 function detalleFactura(
   f: Doc<"facturas">,
   motivo: MotivoNoPagable | null,
 ): string {
-  if (motivo === null) return `Por pagar · ${formatoCOP(f.totalAPagar)}`;
+  if (motivo === null) return `Por pagar · ${formatoCOP(montoAPagarHoy(f, Date.now()))}`;
   if (motivo === "pagada") return "Pagada";
   if (motivo === "historica" && sinPagar(f.estado)) {
     return "Su saldo pasó a la factura siguiente";
+  }
+  if (motivo === "pago_en_verificacion") {
+    /* Pagó y la contabilidad aún no lo refleja: no es deuda que cobrar. */
+    return `Pago en verificación · ${formatoCOP(f.pagoEnVerificacion?.monto ?? 0)}`;
   }
   if (motivo === "vigente_ambigua" || motivo === "en_revision") {
     return "En revisión de la administración";

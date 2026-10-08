@@ -1,5 +1,7 @@
 import { v } from "convex/values";
 import { query, mutation, internalMutation, internalQuery } from "./_generated/server";
+import type { MutationCtx } from "./_generated/server";
+import type { Doc } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import {
   requireCondominioRole,
@@ -7,18 +9,66 @@ import {
   getCurrentAppUser,
   misUnidadIds,
 } from "./model/authz";
-import { facturaVigente } from "./lib/cartera";
+import { facturaVigente, formatoPesos, montoAPagarHoy } from "./lib/cartera";
+import { recalcularCadena } from "./model/estadoFactura";
 
 /**
  * Comprobantes de pago subidos por propietarios (foto/PDF, normalmente vía
  * WhatsApp). Flujo: llega → "pendiente_revision" → la administración lo
- * aprueba (marca la factura vinculada como pagada) o lo rechaza.
+ * aprueba o lo rechaza.
  *
  * Este canal es paralelo a la pasarela Aval y NUNCA toca la tabla `pagos`
  * (esa es exclusiva de la pasarela).
+ *
+ * ── Fase 3 ───────────────────────────────────────────────────────────────
+ *   · Un comprobante dice CUÁNTO y CUÁNDO se pagó (`monto`, `fechaPago`): lo
+ *     declara el residente y lo confirma la administración al aprobar.
+ *   · Aprobarlo es EVIDENCIA de pago por ese monto: la factura queda pagada o
+ *     abonada según lo que se debía (`lib/estadoFactura.ts`), no "pagada" a
+ *     secas. Sin factura vinculada queda registrado y no cambia ningún estado.
+ *   · Solo se adjunta a la factura VIGENTE de la unidad: el saldo de una
+ *     histórica ya va dentro de la más reciente.
  */
 
 const ADMIN_ROLES = ["administrador", "contadora", "junta_directiva"] as const;
+
+/**
+ * Lo que se responde a quien adjunta un comprobante a una factura que ya no
+ * es la vigente. Estable a propósito: la app lo muestra tal cual.
+ */
+export const MENSAJE_COMPROBANTE_HISTORICA =
+  "Ese comprobante debe ir con la factura vigente de la unidad: el saldo de esa factura ya quedó incluido en la más reciente.";
+
+/** Un pago declarado no puede ser de mañana (con un día de holgura por la zona horaria). */
+const HOLGURA_FECHA_MS = 24 * 60 * 60 * 1000;
+
+function validarMontoYFecha(monto: number | undefined, fechaPago: number | undefined) {
+  if (monto !== undefined && (!Number.isFinite(monto) || monto <= 0)) {
+    throw new Error("El monto pagado debe ser mayor que cero.");
+  }
+  if (
+    fechaPago !== undefined &&
+    (!Number.isFinite(fechaPago) || fechaPago <= 0 || fechaPago > Date.now() + HOLGURA_FECHA_MS)
+  ) {
+    throw new Error("La fecha del pago no es válida.");
+  }
+}
+
+/**
+ * Que la factura sea la vigente de su unidad (la del período más reciente).
+ * Lanza el mensaje estable si es histórica.
+ */
+async function exigirVigente(ctx: MutationCtx, factura: Doc<"facturas">) {
+  const cadena = (
+    await ctx.db
+      .query("facturas")
+      .withIndex("by_unidad", (q) => q.eq("unidadId", factura.unidadId))
+      .collect()
+  ).filter((f) => f.condominioId === factura.condominioId);
+  if (cadena.some((f) => f.periodo.localeCompare(factura.periodo) > 0)) {
+    throw new Error(MENSAJE_COMPROBANTE_HISTORICA);
+  }
+}
 
 /** El bot registra un comprobante recibido por WhatsApp. */
 export const crearDesdeBot = internalMutation({
@@ -31,14 +81,52 @@ export const crearDesdeBot = internalMutation({
     url: v.string(),
     mimeType: v.optional(v.string()),
     nota: v.optional(v.string()),
+    monto: v.optional(v.number()),
+    fechaPago: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
+    validarMontoYFecha(args.monto, args.fechaPago);
+    let unidadId = args.unidadId;
+    if (args.facturaId) {
+      const factura = await ctx.db.get(args.facturaId);
+      if (!factura || factura.condominioId !== args.condominioId) {
+        throw new Error("Factura no encontrada.");
+      }
+      await exigirVigente(ctx, factura);
+      unidadId = factura.unidadId;
+    }
     return await ctx.db.insert("soportesPago", {
       ...args,
+      ...(unidadId ? { unidadId } : {}),
       origen: "whatsapp",
       estado: "pendiente_revision",
       createdAt: Date.now(),
     });
+  },
+});
+
+/**
+ * El residente le dice al bot cuánto pagó, después de mandar la foto. Solo
+ * sobre un comprobante suyo (mismo teléfono), sin revisar y sin monto.
+ */
+export const registrarMontoBot = internalMutation({
+  args: {
+    soporteId: v.id("soportesPago"),
+    telefono: v.string(),
+    monto: v.number(),
+  },
+  handler: async (ctx, args) => {
+    validarMontoYFecha(args.monto, undefined);
+    const soporte = await ctx.db.get(args.soporteId);
+    if (!soporte || soporte.telefono !== args.telefono) {
+      throw new Error("Comprobante no encontrado.");
+    }
+    if (soporte.estado !== "pendiente_revision") {
+      throw new Error("El comprobante ya fue revisado.");
+    }
+    if (soporte.monto !== undefined) return args.soporteId;
+    await ctx.db.patch(args.soporteId, { monto: args.monto });
+    return args.soporteId;
   },
 });
 
@@ -48,7 +136,13 @@ export const crearDesdeBot = internalMutation({
 // termina de quedar en producción.
 // ─────────────────────────────────────────────────────────────
 
-/** El propietario adjunta el comprobante de un pago que ya hizo. */
+/**
+ * El propietario adjunta el comprobante de un pago que ya hizo.
+ *
+ * `monto` y `fechaPago` son opcionales solo para no romper las versiones de
+ * la app que todavía no los piden; la app nueva los pide siempre, y la
+ * administración los confirma al aprobar.
+ */
 export const crearMio = mutation({
   args: {
     condominioId: v.id("condominios"),
@@ -56,6 +150,8 @@ export const crearMio = mutation({
     url: v.string(),
     mimeType: v.optional(v.string()),
     nota: v.optional(v.string()),
+    monto: v.optional(v.number()),
+    fechaPago: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const user = await requireAppUser(ctx);
@@ -64,8 +160,9 @@ export const crearMio = mutation({
       throw new Error("No tienes unidades vinculadas en este condominio.");
     }
     if (!args.url.trim()) throw new Error("Falta el archivo del comprobante.");
+    validarMontoYFecha(args.monto, args.fechaPago);
 
-    // La factura (si se indicó) tiene que ser de una unidad suya.
+    // La factura (si se indicó) tiene que ser de una unidad suya, y la vigente.
     let unidadId = [...unidadIds][0]!;
     if (args.facturaId) {
       const factura = await ctx.db.get(args.facturaId);
@@ -75,6 +172,7 @@ export const crearMio = mutation({
       if (!unidadIds.has(factura.unidadId)) {
         throw new Error("Esa factura no pertenece a tu unidad.");
       }
+      await exigirVigente(ctx, factura);
       unidadId = factura.unidadId;
 
       // Evita que se acumulen comprobantes duplicados sin revisar.
@@ -98,6 +196,8 @@ export const crearMio = mutation({
       url: args.url.trim(),
       mimeType: args.mimeType,
       nota: args.nota?.trim() || undefined,
+      ...(args.monto !== undefined ? { monto: args.monto } : {}),
+      ...(args.fechaPago !== undefined ? { fechaPago: args.fechaPago } : {}),
       estado: "pendiente_revision",
       createdAt: Date.now(),
     });
@@ -133,6 +233,8 @@ export const listMios = query({
         url: s.url,
         mimeType: s.mimeType ?? null,
         nota: s.nota ?? null,
+        monto: s.monto ?? null,
+        fechaPago: s.fechaPago ?? null,
         estado: s.estado,
         notaRevision: s.notaRevision ?? null,
         revisadoAt: s.revisadoAt ?? null,
@@ -199,6 +301,7 @@ export const listByCondominio = query({
           .order("desc")
           .take(200);
 
+    const ahora = Date.now();
     return await Promise.all(
       soportes.map(async (s) => {
         const [unidad, factura, user] = await Promise.all([
@@ -214,6 +317,9 @@ export const listByCondominio = query({
           facturaPeriodo: factura?.periodoLabel ?? null,
           facturaTotal: factura?.totalAPagar ?? null,
           facturaEstado: factura?.estado ?? null,
+          /* Lo que se cobraba por la factura el día del pago declarado (con
+           * descuento si cae en su plazo): el monto que la pantalla propone. */
+          facturaAdeudado: factura ? montoAPagarHoy(factura, s.fechaPago ?? s.createdAt ?? ahora) : null,
           userNombre: user?.name ?? null,
         };
       }),
@@ -264,13 +370,24 @@ export const vincularFactura = mutation({
 });
 
 /**
- * Aprueba el comprobante. Si tiene factura vinculada, la marca como pagada
- * (mismo efecto que una aprobación de la pasarela en pagos.aplicarEstado).
+ * Aprueba el comprobante: es evidencia de pago por su monto.
+ *
+ * La pantalla de la administración pide el monto y la fecha del pago (los
+ * que declaró el residente, corregidos si hace falta). Si no llegan —un
+ * comprobante viejo, aprobado por la API—, se toma como pago completo de lo
+ * que se debía ese día (`montoAsumido`), y así queda a la vista.
+ *
+ * Con factura vinculada, el estado de la cadena se recalcula
+ * (`recalcularCadena`): pagada o abonada según el monto, y discrepancia si la
+ * contabilidad no lo refleja. Sin factura, queda registrado y no cambia
+ * ningún estado.
  */
 export const aprobar = mutation({
   args: {
     id: v.id("soportesPago"),
     notaRevision: v.optional(v.string()),
+    monto: v.optional(v.number()),
+    fechaPago: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const soporte = await ctx.db.get(args.id);
@@ -281,24 +398,50 @@ export const aprobar = mutation({
     if (soporte.estado !== "pendiente_revision") {
       throw new Error("El comprobante ya fue revisado.");
     }
+    validarMontoYFecha(args.monto, args.fechaPago);
 
     const now = Date.now();
+    const factura = soporte.facturaId ? await ctx.db.get(soporte.facturaId) : null;
+    const fechaPago = args.fechaPago ?? soporte.fechaPago;
+    const declarado = args.monto ?? soporte.monto;
+    const asumido = declarado === undefined;
+    const monto =
+      declarado ??
+      (factura ? Math.max(0, montoAPagarHoy(factura, fechaPago ?? soporte.createdAt)) : undefined);
+
     await ctx.db.patch(args.id, {
       estado: "aprobado",
       revisadoPorUserId: user._id,
       revisadoPorNombre: user.name,
       revisadoAt: now,
       notaRevision: args.notaRevision,
+      ...(monto !== undefined ? { monto } : {}),
+      ...(fechaPago !== undefined ? { fechaPago } : {}),
+      ...(asumido && monto !== undefined ? { montoAsumido: true } : {}),
+      /* La evidencia se busca por unidad: que la tenga. */
+      ...(factura ? { unidadId: factura.unidadId } : {}),
     });
 
-    if (soporte.facturaId) {
-      const factura = await ctx.db.get(soporte.facturaId);
-      if (factura && factura.estado !== "pagada") {
-        await ctx.db.patch(soporte.facturaId, {
-          estado: "pagada",
-          updatedAt: now,
-        });
-      }
+    if (factura) {
+      await recalcularCadena(ctx, factura.condominioId, factura.unidadId, {
+        origen: "comprobante",
+        actor: user.name || "Administración",
+        actorUserId: user._id,
+        tocadas: new Map([
+          [
+            factura._id,
+            {
+              detalle:
+                monto === undefined
+                  ? "Comprobante aprobado."
+                  : asumido
+                    ? `Comprobante aprobado sin monto: se toma como pago completo (${formatoPesos(monto)}).`
+                    : `Comprobante aprobado: ${formatoPesos(monto)}.`,
+              datos: { soporteId: soporte._id, monto: monto ?? null, asumido, fechaPago: fechaPago ?? null },
+            },
+          ],
+        ]),
+      });
     }
 
     // El bot le prometió al residente avisarle del resultado.
@@ -338,3 +481,4 @@ export const rechazar = mutation({
     return args.id;
   },
 });
+

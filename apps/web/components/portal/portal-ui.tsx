@@ -10,6 +10,20 @@ export function fechaLarga(ts: number): string {
   }).format(new Date(ts));
 }
 
+/**
+ * La fecha de un plazo de la factura (vencimiento, límite del descuento) en
+ * hora de Colombia, donde se fijan: el límite del descuento es el último
+ * instante del día 15, y en otra zona horaria se leería como el 16.
+ */
+export function fechaPlazo(ts: number): string {
+  return new Intl.DateTimeFormat("es-CO", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    timeZone: "America/Bogota",
+  }).format(new Date(ts));
+}
+
 /** Fecha corta desde un string ISO "YYYY-MM-DD" (sin desfase de zona). */
 export function fechaISO(iso: string): string {
   const [y, m, d] = iso.split("-").map(Number);

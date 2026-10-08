@@ -12,12 +12,14 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { getCurrentAppUser, requireAppUser } from "./model/authz";
 import { etiquetaUnidad, referenciaPago } from "./lib/referenciaPago";
 import {
+  ambienteAval,
   faltantesParaProduccion,
   QA_AUTH_BASIC,
   QA_ENDPOINT,
 } from "./lib/avalProduccion";
 import { credencialesConvenio } from "./lib/avalConvenio";
-import { MENSAJE_NO_PAGABLE, motivoNoPagable } from "./lib/cartera";
+import { MENSAJE_NO_PAGABLE, formatoPesos, montoAPagarHoy, motivoNoPagable } from "./lib/cartera";
+import { recalcularCadena } from "./model/estadoFactura";
 
 // ─────────────────────────────────────────────────────────────
 // Integración con la Pasarela de Pagos Aval (AV Villas / Grupo Aval)
@@ -37,7 +39,9 @@ import { MENSAJE_NO_PAGABLE, motivoNoPagable } from "./lib/cartera";
 //     AVAL_ENDPOINT          ej https://<dns-prod>
 //     AVAL_AUTH_BASIC        Authorization Basic del servicio oauth2 (prod)
 //     AVAL_TRN_SRC           Banco recaudador (2 = AV Villas)
-//     AVAL_AMBIENTE          "qa" | "prod"
+//     AVAL_AMBIENTE          "qa" | "prod" — OBLIGATORIA desde la Fase 3: sin
+//                            ella no se habla con el banco (lib/avalProduccion.ts,
+//                            `ambienteAval`).
 //   De cada convenio, con el Nura de sufijo (lib/avalConvenio.ts). El Nura lo
 //   guarda el condominio en `avalNura`:
 //     AVAL_X_AUTHORIZATION_<NURA>   Llave del convenio (X-Authorization) — SECRET
@@ -77,7 +81,9 @@ interface AvalConfig {
  * preguntarle al banco.
  */
 function avalConfig(nura?: string | null): AvalConfig {
-  const ambiente = process.env.AVAL_AMBIENTE ?? "qa";
+  /* Sin `AVAL_AMBIENTE` declarado no se asume nada: antes era "qa" por
+   * defecto, y en producción eso marcaba los pagos reales como de prueba. */
+  const ambiente = ambienteAval(process.env);
   const cfg: AvalConfig = {
     endpoint: process.env.AVAL_ENDPOINT ?? QA_ENDPOINT,
     // Basic del servicio oauth2 — QA del manual (sección 4.3). Prod por env.
@@ -90,9 +96,7 @@ function avalConfig(nura?: string | null): AvalConfig {
     // TLS: en QA el endpoint no envía la cadena de CA completa, así que se
     // relaja la verificación. En producción SIEMPRE estricta (salvo opt-in
     // explícito con AVAL_INSECURE_TLS=1, no recomendado).
-    insecureTls:
-      process.env.AVAL_INSECURE_TLS === "1" ||
-      (process.env.AVAL_AMBIENTE ?? "qa") !== "prod",
+    insecureTls: process.env.AVAL_INSECURE_TLS === "1" || ambiente !== "prod",
   };
 
   const faltan = faltantesParaProduccion(cfg);
@@ -328,13 +332,10 @@ async function armarDatosTrn(
   const noPagable = motivoNoPagable(cadena, factura);
   if (noPagable) throw new Error(MENSAJE_NO_PAGABLE[noPagable]);
 
-  // Monto a pagar: aplica descuento si aún estamos dentro del plazo con descuento.
-  const conDescuentoVigente =
-    typeof factura.totalConDescuento === "number" &&
-    Date.now() <= factura.fechaVencimiento;
-  const monto = conDescuentoVigente
-    ? factura.totalConDescuento!
-    : factura.totalAPagar;
+  /* Monto a pagar: con descuento solo dentro de SU plazo —el que trae el
+   * documento, o el día 15 del mes del período—, no hasta el vencimiento
+   * (F-06: el descuento de septiembre se cobraba hasta el 15 de octubre). */
+  const monto = montoAPagarHoy(factura, Date.now());
 
   return {
     factura: {
@@ -633,12 +634,15 @@ export const registrarPago = internalMutation({
     ),
     redirectUrl: v.optional(v.string()),
     ambiente: v.string(),
+    /** Contra el ambiente de pruebas (AVAL_AMBIENTE=qa): lo único que `pagosPruebas` toca. */
+    esPrueba: v.optional(v.boolean()),
     trnRaw: v.optional(v.any()),
     error: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const now = Date.now();
     return await ctx.db.insert("pagos", {
+      ...(args.esPrueba ? { esPrueba: true } : {}),
       condominioId: args.condominioId,
       unidadId: args.unidadId,
       facturaId: args.facturaId,
@@ -662,7 +666,19 @@ export const registrarPago = internalMutation({
   },
 });
 
-/** Aplica el estado consultado a la pasarela; si aprueba, marca la factura pagada. */
+/**
+ * Aplica el estado consultado a la pasarela.
+ *
+ * Desde la Fase 3 no marca la factura "pagada" por su cuenta: el pago
+ * aprobado es EVIDENCIA, y el estado lo calcula `recalcularCadena` contando
+ * lo pagado contra lo que se debía (F-13: 250.000 sobre 300.000 es un abono,
+ * no un pago) y contra lo que dice la contabilidad (F-02). El aviso por
+ * WhatsApp sale solo en la transición a aprobada.
+ *
+ * Un pago que ya está aprobado o reversado no se mueve con una consulta: Aval
+ * no documenta un código de reverso, y un cambio así lo decide una persona
+ * (`reversarPago`).
+ */
 export const aplicarEstado = internalMutation({
   args: {
     pagoId: v.id("pagos"),
@@ -686,6 +702,19 @@ export const aplicarEstado = internalMutation({
     if (!pago) throw new Error("Pago no encontrado.");
 
     const now = Date.now();
+    if (
+      (pago.estado === "aprobada" || pago.estado === "reversada") &&
+      args.estado !== pago.estado
+    ) {
+      /* Solo se cuenta el intento; el estado no cambia por una consulta. */
+      await ctx.db.patch(args.pagoId, {
+        intentosConsulta: pago.intentosConsulta + 1,
+        statusCodeAval: args.statusCodeAval,
+        updatedAt: now,
+      });
+      return;
+    }
+
     await ctx.db.patch(args.pagoId, {
       estado: args.estado,
       statusCodeAval: args.statusCodeAval,
@@ -698,23 +727,81 @@ export const aplicarEstado = internalMutation({
       updatedAt: now,
     });
 
-    // Reflejo en la factura: al aprobar el pago, la factura queda pagada al instante.
-    if (args.estado === "aprobada") {
-      const factura = await ctx.db.get(pago.facturaId);
-      if (factura && factura.estado !== "pagada") {
-        await ctx.db.patch(pago.facturaId, {
-          estado: "pagada",
-          updatedAt: now,
-        });
-      }
+    const transicion = args.estado === "aprobada" && pago.estado !== "aprobada";
+    if (transicion) {
+      /* El pago aprobado es evidencia: la factura queda pagada o abonada
+       * según el monto, y la cadena se vuelve a juzgar (discrepancias). */
+      await recalcularCadena(ctx, pago.condominioId, pago.unidadId, {
+        origen: "pago",
+        actor: "Pasarela Aval",
+        tocadas: new Map([
+          [
+            pago.facturaId,
+            {
+              detalle: `Pago aprobado por la pasarela: ${formatoPesos(pago.monto)}${
+                args.medioPago ? ` (${args.medioPago})` : ""
+              }.`,
+              datos: { pagoId: pago._id, monto: pago.monto, ambiente: pago.ambiente },
+            },
+          ],
+        ]),
+      });
 
       // Aviso por WhatsApp: solo en la transición a aprobada (no si ya lo estaba).
-      if (pago.estado !== "aprobada") {
-        await ctx.scheduler.runAfter(0, internal.whatsappNotifs.pagoAprobado, {
-          pagoId: args.pagoId,
-        });
-      }
+      await ctx.scheduler.runAfter(0, internal.whatsappNotifs.pagoAprobado, {
+        pagoId: args.pagoId,
+      });
     }
+  },
+});
+
+/**
+ * Un pago aprobado que después se anuló (contracargo, reverso del banco, un
+ * error de conciliación del recaudo). Deja de ser evidencia: la factura
+ * vuelve a juzgarse sin él, y la bitácora dice quién lo reversó y por qué.
+ *
+ * Es interna y a mano (`convex run`) porque Aval no documenta un código de
+ * reverso en la consulta de estado: inventarlo sería convertir cualquier
+ * respuesta rara en un "despagar" silencioso. Cuando el banco lo documente,
+ * `consultarEstado` puede llamar esto mismo.
+ */
+export const reversarPago = internalMutation({
+  args: {
+    pagoId: v.id("pagos"),
+    motivo: v.string(),
+    /** Quién lo decide (aparece en la bitácora). */
+    actor: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const pago = await ctx.db.get(args.pagoId);
+    if (!pago) throw new Error("Pago no encontrado.");
+    if (pago.estado === "reversada") return { reversado: false, motivo: "ya estaba reversado" };
+    if (pago.estado !== "aprobada") {
+      throw new Error(`Solo se reversa un pago aprobado (este está "${pago.estado}").`);
+    }
+    const motivo = args.motivo.trim().slice(0, 500);
+    if (!motivo) throw new Error("Escribe el motivo del reverso.");
+    const ahora = Date.now();
+    await ctx.db.patch(args.pagoId, {
+      estado: "reversada",
+      reversadaAt: ahora,
+      motivoReverso: motivo,
+      updatedAt: ahora,
+    });
+    await recalcularCadena(ctx, pago.condominioId, pago.unidadId, {
+      origen: "pago",
+      actor: args.actor.trim().slice(0, 100) || "pagos.reversarPago",
+      tocadas: new Map([
+        [
+          pago.facturaId,
+          {
+            detalle: `Pago de ${formatoPesos(pago.monto)} reversado: ${motivo}`,
+            datos: { pagoId: pago._id, monto: pago.monto },
+          },
+        ],
+      ]),
+    });
+    return { reversado: true };
   },
 });
 
@@ -893,6 +980,7 @@ async function crearTrnYRegistrar(
         monto: datos.monto,
         estado: "error",
         ambiente: cfg.ambiente,
+        esPrueba: cfg.ambiente === "qa",
         trnRaw: json,
         error: String(msg),
       });
@@ -913,6 +1001,7 @@ async function crearTrnYRegistrar(
       estado: "iniciada",
       redirectUrl: urlRef,
       ambiente: cfg.ambiente,
+      esPrueba: cfg.ambiente === "qa",
       trnRaw: json,
     });
 
@@ -941,6 +1030,7 @@ async function crearTrnYRegistrar(
       monto: datos.monto,
       estado: "error",
       ambiente: cfg.ambiente,
+      esPrueba: cfg.ambiente === "qa",
       error: e instanceof Error ? e.message : String(e),
     });
     throw e;
@@ -1001,14 +1091,19 @@ export const consultarEstado = internalAction({
       pagoId: args.pagoId,
     });
     if (!pago || !pago.pmtAuthId) return null;
+
+    // Ya está en estado final: nada que hacer.
+    if (
+      ["aprobada", "rechazada", "fallida", "expirada", "no_autorizada", "reversada"].includes(
+        pago.estado,
+      )
+    ) {
+      return pago.estado;
+    }
+
     /* BasicData se consulta con la llave del convenio que creó la
      * transacción. Los pagos de antes de guardar el convenio son de QA. */
     const cfg = avalConfig(pago.agrmId);
-
-    // Ya está en estado final: nada que hacer.
-    if (["aprobada", "rechazada", "fallida", "expirada", "no_autorizada"].includes(pago.estado)) {
-      return pago.estado;
-    }
 
     try {
       const token = await obtenerToken(ctx, cfg);
@@ -1088,6 +1183,70 @@ async function reagendarSiProcede(
     { pagoId },
   );
 }
+
+/**
+ * Cuántos días se sigue preguntando, una vez al día, por un pago sin estado
+ * final. Pasado este plazo no se pregunta más: queda en "Pagos por revisar"
+ * de Finanzas (`consultaAgotadaAt`) para que alguien lo mire con el banco.
+ */
+export const DIAS_RECONSULTA = 7;
+
+/** El ciclo de cada 2 minutos dura una hora; se deja un margen antes de entrar. */
+const ESPERA_ANTES_DE_RECONSULTAR_MS = 2 * 60 * 60 * 1000;
+
+/** Separación entre consultas de la misma pasada, para no ametrallar al banco. */
+const SEPARACION_RECONSULTA_MS = 15 * 1000;
+
+const DIA_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Re-consulta diaria de los pagos que quedaron sin estado final (Fase 3).
+ *
+ * La consulta automática pregunta cada 2 minutos durante una hora
+ * (`MAX_INTENTOS`). Un pago que el banco resolviera después —o cuyo ciclo se
+ * cortó por un error— quedaba "iniciada" o "pendiente" para siempre: el
+ * residente pagó y la factura seguía debiendo. Una vez al día se vuelve a
+ * preguntar por esos pagos, durante `DIAS_RECONSULTA` días desde que se
+ * crearon; después se marcan para revisión.
+ *
+ * Solo agenda `consultarEstado` (la misma consulta de siempre): no habla con
+ * el banco aquí. Las consultas salen espaciadas.
+ */
+export const reconsultaDiaria = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const ahora = Date.now();
+    const candidatos = [
+      ...(await ctx.db
+        .query("pagos")
+        .withIndex("by_estado", (q) => q.eq("estado", "iniciada"))
+        .collect()),
+      ...(await ctx.db
+        .query("pagos")
+        .withIndex("by_estado", (q) => q.eq("estado", "pendiente"))
+        .collect()),
+    ];
+    let agendados = 0;
+    let agotados = 0;
+    for (const p of candidatos) {
+      if (!p.pmtAuthId || p.consultaAgotadaAt) continue;
+      /* El ciclo de cada 2 minutos todavía puede estar corriendo. */
+      if (ahora - p.createdAt < ESPERA_ANTES_DE_RECONSULTAR_MS) continue;
+      if (ahora - p.createdAt > DIAS_RECONSULTA * DIA_MS) {
+        await ctx.db.patch(p._id, { consultaAgotadaAt: ahora, updatedAt: ahora });
+        agotados++;
+        continue;
+      }
+      await ctx.scheduler.runAfter(
+        (agendados + 1) * SEPARACION_RECONSULTA_MS,
+        internal.pagos.consultarEstado,
+        { pagoId: p._id },
+      );
+      agendados++;
+    }
+    return { agendados, agotados };
+  },
+});
 
 /** Consulta por pmtId (usada por el httpAction de retorno de Aval). */
 export const consultarEstadoPorPmt = internalAction({

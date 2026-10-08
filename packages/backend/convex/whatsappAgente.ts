@@ -4,7 +4,19 @@ import { internal } from "./_generated/api";
 import { textoAccesoWhatsApp } from "./lib/mensajesAcceso";
 import type { Id } from "./_generated/dataModel";
 import { GUIAS_VEKINO } from "./lib/guiasVekino";
-import { enRevision, motivoNoPagable } from "./lib/cartera";
+import {
+  descuentoVigente,
+  enRevision,
+  fechaLimiteDescuentoDe,
+  mensajePagoEnVerificacion,
+  montoAPagarHoy,
+  motivoNoPagable,
+} from "./lib/cartera";
+
+/** "2026-09-15": el día en Colombia (UTC−5) de un instante. */
+function diaEnColombia(ts: number): string {
+  return new Date(ts - 5 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
 
 /**
  * El agente de WhatsApp.
@@ -38,7 +50,7 @@ const HERRAMIENTAS: Herramienta[] = [
   {
     name: "ver_estado_cuenta",
     description:
-      "Consulta la factura de administración vigente de la unidad del residente: número, período, total a pagar, fecha de vencimiento y si está pagada. Úsala cuando pregunte cuánto debe, por su factura, su saldo o su estado de cuenta.",
+      "Consulta la factura de administración vigente de la unidad del residente: número, período, total a pagar hoy, hasta qué día vale el descuento por pronto pago, fecha de vencimiento, si está pagada y si tiene un pago en verificación. Úsala cuando pregunte cuánto debe, por su factura, su saldo o su estado de cuenta.",
     input_schema: { type: "object", properties: {}, required: [] },
   },
   {
@@ -305,17 +317,26 @@ async function ejecutar(
           unidadId: args.unidadId,
         });
         if (!f) return { sinFacturas: true };
-        const conDescuento =
-          f.totalConDescuento != null && Date.now() <= f.fechaVencimiento;
+        /* El descuento vale hasta SU fecha, no hasta el vencimiento (F-06). */
+        const ahora = Date.now();
+        const limite = fechaLimiteDescuentoDe(f);
         return {
           numeroFactura: f.numeroFactura,
           periodo: f.periodoLabel,
           estado: f.estado,
           /* Lectura dudosa del PDF: el monto no está verificado. */
           enRevision: enRevision(f),
-          totalAPagar: pesos.format(conDescuento ? f.totalConDescuento : f.totalAPagar),
-          aplicaDescuentoProntoPago: conDescuento,
-          venceEl: new Date(f.fechaVencimiento).toISOString().slice(0, 10),
+          /* Pagó y la contabilidad aún no lo refleja: no es deuda que cobrar. */
+          ...(f.pagoEnVerificacion
+            ? {
+                pagoEnVerificacion: pesos.format(f.pagoEnVerificacion.monto),
+                queDecir: `${mensajePagoEnVerificacion(f.pagoEnVerificacion.monto)} No le pidas que pague otra vez.`,
+              }
+            : {}),
+          totalAPagar: pesos.format(montoAPagarHoy(f, ahora)),
+          aplicaDescuentoProntoPago: descuentoVigente(f, ahora),
+          descuentoHasta: limite !== null ? diaEnColombia(limite) : null,
+          venceEl: diaEnColombia(f.fechaVencimiento),
           tienePdf: !!f.pdfUrl,
         };
       }
@@ -335,6 +356,12 @@ async function ejecutar(
             enRevision: true,
             queDecir:
               "Su factura está en revisión por la administración; todavía no se puede pagar en línea. No inventes montos ni fechas.",
+          };
+        }
+        if (noPagable === "pago_en_verificacion") {
+          return {
+            pagoEnVerificacion: true,
+            queDecir: `${mensajePagoEnVerificacion(f.pagoEnVerificacion?.monto ?? 0)} Mientras tanto no se cobra en línea, para no cobrarle dos veces. No inventes montos ni fechas.`,
           };
         }
         if (noPagable) return { alDia: true, sinSaldoPorPagar: true };

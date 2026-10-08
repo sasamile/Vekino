@@ -21,7 +21,15 @@ import {
   parseFechaFlexible,
   parseRangoHorasFlexible,
 } from "./lib/fechaTexto";
-import { MENSAJE_NO_PAGABLE, motivoNoPagable } from "./lib/cartera";
+import {
+  MENSAJE_NO_PAGABLE,
+  descuentoVigente,
+  fechaLimiteDescuentoDe,
+  leerMontoPesos,
+  mensajePagoEnVerificacion,
+  montoAPagarHoy,
+  motivoNoPagable,
+} from "./lib/cartera";
 
 /**
  * Bot de WhatsApp (YCloud).
@@ -1062,23 +1070,46 @@ export const procesarEntrante = internalAction({
           internal.soportesPago.facturaVigenteDeUnidad,
           { unidadId: unidad._id },
         );
-        await ctx.runMutation(internal.soportesPago.crearDesdeBot, {
-          condominioId: condominio._id,
-          unidadId: unidad._id,
-          facturaId: factura?._id,
-          userId: datos!.user!._id,
-          telefono: to,
-          url: subido.publicUrl,
-          mimeType: media.mimeType,
-          nota: media.caption,
-        });
-        await enviar(
-          msgTexto(
-            to,
-            `🧾 ¡Recibido! Tu comprobante quedó *pendiente de revisión* por la administración${factura ? ` (factura ${factura.numeroFactura})` : ""}.\n\nTe avisaremos cuando lo confirmen. Escribe *menú* si necesitas algo más.`,
-          ),
+        /* Cuánto se pagó (Fase 3): si viene en el texto de la foto ("pagué
+         * 340.000") se toma de ahí; si no, se pregunta. Con el monto, el
+         * comprobante aprobado prueba un pago por ese valor, no "pagada" a
+         * ciegas. */
+        const monto = media.caption ? leerMontoPesos(media.caption) : null;
+        const soporteId: Id<"soportesPago"> = await ctx.runMutation(
+          internal.soportesPago.crearDesdeBot,
+          {
+            condominioId: condominio._id,
+            unidadId: unidad._id,
+            facturaId: factura?._id,
+            userId: datos!.user!._id,
+            telefono: to,
+            url: subido.publicUrl,
+            mimeType: media.mimeType,
+            nota: media.caption,
+            ...(monto !== null ? { monto } : {}),
+          },
         );
-        await setConv({ paso: "menu", contexto: { unidadId: unidad._id } });
+        const recibido = `🧾 ¡Recibido! Tu comprobante quedó *pendiente de revisión* por la administración${factura ? ` (factura ${factura.numeroFactura})` : ""}.`;
+        if (monto !== null) {
+          await enviar(
+            msgTexto(
+              to,
+              `${recibido}\n\nAnoté un pago de *${pesos.format(monto)}*. Te avisaremos cuando lo confirmen. Escribe *menú* si necesitas algo más.`,
+            ),
+          );
+          await setConv({ paso: "menu", contexto: { unidadId: unidad._id } });
+        } else {
+          await enviar(
+            msgTexto(
+              to,
+              `${recibido}\n\n¿Cuánto pagaste? Escríbeme solo el valor, por ejemplo *340000*. Si no lo tienes a mano, escribe *omitir* y la administración lo revisa.`,
+            ),
+          );
+          await setConv({
+            paso: "comprobante:monto",
+            contexto: { unidadId: unidad._id, soporteId },
+          });
+        }
       } catch {
         await enviar(
           msgTexto(
@@ -1128,20 +1159,39 @@ export const procesarEntrante = internalAction({
           );
           return;
         }
-        const conDescuento =
-          factura.totalConDescuento != null && Date.now() <= factura.fechaVencimiento;
-        const monto = conDescuento ? factura.totalConDescuento! : factura.totalAPagar;
+        /* El descuento vale hasta SU fecha (la del documento, o el 15 del mes
+         * del período), no hasta el vencimiento (F-06). */
+        const ahora = Date.now();
+        const conDescuento = descuentoVigente(factura, ahora);
+        const monto = montoAPagarHoy(factura, ahora);
+        const limiteDescuento = fechaLimiteDescuentoDe(factura);
         const lineas = [
           `📄 *Factura ${factura.numeroFactura}* — ${factura.periodoLabel}`,
           `Unidad: ${[unidad.torre, unidad.numero].filter(Boolean).join(" ")}`,
           `Estado: *${factura.estado.replace("_", " ")}*`,
-          `Total a pagar: *${pesos.format(monto)}*${conDescuento ? " (con descuento por pronto pago)" : ""}`,
+          `Total a pagar: *${pesos.format(monto)}*${
+            conDescuento && limiteDescuento !== null
+              ? ` (con descuento por pronto pago hasta el ${fechaLarga(limiteDescuento, timezone)})`
+              : ""
+          }`,
           `Vence: ${fechaLarga(factura.fechaVencimiento, timezone)}`,
         ];
         /* Es la vigente: si no se puede pagar es porque ya está saldada
-         * (pagada, saldo a favor o sin saldo), o porque su lectura está en
-         * revisión. No se busca otra anterior. */
+         * (pagada, saldo a favor o sin saldo), porque su lectura está en
+         * revisión, o porque hay un pago en verificación. No se busca otra
+         * anterior. */
         const noPagable = motivoNoPagable([factura], factura);
+        if (noPagable === "pago_en_verificacion") {
+          await enviar(
+            msgTexto(
+              to,
+              `📄 Factura de ${factura.periodoLabel || factura.periodo}\n\n🔎 ${mensajePagoEnVerificacion(
+                factura.pagoEnVerificacion?.monto ?? 0,
+              )} Mientras tanto no te cobro en línea, para no cobrarte dos veces. Si tienes dudas, escribe *menú*.`,
+            ),
+          );
+          return;
+        }
         if (noPagable === "en_revision") {
           await enviar(
             msgTexto(
@@ -1202,6 +1252,8 @@ export const procesarEntrante = internalAction({
                   ? "Esa factura ya no está vigente: su saldo quedó incluido en tu factura más reciente. Escribe *menú* y elige *Estado de cuenta* para verla y pagarla."
                   : motivo.includes(MENSAJE_NO_PAGABLE.sin_saldo)
                     ? "Esa factura no tiene saldo por pagar. ✅"
+                    : motivo.includes(MENSAJE_NO_PAGABLE.pago_en_verificacion)
+                      ? "🔎 Tu pago anterior está registrado y la contabilidad aún no lo refleja. No te cobro en línea mientras la administración lo verifica, para no cobrarte dos veces."
                     : motivo.includes(MENSAJE_NO_PAGABLE.vigente_ambigua) ||
                         motivo.includes(MENSAJE_NO_PAGABLE.en_revision)
                       ? "No puedo generar el pago en línea de esa factura: está en revisión por la administración."
@@ -1576,6 +1628,42 @@ export const procesarEntrante = internalAction({
       await enviar(
         msgTexto(to, "Quedo atento a la *foto o PDF* del comprobante. 🧾"),
       );
+      return null;
+    }
+
+    /* Después de la foto del comprobante: cuánto se pagó. */
+    if (paso === "comprobante:monto" && contexto.soporteId) {
+      const volverAlMenu = () =>
+        setConv({ paso: "menu", contexto: { unidadId: contexto.unidadId } });
+      if (/^(omitir|no s[eé]|no lo tengo|despu[eé]s)\b/.test(comando)) {
+        await enviar(
+          msgTexto(to, "Listo 👍 La administración revisará el valor con el comprobante. Escribe *menú* si necesitas algo más."),
+        );
+        await volverAlMenu();
+        return null;
+      }
+      const monto = leerMontoPesos(texto);
+      if (monto === null) {
+        await enviar(
+          msgTexto(to, "No me quedó claro el valor 😅. Escríbeme solo el número, por ejemplo *340000*, o *omitir*."),
+        );
+        return null;
+      }
+      try {
+        await ctx.runMutation(internal.soportesPago.registrarMontoBot, {
+          soporteId: contexto.soporteId as Id<"soportesPago">,
+          telefono: to,
+          monto,
+        });
+        await enviar(
+          msgTexto(to, `Anotado: *${pesos.format(monto)}*. Te avisaremos cuando la administración lo confirme. ✅`),
+        );
+      } catch {
+        await enviar(
+          msgTexto(to, "Ese comprobante ya fue revisado por la administración. Escribe *menú* si necesitas algo más."),
+        );
+      }
+      await volverAlMenu();
       return null;
     }
 

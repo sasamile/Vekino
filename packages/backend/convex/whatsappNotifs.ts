@@ -121,6 +121,25 @@ export const datosSoporteRevisado = internalQuery({
 });
 
 /**
+ * El cierre del aviso según cómo quedó la factura con el pago (Fase 3): un
+ * abono no es "estar al día", y un pago que la contabilidad todavía no
+ * refleja tampoco se celebra como tal.
+ */
+function cierreSegunFactura(
+  factura: {
+    estado: string;
+    estadoPago?: { estado: string; montoPagado: number; montoAdeudado: number } | null;
+  } | null,
+): string {
+  if (!factura) return "¡Gracias!";
+  if (factura.estadoPago?.estado === "abonada") {
+    const falta = Math.max(0, factura.estadoPago.montoAdeudado - factura.estadoPago.montoPagado);
+    return `Quedan *${pesos.format(falta)}* por pagar de esta factura.`;
+  }
+  return factura.estado === "pagada" ? "¡Gracias por estar al día! 🙌" : "¡Gracias por tu pago!";
+}
+
+/**
  * "Tu comprobante fue aprobado/rechazado" — programado desde
  * soportesPago.aprobar/rechazar. El bot le promete al residente que le
  * avisamos del resultado; esta action cumple esa promesa.
@@ -165,7 +184,7 @@ export const soporteRevisado = internalAction({
       ? `\n\nNota de la administración: ${datos.soporte.notaRevision}`
       : "";
     const cuerpo = aprobado
-      ? `✅ *¡Comprobante aprobado!*\n\nLa administración de ${datos.condominio.name} confirmó tu pago${detalleFactura}. ¡Gracias por estar al día! 🙌${nota}`
+      ? `✅ *¡Comprobante aprobado!*\n\nLa administración de ${datos.condominio.name} confirmó tu pago${detalleFactura}. ${cierreSegunFactura(datos.factura)}${nota}`
       : `❌ *Comprobante rechazado*\n\nLa administración de ${datos.condominio.name} no pudo validar tu comprobante${detalleFactura}.${nota}\n\nPuedes enviar otro comprobante por aquí o comunicarte con tu administración.`;
 
     try {
@@ -247,7 +266,7 @@ export const pagoAprobado = internalAction({
         const res = await enviarMensaje(
           msgTexto(
             datos.telefono,
-            `✅ *¡Pago confirmado!*\n\nRecibimos tu pago de *${monto}* de la factura ${datos.factura.numeroFactura} (${datos.condominio.name}).\n\n¡Gracias por estar al día! 🙌`,
+            `✅ *¡Pago confirmado!*\n\nRecibimos tu pago de *${monto}* de la factura ${datos.factura.numeroFactura} (${datos.condominio.name}).\n\n${cierreSegunFactura(datos.factura)}`,
           ),
         );
         if (datos.conversacionId) {

@@ -59,6 +59,12 @@ export interface FacturaLeida {
   saldoAFavor: number;
   totalAPagar: number;
   totalConDescuento?: number;
+  /**
+   * Hasta qué día del mes del período vale `totalConDescuento`, como lo dice
+   * el documento ("HASTA EL DIA 15 DEL PRESENTE MES"; Ciudad del Campo). La
+   * confirmación lo convierte en `fechaLimiteDescuento` (Fase 3, F-06).
+   */
+  diaLimiteDescuento?: number;
   /** Saldo anterior de la fila "Totales" (Ciudad del Campo). */
   saldoAnteriorDocumento?: number;
   /** Lectura dudosa: por qué esta factura no se puede tomar como cierta. */
@@ -234,6 +240,19 @@ export function parseCdc(texto: string): Omit<FacturaLeida, "paginas"> {
   }
   const leidoConDescuento = conDescuento ? leerMontoCdc(conDescuento) : null;
 
+  /* Hasta cuándo vale el descuento, como lo escribe el documento: "DEBE
+   * PAGAR LA TOTALIDAD DEL ESTADO DE CUENTA HASTA EL DIA 15 DEL PRESENTE MES"
+   * y, en el recuadro de pago, "Pague con descuento del 1 - 15". Antes se
+   * usaba el vencimiento (el 15 del mes SIGUIENTE) y el descuento se
+   * extendía un mes (F-06). */
+  const diaHasta = Number(
+    texto.match(/HASTA EL D[IÍ]A\s+(\d{1,2})\s+DEL PRESENTE MES/i)?.[1] ??
+      texto.match(/Pague con descuento del\s*\d{1,2}\s*-\s*(\d{1,2})/i)?.[1] ??
+      Number.NaN,
+  );
+  const diaLimiteDescuento =
+    leidoConDescuento !== null && diaHasta >= 1 && diaHasta <= 31 ? diaHasta : undefined;
+
   // ── Período: la fila de la cuota del mes; si no la hay, la "Fecha"
   const fecha = texto.match(/Fecha\s+([A-Za-zÁÉÍÓÚáéíóú]+\.?\s*\d{1,2}\s*\/\s*\d{4})/)?.[1];
   const periodoFecha = fecha ? normalizarPeriodo(fecha) : null;
@@ -264,6 +283,7 @@ export function parseCdc(texto: string): Omit<FacturaLeida, "paginas"> {
     saldoAFavor: totalAPagar < 0 ? -totalAPagar : 0,
     totalAPagar,
     ...(leidoConDescuento !== null ? { totalConDescuento: leidoConDescuento } : {}),
+    ...(diaLimiteDescuento !== undefined ? { diaLimiteDescuento } : {}),
     ...(saldoAnteriorDocumento !== undefined ? { saldoAnteriorDocumento } : {}),
     motivos: motivosValidos([...motivos, ...validarLectura(base)]),
   };

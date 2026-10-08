@@ -5,7 +5,13 @@ import { useParams } from "next/navigation";
 import { useQuery } from "convex/react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
-import { resumenResidente } from "@vekino/backend/cartera";
+import {
+  descuentoVigente,
+  fechaLimiteDescuentoDe,
+  mensajePagoEnVerificacion,
+  montoAPagarHoy as montoDeHoy,
+  resumenResidente,
+} from "@vekino/backend/cartera";
 import {
   PiggyBank,
   CalendarCheck,
@@ -29,6 +35,7 @@ import {
   etiquetaUnidad,
   fechaLarga,
   fechaISO,
+  fechaPlazo,
   periodoHumano,
   VINCULO_LABEL,
 } from "@/components/portal/portal-ui";
@@ -45,6 +52,8 @@ type Factura = {
   estado: "pendiente" | "pagada" | "vencida" | "abonada" | "saldo_a_favor";
   totalAPagar: number;
   totalConDescuento?: number;
+  /** Hasta cuándo vale el descuento, según el documento (Fase 3). */
+  fechaLimiteDescuento?: number;
   saldoAFavor: number;
   fechaVencimiento: number;
   pdfUrl?: string;
@@ -55,31 +64,21 @@ type Factura = {
     actual: number;
     total: number;
   }[];
+  /** Un pago registrado que la contabilidad aún no refleja (Fase 3). */
+  pagoEnVerificacion?: { monto: number } | null;
   unidadNumero?: string;
   unidadTipo?: string;
   unidadTorre?: string | null;
 };
 
 /**
- * Monto que aplica HOY: descuento del 1–15 si aún no vence;
- * después, total sin descuento. La última factura ya consolida saldos anteriores.
+ * Monto que aplica HOY: la regla del backend de pagos (`lib/cartera.ts`).
+ * El descuento vale hasta SU fecha —la del documento, o el 15 del mes del
+ * período—, no hasta el vencimiento (Fase 3, F-06). La última factura ya
+ * consolida saldos anteriores.
  */
 function montoAPagarHoy(f: Factura, ahora = Date.now()) {
-  const conDescuento =
-    typeof f.totalConDescuento === "number" &&
-    f.totalConDescuento < f.totalAPagar &&
-    f.fechaVencimiento > FECHA_MIN &&
-    ahora <= f.fechaVencimiento;
-  return conDescuento ? f.totalConDescuento! : f.totalAPagar;
-}
-
-function tieneProntoPagoVigente(f: Factura, ahora = Date.now()) {
-  return (
-    typeof f.totalConDescuento === "number" &&
-    f.totalConDescuento < f.totalAPagar &&
-    f.fechaVencimiento > FECHA_MIN &&
-    ahora <= f.fechaVencimiento
-  );
+  return montoDeHoy(f, ahora);
 }
 
 export default function PortalInicio() {
@@ -134,6 +133,12 @@ export default function PortalInicio() {
   const enMora = resumen.unidades.filter((u) => u.cartera.estado === "en_mora");
   const vencimientoEnMora =
     enMora.length === 1 ? (enMora[0]!.cartera.vencimientoEnMora ?? null) : null;
+  /* Pagos que Vekino registró y la contabilidad aún no refleja (Fase 3). */
+  const enVerificacion = resumen.unidades.reduce(
+    (s, u) =>
+      s + (u.cartera.motivoRevision === "pago_en_verificacion" ? (u.cartera.montoEnVerificacion ?? 0) : 0),
+    0,
+  );
 
   /* El saldo a favor de HOY es el de las facturas vigentes; uno de hace meses
    * ya se aplicó en las siguientes. */
@@ -190,6 +195,7 @@ export default function PortalInicio() {
           estaAlDia={estaAlDia}
           enMora={resumen.estado === "en_mora"}
           vencimientoEnMora={vencimientoEnMora}
+          enVerificacion={enVerificacion}
           totalPendiente={totalPendiente}
           facturasParaPagar={pagables}
           multiUnidad={multiUnidad}
@@ -366,6 +372,7 @@ function DeudaAlert({
   estaAlDia,
   enMora,
   vencimientoEnMora,
+  enVerificacion,
   totalPendiente,
   facturasParaPagar,
   multiUnidad,
@@ -377,6 +384,8 @@ function DeudaAlert({
   enMora: boolean;
   /** Vencimiento que marca la mora, si es de una sola unidad. */
   vencimientoEnMora: number | null;
+  /** Pagado y todavía no reflejado por la contabilidad (0 si no hay). */
+  enVerificacion: number;
   totalPendiente: number;
   facturasParaPagar: Factura[];
   multiUnidad: boolean;
@@ -391,6 +400,20 @@ function DeudaAlert({
           <p className="text-sm text-foreground/65">
             No tienes facturas pendientes.
           </p>
+        </div>
+      </LiquidGlassCard>
+    );
+  }
+
+  /* Pagó y la contabilidad aún no lo refleja (Fase 3): no se le cobra otra
+   * vez ni se le dice que debe. */
+  if (facturasParaPagar.length === 0 && enVerificacion > 0) {
+    return (
+      <LiquidGlassCard className="flex items-center gap-3 px-4 py-3.5">
+        <Clock className="h-5 w-5 shrink-0 text-sky-700" />
+        <div>
+          <p className="font-semibold text-foreground">Pago en verificación</p>
+          <p className="text-sm text-foreground/65">{mensajePagoEnVerificacion(enVerificacion)}</p>
         </div>
       </LiquidGlassCard>
     );
@@ -416,7 +439,8 @@ function DeudaAlert({
   const varias = facturasParaPagar.length > 1;
   const f = facturasParaPagar[0]!;
   const periodo = periodoHumano(f.periodo || f.periodoLabel);
-  const prontoPago = !varias && tieneProntoPagoVigente(f);
+  const limiteDescuento = fechaLimiteDescuentoDe(f);
+  const prontoPago = !varias && descuentoVigente(f, Date.now());
   const vencida = enMora;
 
   const titulo = `Total pendiente: ${cop(totalPendiente)}`;
@@ -429,21 +453,24 @@ function DeudaAlert({
   } else if (vencida) {
     sub =
       vencimientoEnMora !== null && vencimientoEnMora > FECHA_MIN
-        ? `${periodo}${multiUnidad ? ` · ${etiquetaUnidad(f)}` : ""} · Vencida desde el ${fechaLarga(vencimientoEnMora)}`
+        ? `${periodo}${multiUnidad ? ` · ${etiquetaUnidad(f)}` : ""} · Vencida desde el ${fechaPlazo(vencimientoEnMora)}`
         : `${periodo}${multiUnidad ? ` · ${etiquetaUnidad(f)}` : ""} · Factura vencida`;
-  } else if (prontoPago) {
-    sub = `${periodo}${multiUnidad ? ` · ${etiquetaUnidad(f)}` : ""} · Con descuento hasta el ${fechaLarga(f.fechaVencimiento)} · Después ${cop(f.totalAPagar)}`;
+  } else if (prontoPago && limiteDescuento !== null) {
+    /* La fecha real del descuento (la del documento, o el 15 del mes del
+     * período), no el vencimiento: antes se anunciaba un mes de más. */
+    sub = `${periodo}${multiUnidad ? ` · ${etiquetaUnidad(f)}` : ""} · Con descuento hasta el ${fechaPlazo(limiteDescuento)} · Después ${cop(f.totalAPagar)}`;
   } else if (
+    limiteDescuento !== null &&
     typeof f.totalConDescuento === "number" &&
-    f.totalConDescuento < f.totalAPagar &&
-    f.fechaVencimiento > FECHA_MIN &&
-    Date.now() > f.fechaVencimiento
+    f.totalConDescuento < f.totalAPagar
   ) {
-    sub = `${periodo}${multiUnidad ? ` · ${etiquetaUnidad(f)}` : ""} · Sin descuento (después del ${fechaLarga(f.fechaVencimiento)})`;
+    sub = `${periodo}${multiUnidad ? ` · ${etiquetaUnidad(f)}` : ""} · Sin descuento (venció el ${fechaPlazo(limiteDescuento)})${
+      f.fechaVencimiento > FECHA_MIN ? ` · Paga hasta el ${fechaPlazo(f.fechaVencimiento)}` : ""
+    }`;
   } else {
     sub =
       f.fechaVencimiento > FECHA_MIN
-        ? `${periodo}${multiUnidad ? ` · ${etiquetaUnidad(f)}` : ""} · Paga antes del ${fechaLarga(f.fechaVencimiento)}`
+        ? `${periodo}${multiUnidad ? ` · ${etiquetaUnidad(f)}` : ""} · Paga hasta el ${fechaPlazo(f.fechaVencimiento)}`
         : `${periodo}${multiUnidad ? ` · ${etiquetaUnidad(f)}` : ""}`;
   }
 
@@ -523,8 +550,8 @@ function FacturaRow({
           <p className="mt-0.5 text-sm text-foreground/65">
             {f.fechaVencimiento > FECHA_MIN
               ? f.estado === "vencida"
-                ? `Venció el ${fechaLarga(f.fechaVencimiento)}`
-                : `Vence el ${fechaLarga(f.fechaVencimiento)}`
+                ? `Venció el ${fechaPlazo(f.fechaVencimiento)}`
+                : `Vence el ${fechaPlazo(f.fechaVencimiento)}`
               : f.numeroFactura}
           </p>
         </div>

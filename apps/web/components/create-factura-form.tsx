@@ -5,6 +5,7 @@ import { useMutation, useQuery } from "convex/react";
 import { Loader2, Plus, FileText, X } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
+import { vencimientoDePeriodo } from "@vekino/backend/cartera";
 import { Modal } from "@/components/ui/modal";
 import { Button } from "@/components/ui/button";
 import { Input, Select } from "@/components/ui/input";
@@ -15,11 +16,17 @@ function currentPeriodo() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
-function defaultVencimiento() {
-  const d = new Date();
-  d.setMonth(d.getMonth() + 1);
-  d.setDate(15);
-  return d.toISOString().slice(0, 10);
+/**
+ * El vencimiento que se propone: el último día del mes del período (Fase 3:
+ * "del 16 a 30 se paga el precio completo"), la misma regla de la carga por
+ * PDF (`vencimientoDePeriodo`). Antes era el 15 del mes siguiente a HOY,
+ * sin importar el período elegido.
+ */
+function defaultVencimiento(periodo: string) {
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(periodo)) return "";
+  /* `vencimientoDePeriodo` es medianoche de Colombia (05:00 UTC): la fecha
+   * UTC es la misma. */
+  return new Date(vencimientoDePeriodo(periodo)).toISOString().slice(0, 10);
 }
 
 function unidadLabel(u: {
@@ -42,7 +49,9 @@ export function CreateFacturaForm({
   const [open, setOpen] = useState(false);
   const [unidadId, setUnidadId] = useState("");
   const [periodo, setPeriodo] = useState(defaultPeriodo ?? currentPeriodo());
-  const [fechaVencimiento, setFechaVencimiento] = useState(defaultVencimiento());
+  const [fechaVencimiento, setFechaVencimiento] = useState(
+    defaultVencimiento(defaultPeriodo ?? currentPeriodo()),
+  );
   const [valor, setValor] = useState("");
   const [saldoAFavor, setSaldoAFavor] = useState("0");
   const [totalConDescuento, setTotalConDescuento] = useState("");
@@ -67,7 +76,7 @@ export function CreateFacturaForm({
   function reset() {
     setUnidadId("");
     setPeriodo(defaultPeriodo ?? currentPeriodo());
-    setFechaVencimiento(defaultVencimiento());
+    setFechaVencimiento(defaultVencimiento(defaultPeriodo ?? currentPeriodo()));
     setValor("");
     setSaldoAFavor("0");
     setTotalConDescuento("");
@@ -121,12 +130,14 @@ export function CreateFacturaForm({
         throw new Error("Valor con descuento inválido.");
       }
 
-      const venc = new Date(`${fechaVencimiento}T23:59:59`);
+      /* Medianoche de Colombia del día elegido, como la carga por PDF: ese
+       * día todavía se paga y la mora empieza al siguiente. */
+      const venc = Date.parse(`${fechaVencimiento}T00:00:00-05:00`);
       await createManual({
         condominioId,
         unidadId: unidadId as Id<"unidades">,
         periodo,
-        fechaVencimiento: venc.getTime(),
+        fechaVencimiento: venc,
         valor: valorNum,
         saldoAFavor: saldo,
         totalConDescuento: desc,
@@ -196,7 +207,12 @@ export function CreateFacturaForm({
               <Input
                 type="month"
                 value={periodo}
-                onChange={(e) => setPeriodo(e.target.value)}
+                onChange={(e) => {
+                  setPeriodo(e.target.value);
+                  /* El vencimiento propuesto sigue al período. */
+                  const propuesto = defaultVencimiento(e.target.value);
+                  if (propuesto) setFechaVencimiento(propuesto);
+                }}
                 required
               />
             </div>

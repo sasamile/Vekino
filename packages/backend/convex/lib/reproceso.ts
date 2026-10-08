@@ -1,15 +1,18 @@
 import {
   carteraDeUnidad,
-  enRevision,
   resumenResidente,
-  veredictoConciliacion,
   type CarteraUnidad,
   type EstadoCartera,
   type EstadoFactura,
   type LineaFactura,
 } from "./cartera";
 import {
-  estadoDeCarga,
+  calcularCadena,
+  type DiscrepanciaGuardada,
+  type PagoRegistrado,
+  type VeredictoContable,
+} from "./estadoFactura";
+import {
   motivosValidos,
   normalizarPeriodo,
   rechazoDePeriodo,
@@ -33,10 +36,21 @@ import {
  * autorice. Así lo que se revisa con la administración es lo que se escribe.
  *
  * ── Lo que NO toca ───────────────────────────────────────────────────────
- *   · Una factura con evidencia de pago (pago aprobado o comprobante
- *     aprobado): ni sus números ni su estado. F-02 es de la Fase 3.
+ *   · Los números de una factura con evidencia de pago (pago aprobado o
+ *     comprobante aprobado). Su estado lo sigue calculando la regla de la
+ *     Fase 3 (`lib/estadoFactura.ts`), que la inferencia no puede degradar.
  *   · Una factura cuyo documento dice otro período: no se reescribe con él.
+ *   · Una factura cuyo documento publicado NO es el que se cargó: otro
+ *     consecutivo (`documento_distinto`). Pasó con la casa 802 de Ciudad del
+ *     Campo en septiembre de 2026: el PDF consolidado traía dos estados de
+ *     cuenta para ella, el segundo pisó al primero en S3, y la base guardó los
+ *     números del primero. Re-leer el PDF publicado habría reemplazado la
+ *     cuenta correcta por la otra (FASE-3-FACTURACION.md, §2).
  *   · Una factura sin documento que leer.
+ *
+ * El estado de la cadena lo calcula `calcularCadena` (`lib/estadoFactura.ts`),
+ * el mismo cálculo que aplica `model/estadoFactura.ts`: lo que se simula es
+ * lo que se escribe.
  */
 
 /** Lo que el parser nuevo lee del PDF ya publicado de una factura. */
@@ -50,6 +64,8 @@ export type LecturaNueva = {
   periodoLabel: string;
   /** Lo que el parser vio en el PDF y no se comprueba con los números (`FacturaLeida.motivos`). */
   motivos: readonly string[];
+  /** El consecutivo del documento ("Nro."). Si no coincide con el guardado, es otro documento. */
+  numeroInterno?: string;
 };
 
 /** La marca de lectura dudosa, tal como se guarda en la factura. */
@@ -65,6 +81,7 @@ export type FacturaGuardada = {
   unidadId: string;
   periodo: string;
   periodoLabel: string;
+  numeroInterno?: string;
   estado: EstadoFactura;
   fechaVencimiento: number;
   vrAdmon: number;
@@ -72,12 +89,20 @@ export type FacturaGuardada = {
   saldoAFavor: number;
   totalAPagar: number;
   totalConDescuento?: number;
+  fechaLimiteDescuento?: number;
   saldoAnteriorDocumento?: number;
   lecturaDudosa?: MarcaLectura;
+  veredictoContable?: (VeredictoContable & { at?: number }) | null;
+  estadoPago?: { estado: "pagada" | "abonada" } | null;
+  pagoEnVerificacion?: { monto: number } | null;
 };
 
 /** Por qué una factura se deja como está. */
-export type Omision = "evidencia_de_pago" | "sin_documento" | MotivoRechazo;
+export type Omision =
+  | "evidencia_de_pago"
+  | "sin_documento"
+  | "documento_distinto"
+  | MotivoRechazo;
 
 /** Los campos que el re-procesamiento puede cambiar. */
 export const CAMPOS_REPROCESO = [
@@ -182,26 +207,28 @@ function foto<F extends FacturaGuardada>(cadena: readonly F[], ahora: number): F
  *
  * 1. Cada factura toma su lectura nueva —total, líneas, saldo a favor,
  *    saldo anterior del documento y marca de lectura dudosa—, salvo las que
- *    se omiten (evidencia de pago, sin documento, otro período). Como en
- *    `bulkUpsert`: una lectura que cuadra quita la marca; una que no, la pone.
- *    Si ya tenía exactamente esa marca (quizá confirmada) se conserva.
- *    La etiqueta del período solo se reemplaza por una legible.
- * 2. El estado de CARGA (`pendiente` / `saldo_a_favor`) se recalcula con la
- *    lectura nueva —`pendiente` si quedó en revisión—; un estado que vino de
- *    la conciliación o de un pago se conserva.
- * 3. La cadena se vuelve a conciliar con `veredictoConciliacion`, sin tocar
- *    las facturas con evidencia de pago.
+ *    se omiten (evidencia de pago, sin documento, otro período, otro
+ *    documento). Como en `bulkUpsert`: una lectura que cuadra quita la
+ *    marca; una que no, la pone. Si ya tenía exactamente esa marca (quizá
+ *    confirmada) se conserva. La etiqueta del período solo se reemplaza por
+ *    una legible.
+ * 2. El estado de toda la cadena se calcula con la regla de la Fase 3
+ *    (`calcularCadena`): evidencia de pago, veredicto de la factura
+ *    siguiente y estado de carga, con las lecturas nuevas.
  *
  * `cadena` son todas las facturas de la unidad en su conjunto, en cualquier
- * orden. Es idempotente: con el plan aplicado, el siguiente sale vacío.
+ * orden; `pagos`, los pagos aprobados y comprobantes aprobados de esas
+ * facturas. Es idempotente: con el plan aplicado, el siguiente sale vacío.
  */
 export function planificarReproceso<F extends FacturaGuardada>(args: {
   cadena: readonly F[];
   lecturas: ReadonlyMap<string, LecturaNueva>;
-  conEvidencia: ReadonlySet<string>;
+  pagos: readonly PagoRegistrado[];
+  discrepancias?: readonly DiscrepanciaGuardada[];
   ahora: number;
 }): PlanUnidad {
-  const { lecturas, conEvidencia, ahora } = args;
+  const { lecturas, ahora } = args;
+  const conEvidencia = new Set(args.pagos.map((p) => p.facturaId));
   const ordenada = [...args.cadena].sort((a, b) => a.periodo.localeCompare(b.periodo));
 
   // 1. Lecturas nuevas
@@ -212,6 +239,13 @@ export function planificarReproceso<F extends FacturaGuardada>(args: {
     if (!l) return sinCambio("sin_documento");
     const rechazo = rechazoDePeriodo(f.periodo, l.periodoLabel);
     if (rechazo) return sinCambio(rechazo);
+    if (
+      l.numeroInterno?.trim() &&
+      f.numeroInterno?.trim() &&
+      l.numeroInterno.trim() !== f.numeroInterno.trim()
+    ) {
+      return sinCambio("documento_distinto");
+    }
 
     const motivos = motivosValidos([...validarLectura(l), ...l.motivos]);
     const lecturaDudosa: MarcaLectura | undefined =
@@ -231,20 +265,23 @@ export function planificarReproceso<F extends FacturaGuardada>(args: {
       periodoLabel: normalizarPeriodo(l.periodoLabel) ? l.periodoLabel : f.periodoLabel,
       lecturaDudosa,
     };
-    // 2. Estado de carga
-    if (f.estado === "pendiente" || f.estado === "saldo_a_favor") {
-      nueva.estado = enRevision(nueva) ? "pendiente" : estadoDeCarga(nueva);
-    }
     return { f, omitida: null, motivos, nueva };
   });
 
-  // 3. Conciliación de la cadena con las lecturas nuevas
+  // 2. Estado de la cadena con las lecturas nuevas (la regla de la Fase 3)
   const nuevas = pasos.map((p) => p.nueva);
-  for (let i = 1; i < nuevas.length; i++) {
-    const anterior = nuevas[i - 1]!;
-    if (conEvidencia.has(anterior._id)) continue;
-    const estado = veredictoConciliacion(anterior, nuevas[i]!);
-    if (estado !== null) anterior.estado = estado;
+  const calculo = calcularCadena({
+    cadena: nuevas,
+    pagos: args.pagos,
+    discrepancias: args.discrepancias ?? [],
+  });
+  for (const n of nuevas) {
+    const r = calculo.facturas.get(n._id);
+    if (!r) continue;
+    n.estado = r.estado;
+    n.veredictoContable = r.veredicto;
+    n.estadoPago = r.estadoPago;
+    n.pagoEnVerificacion = r.pagoEnVerificacion ? { monto: r.pagoEnVerificacion.monto } : null;
   }
 
   const facturas: PlanFactura[] = pasos.map(({ f, omitida, motivos, nueva }) => {

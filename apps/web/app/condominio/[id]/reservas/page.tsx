@@ -84,6 +84,15 @@ const CARTERA_HINT: Record<EstadoCartera, string> = {
   en_revision: "La lectura del PDF de su factura no cuadra: hasta que Finanzas la revise no se puede decir si está al día o en mora.",
 };
 
+/** Por qué una unidad está "en revisión" (Fase 3). */
+const REVISION_HINT: Record<NonNullable<CarteraFila["motivoRevision"]>, string> = {
+  lectura: CARTERA_HINT.en_revision,
+  pago_en_verificacion:
+    "Tiene un pago registrado que la contabilidad todavía no refleja: hasta que Finanzas lo verifique no se puede decir si está al día o en mora.",
+  mes_faltante:
+    "Falta cargar la factura de un mes: sin ella no se sabe si el período vencido se pagó.",
+};
+
 function fmtFecha(s: string) {
   const parts = s.split("-");
   const y = Number(parts[0] ?? 2026);
@@ -612,6 +621,10 @@ function CeldasCartera({
   }
 
   const { estado, diasMora, saldoActual } = cartera;
+  const pista =
+    estado === "en_revision" && cartera.motivoRevision
+      ? REVISION_HINT[cartera.motivoRevision]
+      : CARTERA_HINT[estado];
 
   return (
     <>
@@ -619,7 +632,7 @@ function CeldasCartera({
         <button
           type="button"
           onClick={onVerDetalle}
-          title={`${CARTERA_HINT[estado]} Ver el estado de cuenta.`}
+          title={`${pista} Ver el estado de cuenta.`}
           className="group -m-1 flex flex-col items-start rounded-lg p-1 text-left transition-colors hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand"
         >
           <span className="flex items-center gap-1">

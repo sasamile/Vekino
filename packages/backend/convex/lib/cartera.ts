@@ -60,6 +60,19 @@ export type LecturaDudosa = {
 };
 
 /**
+ * Lo que la factura siguiente de la cadena dice de esta (Fase 3): el
+ * veredicto de la contabilidad, guardado aparte de la evidencia de pago. Ver
+ * `lib/estadoFactura.ts`.
+ */
+export type VeredictoGuardado = {
+  estado: Veredicto;
+  motivo?: "mes_faltante" | "heredado";
+};
+
+/** Hay un pago registrado que la contabilidad todavia no refleja (solo en la vigente). */
+export type PagoEnVerificacion = { monto: number };
+
+/**
  * Lo que hace falta de una factura para juzgar la cartera.
  *
  * `totalAPagar` NO es la cuota del mes: es la deuda acumulada a esa fecha,
@@ -69,7 +82,11 @@ export type LecturaDudosa = {
 export type FacturaCartera = {
   periodo: string;
   estado: EstadoFactura;
-  /** Timestamp. Dia 15 del mes siguiente al periodo (ver el schema). */
+  /**
+   * Timestamp: el ultimo dia para pagar, a medianoche de Colombia. Desde la
+   * Fase 3, el ultimo dia del mes del periodo (`vencimientoDePeriodo`); las
+   * cargadas antes llevan el dia 15 del mes siguiente.
+   */
   fechaVencimiento: number;
   /** La deuda acumulada que reclama esta factura. */
   totalAPagar: number;
@@ -77,6 +94,8 @@ export type FacturaCartera = {
   /** El saldo anterior que imprime el documento (fila Totales), si lo trae. */
   saldoAnteriorDocumento?: number;
   lecturaDudosa?: LecturaDudosa | null;
+  veredictoContable?: VeredictoGuardado | null;
+  pagoEnVerificacion?: PagoEnVerificacion | null;
 };
 
 /**
@@ -111,6 +130,23 @@ export function enRevision(f: { lecturaDudosa?: LecturaDudosa | null }): boolean
 /** Tolerancia en pesos para considerar una deuda como saldada (redondeos). */
 export const TOLERANCIA_PAGO = 1;
 
+/** "2026-09" → "2026-10". */
+export function periodoSiguiente(periodo: string): string {
+  const [a, m] = periodo.split("-").map(Number) as [number, number];
+  return m === 12 ? `${a + 1}-01` : `${a}-${String(m + 1).padStart(2, "0")}`;
+}
+
+/** Si `siguiente` es exactamente el mes despues de `anterior`. */
+export function periodosConsecutivos(anterior: string, siguiente: string): boolean {
+  return periodoSiguiente(anterior) === siguiente;
+}
+
+/**
+ * Lo que la conciliacion puede decir de una factura. `sin_veredicto`: entre
+ * ella y la siguiente falta un mes, y el saldo anterior no habla de ella.
+ */
+export type Veredicto = "pagada" | "abonada" | "vencida" | "saldo_a_favor" | "sin_veredicto";
+
 /**
  * El veredicto de la conciliacion sobre una factura, a partir de la factura
  * SIGUIENTE de su cadena: su saldo anterior dice cuanto quedo debiendo la
@@ -122,25 +158,35 @@ export const TOLERANCIA_PAGO = 1;
  *   saldo anterior >= total anterior    -> VENCIDA (no pago; con intereses
  *                                          puede venir aun mayor)
  *
- * `null` si el par no se puede juzgar: alguna de las dos esta en revision, y
- * con un documento que no cuadra no se decide si la anterior se pago.
+ * ── Meses faltantes (F-09) ───────────────────────────────────────────────
+ * Solo se juzga un par de meses CONSECUTIVOS. Si entre agosto y octubre falta
+ * septiembre, el saldo anterior de octubre es lo que quedo debiendo al cerrar
+ * septiembre, que lleva dentro la cuota de septiembre: no dice nada de
+ * agosto. Entonces `sin_veredicto`. La excepcion es un saldo anterior en
+ * cero: si al cerrar septiembre no se debia nada, agosto tambien quedo
+ * saldada, hubiera hueco o no.
  *
- * Es la regla de `conciliarCadenaUnidad` (`facturas.ts`) y la del
+ * `null` si el par no se puede juzgar: alguna de las dos esta en revision, y
+ * con un documento que no cuadra no se decide si la anterior se pago. Quien
+ * llama conserva el veredicto que ya tenia.
+ *
+ * Es la regla de la conciliacion (`model/estadoFactura.ts`) y la del
  * re-procesamiento (`lib/reproceso.ts`): una sola, para que lo que se simula
  * sea lo que se aplica.
  */
 export function veredictoConciliacion(
-  anterior: { totalAPagar: number; lecturaDudosa?: LecturaDudosa | null },
+  anterior: { periodo: string; totalAPagar: number; lecturaDudosa?: LecturaDudosa | null },
   siguiente: {
+    periodo: string;
     lineas: readonly LineaFactura[];
     saldoAnteriorDocumento?: number;
     lecturaDudosa?: LecturaDudosa | null;
   },
-): EstadoFactura | null {
+): Veredicto | null {
   if (enRevision(anterior) || enRevision(siguiente)) return null;
   const deuda = saldoAnteriorDe(siguiente);
-  if (anterior.totalAPagar < 0 && deuda <= TOLERANCIA_PAGO) return "saldo_a_favor";
-  if (deuda <= TOLERANCIA_PAGO) return "pagada";
+  if (deuda <= TOLERANCIA_PAGO) return anterior.totalAPagar < 0 ? "saldo_a_favor" : "pagada";
+  if (!periodosConsecutivos(anterior.periodo, siguiente.periodo)) return "sin_veredicto";
   if (deuda < anterior.totalAPagar - TOLERANCIA_PAGO) return "abonada";
   return "vencida";
 }
@@ -165,6 +211,17 @@ export function veredictoConciliacion(
  */
 export type EstadoCartera = "sin_facturas" | "al_dia" | "pendiente" | "en_mora" | "en_revision";
 
+/**
+ * Por que una unidad esta `en_revision`:
+ *   · `lectura`: la vigente, o el periodo que decidiria la mora, tiene una
+ *     lectura dudosa sin confirmar;
+ *   · `pago_en_verificacion`: hay un pago registrado que la contabilidad
+ *     todavia no refleja (una discrepancia abierta);
+ *   · `mes_faltante`: el periodo que decidiria la mora no se puede juzgar
+ *     porque falta el mes siguiente.
+ */
+export type MotivoRevision = "lectura" | "pago_en_verificacion" | "mes_faltante";
+
 export type CarteraUnidad = {
   estado: EstadoCartera;
   /** Lo que la unidad debe HOY. No la suma de saldos historicos. */
@@ -177,6 +234,10 @@ export type CarteraUnidad = {
   periodoEnMora: string | null;
   /** Su vencimiento. */
   vencimientoEnMora: number | null;
+  /** Solo con `en_revision`. */
+  motivoRevision?: MotivoRevision;
+  /** Con `pago_en_verificacion`: lo pagado que la contabilidad no muestra. */
+  montoEnVerificacion?: number;
 };
 
 const DIA = 24 * 60 * 60 * 1000;
@@ -277,6 +338,7 @@ export type MotivoNoPagable =
   | "historica"
   | "vigente_ambigua"
   | "en_revision"
+  | "pago_en_verificacion"
   | "sin_saldo";
 
 /**
@@ -290,6 +352,10 @@ export type MotivoNoPagable =
  * Tampoco una vigente en revision: su total salio de una lectura dudosa del
  * PDF, y cobrarlo seria cobrar un numero que nadie ha verificado.
  *
+ * Ni una vigente con un pago en verificacion (Fase 3): Vekino registro un
+ * pago que la contabilidad todavia no refleja, y su total lo vuelve a
+ * cobrar. Cobrarlo seria hacerle pagar dos veces al residente.
+ *
  * `cadena` son TODAS las facturas de la unidad, `factura` incluida.
  */
 export function motivoNoPagable(
@@ -299,6 +365,7 @@ export function motivoNoPagable(
     estado: EstadoFactura;
     totalAPagar: number;
     lecturaDudosa?: LecturaDudosa | null;
+    pagoEnVerificacion?: PagoEnVerificacion | null;
   },
 ): MotivoNoPagable | null {
   if (factura.estado === "pagada") return "pagada";
@@ -308,6 +375,7 @@ export function motivoNoPagable(
   }
   if (ultimas.length > 1) return "vigente_ambigua";
   if (enRevision(factura)) return "en_revision";
+  if (factura.pagoEnVerificacion) return "pago_en_verificacion";
   if (!sinPagar(factura.estado) || factura.totalAPagar <= 0) return "sin_saldo";
   return null;
 }
@@ -324,8 +392,47 @@ export const MENSAJE_NO_PAGABLE: Readonly<Record<MotivoNoPagable, string>> = {
     "Esta factura no se puede pagar en línea: la unidad tiene más de una factura del mismo período. Comunícate con la administración.",
   en_revision:
     "Esta factura está en revisión: la administración debe verificar su lectura antes de que se pueda pagar.",
+  pago_en_verificacion:
+    "Tu pago está registrado, pero la contabilidad aún no lo refleja. La administración lo está verificando; mientras tanto esta factura no se puede pagar en línea.",
   sin_saldo: "Esta factura no tiene saldo por pagar.",
 };
+
+/**
+ * La frase de "pago en verificacion" con el monto, para las pantallas que lo
+ * conocen (`pagoEnVerificacion.monto`). Los errores usan la de
+ * `MENSAJE_NO_PAGABLE`, que no cambia.
+ */
+export function mensajePagoEnVerificacion(monto: number): string {
+  return `Tu pago de ${formatoPesos(monto)} está registrado; la contabilidad aún no lo refleja. La administración lo está verificando.`;
+}
+
+/** "$ 300.000", como lo muestran la web y el móvil. */
+export function formatoPesos(monto: number): string {
+  const entero = Math.round(Math.abs(monto))
+    .toString()
+    .replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  return `${monto < 0 ? "-" : ""}$ ${entero}`;
+}
+
+/**
+ * Un monto en pesos como lo escribe una persona: "340000", "340.000",
+ * "$ 340.000", "340,000", "340.000,00", "pagué 340.000 ayer". El primero que
+ * aparezca en el texto, en pesos enteros, o `null` si no hay ninguno
+ * creíble (menos de $1.000 o más de $100 millones: una cuota no es eso, y un
+ * "15" suelto es más probablemente un día que un pago).
+ */
+export function leerMontoPesos(texto: string): number | null {
+  const candidatos = texto.match(/\d[\d.,]*/g) ?? [];
+  for (const crudo of candidatos) {
+    const t = crudo.replace(/[.,]$/, "");
+    let valor: number | null = null;
+    if (/^\d{1,3}(\.\d{3})+(,\d{1,2})?$/.test(t)) valor = Number(t.split(",")[0]!.replace(/\./g, ""));
+    else if (/^\d{1,3}(,\d{3})+(\.\d{1,2})?$/.test(t)) valor = Number(t.split(".")[0]!.replace(/,/g, ""));
+    else if (/^\d+$/.test(t)) valor = Number(t);
+    if (valor !== null && valor >= 1_000 && valor <= 100_000_000) return valor;
+  }
+  return null;
+}
 
 /**
  * Cuanto debe HOY la unidad, y si esta incumpliendo.
@@ -382,6 +489,14 @@ export const MENSAJE_NO_PAGABLE: Readonly<Record<MotivoNoPagable, string>> = {
  * decidiria la mora, el estado es `en_revision`: ni "al dia" ni "mora" se
  * pueden afirmar con un documento cuyos numeros no cuadran. El saldo se
  * informa igual, como referencia para quien revisa.
+ *
+ * ── Pagos en verificacion y meses faltantes (Fase 3) ─────────────────────
+ * Tambien es `en_revision` una vigente con un pago en verificacion: Vekino
+ * registro un pago que la contabilidad no refleja, y declarar mora por ese
+ * monto seria cobrarle al residente lo que ya pago. Y un periodo SIN
+ * VEREDICTO —le falta el mes siguiente para juzgarlo— no decide la mora: no
+ * se sabe si se pago, y "en mora" seria inventarlo. Ninguno de los dos
+ * inventa "al dia" tampoco: el saldo se informa igual.
  */
 export function carteraDeUnidad(
   facturas: readonly FacturaCartera[],
@@ -421,7 +536,20 @@ export function carteraDeUnidad(
     estado: saldoActual > 0 ? "pendiente" : "al_dia",
   };
 
-  if (ultimas.some(enRevision)) return { ...base, estado: "en_revision" };
+  if (ultimas.some(enRevision)) {
+    return { ...base, estado: "en_revision", motivoRevision: "lectura" };
+  }
+
+  /* Un pago registrado que la contabilidad no refleja: ni mora ni al dia. */
+  const enVerificacion = ultimas.reduce((s, f) => s + (f.pagoEnVerificacion?.monto ?? 0), 0);
+  if (ultimas.some((f) => f.pagoEnVerificacion)) {
+    return {
+      ...base,
+      estado: "en_revision",
+      motivoRevision: "pago_en_verificacion",
+      montoEnVerificacion: enVerificacion,
+    };
+  }
 
   /* Los periodos que ya vencieron, del mas viejo al mas nuevo. Se ordena por
    * vencimiento y no por el orden en que entraron a la base: lo que define
@@ -452,7 +580,14 @@ export function carteraDeUnidad(
   if (cubierto || saldoActual === 0) return base;
 
   /* El periodo que decidiria la mora tiene una lectura dudosa: no se sabe. */
-  if (enRevision(ultimoVencido)) return { ...base, estado: "en_revision" };
+  if (enRevision(ultimoVencido)) {
+    return { ...base, estado: "en_revision", motivoRevision: "lectura" };
+  }
+
+  /* Le falta el mes siguiente para juzgarlo: tampoco se sabe. */
+  if (ultimoVencido.veredictoContable?.estado === "sin_veredicto") {
+    return { ...base, estado: "en_revision", motivoRevision: "mes_faltante" };
+  }
 
   return {
     ...base,
@@ -578,4 +713,94 @@ export function estadoCuentaDeCadena(
     fechaVencimiento: f.fechaVencimiento,
     totalAPagar: f.totalAPagar,
   }));
+}
+
+// ─────────────────────────────────────────────────────────────
+// Descuento por pronto pago y vencimiento (Fase 3, F-06)
+// ─────────────────────────────────────────────────────────────
+
+/** Colombia no tiene horario de verano: siempre UTC−5. */
+const BOGOTA_UTC_HORAS = 5;
+
+/** Medianoche (hora de Colombia) del dia `dia` del mes del periodo "AAAA-MM". */
+function medianocheDelPeriodo(periodo: string, dia: number): number {
+  const [a, m] = periodo.split("-").map(Number) as [number, number];
+  return Date.UTC(a, m - 1, dia, BOGOTA_UTC_HORAS);
+}
+
+/**
+ * El dia del mes del periodo hasta el que vale el descuento cuando el
+ * documento no lo dice. Es la unica regla documentada: la de Ciudad del
+ * Campo, que imprime "HASTA EL DIA 15 DEL PRESENTE MES" y "Pague con
+ * descuento del 1 - 15". Arboleda no ofrece descuento (sus facturas no
+ * traen `totalConDescuento`), asi que la regla no le aplica.
+ */
+export const DIA_LIMITE_DESCUENTO = 15;
+
+/** El ultimo instante del dia `dia` del mes del periodo, hora de Colombia. */
+export function finDelDiaDelPeriodo(periodo: string, dia: number): number {
+  return medianocheDelPeriodo(periodo, dia + 1) - 1;
+}
+
+/**
+ * Hasta cuando vale `totalConDescuento`, o `null` si la factura no tiene
+ * descuento.
+ *
+ * Manda la fecha que trae el documento (`fechaLimiteDescuento`, que el
+ * parser lee de "HASTA EL DIA N DEL PRESENTE MES"). Si no la trae —las
+ * cargadas antes de la Fase 3—, el dia 15 del mes del PERIODO: la cuenta de
+ * septiembre tiene descuento hasta el 15 de septiembre. Antes se usaba el
+ * vencimiento (15 de octubre) y el descuento se extendia un mes (F-06).
+ */
+export function fechaLimiteDescuentoDe(f: {
+  periodo: string;
+  totalConDescuento?: number | null;
+  fechaLimiteDescuento?: number | null;
+}): number | null {
+  if (typeof f.totalConDescuento !== "number") return null;
+  if (typeof f.fechaLimiteDescuento === "number") return f.fechaLimiteDescuento;
+  return finDelDiaDelPeriodo(f.periodo, DIA_LIMITE_DESCUENTO);
+}
+
+/** Si hoy todavia vale el descuento. */
+export function descuentoVigente(
+  f: { periodo: string; totalConDescuento?: number | null; fechaLimiteDescuento?: number | null },
+  ahora: number,
+): boolean {
+  const limite = fechaLimiteDescuentoDe(f);
+  return limite !== null && ahora <= limite;
+}
+
+/**
+ * Lo que se cobra HOY por la factura: con descuento si todavia vale, y si no
+ * el total. Es lo que cobra la pasarela (`pagos.armarDatosTrn`) y lo que
+ * muestran la web, el movil, el bot y el agente.
+ */
+export function montoAPagarHoy(
+  f: {
+    periodo: string;
+    totalAPagar: number;
+    totalConDescuento?: number | null;
+    fechaLimiteDescuento?: number | null;
+  },
+  ahora: number,
+): number {
+  return descuentoVigente(f, ahora) ? (f.totalConDescuento as number) : f.totalAPagar;
+}
+
+/**
+ * El vencimiento de una factura NUEVA (decision de la administracion para la
+ * Fase 3): "Pagar con descuento hasta el 15 del presente mes, del 16 a 30 se
+ * paga el precio completo". Es decir, el ultimo dia del mes del periodo, a
+ * medianoche de Colombia —la misma convencion de siempre: ese dia todavia se
+ * puede pagar, la mora empieza al siguiente—. El "30" se lee como el ultimo
+ * dia del mes (28 o 29 en febrero, 31 donde lo hay).
+ *
+ * Solo para lo que se carga desde ahora: las facturas ya guardadas conservan
+ * el suyo (dia 15 del mes siguiente) hasta que se autorice re-fecharlas.
+ */
+export function vencimientoDePeriodo(periodo: string): number {
+  const [a, m] = periodo.split("-").map(Number) as [number, number];
+  /* Dia 0 del mes siguiente = ultimo dia de este. */
+  return Date.UTC(a, m, 0, BOGOTA_UTC_HORAS);
 }

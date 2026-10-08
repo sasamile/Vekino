@@ -204,12 +204,24 @@ export function validarLectura(f: {
  * aquí no hay duda que revisar: guardarla sería guardar algo que el propio
  * documento contradice.
  */
-export type MotivoRechazo = "periodo_no_coincide" | "periodo_invalido" | "unidad_ajena";
+export type MotivoRechazo =
+  | "periodo_no_coincide"
+  | "periodo_invalido"
+  | "unidad_ajena"
+  | "documento_repetido"
+  | "factura_duplicada";
 
 export const MENSAJE_RECHAZO: Readonly<Record<MotivoRechazo, string>> = {
   periodo_no_coincide: "El período del documento no coincide con el período elegido.",
   periodo_invalido: "El período elegido no tiene la forma AAAA-MM.",
   unidad_ajena: "La unidad no pertenece a este conjunto.",
+  /* Ciudad del Campo, septiembre de 2026: el PDF consolidado traía dos
+   * estados de cuenta para la misma casa. Guardar uno —el que llegara
+   * primero— es adivinar; se rechazan los dos y se revisa con la contabilidad. */
+  documento_repetido:
+    "El PDF trae más de un documento para esta unidad en el mismo período. Revísalo con la contabilidad.",
+  factura_duplicada:
+    "La unidad ya tiene más de una factura de este período. La administración debe revisarlas.",
 };
 
 /**

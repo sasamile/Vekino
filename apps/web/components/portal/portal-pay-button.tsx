@@ -50,6 +50,10 @@ function mensajeParaElResidente(e: unknown): string {
   if (/más de una factura del mismo período/i.test(crudo)) {
     return "Esta factura no se puede pagar en línea. Comunícate con la administración.";
   }
+  /* Fase 3: hay un pago registrado que la contabilidad aún no refleja. */
+  if (/la contabilidad aún no lo refleja/i.test(crudo)) {
+    return "Tu pago anterior está registrado y la contabilidad aún no lo refleja. No se cobra en línea mientras la administración lo verifica.";
+  }
   if (/está en revisión/i.test(crudo)) {
     return "Esta factura está en revisión por la administración. Podrás pagarla cuando la confirmen.";
   }

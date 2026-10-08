@@ -16,6 +16,11 @@ import { useQuery, useMutation, useAction, Authenticated } from "convex/react";
 import * as ImagePicker from "expo-image-picker";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
+import {
+  mensajePagoEnVerificacion,
+  montoAPagarHoy,
+  vencimientoDePeriodo,
+} from "@vekino/backend/cartera";
 import { getDocumentPicker } from "@/lib/document-picker";
 import { openDocument } from "@/lib/open-document";
 import { useCondominio } from "@/context/condominio-context";
@@ -31,13 +36,13 @@ import {
   GlassSection,
 } from "@/components/ui/glass";
 import { cop, fmtPeriodo } from "@/lib/utils";
-import { estadoVisible, tarjetaFacturas } from "@/lib/resumen-facturas";
+import { descuentoDe, estadoVisible, tarjetaFacturas } from "@/lib/resumen-facturas";
 import { AuthUI } from "@/lib/auth-ui";
 import { SoftUI, softShadow } from "@/lib/soft-ui";
 
 type Estado = "pendiente" | "pagada" | "vencida" | "abonada" | "saldo_a_favor";
 /** Lo que se muestra: el estado guardado, o "en revisión" si la lectura no se ha verificado. */
-type EstadoVisible = Estado | "en_revision";
+type EstadoVisible = Estado | "en_revision" | "en_verificacion";
 
 const ESTADO_TONE: Record<EstadoVisible, "yellow" | "green" | "red" | "neutral" | "blue"> = {
   pendiente: "yellow",
@@ -46,6 +51,7 @@ const ESTADO_TONE: Record<EstadoVisible, "yellow" | "green" | "red" | "neutral" 
   abonada: "blue",
   saldo_a_favor: "blue",
   en_revision: "blue",
+  en_verificacion: "blue",
 };
 
 const ESTADO_LABEL: Record<EstadoVisible, string> = {
@@ -55,6 +61,8 @@ const ESTADO_LABEL: Record<EstadoVisible, string> = {
   abonada: "Abonada",
   saldo_a_favor: "Saldo a favor",
   en_revision: "En revisión",
+  /* Fase 3: pagó y la contabilidad aún no lo refleja. */
+  en_verificacion: "Pago en verificación",
 };
 
 const ESTADO_ICON: Record<
@@ -79,6 +87,7 @@ const ESTADO_ICON: Record<
     fg: SoftUI.blue,
   },
   en_revision: { name: "search-outline", bg: SoftUI.infoSoft, fg: SoftUI.blue },
+  en_verificacion: { name: "hourglass-outline", bg: SoftUI.infoSoft, fg: SoftUI.blue },
 };
 
 type FacturaRow = {
@@ -89,6 +98,8 @@ type FacturaRow = {
   apto?: string;
   totalAPagar: number;
   totalConDescuento?: number;
+  /** Hasta cuándo vale el descuento, según el documento (Fase 3). */
+  fechaLimiteDescuento?: number;
   vrAdmon: number;
   estado: string;
   fechaEmision: number;
@@ -102,6 +113,8 @@ type FacturaRow = {
     total: number;
   }[];
   lecturaDudosa?: { motivos: string[]; confirmada?: unknown };
+  /** Un pago registrado que la contabilidad aún no refleja (Fase 3). */
+  pagoEnVerificacion?: { monto: number } | null;
 };
 
 export default function FacturasScreen() {
@@ -199,6 +212,9 @@ function FacturaListCard({
   const { theme } = useCondominio();
   const estado = estadoVisible(f);
   const iconMeta = ESTADO_ICON[estado] ?? ESTADO_ICON.abonada;
+  /* El descuento vale hasta SU fecha (la del documento, o el 15 del mes del
+   * período), no hasta el vencimiento (Fase 3, F-06). */
+  const descuento = descuentoDe(f, Date.now());
   return (
     <Tap onPress={onPress}>
       <GlassCard style={styles.facturaCard}>
@@ -229,15 +245,22 @@ function FacturaListCard({
                 {new Date(f.fechaVencimiento).toLocaleDateString("es-CO", {
                   day: "numeric",
                   month: "short",
+                  timeZone: "America/Bogota",
                 })}
               </Text>
             )}
           </View>
-          {!showResident && f.totalConDescuento && estado === "pendiente" ? (
+          {!showResident && descuento?.vigente && estado === "pendiente" ? (
             <View style={styles.descuentoRow}>
               <Ionicons name="pricetag" size={12} color={SoftUI.success} />
               <Text style={styles.descuentoText}>
-                Con descuento: {cop(f.totalConDescuento)}
+                Con descuento hasta el{" "}
+                {new Date(descuento.hasta).toLocaleDateString("es-CO", {
+                  day: "numeric",
+                  month: "short",
+                  timeZone: "America/Bogota",
+                })}
+                : {cop(descuento.monto)}
               </Text>
             </View>
           ) : null}
@@ -533,11 +556,15 @@ function currentPeriodo() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
-function defaultVencimientoIso() {
-  const d = new Date();
-  d.setMonth(d.getMonth() + 1);
-  d.setDate(15);
-  return d.toISOString().slice(0, 10);
+/**
+ * El vencimiento que se propone: el último día del mes del período (Fase 3:
+ * "del 16 a 30 se paga el precio completo"), la misma regla de la carga por
+ * PDF. Antes era el 15 del mes siguiente a HOY, sin importar el período.
+ */
+function defaultVencimientoIso(periodo: string) {
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(periodo)) return "";
+  /* Medianoche de Colombia = 05:00 UTC: la fecha UTC es la misma. */
+  return new Date(vencimientoDePeriodo(periodo)).toISOString().slice(0, 10);
 }
 
 type PendingAdjunto = {
@@ -582,7 +609,9 @@ function CrearFacturaSheet({
   const [unidadPicker, setUnidadPicker] = useState(false);
   const [unidadSearch, setUnidadSearch] = useState("");
   const [periodo, setPeriodo] = useState(defaultPeriodo || currentPeriodo());
-  const [fechaVencimiento, setFechaVencimiento] = useState(defaultVencimientoIso());
+  const [fechaVencimiento, setFechaVencimiento] = useState(
+    defaultVencimientoIso(defaultPeriodo || currentPeriodo()),
+  );
   const [valor, setValor] = useState("");
   const [saldoAFavor, setSaldoAFavor] = useState("0");
   const [totalConDescuento, setTotalConDescuento] = useState("");
@@ -593,7 +622,7 @@ function CrearFacturaSheet({
   useEffect(() => {
     if (!visible) return;
     setPeriodo(defaultPeriodo || currentPeriodo());
-    setFechaVencimiento(defaultVencimientoIso());
+    setFechaVencimiento(defaultVencimientoIso(defaultPeriodo || currentPeriodo()));
     setError(null);
   }, [visible, defaultPeriodo]);
 
@@ -614,7 +643,7 @@ function CrearFacturaSheet({
     setUnidadId(null);
     setUnidadSearch("");
     setPeriodo(defaultPeriodo || currentPeriodo());
-    setFechaVencimiento(defaultVencimientoIso());
+    setFechaVencimiento(defaultVencimientoIso(defaultPeriodo || currentPeriodo()));
     setValor("");
     setSaldoAFavor("0");
     setTotalConDescuento("");
@@ -706,7 +735,9 @@ function CrearFacturaSheet({
         throw new Error("Valor con descuento inválido.");
       }
 
-      const venc = new Date(`${fechaVencimiento.trim()}T23:59:59`).getTime();
+      /* Medianoche de Colombia del día elegido, como la carga por PDF: ese
+       * día todavía se paga y la mora empieza al siguiente. */
+      const venc = Date.parse(`${fechaVencimiento.trim()}T00:00:00-05:00`);
       await createManual({
         condominioId,
         unidadId,
@@ -778,7 +809,12 @@ function CrearFacturaSheet({
           </Text>
           <TextInput
             value={periodo}
-            onChangeText={setPeriodo}
+            onChangeText={(t) => {
+              setPeriodo(t);
+              /* El vencimiento propuesto sigue al período. */
+              const propuesto = defaultVencimientoIso(t.trim());
+              if (propuesto) setFechaVencimiento(propuesto);
+            }}
             placeholder="2026-06"
             placeholderTextColor={SoftUI.textDisabled}
             autoCapitalize="none"
@@ -1037,6 +1073,10 @@ function FacturaDetalleModal({
   );
   const [pagando, setPagando] = useState(false);
   const [subiendo, setSubiendo] = useState(false);
+  /* "Ya pagué" pide cuánto y cuándo (Fase 3): el comprobante aprobado prueba
+   * un pago por ese monto, no "pagada" a secas. */
+  const [datosPago, setDatosPago] = useState<{ monto: string; fecha: string } | null>(null);
+  useEffect(() => setDatosPago(null), [detalle?._id]);
 
   /* "Pagar" (y "Ya pagué") solo donde el backend aceptaría iniciar el pago:
    * la factura VIGENTE de una unidad suya y con saldo. Se le pregunta al
@@ -1060,6 +1100,12 @@ function FacturaDetalleModal({
    */
   async function enviarSoporte(adjunto: PendingAdjunto) {
     if (!detalle || !condominioId) return;
+    const monto = Number((datosPago?.monto ?? "").replace(/[^\d]/g, ""));
+    const fecha = (datosPago?.fecha ?? "").trim();
+    if (!Number.isFinite(monto) || monto <= 0 || !/^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
+      Alert.alert("Faltan datos", "Escribe cuánto pagaste y la fecha del pago (AAAA-MM-DD).");
+      return;
+    }
     setSubiendo(true);
     try {
       const { uploadUrl, publicUrl } = await generateUploadUrl({
@@ -1081,7 +1127,11 @@ function FacturaDetalleModal({
         facturaId: detalle._id,
         url: publicUrl,
         mimeType: adjunto.mimeType,
+        monto,
+        /* Mediodía de Colombia: el día escrito, en cualquier zona. */
+        fechaPago: Date.parse(`${fecha}T12:00:00-05:00`),
       });
+      setDatosPago(null);
       Alert.alert(
         "Comprobante enviado",
         "La administración lo revisará y te confirmará el pago.",
@@ -1315,7 +1365,15 @@ function FacturaDetalleModal({
                   fontFamily: AuthUI.font.regular,
                 }}
               >
-                Sin descuento (16-30)
+                {/* Las fechas reales (Fase 3): el descuento vale hasta la del
+                    documento (o el 15 del mes del período), y sin descuento
+                    hasta el vencimiento. */}
+                Sin descuento, hasta el{" "}
+                {new Date(detalle.fechaVencimiento).toLocaleDateString("es-CO", {
+                  day: "numeric",
+                  month: "short",
+                  timeZone: "America/Bogota",
+                })}
               </Text>
               <Text
                 style={{
@@ -1327,7 +1385,7 @@ function FacturaDetalleModal({
                 {cop(detalle.totalAPagar)}
               </Text>
             </View>
-            {detalle.totalConDescuento ? (
+            {descuentoDe(detalle, Date.now()) ? (
               <View
                 style={{
                   flexDirection: "row",
@@ -1349,7 +1407,12 @@ function FacturaDetalleModal({
                       fontFamily: AuthUI.font.semibold,
                     }}
                   >
-                    Con descuento (1-15)
+                    Con descuento, hasta el{" "}
+                    {new Date(descuentoDe(detalle, Date.now())!.hasta).toLocaleDateString("es-CO", {
+                      day: "numeric",
+                      month: "short",
+                      timeZone: "America/Bogota",
+                    })}
                   </Text>
                 </View>
                 <Text
@@ -1359,13 +1422,60 @@ function FacturaDetalleModal({
                     fontFamily: AuthUI.font.bold,
                   }}
                 >
-                  {cop(detalle.totalConDescuento)}
+                  {cop(detalle.totalConDescuento ?? 0)}
                 </Text>
               </View>
             ) : null}
           </GlassCard>
 
+          {detalle.pagoEnVerificacion ? (
+            <GlassCard
+              style={{
+                padding: SoftUI.space.base,
+                marginBottom: SoftUI.space.base,
+                flexDirection: "row",
+                gap: SoftUI.space.sm,
+                alignItems: "flex-start",
+              }}
+            >
+              <Ionicons name="hourglass-outline" size={18} color={SoftUI.blue} />
+              <Text
+                style={{
+                  flex: 1,
+                  color: SoftUI.text,
+                  fontSize: SoftUI.type.caption.size,
+                  fontFamily: AuthUI.font.regular,
+                }}
+              >
+                {mensajePagoEnVerificacion(detalle.pagoEnVerificacion.monto)}
+              </Text>
+            </GlassCard>
+          ) : null}
+
           {soporte ? <SoporteEstado soporte={soporte} /> : null}
+
+          {datosPago ? (
+            <GlassCard style={{ padding: SoftUI.space.base, marginBottom: SoftUI.space.base, gap: SoftUI.space.sm }}>
+              <Text style={styles_label}>¿Cuánto pagaste? *</Text>
+              <TextInput
+                value={datosPago.monto}
+                onChangeText={(t) => setDatosPago({ ...datosPago, monto: t })}
+                keyboardType="number-pad"
+                placeholder="340000"
+                placeholderTextColor={SoftUI.textDisabled}
+                style={inputStyle}
+              />
+              <Text style={styles_label}>¿Qué día pagaste? * (AAAA-MM-DD)</Text>
+              <TextInput
+                value={datosPago.fecha}
+                onChangeText={(t) => setDatosPago({ ...datosPago, fecha: t })}
+                placeholder="2026-09-10"
+                placeholderTextColor={SoftUI.textDisabled}
+                autoCapitalize="none"
+                style={inputStyle}
+              />
+            </GlassCard>
+          ) : null}
 
           <View style={{ gap: SoftUI.space.sm }}>
             {puedePagar ? (
@@ -1382,7 +1492,13 @@ function FacturaDetalleModal({
             ) : null}
             {puedePagar && soporte?.estado !== "pendiente_revision" ? (
               <GlassButton
-                label={subiendo ? "Enviando…" : "Ya pagué, enviar soporte"}
+                label={
+                  subiendo
+                    ? "Enviando…"
+                    : datosPago
+                      ? "Elegir el comprobante y enviar"
+                      : "Ya pagué, enviar soporte"
+                }
                 variant="secondary"
                 loading={subiendo}
                 icon={
@@ -1394,7 +1510,20 @@ function FacturaDetalleModal({
                     />
                   )
                 }
-                onPress={subiendo ? undefined : elegirSoporte}
+                onPress={
+                  subiendo
+                    ? undefined
+                    : datosPago
+                      ? elegirSoporte
+                      : () =>
+                          setDatosPago({
+                            /* Lo que se cobraba hoy, como punto de partida. */
+                            monto: String(montoAPagarHoy(detalle, Date.now())),
+                            fecha: new Date(Date.now() - 5 * 60 * 60 * 1000)
+                              .toISOString()
+                              .slice(0, 10),
+                          })
+                }
               />
             ) : null}
             {detalle.pdfUrl ? (

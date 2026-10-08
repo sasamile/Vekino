@@ -16,6 +16,9 @@ import { resolveTipoVehiculo } from "./model/placa";
 import { normalizarTelefonoE164 } from "./lib/telefono";
 import { estaVigente } from "./lib/vigilancia";
 import { internal } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
+import { recalcularCadena, recalcularUnidades, type Tocada } from "./model/estadoFactura";
+import { actualizarDocumento, escribirFactura } from "./model/facturas";
 
 /**
  * FUNCIONES DE MIGRACIÓN (Fase 2)
@@ -449,7 +452,20 @@ export const getArboledaMappings = internalQuery({
 });
 
 /**
- * Bulk insert de facturas (idempotente por legacyId).
+ * Bulk insert de facturas.
+ *
+ * Idempotente por la identidad de toda factura —(conjunto, unidad,
+ * período)—, no solo por `legacyId` (Fase 3, F-11): antes, una factura que
+ * ya había subido la web por PDF se duplicaba al correr la migración, y una
+ * re-ejecución pisaba el estado con el "pendiente" que mandan los scripts.
+ * Ahora:
+ *   · si la factura no existe, se crea (el estado que traía del sistema
+ *     anterior, si era un juicio, queda como veredicto `heredado`);
+ *   · si existe y la creó esta misma migración (mismo `legacyId`), se
+ *     actualizan sus números —nunca el estado—;
+ *   · si existe y vino de otro lado (la carga por PDF), no se toca: el PDF
+ *     de la contabilidad manda sobre el dato migrado.
+ * El estado lo calcula `recalcularCadena`, con su bitácora.
  */
 export const bulkFacturas = internalMutation({
   args: {
@@ -492,29 +508,46 @@ export const bulkFacturas = internalMutation({
     ),
   },
   handler: async (ctx, args) => {
-    const now = Date.now();
     let inserted = 0;
     let updated = 0;
+    let omitted = 0;
+    let conflictos = 0;
+    const unidades = new Map<Id<"unidades">, Id<"condominios">>();
+    const tocadas = new Map<Id<"facturas">, Tocada>();
 
-    for (const f of args.facturas) {
-      // Un totalAPagar negativo es saldo a favor del residente, sin importar
-      // qué estado haya mandado el script de migración.
-      const row = { ...f, estado: f.totalAPagar < 0 ? ("saldo_a_favor" as const) : f.estado };
-
-      const existing = await ctx.db
-        .query("facturas")
-        .withIndex("by_legacyId", (q) => q.eq("legacyId", f.legacyId))
-        .unique();
-
-      if (existing) {
-        await ctx.db.patch(existing._id, { ...row, updatedAt: now });
-        updated++;
-      } else {
-        await ctx.db.insert("facturas", { ...row, createdAt: now, updatedAt: now });
-        inserted++;
+    for (const { estado, ...f } of args.facturas) {
+      const escritura = await escribirFactura(
+        ctx,
+        {
+          ...f,
+          origen: "migracion",
+          ...(estado === "pagada" || estado === "abonada" || estado === "vencida"
+            ? { veredictoHeredado: estado }
+            : {}),
+        },
+        {
+          siExiste: (existente) => (existente.legacyId === f.legacyId ? "actualizar" : "omitir"),
+          conFechas: true,
+          soloDefinidos: true,
+        },
+      );
+      if (escritura.accion === "ambigua" || escritura.accion === "conflicto_legacy") {
+        conflictos++;
+        continue;
       }
+      unidades.set(f.unidadId, f.condominioId);
+      if (escritura.accion === "omitida") omitted++;
+      else if (escritura.accion === "insertada") inserted++;
+      else updated++;
+      if ("tocada" in escritura && escritura.tocada) tocadas.set(escritura.facturaId, escritura.tocada);
     }
-    return { inserted, updated };
+
+    await recalcularUnidades(ctx, unidades, {
+      origen: "migracion",
+      actor: "migrations.bulkFacturas",
+      tocadas,
+    });
+    return { inserted, updated, omitted, conflictos };
   },
 });
 
@@ -533,12 +566,26 @@ export const listCdcFacturasForFix = internalQuery({
 });
 
 /**
- * Actualiza solo totalConDescuento en una factura.
+ * Actualiza solo totalConDescuento en una factura. Cambia lo que se debía
+ * (y con eso la evidencia de un pago con descuento), así que la cadena se
+ * vuelve a calcular y queda en la bitácora.
  */
 export const setTotalConDescuento = internalMutation({
   args: { id: v.id("facturas"), totalConDescuento: v.number() },
   handler: async (ctx, args) => {
-    await ctx.db.patch(args.id, { totalConDescuento: args.totalConDescuento, updatedAt: Date.now() });
+    const factura = await ctx.db.get(args.id);
+    if (!factura) throw new Error("Factura no encontrada.");
+    const tocada = await actualizarDocumento(
+      ctx,
+      factura,
+      { totalConDescuento: args.totalConDescuento },
+      "Valor con descuento corregido por script",
+    );
+    await recalcularCadena(ctx, factura.condominioId, factura.unidadId, {
+      origen: "migracion",
+      actor: "migrations.setTotalConDescuento",
+      ...(tocada ? { tocadas: new Map([[factura._id, tocada]]) } : {}),
+    });
   },
 });
 
@@ -659,6 +706,10 @@ export const bulkVehiculos = internalMutation({
  * Backfill: corrige facturas con totalAPagar negativo (saldo a favor del
  * residente) que quedaron marcadas "pendiente" antes de existir ese estado.
  * Idempotente — se puede correr varias veces sin efecto tras la primera.
+ *
+ * Ya no escribe el estado: vuelve a calcular la cadena de cada unidad
+ * afectada (`recalcularCadena`), que con un total negativo pone "saldo a
+ * favor" por la misma regla de la carga, y deja la bitácora.
  */
 export const fixSaldoAFavorEstado = internalMutation({
   args: {},
@@ -668,13 +719,17 @@ export const fixSaldoAFavorEstado = internalMutation({
       .withIndex("by_estado", (q) => q.eq("estado", "pendiente"))
       .collect();
 
-    let fixed = 0;
-    const now = Date.now();
+    const unidades = new Map<Id<"unidades">, Id<"condominios">>();
     for (const f of candidatas) {
-      if (f.totalAPagar < 0) {
-        await ctx.db.patch(f._id, { estado: "saldo_a_favor", updatedAt: now });
-        fixed++;
-      }
+      if (f.totalAPagar < 0) unidades.set(f.unidadId, f.condominioId);
+    }
+    await recalcularUnidades(ctx, unidades, {
+      origen: "migracion",
+      actor: "migrations.fixSaldoAFavorEstado",
+    });
+    let fixed = 0;
+    for (const f of candidatas) {
+      if (f.totalAPagar < 0 && (await ctx.db.get(f._id))?.estado === "saldo_a_favor") fixed++;
     }
     return { scanned: candidatas.length, fixed };
   },

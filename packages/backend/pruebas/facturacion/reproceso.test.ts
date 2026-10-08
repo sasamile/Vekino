@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { internal } from "../../convex/_generated/api";
+import { api, internal } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import {
-  aprobarComprobante,
   aprobarPagoAval,
   bloquearRed,
+  esperarProgramadas,
   facturaDe,
   fijarReloj,
   insertarDirecto,
@@ -214,7 +214,29 @@ describe("lo que no toca", () => {
   test("una factura con un comprobante aprobado tampoco, ni siquiera por la conciliación", async () => {
     const esc = await montar();
     const ids = await comoQuedoLa401(esc);
-    await aprobarComprobante(esc, ids.agosto);
+    /* CAMBIO DE LA FASE 3 (docs/audits/FASE-3-FACTURACION.md, §13): esta
+     * prueba subía el comprobante de AGOSTO con `soportesPago.crearMio`, y
+     * desde la Fase 3 (PASO 6) un comprobante solo se adjunta a la factura
+     * vigente: agosto ya está absorbida por septiembre. Lo que la prueba
+     * protege —el re-procesamiento no toca una factura con un comprobante
+     * aprobado— sigue igual; el comprobante entra como uno subido antes de
+     * la Fase 3 y la administración lo aprueba por el camino normal. */
+    const soporteId = await esc.t.run(
+      async (ctx) =>
+        await ctx.db.insert("soportesPago", {
+          condominioId: esc.condominioId,
+          unidadId: esc.u101,
+          facturaId: ids.agosto,
+          userId: esc.residenteId,
+          origen: "app",
+          url: "https://archivos.test/comprobante.pdf",
+          mimeType: "application/pdf",
+          estado: "pendiente_revision",
+          createdAt: Date.now(),
+        }),
+    );
+    await esc.como("admin").mutation(api.soportesPago.aprobar, { id: soporteId });
+    await esperarProgramadas(esc);
     const antes = await facturaDe(esc, "2026-08");
 
     const r = await reprocesar(esc, lecturasDeLa401(ids), false);

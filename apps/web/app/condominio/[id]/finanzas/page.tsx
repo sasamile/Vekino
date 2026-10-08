@@ -27,6 +27,20 @@ import { usePersistedPeriodo } from "@/hooks/use-persisted-periodo";
 import { cop } from "@/lib/utils";
 import { periodoDe } from "@vekino/backend/periodos";
 import { MENSAJE_LECTURA, type MotivoLectura } from "@vekino/backend/lecturaFactura";
+import { fechaLimiteDescuentoDe, leerMontoPesos } from "@vekino/backend/cartera";
+import { PagosPorRevisar } from "@/components/finanzas/pagos-por-revisar";
+import { MesesFaltantes } from "@/components/finanzas/meses-faltantes";
+import { HistorialFactura } from "@/components/finanzas/historial-factura";
+import { fechaPlazo } from "@/components/portal/portal-ui";
+
+/** Lo que dice el veredicto de la contabilidad (la factura siguiente). */
+const VEREDICTO_LABEL: Record<string, string> = {
+  pagada: "pagada",
+  abonada: "abonada",
+  vencida: "vencida",
+  saldo_a_favor: "con saldo a favor",
+  sin_veredicto: "sin veredicto (falta el mes siguiente)",
+};
 
 const PAGE_SIZE = 30;
 
@@ -181,6 +195,8 @@ export default function FinanzasPage() {
         )}
 
         <EnRevision condominioId={condominioId} />
+        <PagosPorRevisar condominioId={condominioId} />
+        <MesesFaltantes condominioId={condominioId} />
 
         {/* KPIs */}
         {resumen ? (
@@ -295,6 +311,9 @@ export default function FinanzasPage() {
                           </Badge>
                           {f.lecturaDudosa && !f.lecturaDudosa.confirmada ? (
                             <Badge tone="warning">En revisión</Badge>
+                          ) : null}
+                          {f.pagoEnVerificacion ? (
+                            <Badge tone="info">Pago en verificación</Badge>
                           ) : null}
                         </div>
                       </TD>
@@ -413,7 +432,9 @@ export default function FinanzasPage() {
                 {facturaDetalle.totalConDescuento != null && facturaDetalle.totalConDescuento > 0 && (
                   <tr className="border-t border-border bg-emerald-500/5">
                     <td colSpan={3} className="px-4 py-2 text-xs font-medium text-emerald-600">
-                      Pague del 1 al 15 (con descuento)
+                      {/* La fecha real del descuento: la del documento, o el 15 del mes del período (Fase 3). */}
+                      Con descuento, hasta el {fechaPlazo(fechaLimiteDescuentoDe(facturaDetalle) ?? 0)}
+                      {facturaDetalle.fechaLimiteDescuento == null ? " (regla del día 15)" : ""}
                     </td>
                     <td className="px-4 py-2 text-right text-sm font-bold tabular-nums dark:text-emerald-400">
                       {cop(facturaDetalle.totalConDescuento)}
@@ -423,8 +444,8 @@ export default function FinanzasPage() {
                 <tr className="border-t border-border bg-muted/40">
                   <td colSpan={3} className="px-4 py-2.5 text-sm font-semibold text-foreground">
                     {facturaDetalle.totalConDescuento != null && facturaDetalle.totalConDescuento > 0
-                      ? "Pague del 16 al 30 (sin descuento)"
-                      : "Total a pagar"}
+                      ? `Sin descuento, hasta el ${fechaPlazo(facturaDetalle.fechaVencimiento)}`
+                      : `Total a pagar · vence el ${fechaPlazo(facturaDetalle.fechaVencimiento)}`}
                   </td>
                   <td className="px-4 py-2.5 text-right text-sm font-bold tabular-nums text-foreground">
                     {cop(facturaDetalle.totalAPagar)}
@@ -433,6 +454,44 @@ export default function FinanzasPage() {
               </tfoot>
             </table>
           </div>
+
+          {/* Por qué está en este estado (Fase 3): evidencia, veredicto y pago en verificación. */}
+          <div className="mt-4 space-y-1 text-xs text-muted-foreground">
+            {facturaDetalle.estadoPago ? (
+              <p>
+                <span className="font-medium text-foreground">Pagos registrados:</span>{" "}
+                {cop(facturaDetalle.estadoPago.montoPagado)} de {cop(facturaDetalle.estadoPago.montoAdeudado)}
+                {facturaDetalle.estadoPago.conDescuento ? " (con descuento)" : ""}
+                {facturaDetalle.estadoPago.excedente
+                  ? ` · ${cop(facturaDetalle.estadoPago.excedente)} de más`
+                  : ""}
+              </p>
+            ) : null}
+            {facturaDetalle.veredictoContable ? (
+              <p>
+                <span className="font-medium text-foreground">Según la factura siguiente:</span>{" "}
+                {facturaDetalle.veredictoContable.motivo === "heredado"
+                  ? `${VEREDICTO_LABEL[facturaDetalle.veredictoContable.estado] ?? facturaDetalle.veredictoContable.estado} (estado que traía de antes)`
+                  : VEREDICTO_LABEL[facturaDetalle.veredictoContable.estado] ?? facturaDetalle.veredictoContable.estado}
+                {facturaDetalle.veredictoContable.saldoAnteriorSiguiente !== undefined
+                  ? ` · saldo anterior ${cop(facturaDetalle.veredictoContable.saldoAnteriorSiguiente)}`
+                  : ""}
+              </p>
+            ) : null}
+            {facturaDetalle.pagoEnVerificacion ? (
+              <p className="text-sky-700 dark:text-sky-400">
+                Pago en verificación: {cop(facturaDetalle.pagoEnVerificacion.monto)} pagados que la contabilidad
+                todavía no refleja. No se cobra en línea mientras tanto.
+              </p>
+            ) : null}
+          </div>
+
+          <details className="mt-4">
+            <summary className="cursor-pointer text-sm font-medium text-foreground">Historial de la factura</summary>
+            <div className="mt-2">
+              <HistorialFactura facturaId={facturaDetalle._id} />
+            </div>
+          </details>
         </Modal>
       )}
     </PageContainer>
@@ -451,12 +510,31 @@ function EnRevision({ condominioId }: { condominioId: Id<"condominios"> }) {
   const [error, setError] = useState<string | null>(null);
   if (!filas || filas.length === 0) return null;
 
-  async function onConfirmar(id: Id<"facturas">) {
-    if (!window.confirm("¿Revisaste el PDF y los valores son correctos? La factura quedará disponible para pago.")) return;
+  async function onConfirmar(id: Id<"facturas">, motivos: readonly string[]) {
+    /* Sin total en el documento (o empezaba en una hoja de continuación): el
+     * número guardado no salió del PDF, y confirmarlo a ciegas lo volvería
+     * cobrable. Hay que escribir el total que se ve en el documento (Fase 3). */
+    let totalVerificado: number | undefined;
+    if (motivos.includes("total_no_leido") || motivos.includes("pagina_de_continuacion")) {
+      const escrito = window.prompt(
+        "El total de esta factura no salió del documento. Escribe el TOTAL A PAGAR que ves en el PDF (sin descuento). Si es un saldo a favor, con signo menos.",
+      );
+      if (escrito === null) return;
+      const negativo = escrito.trim().startsWith("-");
+      const limpio = escrito.replace(/[^\d.,]/g, "");
+      const valor = /^0+$/.test(limpio) ? 0 : leerMontoPesos(limpio);
+      if (valor === null) {
+        setError("El total escrito no es un valor válido. Escríbelo como aparece en el PDF, por ejemplo 342.000.");
+        return;
+      }
+      totalVerificado = negativo ? -valor : valor;
+    } else if (!window.confirm("¿Revisaste el PDF y los valores son correctos? La factura quedará disponible para pago.")) {
+      return;
+    }
     setConfirmando(id);
     setError(null);
     try {
-      await confirmar({ facturaId: id });
+      await confirmar({ facturaId: id, ...(totalVerificado !== undefined ? { totalVerificado } : {}) });
     } catch (e) {
       setError(e instanceof Error ? e.message : "No se pudo confirmar.");
     } finally {
@@ -501,7 +579,7 @@ function EnRevision({ condominioId }: { condominioId: Id<"condominios"> }) {
                   <ExternalLink className="h-4 w-4" />
                 </a>
               )}
-              <Button variant="outline" size="sm" disabled={confirmando === f._id} onClick={() => onConfirmar(f._id)}>
+              <Button variant="outline" size="sm" disabled={confirmando === f._id} onClick={() => onConfirmar(f._id, f.motivos)}>
                 {confirmando === f._id ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : "Confirmar lectura"}
               </Button>
             </div>

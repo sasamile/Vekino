@@ -41,8 +41,20 @@ type SoporteRow = {
   facturaPeriodo: string | null;
   facturaTotal: number | null;
   facturaEstado: string | null;
+  /** Lo que se cobraba por la factura el día del pago declarado (con descuento si aplica). */
+  facturaAdeudado: number | null;
   userNombre: string | null;
+  /** Cuánto y cuándo dice el residente que pagó (Fase 3). */
+  monto?: number;
+  fechaPago?: number;
+  /** Aprobado sin monto: se tomó como pago completo. */
+  montoAsumido?: boolean;
 };
+
+/** "2026-09-10" en hora de Colombia, para un `<input type="date">`. */
+function diaColombia(ts: number) {
+  return new Date(ts - 5 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
 
 const TABS: { value: EstadoSoporte; label: string }[] = [
   { value: "pendiente_revision", label: "Pendientes" },
@@ -284,6 +296,17 @@ function SoporteCard({
             </p>
           )}
 
+          {s.monto != null ? (
+            <p className="text-xs text-muted-foreground">
+              <span className="font-medium text-foreground">
+                {s.estado === "aprobado" ? "Pago registrado" : "Dice que pagó"}:
+              </span>{" "}
+              <span className="tabular-nums text-foreground">{cop(s.monto)}</span>
+              {s.fechaPago ? ` el ${new Date(s.fechaPago).toLocaleDateString("es-CO", { timeZone: "America/Bogota" })}` : ""}
+              {s.montoAsumido ? " (aprobado sin monto: se tomó como pago completo)" : ""}
+            </p>
+          ) : null}
+
           {/* Info de revisión */}
           {!pendiente && (
             <div className="text-xs text-muted-foreground">
@@ -355,17 +378,45 @@ function PreviewModal({ s, onClose }: { s: SoporteRow; onClose: () => void }) {
   );
 }
 
+/**
+ * Aprobar un comprobante es registrar un PAGO por un monto (Fase 3): la
+ * factura queda pagada si cubre lo que se debía ese día, o abonada si es
+ * menos. Por eso se piden el monto y la fecha —los que declaró el residente,
+ * o lo que se debía—, y no se aprueba sin ellos.
+ */
 function AprobarModal({ s, onClose }: { s: SoporteRow; onClose: () => void }) {
   const aprobar = useMutation(api.soportesPago.aprobar);
   const [nota, setNota] = useState("");
+  const [monto, setMonto] = useState(
+    String(s.monto ?? (s.facturaAdeudado != null && s.facturaAdeudado > 0 ? s.facturaAdeudado : "")),
+  );
+  const [fecha, setFecha] = useState(diaColombia(s.fechaPago ?? s.createdAt));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const montoNum = Number(monto.replace(/[^\d]/g, ""));
+  const montoValido = monto.trim() !== "" && Number.isFinite(montoNum) && montoNum > 0;
+  const fechaValida = /^\d{4}-\d{2}-\d{2}$/.test(fecha);
+
   async function confirmar() {
+    if (!montoValido) {
+      setError("Escribe el monto pagado.");
+      return;
+    }
+    if (!fechaValida) {
+      setError("Escribe la fecha del pago.");
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
-      await aprobar({ id: s._id, notaRevision: nota.trim() || undefined });
+      await aprobar({
+        id: s._id,
+        notaRevision: nota.trim() || undefined,
+        monto: montoNum,
+        /* Mediodía de Colombia: el día elegido, en cualquier zona. */
+        fechaPago: Date.parse(`${fecha}T12:00:00-05:00`),
+      });
       onClose();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error al aprobar.");
@@ -382,7 +433,7 @@ function AprobarModal({ s, onClose }: { s: SoporteRow; onClose: () => void }) {
       footer={
         <>
           <Button variant="ghost" size="sm" onClick={onClose} disabled={busy}>Cancelar</Button>
-          <Button size="sm" onClick={confirmar} disabled={busy}>
+          <Button size="sm" onClick={confirmar} disabled={busy || !montoValido || !fechaValida}>
             {busy && <Loader2 className="h-4 w-4 animate-spin" />}
             <Check className="h-4 w-4" aria-hidden />
             Aprobar
@@ -393,17 +444,35 @@ function AprobarModal({ s, onClose }: { s: SoporteRow; onClose: () => void }) {
       <div className="space-y-4">
         {s.facturaNumero ? (
           <p className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3 text-sm text-foreground">
-            Al aprobar, la factura <span className="font-medium">{s.facturaNumero}</span>
+            Al aprobar, se registra un pago de{" "}
+            <span className="font-medium tabular-nums">{montoValido ? cop(montoNum) : "—"}</span> para la factura{" "}
+            <span className="font-medium">{s.facturaNumero}</span>
             {s.facturaPeriodo ? ` (${s.facturaPeriodo})` : ""}
-            {s.facturaTotal != null ? ` por ${cop(s.facturaTotal)}` : ""} se marcará como{" "}
-            <span className="font-medium">pagada</span>.
+            {s.facturaAdeudado != null ? `, que ese día debía ${cop(s.facturaAdeudado)}` : ""}. Queda{" "}
+            <span className="font-medium">pagada</span> si lo cubre, o <span className="font-medium">abonada</span>{" "}
+            si es menos.
           </p>
         ) : (
           <p className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 text-sm text-foreground">
             Este comprobante no tiene factura vinculada: quedará aprobado pero{" "}
-            <span className="font-medium">ninguna factura se marcará como pagada</span>.
+            <span className="font-medium">ningún estado de factura cambiará</span>.
           </p>
         )}
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1.5">
+            <label className="block text-xs font-medium text-foreground">Monto pagado *</label>
+            <Input
+              inputMode="numeric"
+              value={monto}
+              onChange={(e) => setMonto(e.target.value)}
+              placeholder="340000"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label className="block text-xs font-medium text-foreground">Fecha del pago *</label>
+            <Input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} />
+          </div>
+        </div>
         <div className="space-y-1.5">
           <label className="block text-xs font-medium text-foreground">
             Nota <span className="text-muted-foreground">(opcional)</span>

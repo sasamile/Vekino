@@ -1,5 +1,5 @@
 import { mutation, query, internalMutation } from "./_generated/server";
-import type { MutationCtx } from "./_generated/server";
+import type { QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
@@ -8,17 +8,31 @@ import {
   carteraDeUnidad,
   enRevision,
   estadoCuentaDeCadena,
-  veredictoConciliacion,
+  formatoPesos,
+  periodoSiguiente,
+  periodosConsecutivos,
 } from "./lib/cartera";
 import {
   PERIODO_VALIDO,
-  estadoDeCarga,
   motivosValidos,
   rechazoDePeriodo,
   validarLectura,
   type MotivoRechazo,
 } from "./lib/lecturaFactura";
 import { planificarReproceso, type PlanUnidad } from "./lib/reproceso";
+import {
+  anotarEvento,
+  pagosRegistrados,
+  recalcularCadena,
+  recalcularUnidades,
+  type Tocada,
+} from "./model/estadoFactura";
+import {
+  actualizarDocumento,
+  escribirFactura,
+  facturasDeIdentidad,
+  type EntradaFactura,
+} from "./model/facturas";
 
 /** Quien sube y confirma facturas: los mismos roles de `bulkUpsert`. */
 const CARGA_ROLES = ["administrador", "contadora"] as const;
@@ -69,67 +83,24 @@ const lineValidator = v.object({
 });
 
 // ─────────────────────────────────────────────────────────────
-// Conciliación por saldo anterior
+// Estado y conciliación (Fase 3)
 //
-// La factura del mes siguiente es la fuente de verdad sobre el pago del mes
-// anterior: su "saldo anterior" dice cuánto quedó debiendo la unidad.
-//   saldo anterior == 0                → la anterior quedó PAGADA
-//   0 < saldo anterior < total anterior → la anterior quedó ABONADA (pago parcial)
-//   saldo anterior >= total anterior    → la anterior quedó VENCIDA (no pagó;
-//                                         con intereses puede venir aún mayor)
-// Se recorre la cadena completa por unidad (1ª → 2ª → 3ª…): cada factura juzga
-// a la inmediatamente anterior. La última de la cadena no se toca (aún no hay
-// factura siguiente que la juzgue).
-//
-// El "saldo anterior" es el que imprime el documento (fila Totales) cuando lo
-// trae, y la suma de las líneas si no (`saldoAnteriorDe`). Y un par en el que
-// alguna de las dos facturas está en revisión (lectura dudosa) no se juzga:
-// con un documento que no cuadra no se decide si la anterior se pagó. La
-// anterior conserva el estado que tenía: si no lo tenía, sigue sin veredicto.
+// La factura del mes siguiente dice cuánto quedó debiendo la unidad (su
+// saldo anterior), y de ahí se infiere si la anterior se pagó. Desde la Fase
+// 3 esa inferencia es UNA de las fuentes del estado, no la única: la
+// evidencia de pago (pasarela, comprobantes) es un piso que la inferencia no
+// baja, un mes faltante no deja juzgar, y una contradicción entre los dos se
+// registra como discrepancia. Todo eso vive en `lib/estadoFactura.ts` y lo
+// escribe `model/estadoFactura.ts` (`recalcularCadena`); las facturas las
+// inserta y actualiza `model/facturas.ts` (`escribirFactura`). Ninguna ruta
+// de este archivo escribe `estado`.
 // ─────────────────────────────────────────────────────────────
 
-/**
- * Recorre la cadena de facturas de una unidad (orden ascendente por período)
- * y ajusta el estado de cada factura según el saldo anterior de la siguiente
- * (`veredictoConciliacion`, `lib/cartera.ts`). Devuelve el conteo de cambios
- * aplicados.
- */
-async function conciliarCadenaUnidad(
-  ctx: MutationCtx,
-  condominioId: Id<"condominios">,
-  unidadId: Id<"unidades">,
-): Promise<{ pagadas: number; abonadas: number; vencidas: number }> {
-  const cadena = (
-    await ctx.db
-      .query("facturas")
-      .withIndex("by_unidad", (q) => q.eq("unidadId", unidadId))
-      .collect()
-  )
-    .filter((f) => f.condominioId === condominioId)
-    .sort((a, b) => a.periodo.localeCompare(b.periodo));
-
-  const cambios = { pagadas: 0, abonadas: 0, vencidas: 0 };
-  const now = Date.now();
-
-  for (let i = 1; i < cadena.length; i++) {
-    const anterior = cadena[i - 1]!;
-    const estado = veredictoConciliacion(anterior, cadena[i]!);
-    if (estado === null) continue;
-
-    if (anterior.estado !== estado) {
-      await ctx.db.patch(anterior._id, { estado, updatedAt: now });
-      if (estado === "pagada") cambios.pagadas++;
-      else if (estado === "abonada") cambios.abonadas++;
-      else cambios.vencidas++;
-    }
-  }
-
-  return cambios;
+/** El nombre con el que la bitácora registra a una persona. */
+function nombreDe(user: Doc<"users">): string {
+  return user.name || user.email || "Administración";
 }
 
-/**
- * Inserta una factura extraída del PDF. Idempotente por (condominioId, unidadId, periodo).
- */
 /**
  * Alta/actualización de una factura desde los scripts de importación.
  *
@@ -141,6 +112,11 @@ async function conciliarCadenaUnidad(
  *
  * La alta manual desde la aplicación es `createManual`, que sí comprueba
  * permisos.
+ *
+ * Idempotente por (conjunto, unidad, período), como toda escritura de
+ * facturas (`model/facturas.ts`). El `estado` que manda el script NO se
+ * escribe (los scripts mandan "pendiente" a ciegas, y pisaban pagos: F-11):
+ * el estado lo calcula `recalcularCadena`.
  */
 export const upsertFactura = internalMutation({
   args: {
@@ -176,72 +152,33 @@ export const upsertFactura = internalMutation({
     legacyId: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const now = Date.now();
-    // Un totalAPagar negativo es saldo a favor del residente, sin importar
-    // qué estado haya calculado el caller (que suele mandar "pendiente" a ciegas).
-    const estado = args.totalAPagar < 0 ? "saldo_a_favor" : args.estado;
-
-    // Busca factura existente por (condominioId, unidadId, periodo)
-    const existing = await ctx.db
-      .query("facturas")
-      .withIndex("by_condominio_periodo", (q) =>
-        q.eq("condominioId", args.condominioId).eq("periodo", args.periodo)
-      )
-      .filter((q) => q.eq(q.field("unidadId"), args.unidadId))
-      .first();
-
-    if (existing) {
-      // Actualiza si ya existe
-      await ctx.db.patch(existing._id, {
-        numeroFactura: args.numeroFactura,
-        numeroInterno: args.numeroInterno,
-        periodoLabel: args.periodoLabel,
-        residenteNombre: args.residenteNombre,
-        apto: args.apto,
-        vrAdmon: args.vrAdmon,
-        lineas: args.lineas,
-        saldoAFavor: args.saldoAFavor,
-        totalAPagar: args.totalAPagar,
-        totalConDescuento: args.totalConDescuento,
-        fechaEmision: args.fechaEmision,
-        fechaVencimiento: args.fechaVencimiento,
-        estado,
-        pdfUrl: args.pdfUrl,
-        membershipId: args.membershipId,
-        updatedAt: now,
-      });
-      return existing._id;
+    const { estado, ...documento } = args;
+    const escritura = await escribirFactura(
+      ctx,
+      {
+        ...documento,
+        origen: "script",
+        ...(estado === "pagada" || estado === "abonada" || estado === "vencida"
+          ? { veredictoHeredado: estado }
+          : {}),
+      },
+      { siExiste: "actualizar", conFechas: true, soloDefinidos: true },
+    );
+    if (escritura.accion === "ambigua") {
+      throw new Error("La unidad ya tiene más de una factura de este período.");
     }
-
-    // Crea nueva factura
-    const id = await ctx.db.insert("facturas", {
-      condominioId: args.condominioId,
-      unidadId: args.unidadId,
-      membershipId: args.membershipId,
-      numeroFactura: args.numeroFactura,
-      numeroInterno: args.numeroInterno,
-      periodo: args.periodo,
-      periodoLabel: args.periodoLabel,
-      residenteNombre: args.residenteNombre,
-      apto: args.apto,
-      vrAdmon: args.vrAdmon,
-      lineas: args.lineas,
-      saldoAFavor: args.saldoAFavor,
-      totalAPagar: args.totalAPagar,
-      totalConDescuento: args.totalConDescuento,
-      fechaEmision: args.fechaEmision,
-      fechaVencimiento: args.fechaVencimiento,
-      estado,
-      pdfUrl: args.pdfUrl,
-      legacyId: args.legacyId,
-      createdAt: now,
-      updatedAt: now,
+    if (escritura.accion === "conflicto_legacy") {
+      throw new Error(`El legacyId ${args.legacyId} ya es de otra factura.`);
+    }
+    await recalcularCadena(ctx, args.condominioId, args.unidadId, {
+      origen: "migracion",
+      actor: "facturas.upsertFactura",
+      tocadas:
+        "tocada" in escritura && escritura.tocada
+          ? new Map([[escritura.facturaId, escritura.tocada]])
+          : undefined,
     });
-
-    // Concilia la cadena de la unidad con la nueva información
-    await conciliarCadenaUnidad(ctx, args.condominioId, args.unidadId);
-
-    return id;
+    return escritura.facturaId;
   },
 });
 
@@ -513,6 +450,11 @@ const facturaInputValidator = v.object({
   /** Saldo anterior que imprime el documento (fila Totales), si lo trae. */
   saldoAnteriorDocumento: v.optional(v.number()),
   /**
+   * Hasta cuándo vale `totalConDescuento`, como lo dice el documento ("HASTA
+   * EL DIA 15 DEL PRESENTE MES"). Sin él, `lib/cartera.ts` aplica la regla.
+   */
+  fechaLimiteDescuento: v.optional(v.number()),
+  /**
    * Motivos de lectura dudosa que vio el parser en el PDF y que no se pueden
    * comprobar con los números (no estaba el total, la hoja era de
    * continuación…). Solo pueden AGREGAR dudas: lo que el backend comprueba
@@ -580,6 +522,16 @@ export const permisoSubida = query({
  *
  * Una lectura correcta que llega después (re-subida con "actualizar") quita
  * la marca.
+ *
+ * ── Fase 3 ───────────────────────────────────────────────────────────────
+ *   · Escribe por `escribirFactura` (identidad única) y NUNCA el estado: lo
+ *     calcula `recalcularCadena` por cada unidad tocada, con evidencia de
+ *     pago, veredicto y discrepancias, y deja la bitácora.
+ *   · Dos documentos de la misma unidad en el mismo lote se rechazan los dos
+ *     (`documento_repetido`): guardar el primero era adivinar (CDC 802,
+ *     septiembre de 2026).
+ *   · El `fechaVencimiento` es el que manda quien carga (la confirmación de
+ *     la web le pone la regla nueva a lo que entra).
  */
 export const bulkUpsert = mutation({
   args: {
@@ -593,7 +545,7 @@ export const bulkUpsert = mutation({
      * comprobación —el bucle de abajo no itera— y una mutación pública
      * respondía correctamente a quien no había iniciado sesión. No escribía
      * nada, pero una escritura que no exige identidad no debe existir. */
-    await requireAppUser(ctx);
+    const user = await requireAppUser(ctx);
 
     /* El lote no trae un `condominioId` propio: cada factura lleva el suyo.
      * Así que se comprueba el permiso sobre CADA conjunto presente en el
@@ -619,9 +571,17 @@ export const bulkUpsert = mutation({
     let marcadas = 0;
     const rechazos: { indice: number; unidadId: Id<"unidades">; motivo: MotivoRechazo }[] = [];
     const unidadesAfectadas = new Map<Id<"unidades">, Id<"condominios">>();
+    const tocadas = new Map<Id<"facturas">, Tocada>();
+
+    /* Dos documentos de la misma unidad y período en el lote: ninguno. */
+    const porIdentidad = new Map<string, number>();
+    for (const f of args.facturas) {
+      const clave = `${f.condominioId}|${f.unidadId}|${f.periodo}`;
+      porIdentidad.set(clave, (porIdentidad.get(clave) ?? 0) + 1);
+    }
 
     for (const [indice, entrada] of args.facturas.entries()) {
-      const { motivosLectura, ...f } = entrada;
+      const { motivosLectura, estado: _estadoDelCliente, ...f } = entrada;
 
       /* Identidad: la unidad es de este conjunto, y el período es el que dice
        * el propio documento. Si no, la factura no se guarda. */
@@ -629,7 +589,9 @@ export const bulkUpsert = mutation({
       const rechazo: MotivoRechazo | null =
         !unidad || unidad.condominioId !== f.condominioId
           ? "unidad_ajena"
-          : rechazoDePeriodo(f.periodo, f.periodoLabel);
+          : (porIdentidad.get(`${f.condominioId}|${f.unidadId}|${f.periodo}`) ?? 0) > 1
+            ? "documento_repetido"
+            : rechazoDePeriodo(f.periodo, f.periodoLabel);
       if (rechazo) {
         rechazos.push({ indice, unidadId: f.unidadId, motivo: rechazo });
         continue;
@@ -639,74 +601,49 @@ export const bulkUpsert = mutation({
        * parser vio en el PDF. Cualquier motivo deja la factura en revisión. */
       const motivos = motivosValidos([...validarLectura(f), ...(motivosLectura ?? [])]);
       const lecturaDudosa = motivos.length > 0 ? { motivos, marcadaAt: now } : undefined;
-      const estadoCarga = lecturaDudosa ? ("pendiente" as const) : estadoDeCarga(f);
 
-      const existing = await ctx.db
-        .query("facturas")
-        .withIndex("by_condominio_periodo", (q) =>
-          q.eq("condominioId", f.condominioId).eq("periodo", f.periodo)
-        )
-        .filter((q) => q.eq(q.field("unidadId"), f.unidadId))
-        .first();
-
-      if (existing) {
-        if (args.skipExisting) {
-          skipped++;
-          // Aun sin re-insertar, la factura existente puede juzgar a la anterior
-          unidadesAfectadas.set(f.unidadId, f.condominioId);
-        } else {
-          /* Preserva el estado que vino de un pago o de la conciliación; solo
-           * el de carga (pendiente / saldo a favor) se recalcula con la nueva
-           * lectura. La marca de lectura dudosa se reemplaza por la nueva: una
-           * lectura correcta la quita. */
-          const deCarga = existing.estado === "pendiente" || existing.estado === "saldo_a_favor";
-          await ctx.db.patch(existing._id, {
-            numeroFactura: f.numeroFactura,
-            numeroInterno: f.numeroInterno,
-            periodoLabel: f.periodoLabel,
-            residenteNombre: f.residenteNombre,
-            apto: f.apto,
-            vrAdmon: f.vrAdmon,
-            lineas: f.lineas,
-            saldoAFavor: f.saldoAFavor,
-            totalAPagar: f.totalAPagar,
-            totalConDescuento: f.totalConDescuento,
-            saldoAnteriorDocumento: f.saldoAnteriorDocumento,
-            lecturaDudosa,
-            pdfUrl: f.pdfUrl,
-            ...(deCarga ? { estado: estadoCarga } : {}),
-            ...(args.importacionId ? { importacionId: args.importacionId } : {}),
-            updatedAt: now,
-          });
-          updated++;
-          if (lecturaDudosa) marcadas++;
-          unidadesAfectadas.set(f.unidadId, f.condominioId);
-        }
-      } else {
-        /* El estado lo decide la lectura, no el que mande quien llama (la UI
-         * de subida mandaba "pendiente" a ciegas). */
-        await ctx.db.insert("facturas", {
+      /* El estado NO lo decide quien llama (la UI de subida mandaba
+       * "pendiente" a ciegas), ni esta ruta: lo calcula `recalcularCadena`.
+       * Al actualizar se escriben solo los números del documento, así que
+       * nada que venga de un pago o de la conciliación se pisa. */
+      const escritura = await escribirFactura(
+        ctx,
+        {
           ...f,
-          estado: estadoCarga,
-          ...(lecturaDudosa ? { lecturaDudosa } : {}),
+          lecturaDudosa,
+          origen: "pdf",
           ...(args.importacionId ? { importacionId: args.importacionId } : {}),
-          createdAt: now,
-          updatedAt: now,
-        });
-        inserted++;
-        if (lecturaDudosa) marcadas++;
-        unidadesAfectadas.set(f.unidadId, f.condominioId);
+        },
+        { siExiste: args.skipExisting ? "omitir" : "actualizar", conLectura: true },
+      );
+
+      if (escritura.accion === "ambigua") {
+        rechazos.push({ indice, unidadId: f.unidadId, motivo: "factura_duplicada" });
+        continue;
       }
+      if (escritura.accion === "conflicto_legacy") {
+        rechazos.push({ indice, unidadId: f.unidadId, motivo: "factura_duplicada" });
+        continue;
+      }
+      // Aun sin re-insertar, la factura existente puede juzgar a la anterior
+      unidadesAfectadas.set(f.unidadId, f.condominioId);
+      if (escritura.accion === "omitida") {
+        skipped++;
+        continue;
+      }
+      if (escritura.accion === "insertada") inserted++;
+      else updated++;
+      if (lecturaDudosa) marcadas++;
+      if (escritura.tocada) tocadas.set(escritura.facturaId, escritura.tocada);
     }
 
-    // Conciliación automática: cada factura nueva juzga a la anterior de su unidad
-    const conciliacion = { pagadas: 0, abonadas: 0, vencidas: 0 };
-    for (const [unidadId, condominioId] of unidadesAfectadas) {
-      const c = await conciliarCadenaUnidad(ctx, condominioId, unidadId);
-      conciliacion.pagadas += c.pagadas;
-      conciliacion.abonadas += c.abonadas;
-      conciliacion.vencidas += c.vencidas;
-    }
+    // Estado y conciliación de cada unidad tocada (`model/estadoFactura.ts`)
+    const conciliacion = await recalcularUnidades(ctx, unidadesAfectadas, {
+      origen: "carga",
+      actor: nombreDe(user),
+      actorUserId: user._id,
+      tocadas,
+    });
 
     if (importacion) {
       await ctx.db.patch(importacion._id, {
@@ -789,6 +726,10 @@ export const iniciarImportacion = mutation({
     if (!/^[0-9a-f]{64}$/.test(args.hash)) throw new Error("La huella del archivo no es válida.");
 
     const ahora = Date.now();
+    /* La llave de idempotencia es el archivo, el período Y el modo: el mismo
+     * PDF confirmado con "solo nuevas" y después con "actualizar" son dos
+     * cargas distintas (la segunda sí actualiza). Sin el modo, la segunda
+     * respondía "ya se cargó" y no actualizaba nada (Fase 3, PASO 11). */
     const previa = (
       await ctx.db
         .query("importaciones")
@@ -796,7 +737,7 @@ export const iniciarImportacion = mutation({
           q.eq("condominioId", args.condominioId).eq("hash", args.hash),
         )
         .collect()
-    ).find((i) => i.periodo === args.periodo);
+    ).find((i) => i.periodo === args.periodo && i.soloNuevas === args.soloNuevas);
 
     if (previa?.estado === "completada") {
       return {
@@ -847,26 +788,34 @@ export const iniciarImportacion = mutation({
     }
 
     const plan: { indice: number; accion: "insertar" | "actualizar" | "omitir" | "rechazar"; motivo?: MotivoRechazo }[] = [];
+    const porUnidad = new Map<string, number>();
+    for (const c of args.candidatas) porUnidad.set(c.unidadId, (porUnidad.get(c.unidadId) ?? 0) + 1);
     for (const c of args.candidatas) {
       const unidad = await ctx.db.get(c.unidadId);
       const rechazo: MotivoRechazo | null =
         !unidad || unidad.condominioId !== args.condominioId
           ? "unidad_ajena"
-          : rechazoDePeriodo(args.periodo, c.periodoLabel);
+          : (porUnidad.get(c.unidadId) ?? 0) > 1
+            ? "documento_repetido"
+            : rechazoDePeriodo(args.periodo, c.periodoLabel);
       if (rechazo) {
         plan.push({ indice: c.indice, accion: "rechazar", motivo: rechazo });
         continue;
       }
-      const existente = await ctx.db
-        .query("facturas")
-        .withIndex("by_condominio_periodo", (q) =>
-          q.eq("condominioId", args.condominioId).eq("periodo", args.periodo),
-        )
-        .filter((q) => q.eq(q.field("unidadId"), c.unidadId))
-        .first();
+      const existentes = await facturasDeIdentidad(ctx, args.condominioId, c.unidadId, args.periodo);
+      if (existentes.length > 1) {
+        plan.push({ indice: c.indice, accion: "rechazar", motivo: "factura_duplicada" });
+        continue;
+      }
+      const existente = existentes[0];
       plan.push({
         indice: c.indice,
-        accion: existente ? (args.soloNuevas ? "omitir" : "actualizar") : "insertar",
+        accion: !existente
+          ? "insertar"
+          : /* Una hecha a mano la reemplaza el PDF, aun con "solo nuevas". */
+            args.soloNuevas && existente.origen !== "manual"
+            ? "omitir"
+            : "actualizar",
       });
     }
 
@@ -881,6 +830,11 @@ export const finalizarImportacion = mutation({
     error: v.optional(v.string()),
     /** Facturas que no llegaron al backend: sin unidad emparejada. */
     sinUnidad: v.optional(v.array(v.number())),
+    /**
+     * Otras que el plan rechazó y no se mandaron a guardar (dos documentos
+     * de la misma unidad en el PDF: `documento_repetido`).
+     */
+    rechazos: v.optional(v.array(v.object({ indice: v.number(), motivo: v.string() }))),
   },
   handler: async (ctx, args) => {
     const importacion = await ctx.db.get(args.importacionId);
@@ -888,13 +842,15 @@ export const finalizarImportacion = mutation({
     await requireCondominioRole(ctx, importacion.condominioId, [...CARGA_ROLES]);
     if (importacion.estado !== "en_curso") return resumenImportacion(importacion);
     const sinUnidad = args.sinUnidad ?? [];
+    const otros = (args.rechazos ?? []).map((r) => ({ indice: r.indice, motivo: r.motivo.slice(0, 60) }));
     await ctx.db.patch(args.importacionId, {
       estado: args.estado,
       error: args.error?.slice(0, 500),
-      rechazadas: importacion.rechazadas + sinUnidad.length,
+      rechazadas: importacion.rechazadas + sinUnidad.length + otros.length,
       rechazos: [
         ...importacion.rechazos,
         ...sinUnidad.map((indice) => ({ indice, motivo: "sin_unidad" })),
+        ...otros,
       ],
       completadaAt: Date.now(),
     });
@@ -937,30 +893,100 @@ export const listEnRevision = query({
 });
 
 /**
+ * Motivos con los que el total que se cobraría NO salió del documento: no se
+ * encontró, o el documento empezaba en una hoja de continuación (falta la
+ * primera). Confirmar esas lecturas exige escribir el total del PDF.
+ */
+const SIN_TOTAL_DEL_DOCUMENTO: ReadonlySet<string> = new Set([
+  "total_no_leido",
+  "pagina_de_continuacion",
+]);
+
+/**
  * La administración revisó el PDF y da por buena la lectura, aunque no
  * cuadre (por ejemplo, el documento de la contabilidad viene así). Queda
  * registrado quién y cuándo; los motivos originales se conservan. Desde ese
  * momento la factura se paga y concilia como cualquier otra.
+ *
+ * ── Sin total en el documento (Fase 3, PASO 11) ──────────────────────────
+ * Si el total no se leyó (`total_no_leido`) o el documento empezaba en una
+ * hoja de continuación, el número guardado no salió del PDF: confirmarlo a
+ * ciegas era volver cobrable un monto que nadie verificó. Entonces hay que
+ * escribir el total que se ve en el documento (`totalVerificado`):
+ *   · si coincide con el leído (±$1), se confirma y queda registrado;
+ *   · si no, la factura queda con el total escrito —y sin el valor con
+ *     descuento, que tampoco se verificó, salvo que se escriba
+ *     (`totalConDescuentoVerificado`)—, y queda registrado el que se había
+ *     leído.
+ * La otra salida es volver a subir el PDF completo.
  */
 export const confirmarLectura = mutation({
-  args: { facturaId: v.id("facturas") },
+  args: {
+    facturaId: v.id("facturas"),
+    totalVerificado: v.optional(v.number()),
+    totalConDescuentoVerificado: v.optional(v.number()),
+  },
   handler: async (ctx, args) => {
     const factura = await ctx.db.get(args.facturaId);
     if (!factura) throw new Error("Factura no encontrada.");
     const { user } = await requireCondominioRole(ctx, factura.condominioId, [...CARGA_ROLES]);
     if (!factura.lecturaDudosa) throw new Error("La factura no tiene una lectura en revisión.");
     if (factura.lecturaDudosa.confirmada) return args.facturaId;
+
+    const sinTotal = factura.lecturaDudosa.motivos.some((m) => SIN_TOTAL_DEL_DOCUMENTO.has(m));
+    const verificado = args.totalVerificado;
+    if (sinTotal && verificado === undefined) {
+      throw new Error(
+        "El total de esta factura no salió del documento: escribe el total que ves en el PDF para confirmarla, o vuelve a subir el PDF completo.",
+      );
+    }
+    if (verificado !== undefined && !Number.isFinite(verificado)) {
+      throw new Error("El total escrito no es un número válido.");
+    }
+    const conDescuento = args.totalConDescuentoVerificado;
+    if (conDescuento !== undefined && (!Number.isFinite(conDescuento) || verificado === undefined || conDescuento > verificado)) {
+      throw new Error("El valor con descuento debe ser un número menor o igual al total.");
+    }
+
     const now = Date.now();
-    await ctx.db.patch(args.facturaId, {
-      lecturaDudosa: {
-        ...factura.lecturaDudosa,
-        confirmada: { userId: user._id, nombre: user.name, at: now },
+    const corrige = verificado !== undefined && Math.abs(verificado - factura.totalAPagar) > 1;
+    const tocada = await actualizarDocumento(
+      ctx,
+      factura,
+      {
+        lecturaDudosa: {
+          ...factura.lecturaDudosa,
+          confirmada: {
+            userId: user._id,
+            nombre: user.name,
+            at: now,
+            ...(verificado !== undefined
+              ? { totalVerificado: verificado, totalLeido: factura.totalAPagar }
+              : {}),
+          },
+        },
+        ...(corrige
+          ? {
+              totalAPagar: verificado,
+              totalConDescuento: conDescuento,
+              fechaLimiteDescuento: conDescuento === undefined ? undefined : factura.fechaLimiteDescuento,
+            }
+          : {}),
       },
-      /* Entró `pendiente` por ser dudosa; ahora sus números valen. */
-      ...(factura.estado === "pendiente" ? { estado: estadoDeCarga(factura) } : {}),
-      updatedAt: now,
+      `Lectura confirmada por ${nombreDe(user)}${
+        verificado === undefined
+          ? ""
+          : corrige
+            ? `: el total del documento es ${formatoPesos(verificado)} (se había leído ${formatoPesos(factura.totalAPagar)})`
+            : `: total verificado ${formatoPesos(verificado)}`
+      }`,
+    );
+    await recalcularCadena(ctx, factura.condominioId, factura.unidadId, {
+      origen: "confirmacion_lectura",
+      actor: nombreDe(user),
+      actorUserId: user._id,
+      ...(tocada ? { tocadas: new Map([[factura._id, tocada]]) } : {}),
     });
-    await conciliarCadenaUnidad(ctx, factura.condominioId, factura.unidadId);
     return args.facturaId;
   },
 });
@@ -973,7 +999,7 @@ export const confirmarLectura = mutation({
 export const reconciliar = mutation({
   args: { condominioId: v.id("condominios") },
   handler: async (ctx, args) => {
-    await requireCondominioRole(ctx, args.condominioId, [
+    const { user } = await requireCondominioRole(ctx, args.condominioId, [
       "administrador",
       "contadora",
       "junta_directiva",
@@ -984,18 +1010,18 @@ export const reconciliar = mutation({
       .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
       .collect();
 
-    const unidades = [...new Set(facturas.map((f) => f.unidadId))];
+    const unidades = new Map(facturas.map((f) => [f.unidadId, args.condominioId] as const));
 
-    const totales = { pagadas: 0, abonadas: 0, vencidas: 0 };
-    for (const unidadId of unidades) {
-      const c = await conciliarCadenaUnidad(ctx, args.condominioId, unidadId);
-      totales.pagadas += c.pagadas;
-      totales.abonadas += c.abonadas;
-      totales.vencidas += c.vencidas;
-    }
+    /* La misma regla que al cargar o pagar: una factura con evidencia de pago
+     * no la degrada la inferencia (F-02). */
+    const totales = await recalcularUnidades(ctx, unidades, {
+      origen: "conciliacion",
+      actor: nombreDe(user),
+      actorUserId: user._id,
+    });
 
     return {
-      unidades: unidades.length,
+      unidades: unidades.size,
       facturas: facturas.length,
       ...totales,
     };
@@ -1017,6 +1043,8 @@ const lecturaNuevaValidator = v.object({
   saldoAnteriorDocumento: v.optional(v.number()),
   periodoLabel: v.string(),
   motivos: v.array(v.string()),
+  /** El consecutivo del documento publicado: si no es el guardado, es otro documento. */
+  numeroInterno: v.optional(v.string()),
 });
 
 /**
@@ -1033,8 +1061,11 @@ const lecturaNuevaValidator = v.object({
  * aplica SOLO con autorización explícita, después de revisar el informe con
  * la administración (docs/audits/FASE-2-FACTURACION.md, PASO 12).
  *
- * No toca facturas con un pago aprobado o un comprobante aprobado (F-02 es de
- * la Fase 3), ni las que su propio documento dice que son de otro período.
+ * No toca los números de facturas con un pago aprobado o un comprobante
+ * aprobado, ni las que su propio documento dice que son de otro período, ni
+ * aquellas cuyo PDF publicado es OTRO documento (otro consecutivo:
+ * `documento_distinto`, el caso de la casa 802 de Ciudad del Campo). El
+ * estado lo escribe `recalcularCadena`, con la regla de la Fase 3.
  */
 export const reprocesarLecturas = internalMutation({
   args: {
@@ -1063,33 +1094,39 @@ export const reprocesarLecturas = internalMutation({
           .withIndex("by_unidad", (q) => q.eq("unidadId", unidadId))
           .collect()
       ).filter((f) => f.condominioId === args.condominioId);
+      const ids = new Set<string>(cadena.map((f) => f._id));
+      const pagos = (await pagosRegistrados(ctx, unidadId)).filter((p) => ids.has(p.facturaId));
+      const discrepancias = (
+        await ctx.db
+          .query("discrepanciasPago")
+          .withIndex("by_unidad", (q) => q.eq("unidadId", unidadId))
+          .collect()
+      ).filter((d) => d.condominioId === args.condominioId);
 
-      const conEvidencia = new Set<string>();
-      for (const f of cadena) {
-        const pago = await ctx.db
-          .query("pagos")
-          .withIndex("by_factura", (q) => q.eq("facturaId", f._id))
-          .filter((q) => q.eq(q.field("estado"), "aprobada"))
-          .first();
-        const comprobante = await ctx.db
-          .query("soportesPago")
-          .withIndex("by_factura", (q) => q.eq("facturaId", f._id))
-          .filter((q) => q.eq(q.field("estado"), "aprobado"))
-          .first();
-        if (pago || comprobante) conEvidencia.add(f._id);
-      }
-
-      const plan = planificarReproceso({ cadena, lecturas, conEvidencia, ahora });
+      const plan = planificarReproceso({ cadena, lecturas, pagos, discrepancias, ahora });
       if (!dryRun) {
+        const tocadas = new Map<Id<"facturas">, Tocada>();
         for (const pf of plan.facturas) {
           if (pf.cambios.length === 0) continue;
-          /* La marca conservada trae el `userId` de quien confirmó tal como
-           * está en la base; las nuevas no traen confirmación. */
-          await ctx.db.patch(pf.facturaId as Id<"facturas">, {
-            ...(pf.parche as Partial<Doc<"facturas">>),
-            updatedAt: ahora,
-          });
+          const factura = cadena.find((f) => f._id === pf.facturaId)!;
+          /* Solo los números del documento; el estado lo pone
+           * `recalcularCadena`, con el mismo cálculo del plan. La marca
+           * conservada trae el `userId` de quien confirmó tal como está en la
+           * base; las nuevas no traen confirmación. */
+          const { estado: _estado, ...numeros } = pf.parche;
+          const tocada = await actualizarDocumento(
+            ctx,
+            factura,
+            numeros as Parameters<typeof actualizarDocumento>[2],
+            "Re-procesada con el parser nuevo",
+          );
+          if (tocada) tocadas.set(factura._id, tocada);
         }
+        await recalcularCadena(ctx, args.condominioId, unidadId, {
+          origen: "reproceso",
+          actor: "facturas.reprocesarLecturas",
+          tocadas,
+        });
       }
       planes.push(plan);
     }
@@ -1111,6 +1148,12 @@ export const generateUploadUrl = mutation({
 /**
  * Crea una factura puntual para una unidad (montos manuales + PDF/imagen opcional).
  * Falla si ya existe factura para (condominio, unidad, período).
+ *
+ * Queda con `origen: "manual"`: si después llega el PDF de la contabilidad
+ * para esa unidad y período, la carga la reemplaza (aun con "solo nuevas"),
+ * porque la manual era un sustituto mientras llegaba el documento.
+ * El vencimiento lo elige quien la crea; la web y el móvil proponen el de la
+ * regla nueva (`vencimientoDePeriodo`).
  */
 export const createManual = mutation({
   args: {
@@ -1125,7 +1168,7 @@ export const createManual = mutation({
     pdfUrl: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await requireCondominioRole(ctx, args.condominioId, [
+    const { user } = await requireCondominioRole(ctx, args.condominioId, [
       "administrador",
       "contadora",
       "junta_directiva",
@@ -1149,14 +1192,7 @@ export const createManual = mutation({
       throw new Error("Unidad no encontrada en este condominio.");
     }
 
-    const existing = await ctx.db
-      .query("facturas")
-      .withIndex("by_condominio_periodo", (q) =>
-        q.eq("condominioId", args.condominioId).eq("periodo", args.periodo),
-      )
-      .filter((q) => q.eq(q.field("unidadId"), args.unidadId))
-      .first();
-    if (existing) {
+    if ((await facturasDeIdentidad(ctx, args.condominioId, args.unidadId, args.periodo)).length > 0) {
       throw new Error(
         "Ya existe una factura para esta unidad en ese período.",
       );
@@ -1194,7 +1230,7 @@ export const createManual = mutation({
       pdfUrl = (await ctx.storage.getUrl(args.pdfStorageId)) ?? undefined;
     }
 
-    const id = await ctx.db.insert("facturas", {
+    const entrada: EntradaFactura = {
       condominioId: args.condominioId,
       unidadId: args.unidadId,
       membershipId,
@@ -1219,14 +1255,21 @@ export const createManual = mutation({
       totalConDescuento: args.totalConDescuento,
       fechaEmision: now,
       fechaVencimiento: args.fechaVencimiento,
-      estado: "pendiente",
       pdfUrl,
-      createdAt: now,
-      updatedAt: now,
-    });
+      origen: "manual",
+    };
+    const escritura = await escribirFactura(ctx, entrada, { siExiste: "error" });
+    if (escritura.accion !== "insertada") {
+      throw new Error("Ya existe una factura para esta unidad en ese período.");
+    }
 
-    await conciliarCadenaUnidad(ctx, args.condominioId, args.unidadId);
-    return id;
+    await recalcularCadena(ctx, args.condominioId, args.unidadId, {
+      origen: "carga",
+      actor: nombreDe(user),
+      actorUserId: user._id,
+      tocadas: new Map([[escritura.facturaId, escritura.tocada]]),
+    });
+    return escritura.facturaId;
   },
 });
 
@@ -1305,26 +1348,39 @@ export const listMia = query({
  * Deriva ambas del período "YYYY-MM":
  *   fechaEmision     = día 1 del mes del período
  *   fechaVencimiento = día 15 del mes siguiente (regla documentada en el schema)
- * Solo toca facturas con la fecha en 0. Idempotente.
+ * Solo toca facturas con la fecha en 0. Idempotente. No mueve el estado;
+ * cada factura completada deja su evento en la bitácora.
  */
 export const backfillFechas = internalMutation({
   args: {},
   handler: async (ctx) => {
     const rows = await ctx.db.query("facturas").collect();
     let actualizadas = 0;
-    const now = Date.now();
     for (const f of rows) {
       if (f.fechaEmision > 0 && f.fechaVencimiento > 0) continue;
       const parts = f.periodo.split("-");
       const y = Number(parts[0]);
       const m = Number(parts[1]);
       if (!y || !m) continue;
-      await ctx.db.patch(f._id, {
-        fechaEmision: f.fechaEmision > 0 ? f.fechaEmision : Date.UTC(y, m - 1, 1, 12),
-        fechaVencimiento:
-          f.fechaVencimiento > 0 ? f.fechaVencimiento : Date.UTC(y, m, 15, 12),
-        updatedAt: now,
-      });
+      const tocada = await actualizarDocumento(
+        ctx,
+        f,
+        {
+          fechaEmision: f.fechaEmision > 0 ? f.fechaEmision : Date.UTC(y, m - 1, 1, 12),
+          fechaVencimiento:
+            f.fechaVencimiento > 0 ? f.fechaVencimiento : Date.UTC(y, m, 15, 12),
+        },
+        "Fechas completadas",
+      );
+      if (tocada) {
+        await anotarEvento(
+          ctx,
+          f,
+          { origen: "migracion", actor: "facturas.backfillFechas" },
+          tocada.detalle,
+          tocada.datos,
+        );
+      }
       actualizadas++;
     }
     return { actualizadas, total: rows.length };
@@ -1467,5 +1523,272 @@ export const estadoCuentaUnidad = query({
        * estado de cuenta. */
       facturas: filas.reverse(),
     };
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// Finanzas: lo que la administración tiene que revisar (Fase 3)
+// ─────────────────────────────────────────────────────────────
+
+type UnidadCorta = { numero: string; torre: string | null };
+
+async function etiquetaUnidad(
+  ctx: QueryCtx,
+  cache: Map<Id<"unidades">, UnidadCorta>,
+  unidadId: Id<"unidades">,
+): Promise<UnidadCorta> {
+  let u = cache.get(unidadId);
+  if (!u) {
+    const doc = await ctx.db.get(unidadId);
+    u = { numero: doc?.numero ?? "—", torre: doc?.torre ?? null };
+    cache.set(unidadId, u);
+  }
+  return u;
+}
+
+/**
+ * Pagos por revisar del conjunto:
+ *   · discrepancias: Vekino registró un pago que la factura siguiente no
+ *     refleja (abiertas primero, y las resueltas recientes con su motivo);
+ *   · excedentes: facturas pagadas de más (se informan; no se aplican solos);
+ *   · pagos sin estado final: la pasarela no respondió y la consulta
+ *     automática se rindió (`pagos.reconsultaDiaria`).
+ */
+export const pagosPorRevisar = query({
+  args: { condominioId: v.id("condominios") },
+  handler: async (ctx, args) => {
+    await requireCondominioRole(ctx, args.condominioId, [...CARTERA_ROLES]);
+    const cache = new Map<Id<"unidades">, UnidadCorta>();
+
+    const discrepancias = await ctx.db
+      .query("discrepanciasPago")
+      .withIndex("by_condominio_estado", (q) => q.eq("condominioId", args.condominioId))
+      .order("desc")
+      .take(200);
+    const ordenadas = [...discrepancias].sort((a, b) =>
+      a.estado === b.estado ? b.updatedAt - a.updatedAt : a.estado === "abierta" ? -1 : 1,
+    );
+    const filasDiscrepancia = [];
+    for (const d of ordenadas) {
+      const u = await etiquetaUnidad(ctx, cache, d.unidadId);
+      filasDiscrepancia.push({
+        _id: d._id,
+        estado: d.estado,
+        unidadNumero: u.numero,
+        unidadTorre: u.torre,
+        facturaId: d.facturaId,
+        facturaSiguienteId: d.facturaSiguienteId,
+        periodo: d.periodo,
+        periodoSiguiente: d.periodoSiguiente,
+        montoAdeudado: d.montoAdeudado,
+        montoPagado: d.montoPagado,
+        saldoAnteriorSiguiente: d.saldoAnteriorSiguiente,
+        montoNoAplicado: d.montoNoAplicado,
+        pagos: d.pagoIds.length,
+        comprobantes: d.soporteIds.length,
+        resolucion: d.resolucion ?? null,
+        createdAt: d.createdAt,
+      });
+    }
+
+    const facturas = await ctx.db
+      .query("facturas")
+      .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
+      .collect();
+    const excedentes = [];
+    for (const f of facturas) {
+      if (!f.estadoPago?.excedente) continue;
+      const u = await etiquetaUnidad(ctx, cache, f.unidadId);
+      excedentes.push({
+        facturaId: f._id,
+        periodo: f.periodo,
+        unidadNumero: u.numero,
+        unidadTorre: u.torre,
+        montoAdeudado: f.estadoPago.montoAdeudado,
+        montoPagado: f.estadoPago.montoPagado,
+        excedente: f.estadoPago.excedente,
+      });
+    }
+
+    const pagos = await ctx.db
+      .query("pagos")
+      .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
+      .order("desc")
+      .take(500);
+    const sinEstadoFinal = [];
+    for (const p of pagos) {
+      if (!p.consultaAgotadaAt || (p.estado !== "iniciada" && p.estado !== "pendiente")) continue;
+      const u = await etiquetaUnidad(ctx, cache, p.unidadId);
+      sinEstadoFinal.push({
+        pagoId: p._id,
+        facturaId: p.facturaId,
+        unidadNumero: u.numero,
+        unidadTorre: u.torre,
+        monto: p.monto,
+        estado: p.estado,
+        createdAt: p.createdAt,
+        consultaAgotadaAt: p.consultaAgotadaAt,
+      });
+    }
+
+    return { discrepancias: filasDiscrepancia, excedentes, sinEstadoFinal };
+  },
+});
+
+/**
+ * La administración resuelve a mano una discrepancia: verificó con la
+ * contabilidad (o con el banco) y deja escrito qué encontró.
+ *
+ * Al resolverla, la vigente deja de estar "pago en verificación" y vuelve a
+ * poderse pagar por el valor de su documento. Por eso la nota es obligatoria:
+ * resolver sin que la contabilidad haya reflejado el pago es volver a cobrar
+ * lo que el residente ya pagó. Si la contabilidad emite un documento
+ * corregido, no hace falta resolverla: se resuelve sola al cargarlo.
+ */
+export const resolverDiscrepancia = mutation({
+  args: { id: v.id("discrepanciasPago"), nota: v.string() },
+  handler: async (ctx, args) => {
+    const d = await ctx.db.get(args.id);
+    if (!d) throw new Error("Discrepancia no encontrada.");
+    const { user } = await requireCondominioRole(ctx, d.condominioId, [...CARGA_ROLES]);
+    const nota = args.nota.trim().slice(0, 500);
+    if (!nota) throw new Error("Escribe qué se verificó para resolverla.");
+    if (d.estado === "resuelta") return args.id;
+
+    const ahora = Date.now();
+    await ctx.db.patch(args.id, {
+      estado: "resuelta",
+      resolucion: {
+        tipo: "administracion",
+        nota,
+        userId: user._id,
+        nombre: nombreDe(user),
+        at: ahora,
+      },
+      updatedAt: ahora,
+    });
+    const contexto = {
+      origen: "discrepancia" as const,
+      actor: nombreDe(user),
+      actorUserId: user._id,
+    };
+    const factura = await ctx.db.get(d.facturaId);
+    if (factura) {
+      await anotarEvento(
+        ctx,
+        factura,
+        contexto,
+        `Discrepancia resuelta por ${nombreDe(user)}: ${nota}`,
+        { discrepanciaId: d._id, montoNoAplicado: d.montoNoAplicado },
+      );
+    }
+    await recalcularCadena(ctx, d.condominioId, d.unidadId, contexto);
+    return args.id;
+  },
+});
+
+/**
+ * Meses faltantes: unidades a las que les falta la factura de algún mes.
+ *
+ *   · `hueco`: entre dos facturas cargadas falta una (agosto y octubre, sin
+ *     septiembre). El saldo anterior de octubre no permite juzgar agosto
+ *     (F-09): queda sin veredicto hasta que se cargue septiembre.
+ *   · `al_final`: a la unidad le faltan los meses más recientes que el
+ *     conjunto ya cargó para las demás. Su "vigente" es vieja.
+ */
+export const mesesFaltantes = query({
+  args: { condominioId: v.id("condominios") },
+  handler: async (ctx, args) => {
+    await requireCondominioRole(ctx, args.condominioId, [...CARTERA_ROLES]);
+    const facturas = await ctx.db
+      .query("facturas")
+      .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
+      .collect();
+    const ultimoDelConjunto = facturas.reduce(
+      (max, f) => (f.periodo.localeCompare(max) > 0 ? f.periodo : max),
+      "",
+    );
+    const porUnidad = new Map<Id<"unidades">, Set<string>>();
+    for (const f of facturas) {
+      const s = porUnidad.get(f.unidadId) ?? new Set<string>();
+      s.add(f.periodo);
+      porUnidad.set(f.unidadId, s);
+    }
+
+    /** Los períodos estrictamente entre `desde` y `hasta` (a lo sumo dos años). */
+    const entre = (desde: string, hasta: string, incluirHasta: boolean): string[] => {
+      const faltan: string[] = [];
+      for (
+        let p = periodoSiguiente(desde);
+        (incluirHasta ? p.localeCompare(hasta) <= 0 : p.localeCompare(hasta) < 0) && faltan.length < 24;
+        p = periodoSiguiente(p)
+      ) {
+        faltan.push(p);
+      }
+      return faltan;
+    };
+
+    const cache = new Map<Id<"unidades">, UnidadCorta>();
+    const filas = [];
+    for (const [unidadId, periodos] of porUnidad) {
+      const orden = [...periodos].sort();
+      const huecos: {
+        tipo: "hueco" | "al_final";
+        desde: string;
+        hasta: string | null;
+        faltan: string[];
+      }[] = [];
+      for (let i = 1; i < orden.length; i++) {
+        if (periodosConsecutivos(orden[i - 1]!, orden[i]!)) continue;
+        huecos.push({
+          tipo: "hueco",
+          desde: orden[i - 1]!,
+          hasta: orden[i]!,
+          faltan: entre(orden[i - 1]!, orden[i]!, false),
+        });
+      }
+      const ultimo = orden[orden.length - 1]!;
+      if (ultimoDelConjunto && ultimo.localeCompare(ultimoDelConjunto) < 0) {
+        huecos.push({
+          tipo: "al_final",
+          desde: ultimo,
+          hasta: null,
+          faltan: entre(ultimo, ultimoDelConjunto, true),
+        });
+      }
+      if (huecos.length === 0) continue;
+      const u = await etiquetaUnidad(ctx, cache, unidadId);
+      filas.push({ unidadId, unidadNumero: u.numero, unidadTorre: u.torre, huecos });
+    }
+    return {
+      ultimoPeriodo: ultimoDelConjunto || null,
+      unidades: filas.sort((a, b) =>
+        a.unidadNumero.localeCompare(b.unidadNumero, "es", { numeric: true }),
+      ),
+    };
+  },
+});
+
+/** La bitácora de una factura: cada cambio, con su origen y quién. */
+export const eventos = query({
+  args: { facturaId: v.id("facturas") },
+  handler: async (ctx, args) => {
+    const factura = await ctx.db.get(args.facturaId);
+    if (!factura) return [];
+    await requireCondominioRole(ctx, factura.condominioId, [...CARTERA_ROLES]);
+    const filas = await ctx.db
+      .query("facturaEventos")
+      .withIndex("by_factura", (q) => q.eq("facturaId", args.facturaId))
+      .order("desc")
+      .take(100);
+    return filas.map((e) => ({
+      _id: e._id,
+      at: e.at,
+      origen: e.origen,
+      estadoAntes: e.estadoAntes ?? null,
+      estadoDespues: e.estadoDespues,
+      actor: e.actor ?? null,
+      detalle: e.detalle,
+    }));
   },
 });

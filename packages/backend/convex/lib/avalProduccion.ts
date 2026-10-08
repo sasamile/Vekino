@@ -79,3 +79,26 @@ export function faltantesParaProduccion(cfg: ConfigRevisable): string[] {
   }
   return faltan;
 }
+
+/** Los dos ambientes de la pasarela. */
+export type AmbienteAval = "qa" | "prod";
+
+/**
+ * El ambiente de la pasarela, que tiene que estar declarado (Fase 3 de la
+ * auditoría de facturación, F-21).
+ *
+ * Antes, sin `AVAL_AMBIENTE` se asumía "qa". En un deployment de producción
+ * al que se le olvidara la variable, los pagos reales quedaban marcados como
+ * de prueba —y `pagosPruebas.revertirTodos` borra los de prueba y le quita el
+ * "pagada" a sus facturas—. Ahora la variable es obligatoria y solo admite
+ * "qa" o "prod": sin ella no sale nada al banco ni se toca un pago.
+ */
+export function ambienteAval(env: Record<string, string | undefined>): AmbienteAval {
+  const valor = env.AVAL_AMBIENTE?.trim();
+  if (valor === "qa" || valor === "prod") return valor;
+  throw new Error(
+    valor
+      ? `AVAL_AMBIENTE debe ser "qa" o "prod" (es "${valor.slice(0, 20)}"). No se envía nada al banco.`
+      : 'Falta AVAL_AMBIENTE ("qa" o "prod") en el deployment. No se envía nada al banco.',
+  );
+}

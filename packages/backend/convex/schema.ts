@@ -329,6 +329,12 @@ export default defineSchema({
             userId: v.id("users"),
             nombre: v.string(),
             at: v.number(),
+            // Sin total en el documento (o empezaba en una hoja de
+            // continuación): el total que la administración leyó en el PDF y
+            // escribió al confirmar, y el que se había leído. Ver
+            // `facturas.confirmarLectura`.
+            totalVerificado: v.optional(v.number()),
+            totalLeido: v.optional(v.number()),
           }),
         ),
       }),
@@ -339,13 +345,77 @@ export default defineSchema({
 
     // Fechas
     fechaEmision: v.number(), // timestamp
-    fechaVencimiento: v.number(), // timestamp (día 15 del siguiente mes)
+    // Timestamp. Desde la Fase 3, el último día del mes del período ("del 16
+    // a 30 se paga el precio completo"); antes, el día 15 del mes siguiente.
+    // Ver `lib/cartera.ts`, `vencimientoDePeriodo`.
+    fechaVencimiento: v.number(),
+    // Último instante en que vale `totalConDescuento`, leído del documento
+    // ("HASTA EL DIA 15 DEL PRESENTE MES"). Sin él se aplica la regla de
+    // `lib/cartera.ts`, `fechaLimiteDescuentoDe`.
+    fechaLimiteDescuento: v.optional(v.number()),
+    // Lo calcula UNA función (`lib/estadoFactura.ts`, `estadoDeFactura`) a
+    // partir de la carga, la evidencia de pago (`estadoPago`) y el veredicto
+    // de la contabilidad (`veredictoContable`). Nadie más lo escribe.
     estado: v.union(
       v.literal("pendiente"),
       v.literal("pagada"),
       v.literal("vencida"),
       v.literal("abonada"),
       v.literal("saldo_a_favor"),
+    ),
+
+    // ── Modelo de pagos y estados (Fase 3 de la auditoría de facturación) ──
+    // Evidencia: lo que suman los pagos aprobados de la pasarela y los
+    // comprobantes aprobados de ESTA factura, contra lo que se adeudaba al
+    // pagar (el total con descuento si se pagó dentro del plazo).
+    estadoPago: v.optional(
+      v.object({
+        estado: v.union(v.literal("pagada"), v.literal("abonada")),
+        montoPagado: v.number(),
+        montoAdeudado: v.number(),
+        conDescuento: v.boolean(),
+        // Lo pagado de más. Se informa a la administración; no se aplica solo.
+        excedente: v.optional(v.number()),
+        actualizadoAt: v.number(),
+      }),
+    ),
+    // Inferencia: lo que la factura SIGUIENTE de la cadena dice de esta con su
+    // saldo anterior. `sin_veredicto` si entre las dos falta un mes.
+    // `heredado`: el estado que tenía antes de la Fase 3, sin factura
+    // siguiente que lo vuelva a juzgar.
+    veredictoContable: v.optional(
+      v.object({
+        estado: v.union(
+          v.literal("pagada"),
+          v.literal("abonada"),
+          v.literal("vencida"),
+          v.literal("saldo_a_favor"),
+          v.literal("sin_veredicto"),
+        ),
+        motivo: v.optional(v.union(v.literal("mes_faltante"), v.literal("heredado"))),
+        facturaSiguienteId: v.optional(v.id("facturas")),
+        saldoAnteriorSiguiente: v.optional(v.number()),
+        at: v.number(),
+      }),
+    ),
+    // Solo en la vigente: hay un pago registrado que la contabilidad todavía
+    // no refleja (`discrepanciasPago` abiertas). Mientras exista, la vigente
+    // no se cobra en línea y la unidad no se declara en mora por ese monto.
+    pagoEnVerificacion: v.optional(
+      v.object({
+        monto: v.number(),
+        discrepancias: v.array(v.id("discrepanciasPago")),
+      }),
+    ),
+    // Por dónde entró. "manual": la creó la administración a mano
+    // (`createManual`); el PDF del mismo período la reemplaza.
+    origen: v.optional(
+      v.union(
+        v.literal("pdf"),
+        v.literal("manual"),
+        v.literal("migracion"),
+        v.literal("script"),
+      ),
     ),
 
     // Archivos
@@ -362,8 +432,109 @@ export default defineSchema({
     .index("by_membership", ["membershipId"])
     .index("by_periodo", ["periodo"])
     .index("by_condominio_periodo", ["condominioId", "periodo"])
+    // La identidad de una factura: una por unidad y período. La busca el
+    // único escritor (`model/facturas.ts`, `escribirFactura`).
+    .index("by_condominio_unidad_periodo", ["condominioId", "unidadId", "periodo"])
     .index("by_estado", ["estado"])
     .index("by_legacyId", ["legacyId"]),
+
+  // ─────────────────────────────────────────────────────────────
+  // Bitácora de facturas: cada cambio, con su origen.
+  //
+  // Toda escritura de una factura pasa por `model/facturas.ts` o
+  // `model/estadoFactura.ts`, y deja aquí qué estado tenía, cuál quedó, por
+  // qué (la carga de un PDF, un pago, un comprobante, la conciliación…) y
+  // quién. Es historia: no se edita ni se borra (`limpieza` no la toca).
+  // ─────────────────────────────────────────────────────────────
+  facturaEventos: defineTable({
+    facturaId: v.id("facturas"),
+    condominioId: v.id("condominios"),
+    unidadId: v.id("unidades"),
+    periodo: v.string(),
+    /** Ausente cuando el evento es la creación de la factura. */
+    estadoAntes: v.optional(
+      v.union(
+        v.literal("pendiente"),
+        v.literal("pagada"),
+        v.literal("vencida"),
+        v.literal("abonada"),
+        v.literal("saldo_a_favor"),
+      ),
+    ),
+    estadoDespues: v.union(
+      v.literal("pendiente"),
+      v.literal("pagada"),
+      v.literal("vencida"),
+      v.literal("abonada"),
+      v.literal("saldo_a_favor"),
+    ),
+    origen: v.union(
+      v.literal("carga"),
+      v.literal("conciliacion"),
+      v.literal("pago"),
+      v.literal("comprobante"),
+      v.literal("confirmacion_lectura"),
+      v.literal("reproceso"),
+      v.literal("migracion"),
+      v.literal("discrepancia"),
+    ),
+    /** Quién: el nombre de la persona, "Pasarela Aval", "Sistema" o el script. */
+    actor: v.optional(v.string()),
+    actorUserId: v.optional(v.id("users")),
+    detalle: v.string(),
+    /** Lo que cambió, para auditoría (campos, montos, ids). */
+    datos: v.optional(v.any()),
+    at: v.number(),
+  })
+    .index("by_factura", ["facturaId"])
+    .index("by_condominio", ["condominioId"]),
+
+  // ─────────────────────────────────────────────────────────────
+  // Discrepancias de pago: Vekino registró un pago de la factura N y la
+  // factura N+1 no lo refleja (su saldo anterior es mayor que lo que quedaba
+  // por pagar). No se le cobra dos veces al residente: la vigente queda "pago
+  // en verificación" hasta que un documento posterior lo refleje o la
+  // administración lo resuelva. Ver `lib/estadoFactura.ts`.
+  // ─────────────────────────────────────────────────────────────
+  discrepanciasPago: defineTable({
+    condominioId: v.id("condominios"),
+    unidadId: v.id("unidades"),
+    /** N: la factura que tiene el pago. */
+    facturaId: v.id("facturas"),
+    /** N+1: la que no lo refleja. */
+    facturaSiguienteId: v.id("facturas"),
+    periodo: v.string(),
+    periodoSiguiente: v.string(),
+    montoAdeudado: v.number(),
+    montoPagado: v.number(),
+    saldoAnteriorSiguiente: v.number(),
+    /** Lo pagado que la contabilidad no muestra aplicado. */
+    montoNoAplicado: v.number(),
+    pagoIds: v.array(v.id("pagos")),
+    soporteIds: v.array(v.id("soportesPago")),
+    estado: v.union(v.literal("abierta"), v.literal("resuelta")),
+    resolucion: v.optional(
+      v.object({
+        tipo: v.union(
+          v.literal("documento_corregido"),
+          v.literal("aplicado_en_documento_posterior"),
+          v.literal("pago_reversado"),
+          v.literal("administracion"),
+        ),
+        nota: v.optional(v.string()),
+        userId: v.optional(v.id("users")),
+        nombre: v.optional(v.string()),
+        /** El documento que la resolvió, si fue uno. */
+        facturaId: v.optional(v.id("facturas")),
+        at: v.number(),
+      }),
+    ),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_condominio_estado", ["condominioId", "estado"])
+    .index("by_unidad", ["unidadId"])
+    .index("by_factura", ["facturaId"]),
 
   // ─────────────────────────────────────────────────────────────
   // Importaciones de facturas: una por PDF confirmado en Finanzas.
@@ -447,7 +618,11 @@ export default defineSchema({
       v.literal("fallida"),        // StatusCode 3
       v.literal("expirada"),       // StatusCode 5
       v.literal("no_autorizada"),  // StatusCode 6
-      v.literal("error")           // fallo nuestro creando la transacción
+      v.literal("error"),          // fallo nuestro creando la transacción
+      // Un pago aprobado que después se anuló (contracargo, reverso del
+      // banco). Aval no documenta un código para esto: solo lo marca
+      // `pagos.reversarPago`, a mano y con su motivo. Deja de ser evidencia.
+      v.literal("reversada"),
     ),
     statusCodeAval: v.optional(v.string()), // StatusCode crudo de Aval
     medioPago: v.optional(v.string()),      // "PSE" | "TC" | "Pagos AVAL"
@@ -456,6 +631,14 @@ export default defineSchema({
     // URLs y ambiente
     redirectUrl: v.optional(v.string()),    // front de la pasarela (destino del usuario)
     ambiente: v.string(),                    // "qa" | "prod"
+    // Pago contra el ambiente de PRUEBAS de Aval (AVAL_AMBIENTE=qa). Lo único
+    // que `pagosPruebas` puede revertir o borrar.
+    esPrueba: v.optional(v.boolean()),
+    reversadaAt: v.optional(v.number()),
+    motivoReverso: v.optional(v.string()),
+    // La consulta automática se rindió sin un estado final (ver
+    // `pagos.reconsultaDiaria`): queda para revisión de la administración.
+    consultaAgotadaAt: v.optional(v.number()),
 
     // Trazabilidad (respuestas crudas para auditoría/soporte)
     trnRaw: v.optional(v.any()),
@@ -469,6 +652,7 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_factura", ["facturaId"])
+    .index("by_unidad", ["unidadId"])
     .index("by_condominio", ["condominioId"])
     .index("by_pmtAuthId", ["pmtAuthId"])
     .index("by_rqUID", ["rqUID"])
@@ -2549,6 +2733,15 @@ export default defineSchema({
     mimeType: v.optional(v.string()),
     nota: v.optional(v.string()), // caption que acompañó la imagen
 
+    // Cuánto y cuándo se pagó. Lo declara el residente al subirlo y lo
+    // confirma la administración al aprobarlo: con eso el comprobante es
+    // evidencia de pago por un monto (`lib/estadoFactura.ts`).
+    monto: v.optional(v.number()),
+    fechaPago: v.optional(v.number()),
+    // Aprobado sin monto (versiones viejas de la app, o el bot antes de
+    // preguntar): se toma como pago completo de lo adeudado, y así se ve.
+    montoAsumido: v.optional(v.boolean()),
+
     estado: v.union(
       v.literal("pendiente_revision"),
       v.literal("aprobado"),
@@ -2563,7 +2756,8 @@ export default defineSchema({
   })
     .index("by_condominio", ["condominioId"])
     .index("by_condominio_estado", ["condominioId", "estado"])
-    .index("by_factura", ["facturaId"]),
+    .index("by_factura", ["facturaId"])
+    .index("by_unidad", ["unidadId"]),
 
   // ─────────────────────────────────────────────────────────────
   // VIGILANCIA — compañías de seguridad, personal, contratos y asignaciones

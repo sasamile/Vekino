@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
+import { finDelDiaDelPeriodo, vencimientoDePeriodo } from "@vekino/backend/cartera";
 import { fetchAuthMutation } from "@/lib/auth-server";
 import { hashDe, leerPdf, pdfDeFactura } from "../lectura";
 import { rechazoDePermiso, rechazoSinSesion } from "../permiso";
@@ -27,6 +28,11 @@ export const maxDuration = 60;
  *      `pdfUrl` anterior de una factura actualizada sigue sirviendo.
  *   5. `bulkUpsert` guarda (y vuelve a validar) y `finalizarImportacion`
  *      cierra la carga con sus conteos.
+ *
+ * Fase 3: el vencimiento de lo que entra es el último día del mes del
+ * período (`vencimientoDePeriodo`, decisión de la administración) y el plazo
+ * del descuento es el que dice el documento (`fechaLimiteDescuento`). Dos
+ * documentos para la misma unidad no se guardan (`documento_repetido`).
  */
 
 const s3 = new S3Client({
@@ -42,19 +48,6 @@ const REGION = process.env.AWS_REGION ?? "us-east-1";
 const LOTE = 20;
 /** Publicaciones simultáneas en S3. */
 const PARALELO = 6;
-
-/**
- * El vencimiento que la carga le pone a una factura: el día 15 del mes
- * siguiente al período, a medianoche de Colombia. Es la regla que aplicaba la
- * pantalla (con la hora del navegador); aquí se fija la zona porque el
- * servidor no corre en Colombia. Qué fecha es la correcta lo decide la Fase 3
- * de la auditoría (F-06).
- */
-function vencimientoDe(periodo: string): number {
-  const [a, m] = periodo.split("-").map(Number) as [number, number];
-  const siguiente = m === 12 ? `${a + 1}-01` : `${a}-${String(m + 1).padStart(2, "0")}`;
-  return Date.parse(`${siguiente}-15T00:00:00-05:00`);
-}
 
 function llaveDe(
   legacyId: string,
@@ -193,8 +186,19 @@ export async function POST(req: NextRequest) {
     });
 
     const fechaEmision = Date.now();
-    const fechaVencimiento = vencimientoDe(periodo);
-    const facturas = candidatas.map((c, i) => {
+    /* Decisión de la administración para la Fase 3: "con descuento hasta el
+     * 15 del presente mes, del 16 a 30 se paga el precio completo". El
+     * vencimiento es el último día del mes del período (antes, el 15 del mes
+     * siguiente). Solo para lo que entra desde ahora. */
+    const fechaVencimiento = vencimientoDePeriodo(periodo);
+    /* Dos documentos para la misma unidad en este PDF: el plan los rechazó y
+     * no se mandan a guardar (podrían caer en lotes distintos y el segundo
+     * pisaría al primero). Quedan registrados al cerrar. */
+    const repetidas = inicio.plan.filter(
+      (p) => p.accion === "rechazar" && p.motivo === "documento_repetido",
+    );
+    const fuera = new Set(repetidas.map((p) => p.indice));
+    const facturas = candidatas.filter((c) => !fuera.has(c.indice)).map((c, i) => {
       const f = leido.facturas[c.indice]!;
       const pdfUrl = urls.get(c.indice);
       return {
@@ -211,6 +215,9 @@ export async function POST(req: NextRequest) {
         saldoAFavor: f.saldoAFavor,
         totalAPagar: f.totalAPagar,
         ...(f.totalConDescuento !== undefined ? { totalConDescuento: f.totalConDescuento } : {}),
+        ...(f.totalConDescuento !== undefined && f.diaLimiteDescuento !== undefined
+          ? { fechaLimiteDescuento: finDelDiaDelPeriodo(periodo, f.diaLimiteDescuento) }
+          : {}),
         ...(f.saldoAnteriorDocumento !== undefined
           ? { saldoAnteriorDocumento: f.saldoAnteriorDocumento }
           : {}),
@@ -238,6 +245,9 @@ export async function POST(req: NextRequest) {
       importacionId,
       estado: "completada",
       sinUnidad,
+      ...(repetidas.length > 0
+        ? { rechazos: repetidas.map((p) => ({ indice: p.indice, motivo: "documento_repetido" })) }
+        : {}),
     });
     return NextResponse.json({ tipo: "nueva", ...final, conciliacion, publicadas: aPublicar.length });
   } catch (e) {

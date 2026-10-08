@@ -19,6 +19,14 @@ import type { Id } from "./_generated/dataModel";
  * NUNCA toca los datos maestros —unidades, usuarios, facturas, vehiculos,
  * zonas, documentos, comunicados— porque esos son reales: se importaron de la
  * contabilidad y del censo del conjunto, no los inventamos nosotros.
+ *
+ * Tampoco la evidencia ni la historia del dinero (Fase 3 de la auditoria de
+ * facturacion): los pagos de la pasarela, los comprobantes, la bitacora de
+ * facturas (`facturaEventos`), las discrepancias de pago y las importaciones
+ * de PDF. Antes "Pagos de pasarela" y "Soportes de pago" estaban en la lista:
+ * limpiar un conjunto en operacion borraba la prueba de que una casa pago, y
+ * la factura quedaba como si no. Los pagos de PRUEBA se quitan con
+ * `pagosPruebas`, que solo toca los marcados como tales.
  */
 
 /** Tablas de operacion que se pueden limpiar, con su nombre en cristiano. */
@@ -35,11 +43,23 @@ const OPERACION = {
   guardiaRondas: "Rondas",
   pqrs: "PQRS",
   soporteTickets: "Tickets de soporte",
-  pagos: "Pagos de pasarela",
-  soportesPago: "Soportes de pago",
   inventarioNovedades: "Novedades de inventario",
   actividadUso: "Actividad de uso",
 } as const;
+
+/**
+ * Lo que la limpieza no toca nunca, aunque se pida por nombre. La lista
+ * existe para que una prueba lo compruebe y para que nadie la agregue arriba
+ * sin leer esto.
+ */
+export const NUNCA_SE_LIMPIA = [
+  "pagos",
+  "soportesPago",
+  "facturaEventos",
+  "discrepanciasPago",
+  "importaciones",
+  "facturas",
+] as const;
 
 type Tabla = keyof typeof OPERACION;
 

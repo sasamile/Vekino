@@ -5,7 +5,14 @@ import { useParams } from "next/navigation";
 import { useQuery, useAction } from "convex/react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
-import { enRevision, resumenResidente } from "@vekino/backend/cartera";
+import {
+  descuentoVigente,
+  enRevision,
+  fechaLimiteDescuentoDe,
+  mensajePagoEnVerificacion,
+  montoAPagarHoy as montoDeHoy,
+  resumenResidente,
+} from "@vekino/backend/cartera";
 import {
   Download,
   ArrowRight,
@@ -22,23 +29,20 @@ import { cop, cn } from "@/lib/utils";
 import {
   ESTADO_FACTURA,
   etiquetaUnidad,
-  fechaLarga,
+  fechaPlazo,
   periodoHumano,
 } from "@/components/portal/portal-ui";
 
 const FECHA_MIN = 946684800000;
 
-function montoAPagarHoy(f: {
-  totalAPagar: number;
-  totalConDescuento?: number;
-  fechaVencimiento: number;
-}, ahora = Date.now()) {
-  const conDescuento =
-    typeof f.totalConDescuento === "number" &&
-    f.totalConDescuento < f.totalAPagar &&
-    f.fechaVencimiento > FECHA_MIN &&
-    ahora <= f.fechaVencimiento;
-  return conDescuento ? f.totalConDescuento! : f.totalAPagar;
+/**
+ * Lo que se cobra hoy: la misma regla del backend de pagos
+ * (`lib/cartera.ts`, `montoAPagarHoy`). El descuento vale hasta SU fecha —la
+ * del documento, o el 15 del mes del período—, no hasta el vencimiento
+ * (Fase 3, F-06): antes la pantalla ofrecía el descuento un mes de más.
+ */
+function montoAPagarHoy(f: Factura, ahora = Date.now()) {
+  return montoDeHoy(f, ahora);
 }
 
 type LineaFactura = {
@@ -58,12 +62,16 @@ type Factura = {
   estado: "pendiente" | "pagada" | "vencida" | "abonada" | "saldo_a_favor";
   totalAPagar: number;
   totalConDescuento?: number;
+  /** Hasta cuándo vale el descuento, según el documento (Fase 3). */
+  fechaLimiteDescuento?: number;
   saldoAFavor: number;
   fechaVencimiento: number;
   pdfUrl?: string;
   lineas: LineaFactura[];
   /** Lectura dudosa del PDF (Fase 2): en revisión mientras no se confirme. */
   lecturaDudosa?: { motivos: string[]; confirmada?: unknown } | null;
+  /** Un pago registrado que la contabilidad aún no refleja (Fase 3). */
+  pagoEnVerificacion?: { monto: number } | null;
   unidadNumero?: string;
   unidadTipo?: string;
   unidadTorre?: string | null;
@@ -103,6 +111,13 @@ export default function MisFacturas() {
   const pagables = resumen.pagables;
   const pagableIds = new Set(pagables.map((f) => f._id));
   const deudaTotal = pagables.reduce((s, f) => s + montoAPagarHoy(f), 0);
+  /* Pagos que Vekino registró y la contabilidad aún no refleja: no se cobran
+   * otra vez, y la unidad no está "en mora" por ellos. */
+  const enVerificacion = resumen.unidades.reduce(
+    (s, u) =>
+      s + (u.cartera.motivoRevision === "pago_en_verificacion" ? (u.cartera.montoEnVerificacion ?? 0) : 0),
+    0,
+  );
 
   function scrollToFacturas() {
     document.getElementById("facturas")?.scrollIntoView({ behavior: "smooth" });
@@ -181,6 +196,7 @@ export default function MisFacturas() {
           estaAlDia={estaAlDia}
           enMora={enMora}
           enRevision={resumen.estado === "en_revision"}
+          enVerificacion={enVerificacion}
           conteo={pagables.length}
           deuda={deudaTotal}
           multiUnidad={multiUnidad && unidadFiltro === ""}
@@ -190,6 +206,7 @@ export default function MisFacturas() {
           loading={facturas === undefined}
           facturas={pagables}
           estaAlDia={estaAlDia}
+          enVerificacion={enVerificacion}
           unidadesEnMora={unidadesEnMora}
           avalPortalUrl={avalPortalUrl}
           multiUnidad={multiUnidad}
@@ -251,6 +268,7 @@ function ResumenActual({
   estaAlDia,
   enMora,
   enRevision,
+  enVerificacion,
   conteo,
   deuda,
   multiUnidad,
@@ -262,6 +280,8 @@ function ResumenActual({
   enMora: boolean;
   /** La factura vigente tiene una lectura dudosa: ni al día ni en mora. */
   enRevision: boolean;
+  /** Pagado y todavía no reflejado por la contabilidad (0 si no hay). */
+  enVerificacion: number;
   conteo: number;
   deuda: number;
   multiUnidad: boolean;
@@ -278,9 +298,11 @@ function ResumenActual({
     ? "Al día"
     : enMora
       ? "Vencida"
-      : enRevision
-        ? "En revisión"
-        : "Pendiente";
+      : enVerificacion > 0
+        ? "Pago en verificación"
+        : enRevision
+          ? "En revisión"
+          : "Pendiente";
 
   return (
     <LiquidGlassCard className="relative flex min-h-[180px] w-full flex-col justify-between overflow-hidden p-5 sm:p-6">
@@ -297,6 +319,8 @@ function ResumenActual({
           <p className="text-sm text-muted-foreground">
             No tienes facturas pendientes. ¡Estás al día!
           </p>
+        ) : enVerificacion > 0 && conteo === 0 ? (
+          <p className="text-sm text-muted-foreground">{mensajePagoEnVerificacion(enVerificacion)}</p>
         ) : conteo === 0 ? (
           /* Debe, pero no hay una factura vigente que se pueda pagar: la
            * unidad tiene dos del mismo período y la administración debe
@@ -334,6 +358,7 @@ function ProximoPagoCard({
   loading,
   facturas,
   estaAlDia,
+  enVerificacion,
   unidadesEnMora,
   avalPortalUrl,
   multiUnidad,
@@ -342,6 +367,8 @@ function ProximoPagoCard({
   /** Las vigentes que se pueden pagar: a lo sumo una por unidad. */
   facturas: Factura[];
   estaAlDia: boolean;
+  /** Pagado y todavía no reflejado por la contabilidad (0 si no hay). */
+  enVerificacion: number;
   unidadesEnMora: ReadonlySet<string>;
   avalPortalUrl: string | null;
   multiUnidad: boolean;
@@ -363,6 +390,14 @@ function ProximoPagoCard({
             <p className="text-lg font-bold text-foreground">Estás al día</p>
             <p className="text-sm text-muted-foreground">
               No tienes pagos pendientes.
+            </p>
+          </>
+        ) : enVerificacion > 0 ? (
+          /* No se cobra en línea: se le cobraría dos veces lo que ya pagó. */
+          <>
+            <p className="text-lg font-bold text-foreground">Pago en verificación</p>
+            <p className="text-sm text-muted-foreground">
+              {mensajePagoEnVerificacion(enVerificacion)}
             </p>
           </>
         ) : (
@@ -428,8 +463,9 @@ function ProximoPagoCard({
     : ESTADO_FACTURA[factura.estado];
   const venc =
     factura.fechaVencimiento > FECHA_MIN
-      ? fechaLarga(factura.fechaVencimiento)
+      ? fechaPlazo(factura.fechaVencimiento)
       : null;
+  const limiteDescuento = fechaLimiteDescuentoDe(factura);
 
   return (
     <LiquidGlassCard className="flex min-h-[180px] w-full flex-col justify-between gap-4 p-5 sm:flex-row sm:items-center sm:p-6">
@@ -457,12 +493,9 @@ function ProximoPagoCard({
         <span className="text-xl font-bold tabular-nums tracking-tight text-foreground sm:text-2xl">
           {cop(montoAPagarHoy(factura))}
         </span>
-        {typeof factura.totalConDescuento === "number" &&
-        factura.totalConDescuento < factura.totalAPagar &&
-        factura.fechaVencimiento > FECHA_MIN &&
-        Date.now() <= factura.fechaVencimiento ? (
+        {limiteDescuento !== null && descuentoVigente(factura, Date.now()) ? (
           <p className="text-xs text-muted-foreground">
-            Sin descuento después: {cop(factura.totalAPagar)}
+            Con descuento hasta el {fechaPlazo(limiteDescuento)}. Después: {cop(factura.totalAPagar)}
           </p>
         ) : null}
         <PortalPayButton
@@ -493,8 +526,9 @@ function FacturaRow({
   const [open, setOpen] = useState(false);
   const meta = ESTADO_FACTURA[factura.estado];
   const isPagada = factura.estado === "pagada";
-  const venc = factura.fechaVencimiento > FECHA_MIN ? fechaLarga(factura.fechaVencimiento) : null;
+  const venc = factura.fechaVencimiento > FECHA_MIN ? fechaPlazo(factura.fechaVencimiento) : null;
   const periodo = periodoHumano(factura.periodo || factura.periodoLabel);
+  const limiteDescuento = fechaLimiteDescuentoDe(factura);
 
   return (
     <div className="overflow-hidden rounded-lg border border-border transition-colors">
@@ -510,6 +544,9 @@ function FacturaRow({
             </span>
             {meta && <Badge tone={meta.tone}>{meta.label}</Badge>}
             {enRevision(factura) && <Badge tone="info">En revisión</Badge>}
+            {factura.pagoEnVerificacion ? (
+              <Badge tone="info">Pago en verificación</Badge>
+            ) : null}
             {isPagada && (
               <span className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground">
                 <CheckCircle2 className="h-3.5 w-3.5" /> Pagada
@@ -527,6 +564,11 @@ function FacturaRow({
           {venc && (
             <p className="text-xs font-medium text-muted-foreground">Vence: {venc}</p>
           )}
+          {factura.pagoEnVerificacion ? (
+            <p className="mt-1 text-xs text-muted-foreground">
+              {mensajePagoEnVerificacion(factura.pagoEnVerificacion.monto)}
+            </p>
+          ) : null}
         </div>
 
         <div className="flex shrink-0 items-center justify-between gap-3 sm:justify-end">
@@ -599,6 +641,7 @@ function FacturaRow({
                   </tr>
                 )}
                 {factura.totalConDescuento != null &&
+                limiteDescuento !== null &&
                 factura.totalConDescuento < factura.totalAPagar ? (
                   <>
                     <tr>
@@ -606,7 +649,7 @@ function FacturaRow({
                         colSpan={3}
                         className="pt-3 text-right text-sm font-medium text-emerald-700 dark:text-emerald-400"
                       >
-                        Pague del 1 al 15 (con descuento)
+                        Con descuento, hasta el {fechaPlazo(limiteDescuento)}
                       </td>
                       <td className="pt-3 text-right text-base font-bold tabular-nums text-emerald-700 dark:text-emerald-400">
                         {cop(factura.totalConDescuento)}
@@ -614,7 +657,7 @@ function FacturaRow({
                     </tr>
                     <tr>
                       <td colSpan={3} className="pt-1 text-right text-sm font-semibold text-foreground">
-                        Pague del 16 al 30 (sin descuento)
+                        {venc ? `Sin descuento, hasta el ${venc}` : "Sin descuento"}
                       </td>
                       <td className="pt-1 text-right text-base font-bold tabular-nums text-foreground">
                         {cop(factura.totalAPagar)}

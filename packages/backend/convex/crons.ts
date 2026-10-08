@@ -76,4 +76,17 @@ crons.daily(
   {},
 );
 
+/**
+ * Vuelve a preguntarle a la pasarela por los pagos que quedaron sin estado
+ * final (la consulta de cada 2 minutos se rinde a la hora). Una vez al día,
+ * a las 6 de la mañana de Colombia, durante una semana por pago; después
+ * quedan para revisión en Finanzas. Ver `pagos.reconsultaDiaria`.
+ */
+crons.daily(
+  "recheck payments without final state",
+  { hourUTC: 11, minuteUTC: 0 },
+  internal.pagos.reconsultaDiaria,
+  {},
+);
+
 export default crons;
