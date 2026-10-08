@@ -4,6 +4,7 @@ import { internal } from "./_generated/api";
 import { textoAccesoWhatsApp } from "./lib/mensajesAcceso";
 import type { Id } from "./_generated/dataModel";
 import { GUIAS_VEKINO } from "./lib/guiasVekino";
+import { motivoNoPagable } from "./lib/cartera";
 
 /**
  * El agente de WhatsApp.
@@ -323,7 +324,11 @@ async function ejecutar(
           unidadId: args.unidadId,
         });
         if (!f) return { error: "No hay factura para pagar." };
-        if (f.estado === "pagada") return { yaPagada: true };
+        /* `f` es la vigente: si no se puede pagar, está saldada. Nunca se
+         * busca una anterior, cuyo saldo ya va dentro de esta. */
+        const noPagable = motivoNoPagable([f], f);
+        if (noPagable === "pagada") return { yaPagada: true };
+        if (noPagable) return { alDia: true, sinSaldoPorPagar: true };
         const pago = await ctx.runAction(internal.pagos.crearPagoFacturaBot, {
           facturaId: f._id,
           userId: args.userId,

@@ -7,6 +7,7 @@ import {
   getCurrentAppUser,
   misUnidadIds,
 } from "./model/authz";
+import { facturaVigente } from "./lib/cartera";
 
 /**
  * Comprobantes de pago subidos por propietarios (foto/PDF, normalmente vía
@@ -140,20 +141,32 @@ export const listMios = query({
   },
 });
 
-/** Factura pendiente/vencida más reciente de una unidad (para vincular el comprobante). */
+/**
+ * La factura vigente de una unidad (`lib/cartera.ts`, `facturaVigente`): la
+ * del período más reciente, esté como esté. El bot y el agente la ofrecen
+ * para pagar y le vinculan los comprobantes.
+ *
+ * Antes era "la primera sin pagar entre las 12 creadas más recientemente":
+ * dependía del orden de carga —julio subido tarde le ganaba a septiembre— y,
+ * con la vigente pagada, retrocedía hasta una factura vieja cuyo saldo ya iba
+ * dentro de la pagada. Ahora, si la vigente está pagada o con saldo a favor,
+ * se devuelve igual y quien llama responde "estás al día".
+ *
+ * `null` si la unidad no tiene facturas, o si tiene dos del período más
+ * reciente (no se adivina cuál: nada que ofrecer hasta que se revise).
+ */
 export const facturaVigenteDeUnidad = internalQuery({
   args: { unidadId: v.id("unidades") },
   handler: async (ctx, args) => {
-    const facturas = await ctx.db
-      .query("facturas")
-      .withIndex("by_unidad", (q) => q.eq("unidadId", args.unidadId))
-      .order("desc")
-      .take(12);
-    return (
-      facturas.find((f) => f.estado === "pendiente" || f.estado === "vencida" || f.estado === "abonada") ??
-      facturas[0] ??
-      null
-    );
+    const unidad = await ctx.db.get(args.unidadId);
+    if (!unidad) return null;
+    const cadena = (
+      await ctx.db
+        .query("facturas")
+        .withIndex("by_unidad", (q) => q.eq("unidadId", args.unidadId))
+        .collect()
+    ).filter((f) => f.condominioId === unidad.condominioId);
+    return facturaVigente(cadena);
   },
 });
 

@@ -31,6 +31,7 @@ import {
   GlassSection,
 } from "@/components/ui/glass";
 import { cop, fmtPeriodo } from "@/lib/utils";
+import { tarjetaFacturas } from "@/lib/resumen-facturas";
 import { AuthUI } from "@/lib/auth-ui";
 import { SoftUI, softShadow } from "@/lib/soft-ui";
 
@@ -445,8 +446,8 @@ function ResidentFacturasView({
     (f) => !estadoFiltro || f.estado === estadoFiltro,
   ) as FacturaRow[];
 
-  const pendientes = (facturas ?? []).filter((f) => f.estado === "pendiente");
-  const pendientesTotal = pendientes.reduce((s, f) => s + f.totalAPagar, 0);
+  // Misma regla de cartera que la web y la administración (lib/resumen-facturas).
+  const tarjeta = tarjetaFacturas(facturas ?? [], Date.now());
 
   const hora = new Date().getHours();
   const saludo =
@@ -471,18 +472,14 @@ function ResidentFacturasView({
           </View>
           <View style={{ flex: 1, gap: 2, minWidth: 0 }}>
             <Text style={styles.summaryTitle} numberOfLines={1}>
-              {facturas === undefined
-                ? "…"
-                : pendientes.length === 0
-                  ? "Estás al día"
-                  : pendientes.length === 1
-                    ? "1 factura pendiente"
-                    : `${pendientes.length} facturas pendientes`}
+              {facturas === undefined ? "…" : tarjeta.titulo}
             </Text>
             <Text style={styles.summarySub} numberOfLines={1}>
-              {pendientesTotal > 0
-                ? `${cop(pendientesTotal)} por pagar`
-                : "No tienes saldos pendientes"}
+              {tarjeta.porPagar > 0
+                ? `${cop(tarjeta.porPagar)} por pagar`
+                : tarjeta.alDia
+                  ? "No tienes saldos pendientes"
+                  : "Consulta con la administración"}
             </Text>
           </View>
         </GlassCard>
@@ -1034,11 +1031,16 @@ function FacturaDetalleModal({
   const [pagando, setPagando] = useState(false);
   const [subiendo, setSubiendo] = useState(false);
 
-  const puedePagar =
-    detalle != null &&
-    (detalle.estado === "pendiente" ||
-      detalle.estado === "vencida" ||
-      detalle.estado === "abonada");
+  /* "Pagar" (y "Ya pagué") solo donde el backend aceptaría iniciar el pago:
+   * la factura VIGENTE de una unidad suya y con saldo. Se le pregunta al
+   * servidor (`pagos.puedePagar`, la misma validación de `crearPagoFactura`)
+   * en vez de deducirlo del estado: una factura vieja `vencida`, cuyo saldo
+   * ya va dentro de la siguiente, ya no se ofrece para pagar otra vez. */
+  const pagable = useQuery(
+    api.pagos.puedePagar,
+    detalle ? { facturaId: detalle._id } : "skip",
+  );
+  const puedePagar = detalle != null && pagable === true;
 
   // Comprobante más reciente que el residente ya envió por esta factura.
   const soporte = detalle

@@ -10,6 +10,7 @@ import {
 import { displayNameFromUser } from "./model/displayName";
 import { resolveUserImage } from "./model/userImage";
 import { certificaPorApi } from "./lib/certificacion";
+import { carteraDeUnidad } from "./lib/cartera";
 
 /**
  * PORTAL DEL RESIDENTE / PROPIETARIO
@@ -263,23 +264,34 @@ export const navBadges = query({
         (p.estado === "abierto" || p.estado === "en_gestion"),
     ).length;
 
+    /* La mora ACTUAL: cuántas de sus unidades están en mora según la misma
+     * regla de la cartera de la administración (`carteraDeUnidad`). Cada una
+     * es una obligación vencida, la de su factura vigente.
+     *
+     * Antes contaba toda factura `vencida` del historial: una casa al día con
+     * abril y junio vencidos —ya absorbidos y saldados por las siguientes—
+     * sumaba 2, y una con la vigente vencida sin pagar (que sigue `pendiente`
+     * porque ninguna factura posterior la ha juzgado) sumaba 0. */
     let facturasVencidas = 0;
     if (membership) {
       const links = await ctx.db
         .query("usuarioUnidad")
         .withIndex("by_membership", (q) => q.eq("membershipId", membership._id))
         .collect();
-      const sets = await Promise.all(
-        links.map((l) =>
-          ctx.db
-            .query("facturas")
-            .withIndex("by_unidad", (q) => q.eq("unidadId", l.unidadId))
-            .collect(),
-        ),
+      const unidadIds = [...new Set(links.map((l) => l.unidadId))];
+      const ahora = Date.now();
+      const carteras = await Promise.all(
+        unidadIds.map(async (unidadId) => {
+          const cadena = (
+            await ctx.db
+              .query("facturas")
+              .withIndex("by_unidad", (q) => q.eq("unidadId", unidadId))
+              .collect()
+          ).filter((f) => f.condominioId === args.condominioId);
+          return carteraDeUnidad(cadena, ahora);
+        }),
       );
-      facturasVencidas = sets
-        .flat()
-        .filter((f) => f.estado === "vencida").length;
+      facturasVencidas = carteras.filter((c) => c.estado === "en_mora").length;
     }
 
     const avisos = await ctx.db

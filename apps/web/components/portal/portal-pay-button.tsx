@@ -40,6 +40,16 @@ function mensajeParaElResidente(e: unknown): string {
   if (/ya está pagada/i.test(crudo)) {
     return "Esta factura ya figura como pagada.";
   }
+  // El backend solo cobra la factura vigente (lib/cartera.ts, MENSAJE_NO_PAGABLE).
+  if (/ya no está vigente/i.test(crudo)) {
+    return "Esta factura ya no está vigente: su saldo está incluido en tu factura más reciente.";
+  }
+  if (/no tiene saldo por pagar/i.test(crudo)) {
+    return "Esta factura no tiene saldo por pagar.";
+  }
+  if (/más de una factura del mismo período/i.test(crudo)) {
+    return "Esta factura no se puede pagar en línea. Comunícate con la administración.";
+  }
   if (/Failed to fetch|NetworkError|network/i.test(crudo)) {
     return "No hay conexión con la pasarela. Revisa tu internet e intenta de nuevo.";
   }

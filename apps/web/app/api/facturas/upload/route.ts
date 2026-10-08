@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { PDFDocument } from "pdf-lib";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { existsSync, mkdirSync } from "fs";
+import { api } from "@vekino/backend/api";
+import { fetchAuthQuery, isAuthenticated } from "@/lib/auth-server";
 import { extraerTextoConLayout } from "../pdf-layout";
 
 // ─── S3 ────────────────────────────────────────────────────────────────────────
@@ -238,10 +240,46 @@ function parseCdc(text: string): ParsedInvoice {
   };
 }
 
+// ─── Sesión y permiso ─────────────────────────────────────────────────────────
+
+/**
+ * Esta ruta escribe en S3, en la carpeta del conjunto, y respondía a
+ * cualquiera: sin sesión devolvía 200 y publicaba el PDF. Ahora pide la misma
+ * sesión que el resto de la web (la cookie de Better Auth, que Convex valida;
+ * igual que `/api/incidentes/reporte`) y el rol de quien sube facturas en
+ * ese conjunto (`facturas.permisoSubida`). Ante la duda, no deja pasar.
+ */
+async function rechazoDePermiso(condominioLegacyId: string): Promise<NextResponse | null> {
+  const SIN_SESION = { error: "Tu sesión no es válida. Vuelve a iniciar sesión." };
+  const SIN_PERMISO = { error: "No tienes permiso para subir facturas de este conjunto." };
+  try {
+    const permiso = await fetchAuthQuery(api.facturas.permisoSubida, { condominioLegacyId });
+    if (permiso?.allowed) return null;
+    return permiso?.motivo === "sin_sesion"
+      ? NextResponse.json(SIN_SESION, { status: 401 })
+      : NextResponse.json(SIN_PERMISO, { status: 403 });
+  } catch (e) {
+    /* Un token que Convex no acepta llega como error, no como respuesta. */
+    const texto = e instanceof Error ? e.message : "";
+    if (/autenticado|perfil inexistente|token|unauthenticated/i.test(texto)) {
+      return NextResponse.json(SIN_SESION, { status: 401 });
+    }
+    return NextResponse.json(
+      { error: "No fue posible validar tu sesión. Intenta de nuevo." },
+      { status: 500 },
+    );
+  }
+}
+
 // ─── POST handler ─────────────────────────────────────────────────────────────
 
 export async function POST(req: NextRequest) {
   try {
+    /* Sin sesión no se lee ni el formulario. */
+    if (!(await isAuthenticated())) {
+      return NextResponse.json({ error: "Inicia sesión para subir facturas." }, { status: 401 });
+    }
+
     const form = await req.formData();
     const file = form.get("pdf") as File | null;
     const condominioLegacyId = form.get("condominioLegacyId") as string;
@@ -250,6 +288,9 @@ export async function POST(req: NextRequest) {
     if (!file || !condominioLegacyId || !periodo) {
       return NextResponse.json({ error: "Faltan campos: pdf, condominioLegacyId, periodo" }, { status: 400 });
     }
+
+    const rechazo = await rechazoDePermiso(condominioLegacyId);
+    if (rechazo) return rechazo;
 
     const pdfBytes = new Uint8Array(await file.arrayBuffer());
     const doc = await PDFDocument.load(pdfBytes);

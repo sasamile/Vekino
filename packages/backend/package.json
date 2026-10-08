@@ -41,6 +41,10 @@
       "types": "./convex/lib/periodos.ts",
       "default": "./convex/lib/periodos.ts"
     },
+    "./cartera": {
+      "types": "./convex/lib/cartera.ts",
+      "default": "./convex/lib/cartera.ts"
+    },
     "./costoReserva": {
       "types": "./convex/lib/costoReserva.ts",
       "default": "./convex/lib/costoReserva.ts"

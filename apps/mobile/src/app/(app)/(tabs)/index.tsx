@@ -24,6 +24,7 @@ import {
 import { SoftHomeHeader } from "@/components/ui/soft-home-header";
 import { Tap } from "@/components/ui/tap";
 import { cop, fmtPeriodo, formatDisplayName, greetingName } from "@/lib/utils";
+import { tarjetaFacturas } from "@/lib/resumen-facturas";
 import { useCondominio } from "@/context/condominio-context";
 import { C } from "@/lib/theme";
 import { AuthUI } from "@/lib/auth-ui";
@@ -230,8 +231,8 @@ function ResidentHome({
     api.comunicados.listRecent,
     condominioId ? { condominioId, limit: 3 } : "skip",
   );
-  const pendientes = (facturas ?? []).filter((f) => f.estado === "pendiente");
-  const totalAPagar = pendientes.reduce((s, f) => s + f.totalAPagar, 0);
+  // Misma regla de cartera que la web y la administración (lib/resumen-facturas).
+  const tarjeta = tarjetaFacturas(facturas ?? [], Date.now());
   const linkColor = theme.accent;
   const featuredAviso = (comunicados ?? []).find((c) => c.fijado) ?? comunicados?.[0];
 
@@ -267,20 +268,16 @@ function ResidentHome({
             </View>
             <View style={{ flex: 1, gap: 2, minWidth: 0 }}>
               <Text style={styles.usageTitle} numberOfLines={1}>
-                {facturas === undefined
-                  ? "…"
-                  : pendientes.length === 0
-                    ? "Estás al día"
-                    : pendientes.length === 1
-                      ? "1 factura pendiente"
-                      : `${pendientes.length} facturas pendientes`}
+                {facturas === undefined ? "…" : tarjeta.titulo}
               </Text>
               <Text style={styles.usageSub} numberOfLines={1}>
                 {facturas === undefined
                   ? "Cargando…"
-                  : totalAPagar > 0
-                    ? `${cop(totalAPagar)} por pagar`
-                    : "No tienes saldos pendientes"}
+                  : tarjeta.porPagar > 0
+                    ? `${cop(tarjeta.porPagar)} por pagar`
+                    : tarjeta.alDia
+                      ? "No tienes saldos pendientes"
+                      : "Consulta con la administración"}
               </Text>
             </View>
             <Tap

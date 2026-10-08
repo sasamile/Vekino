@@ -9,7 +9,7 @@
     "lint": "next lint",
     "test:operacion": "bun test pruebas/operacionCompania.test.mjs",
     "test:incidentes": "bun test pruebas/incidentes.test.mjs && bun test pruebas/incidentesFase5.test.mjs && bun test pruebas/incidentesFase6.test.mjs && bun test pruebas/incidentesFase7.test.mjs",
-    "test:facturacion": "bun test pruebas/facturacion",
+    "test:facturacion": "bun test pruebas/subidaFacturas.test.mjs && bun test pruebas/facturacion",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

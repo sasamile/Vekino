@@ -1,11 +1,13 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
+import type { Doc } from "./_generated/dataModel";
 import {
   getCurrentAppUser,
   requireAppUser,
   getMembership,
   misUnidadIds,
 } from "./model/authz";
+import { motivoNoPagable, sinPagar, type MotivoNoPagable } from "./lib/cartera";
 
 /**
  * Bandeja de novedades del residente.
@@ -60,6 +62,21 @@ export const feed = query({
 
     // ── Facturas de SUS unidades ────────────────────────────────
     if (unidadIds.size > 0) {
+      /* "Por pagar" solo lo que se puede pagar: la vigente de cada unidad
+       * (`lib/cartera.ts`). Antes toda factura no pagada decía "Por pagar",
+       * también las viejas cuyo saldo ya iba dentro de la siguiente: la
+       * campana pedía pagar dos veces lo mismo. */
+      const cadenas = new Map<string, Doc<"facturas">[]>();
+      for (const unidadId of unidadIds) {
+        const cadena = await ctx.db
+          .query("facturas")
+          .withIndex("by_unidad", (q) => q.eq("unidadId", unidadId))
+          .collect();
+        cadenas.set(
+          unidadId,
+          cadena.filter((f) => f.condominioId === args.condominioId),
+        );
+      }
       const facturas = await ctx.db
         .query("facturas")
         .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
@@ -72,10 +89,7 @@ export const feed = query({
           id: f._id,
           tipo: "factura",
           titulo: `Factura de ${f.periodoLabel}`,
-          detalle:
-            f.estado === "pagada"
-              ? "Pagada"
-              : `Por pagar · ${formatoCOP(f.totalAPagar)}`,
+          detalle: detalleFactura(f, motivoNoPagable(cadenas.get(f.unidadId) ?? [f], f)),
           createdAt: f.createdAt,
           ruta: "/(app)/(tabs)/facturas",
         });
@@ -260,4 +274,18 @@ function formatoCOP(valor: number): string {
   const entero = Math.round(valor).toString();
   const conPuntos = entero.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
   return `$ ${conPuntos}`;
+}
+
+/** La línea de una factura en la campana, según si hoy se puede pagar. */
+function detalleFactura(
+  f: Doc<"facturas">,
+  motivo: MotivoNoPagable | null,
+): string {
+  if (motivo === null) return `Por pagar · ${formatoCOP(f.totalAPagar)}`;
+  if (motivo === "pagada") return "Pagada";
+  if (motivo === "historica" && sinPagar(f.estado)) {
+    return "Su saldo pasó a la factura siguiente";
+  }
+  if (motivo === "vigente_ambigua") return "En revisión de la administración";
+  return "Sin saldo por pagar";
 }

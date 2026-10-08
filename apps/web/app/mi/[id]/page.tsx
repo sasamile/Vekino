@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { useQuery } from "convex/react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
+import { resumenResidente } from "@vekino/backend/cartera";
 import {
   PiggyBank,
   CalendarCheck,
@@ -47,33 +48,17 @@ type Factura = {
   saldoAFavor: number;
   fechaVencimiento: number;
   pdfUrl?: string;
+  lineas: {
+    codigo: number;
+    concepto: string;
+    saldoAnterior: number;
+    actual: number;
+    total: number;
+  }[];
   unidadNumero?: string;
   unidadTipo?: string;
   unidadTorre?: string | null;
 };
-
-/** Una factura pagable por unidad (la más reciente sin pagar consolida el saldo). */
-function facturasPagables(conDeuda: Factura[]): Factura[] {
-  const byUnit = new Map<string, Factura>();
-  for (const f of conDeuda) {
-    const key = String(f.unidadId);
-    const cur = byUnit.get(key);
-    if (!cur || f.fechaVencimiento > cur.fechaVencimiento) {
-      byUnit.set(key, f);
-    }
-  }
-  return [...byUnit.values()].sort(
-    (a, b) => b.fechaVencimiento - a.fechaVencimiento,
-  );
-}
-
-function esPendientePago(f: Factura) {
-  return (
-    f.estado === "pendiente" ||
-    f.estado === "vencida" ||
-    f.estado === "abonada"
-  );
-}
 
 /**
  * Monto que aplica HOY: descuento del 1–15 si aún no vence;
@@ -137,15 +122,25 @@ export default function PortalInicio() {
     : null;
 
   const lista = facturas ?? [];
-  const conDeuda = lista.filter(esPendientePago);
-  const vencidas = lista.filter((f) => f.estado === "vencida");
-  const estaAlDia = conDeuda.length === 0;
-
-  // Una factura pagable por unidad (cada una consolida su propio saldo).
-  const pagables = facturasPagables(conDeuda);
+  /* La misma regla de la cartera que "Mis facturas" y la administración
+   * (`lib/cartera.ts`): por unidad, la deuda es su factura vigente, que ya
+   * absorbe a las anteriores. El historial no pinta mora ni se ofrece. */
+  const resumen = resumenResidente(lista, Date.now());
+  const estaAlDia = resumen.estado === "al_dia" || resumen.estado === "sin_facturas";
+  const pagables = resumen.pagables;
   const totalPendiente = pagables.reduce((s, f) => s + montoAPagarHoy(f), 0);
+  /* Con una sola unidad en mora, desde cuándo: la mora la marca el último
+   * período vencido sin cubrir, que puede ser anterior a la vigente. */
+  const enMora = resumen.unidades.filter((u) => u.cartera.estado === "en_mora");
+  const vencimientoEnMora =
+    enMora.length === 1 ? (enMora[0]!.cartera.vencimientoEnMora ?? null) : null;
 
-  const saldoAFavor = lista.reduce((s, f) => Math.max(s, f.saldoAFavor), 0);
+  /* El saldo a favor de HOY es el de las facturas vigentes; uno de hace meses
+   * ya se aplicó en las siguientes. */
+  const saldoAFavor = resumen.unidades.reduce(
+    (s, u) => s + Math.max(0, u.vigente?.saldoAFavor ?? 0),
+    0,
+  );
   const reservas = actividades?.reservasActivas ?? [];
   const ticketsAbiertos = actividades?.ticketsAbiertos ?? 0;
   const proximaReserva = reservas[0] ?? null;
@@ -193,7 +188,8 @@ export default function PortalInicio() {
         <DeudaAlert
           base={base}
           estaAlDia={estaAlDia}
-          tieneVencidas={vencidas.length > 0}
+          enMora={resumen.estado === "en_mora"}
+          vencimientoEnMora={vencimientoEnMora}
           totalPendiente={totalPendiente}
           facturasParaPagar={pagables}
           multiUnidad={multiUnidad}
@@ -368,7 +364,8 @@ function AvisoFijado({
 function DeudaAlert({
   base,
   estaAlDia,
-  tieneVencidas,
+  enMora,
+  vencimientoEnMora,
   totalPendiente,
   facturasParaPagar,
   multiUnidad,
@@ -376,13 +373,16 @@ function DeudaAlert({
 }: {
   base: string;
   estaAlDia: boolean;
-  tieneVencidas: boolean;
+  /** Mora ACTUAL según la cartera, no "alguna factura vencida en el historial". */
+  enMora: boolean;
+  /** Vencimiento que marca la mora, si es de una sola unidad. */
+  vencimientoEnMora: number | null;
   totalPendiente: number;
   facturasParaPagar: Factura[];
   multiUnidad: boolean;
   avalPortalUrl: string | null;
 }) {
-  if (estaAlDia || facturasParaPagar.length === 0) {
+  if (estaAlDia) {
     return (
       <LiquidGlassCard className="flex items-center gap-3 px-4 py-3.5">
         <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-600" />
@@ -396,12 +396,27 @@ function DeudaAlert({
     );
   }
 
+  /* Debe, pero ninguna vigente se puede pagar: la unidad tiene dos facturas
+   * del mismo período y la administración debe revisarlas. */
+  if (facturasParaPagar.length === 0) {
+    return (
+      <LiquidGlassCard className="flex items-center gap-3 px-4 py-3.5">
+        <Clock className="h-5 w-5 shrink-0 text-amber-700" />
+        <div>
+          <p className="font-semibold text-foreground">Tu factura está en revisión</p>
+          <p className="text-sm text-foreground/65">
+            Comunícate con la administración.
+          </p>
+        </div>
+      </LiquidGlassCard>
+    );
+  }
+
   const varias = facturasParaPagar.length > 1;
   const f = facturasParaPagar[0]!;
   const periodo = periodoHumano(f.periodo || f.periodoLabel);
   const prontoPago = !varias && tieneProntoPagoVigente(f);
-  const vencida =
-    tieneVencidas || facturasParaPagar.some((x) => x.estado === "vencida");
+  const vencida = enMora;
 
   const titulo = `Total pendiente: ${cop(totalPendiente)}`;
   let sub: string;
@@ -410,10 +425,10 @@ function DeudaAlert({
       .map((x) => etiquetaUnidad(x))
       .join(" · ");
     sub = `${facturasParaPagar.length} unidades con saldo · ${unidades}`;
-  } else if (vencida && f.estado === "vencida") {
+  } else if (vencida) {
     sub =
-      f.fechaVencimiento > FECHA_MIN
-        ? `${periodo}${multiUnidad ? ` · ${etiquetaUnidad(f)}` : ""} · Venció el ${fechaLarga(f.fechaVencimiento)}`
+      vencimientoEnMora !== null && vencimientoEnMora > FECHA_MIN
+        ? `${periodo}${multiUnidad ? ` · ${etiquetaUnidad(f)}` : ""} · Vencida desde el ${fechaLarga(vencimientoEnMora)}`
         : `${periodo}${multiUnidad ? ` · ${etiquetaUnidad(f)}` : ""} · Factura vencida`;
   } else if (prontoPago) {
     sub = `${periodo}${multiUnidad ? ` · ${etiquetaUnidad(f)}` : ""} · Con descuento hasta el ${fechaLarga(f.fechaVencimiento)} · Después ${cop(f.totalAPagar)}`;

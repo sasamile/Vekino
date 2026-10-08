@@ -9,7 +9,7 @@ import {
 import type { ActionCtx, QueryCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { requireAppUser } from "./model/authz";
+import { getCurrentAppUser, requireAppUser } from "./model/authz";
 import { etiquetaUnidad, referenciaPago } from "./lib/referenciaPago";
 import {
   faltantesParaProduccion,
@@ -17,6 +17,7 @@ import {
   QA_ENDPOINT,
 } from "./lib/avalProduccion";
 import { credencialesConvenio } from "./lib/avalConvenio";
+import { MENSAJE_NO_PAGABLE, motivoNoPagable } from "./lib/cartera";
 
 // ─────────────────────────────────────────────────────────────
 // Integración con la Pasarela de Pagos Aval (AV Villas / Grupo Aval)
@@ -310,9 +311,22 @@ async function armarDatosTrn(
     }
   }
 
-  if (factura.estado === "pagada") {
-    throw new Error("Esta factura ya está pagada.");
-  }
+  /* Solo se cobra la factura VIGENTE de la unidad (la del período más
+   * reciente) y solo si deja saldo. Antes bastaba con que no estuviera
+   * `pagada`: una factura vieja `vencida` o `abonada` —cuyo saldo ya iba
+   * dentro de la siguiente— se podía pagar otra vez, por la web, el móvil o
+   * WhatsApp. La regla es la misma que decide los botones "Pagar"
+   * (`lib/cartera.ts`), para que lo que se ofrece y lo que se acepta no
+   * dejen de coincidir. Se valida aquí, no en las pantallas: el bot y
+   * cualquier llamador de la acción pasan por este punto. */
+  const cadena = (
+    await ctx.db
+      .query("facturas")
+      .withIndex("by_unidad", (q) => q.eq("unidadId", factura.unidadId))
+      .collect()
+  ).filter((f) => f.condominioId === factura.condominioId);
+  const noPagable = motivoNoPagable(cadena, factura);
+  if (noPagable) throw new Error(MENSAJE_NO_PAGABLE[noPagable]);
 
   // Monto a pagar: aplica descuento si aún estamos dentro del plazo con descuento.
   const conDescuentoVigente =
@@ -574,6 +588,28 @@ export const datosParaTrnDeUsuario = internalQuery({
     if (!user) throw new Error("Usuario no encontrado.");
     if (!user.active) throw new Error("Usuario inactivo.");
     return await armarDatosTrn(ctx, user, args.facturaId, false);
+  },
+});
+
+/**
+ * Si el usuario autenticado puede iniciar HOY el pago de esta factura.
+ *
+ * Corre exactamente la validación de `crearPagoFactura` (`armarDatosTrn`)
+ * sin crear nada: la app móvil la usa para decidir si muestra "Pagar", y
+ * así el botón aparece solo donde la pasarela lo aceptaría. Devuelve un sí o
+ * un no; los datos que arma esa validación no salen de aquí.
+ */
+export const puedePagar = query({
+  args: { facturaId: v.id("facturas") },
+  handler: async (ctx, args): Promise<boolean> => {
+    const user = await getCurrentAppUser(ctx);
+    if (!user || !user.active) return false;
+    try {
+      await armarDatosTrn(ctx, user, args.facturaId, true);
+      return true;
+    } catch {
+      return false;
+    }
   },
 });
 

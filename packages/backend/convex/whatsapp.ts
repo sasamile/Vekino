@@ -21,6 +21,7 @@ import {
   parseFechaFlexible,
   parseRangoHorasFlexible,
 } from "./lib/fechaTexto";
+import { MENSAJE_NO_PAGABLE, motivoNoPagable } from "./lib/cartera";
 
 /**
  * Bot de WhatsApp (YCloud).
@@ -1137,7 +1138,9 @@ export const procesarEntrante = internalAction({
           `Total a pagar: *${pesos.format(monto)}*${conDescuento ? " (con descuento por pronto pago)" : ""}`,
           `Vence: ${fechaLarga(factura.fechaVencimiento, timezone)}`,
         ];
-        if (factura.estado === "pagada" || factura.estado === "saldo_a_favor") {
+        /* Es la vigente: si no se puede pagar es porque ya está saldada
+         * (pagada, saldo a favor o sin saldo). No se busca otra anterior. */
+        if (motivoNoPagable([factura], factura) !== null) {
           await enviar(msgTexto(to, `${lineas.join("\n")}\n\n✅ Estás al día. ¡Gracias!`));
           return;
         }
@@ -1176,12 +1179,21 @@ export const procesarEntrante = internalAction({
           );
         } catch (e) {
           const motivo = e instanceof Error ? e.message : "";
+          /* Un botón "Pagar" viejo del chat puede apuntar a una factura que
+           * ya no es la vigente (llegó la del mes siguiente): el backend la
+           * rechaza, y "intenta más tarde" no le serviría de nada. */
           await enviar(
             msgTexto(
               to,
               motivo.includes("pagada")
                 ? "Esa factura ya figura pagada. ✅"
-                : "😕 No pude generar el enlace de pago en este momento. Intenta más tarde o escribe *menú*.",
+                : motivo.includes(MENSAJE_NO_PAGABLE.historica)
+                  ? "Esa factura ya no está vigente: su saldo quedó incluido en tu factura más reciente. Escribe *menú* y elige *Estado de cuenta* para verla y pagarla."
+                  : motivo.includes(MENSAJE_NO_PAGABLE.sin_saldo)
+                    ? "Esa factura no tiene saldo por pagar. ✅"
+                    : motivo.includes(MENSAJE_NO_PAGABLE.vigente_ambigua)
+                      ? "No puedo generar el pago en línea de esa factura. Comunícate con la administración para revisarla."
+                      : "😕 No pude generar el enlace de pago en este momento. Intenta más tarde o escribe *menú*.",
             ),
           );
         }

@@ -150,6 +150,93 @@ export function diasDesde(vencimiento: number, ahora: number): number {
   return Math.floor((ahora - vencimiento) / DIA);
 }
 
+/** Las facturas del periodo mas reciente de la cadena. Normalmente una. */
+function delUltimoPeriodo<F extends { periodo: string }>(cadena: readonly F[]): F[] {
+  let ultimas: F[] = [];
+  for (const f of cadena) {
+    const orden = ultimas.length === 0 ? 1 : f.periodo.localeCompare(ultimas[0]!.periodo);
+    if (orden > 0) ultimas = [f];
+    else if (orden === 0) ultimas.push(f);
+  }
+  return ultimas;
+}
+
+/**
+ * La factura vigente de una unidad: la del periodo mas reciente de su cadena.
+ *
+ * ── Por que esa ──────────────────────────────────────────────────────────
+ * Cada factura absorbe lo que quedo debiendo la anterior (ver
+ * `carteraDeUnidad`), asi que la ultima por periodo es la unica que dice
+ * cuanto se debe hoy. Las demas son historial: aunque esten `vencida`,
+ * `abonada` o `pendiente`, su saldo ya va dentro de una posterior, y
+ * cobrarlas es cobrar dos veces lo mismo.
+ *
+ * ── Que NO la decide ─────────────────────────────────────────────────────
+ * Ni el orden en que se cargaron, ni `_creationTime`, ni el id, ni el orden
+ * en que llegaron los PDF: julio subido despues de septiembre sigue siendo
+ * historial. Solo se compara el periodo, y el resultado no cambia aunque
+ * `cadena` llegue en otro orden. Tampoco el estado: si la vigente esta
+ * pagada la casa esta al dia, y no se retrocede a buscar una anterior sin
+ * pagar.
+ *
+ * `null` si no hay facturas, o si dos comparten el periodo mas reciente (no
+ * deberia pasar: es una por unidad y periodo). Elegir una de las dos seria
+ * volver a depender del orden de carga, asi que no se adivina: nada se
+ * ofrece para pagar hasta que la administracion lo revise.
+ *
+ * Es la definicion de toda la aplicacion: la usan el cobro
+ * (`pagos.armarDatosTrn`, por `motivoNoPagable`), el bot y el agente
+ * (`soportesPago.facturaVigenteDeUnidad`), la campana y la web y el movil
+ * (por `resumenResidente`). Contencion de la Fase 1 de la auditoria de
+ * facturacion: la Fase 3 la reemplaza por el modelo de obligaciones y pagos.
+ */
+export function facturaVigente<F extends { periodo: string }>(
+  cadena: readonly F[],
+): F | null {
+  const ultimas = delUltimoPeriodo(cadena);
+  return ultimas.length === 1 ? ultimas[0]! : null;
+}
+
+/** Por que no se puede pagar una factura. */
+export type MotivoNoPagable = "pagada" | "historica" | "vigente_ambigua" | "sin_saldo";
+
+/**
+ * Si una factura se puede pagar hoy y, si no, por que.
+ *
+ * Solo se paga la vigente (`facturaVigente`) y solo si deja saldo. Una
+ * historica no, este como este: lo que quedo debiendo ya lo cobra una
+ * posterior. Es la regla del backend de pagos y la de los botones "Pagar",
+ * para que lo que se ofrece y lo que se acepta no dejen de coincidir.
+ *
+ * `cadena` son TODAS las facturas de la unidad, `factura` incluida.
+ */
+export function motivoNoPagable(
+  cadena: readonly { periodo: string }[],
+  factura: { periodo: string; estado: EstadoFactura; totalAPagar: number },
+): MotivoNoPagable | null {
+  if (factura.estado === "pagada") return "pagada";
+  const ultimas = delUltimoPeriodo(cadena);
+  if (ultimas.length > 0 && factura.periodo.localeCompare(ultimas[0]!.periodo) < 0) {
+    return "historica";
+  }
+  if (ultimas.length > 1) return "vigente_ambigua";
+  if (!sinPagar(factura.estado) || factura.totalAPagar <= 0) return "sin_saldo";
+  return null;
+}
+
+/**
+ * Lo que se le responde a quien intenta pagar. Estables a proposito: el bot
+ * y la web los reconocen por el texto. Sin ids ni detalles internos.
+ */
+export const MENSAJE_NO_PAGABLE: Readonly<Record<MotivoNoPagable, string>> = {
+  pagada: "Esta factura ya está pagada.",
+  historica:
+    "Esta factura ya no está vigente: su saldo quedó incluido en la factura más reciente de la unidad.",
+  vigente_ambigua:
+    "Esta factura no se puede pagar en línea: la unidad tiene más de una factura del mismo período. Comunícate con la administración.",
+  sin_saldo: "Esta factura no tiene saldo por pagar.",
+};
+
 /**
  * Cuanto debe HOY la unidad, y si esta incumpliendo.
  *
@@ -183,11 +270,22 @@ export function diasDesde(vencimiento: number, ahora: number): number {
  * vencido no esta incumpliendo hoy: debe plata y esta respondiendo, y las
  * dos cosas son ciertas al tiempo.
  *
+ * Lo cubre tambien una factura POSTERIOR de la cadena que muestre pago,
+ * porque absorbio ese saldo: agosto `vencida` que septiembre arrastro, y
+ * septiembre `pagada`, es una casa que pago todo. Mirar solo a agosto la
+ * dejaba en mora con saldo cero hasta que venciera septiembre (hallazgo de
+ * la Fase 0 de la auditoria de facturacion). Y sin saldo no hay mora: la
+ * mora es deber algo vencido, no haber debido.
+ *
  * `vencida` no cuenta como cubierta, evidentemente. Y `pendiente` tampoco:
  * no es un estado de pago, es la ultima de la cadena, a la que todavia
  * ninguna factura posterior ha juzgado. Ausencia de veredicto, no constancia
  * de pago. Si contara, un conjunto que dejara de cargar facturas se veria
  * entero al dia mientras la deuda corre.
+ *
+ * Es una contencion sobre los estados que hoy pone la conciliacion: la Fase
+ * 3 de la auditoria reemplaza esta inferencia por el modelo estructural de
+ * obligaciones y pagos.
  */
 export function carteraDeUnidad(
   facturas: readonly FacturaCartera[],
@@ -204,23 +302,26 @@ export function carteraDeUnidad(
 
   if (facturas.length === 0) return vacia;
 
-  /* La cadena de facturacion, en el mismo orden que usa la conciliacion: por
-   * periodo. Es el orden en el que el saldo va pasando de una a otra. */
-  const cadena = [...facturas].sort((a, b) => a.periodo.localeCompare(b.periodo));
-  const vigente = cadena[cadena.length - 1]!;
+  /* La obligacion vigente, la del periodo mas reciente (`facturaVigente`):
+   * el orden de la cadena es el de la conciliacion, por periodo, que es como
+   * el saldo pasa de una a otra. Si dos compartieran ese periodo —no deberia:
+   * es una por unidad y periodo— no se elige por el orden de carga: se
+   * reporta la que mas debe. */
+  const ultimas = delUltimoPeriodo(facturas);
 
   /* Si la vigente estuviera `abonada` no se sabria cuanto se abono —eso lo
    * diria la siguiente, que no existe—, asi que se reporta el total. Preferir
    * pasarse a quedarse corto: una deuda subestimada en pantalla es peor que
    * una que el detalle matiza. */
-  const saldoActual = conEvidenciaTotalDePago(vigente.estado)
-    ? 0
-    : Math.max(0, vigente.totalAPagar);
+  const saldoActual = Math.max(
+    0,
+    ...ultimas.map((f) => (conEvidenciaTotalDePago(f.estado) ? 0 : f.totalAPagar)),
+  );
 
   const base: CarteraUnidad = {
     ...vacia,
     saldoActual,
-    periodoActual: vigente.periodo,
+    periodoActual: ultimas[0]!.periodo,
     estado: saldoActual > 0 ? "pendiente" : "al_dia",
   };
 
@@ -240,9 +341,17 @@ export function carteraDeUnidad(
 
   const ultimoVencido = yaVencidas[yaVencidas.length - 1];
 
-  /* Nada ha vencido todavia, o lo que vencio quedo cubierto. Debe, pero
-   * dentro de plazo: llamarlo mora seria cobrarle un atraso que no tiene. */
-  if (!ultimoVencido || conEvidenciaDePago(ultimoVencido.estado)) return base;
+  /* Nada ha vencido todavia: debe, pero dentro de plazo. */
+  if (!ultimoVencido) return base;
+
+  /* Lo que vencio quedo cubierto —por el mismo o por una posterior que lo
+   * absorbio—, o ya no queda nada que deber. Llamarlo mora seria cobrarle un
+   * atraso que no tiene. */
+  const cubierto = facturas.some(
+    (f) =>
+      f.periodo.localeCompare(ultimoVencido.periodo) >= 0 && conEvidenciaDePago(f.estado),
+  );
+  if (cubierto || saldoActual === 0) return base;
 
   return {
     ...base,
@@ -250,6 +359,76 @@ export function carteraDeUnidad(
     diasMora: diasDesde(ultimoVencido.fechaVencimiento, ahora),
     periodoEnMora: ultimoVencido.periodo,
     vencimientoEnMora: ultimoVencido.fechaVencimiento,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────
+// Lo que ve el residente: la misma regla, por unidad
+// ─────────────────────────────────────────────────────────────
+
+/** Una unidad del residente, tal como se le muestra. */
+export type UnidadResidente<F> = {
+  unidadId: string;
+  /** El mismo calculo que ve la administracion (`carteraDeUnidad`). */
+  cartera: CarteraUnidad;
+  /** La vigente (`facturaVigente`), pagada o no. */
+  vigente: F | null;
+  /** La vigente, si hoy se puede pagar (`motivoNoPagable`). */
+  pagable: F | null;
+};
+
+export type ResumenResidente<F> = {
+  /** El de la unidad que peor esta: en mora, pendiente, al dia, sin facturas. */
+  estado: EstadoCartera;
+  unidades: UnidadResidente<F>[];
+  /** A lo sumo una por unidad: su vigente, cuando se puede pagar. */
+  pagables: F[];
+};
+
+const PEOR_PRIMERO: readonly EstadoCartera[] = ["en_mora", "pendiente", "al_dia"];
+
+/**
+ * El estado de cuenta del residente, con la MISMA regla de la administracion.
+ *
+ * La web y el movil lo pintaban mirando el historial entero: bastaba una
+ * factura vieja `vencida` —ya absorbida y saldada por las siguientes— para
+ * mostrar "Vencida" a una casa al dia, y con la vigente pagada se ofrecia
+ * pagar otra vez la anterior. Aqui no hay regla propia: por unidad, la
+ * cartera sale de `carteraDeUnidad` y lo que se puede pagar de
+ * `facturaVigente` + `motivoNoPagable`, que son las del backend.
+ *
+ * `facturas` son las del residente, de una o varias unidades, en cualquier
+ * orden: tal como las entrega `facturas.listMia`.
+ */
+export function resumenResidente<F extends FacturaCartera & { unidadId: string }>(
+  facturas: readonly F[],
+  ahora: number,
+): ResumenResidente<F> {
+  const porUnidad = new Map<string, F[]>();
+  for (const f of facturas) {
+    const cadena = porUnidad.get(f.unidadId);
+    if (cadena) cadena.push(f);
+    else porUnidad.set(f.unidadId, [f]);
+  }
+
+  const unidades = [...porUnidad.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([unidadId, cadena]): UnidadResidente<F> => {
+      const vigente = facturaVigente(cadena);
+      return {
+        unidadId,
+        cartera: carteraDeUnidad(cadena, ahora),
+        vigente,
+        pagable: vigente && motivoNoPagable(cadena, vigente) === null ? vigente : null,
+      };
+    });
+
+  return {
+    estado:
+      PEOR_PRIMERO.find((e) => unidades.some((u) => u.cartera.estado === e)) ??
+      "sin_facturas",
+    unidades,
+    pagables: unidades.flatMap((u) => (u.pagable ? [u.pagable] : [])),
   };
 }
 

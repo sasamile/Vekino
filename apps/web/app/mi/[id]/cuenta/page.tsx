@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { useQuery, useAction } from "convex/react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
+import { resumenResidente } from "@vekino/backend/cartera";
 import {
   Download,
   ArrowRight,
@@ -52,7 +53,7 @@ type Factura = {
   _id: Id<"facturas">;
   unidadId: Id<"unidades">;
   numeroFactura: string;
-  periodo?: string;
+  periodo: string;
   periodoLabel: string;
   estado: "pendiente" | "pagada" | "vencida" | "abonada" | "saldo_a_favor";
   totalAPagar: number;
@@ -65,29 +66,6 @@ type Factura = {
   unidadTipo?: string;
   unidadTorre?: string | null;
 };
-
-function esPendientePago(f: Factura) {
-  return (
-    f.estado === "pendiente" ||
-    f.estado === "vencida" ||
-    f.estado === "abonada"
-  );
-}
-
-/** Una factura pagable por unidad (la más reciente sin pagar consolida el saldo). */
-function facturasPagables(conDeuda: Factura[]): Factura[] {
-  const byUnit = new Map<string, Factura>();
-  for (const f of conDeuda) {
-    const key = String(f.unidadId);
-    const cur = byUnit.get(key);
-    if (!cur || f.fechaVencimiento > cur.fechaVencimiento) {
-      byUnit.set(key, f);
-    }
-  }
-  return [...byUnit.values()].sort(
-    (a, b) => b.fechaVencimiento - a.fechaVencimiento,
-  );
-}
 
 export default function MisFacturas() {
   const { id } = useParams<{ id: string }>();
@@ -109,10 +87,18 @@ export default function MisFacturas() {
       ? listaAll
       : listaAll.filter((f) => String(f.unidadId) === String(unidadFiltro));
 
-  const conDeuda = lista.filter(esPendientePago);
-  const tieneVencidas = conDeuda.some((f) => f.estado === "vencida");
-  const estaAlDia = conDeuda.length === 0;
-  const pagables = facturasPagables(conDeuda);
+  /* Estado y botones "Pagar" con la regla de la cartera (`lib/cartera.ts`),
+   * la misma de la administración y del backend de pagos: la deuda es la
+   * factura vigente de cada unidad, no el historial. Una factura vieja
+   * `vencida` ya absorbida por las siguientes no pinta "Vencida" ni se
+   * ofrece para pagar; una vigente que venció sin pagarse, sí es mora. */
+  const resumen = resumenResidente(lista, Date.now());
+  const estaAlDia = resumen.estado === "al_dia" || resumen.estado === "sin_facturas";
+  const enMora = resumen.estado === "en_mora";
+  const unidadesEnMora = new Set(
+    resumen.unidades.filter((u) => u.cartera.estado === "en_mora").map((u) => u.unidadId),
+  );
+  const pagables = resumen.pagables;
   const pagableIds = new Set(pagables.map((f) => f._id));
   const deudaTotal = pagables.reduce((s, f) => s + montoAPagarHoy(f), 0);
 
@@ -191,7 +177,7 @@ export default function MisFacturas() {
         <ResumenActual
           loading={facturas === undefined}
           estaAlDia={estaAlDia}
-          tieneVencidas={tieneVencidas}
+          enMora={enMora}
           conteo={pagables.length}
           deuda={deudaTotal}
           multiUnidad={multiUnidad && unidadFiltro === ""}
@@ -200,6 +186,8 @@ export default function MisFacturas() {
         <ProximoPagoCard
           loading={facturas === undefined}
           facturas={pagables}
+          estaAlDia={estaAlDia}
+          unidadesEnMora={unidadesEnMora}
           avalPortalUrl={avalPortalUrl}
           multiUnidad={multiUnidad}
         />
@@ -258,7 +246,7 @@ export default function MisFacturas() {
 function ResumenActual({
   loading,
   estaAlDia,
-  tieneVencidas,
+  enMora,
   conteo,
   deuda,
   multiUnidad,
@@ -266,7 +254,8 @@ function ResumenActual({
 }: {
   loading: boolean;
   estaAlDia: boolean;
-  tieneVencidas: boolean;
+  /** Mora ACTUAL según la cartera, no "alguna factura vencida en el historial". */
+  enMora: boolean;
   conteo: number;
   deuda: number;
   multiUnidad: boolean;
@@ -274,12 +263,12 @@ function ResumenActual({
 }) {
   const badgeTone = estaAlDia
     ? ("success" as const)
-    : tieneVencidas
+    : enMora
       ? ("destructive" as const)
       : ("warning" as const);
   const badgeLabel = estaAlDia
     ? "Al día"
-    : tieneVencidas
+    : enMora
       ? "Vencida"
       : "Pendiente";
 
@@ -297,6 +286,13 @@ function ResumenActual({
         ) : estaAlDia ? (
           <p className="text-sm text-muted-foreground">
             No tienes facturas pendientes. ¡Estás al día!
+          </p>
+        ) : conteo === 0 ? (
+          /* Debe, pero no hay una factura vigente que se pueda pagar: la
+           * unidad tiene dos del mismo período y la administración debe
+           * revisarlas. No se adivina cuál cobrar. */
+          <p className="text-sm text-muted-foreground">
+            Tu factura está en revisión. Comunícate con la administración.
           </p>
         ) : (
           <>
@@ -327,11 +323,16 @@ function ResumenActual({
 function ProximoPagoCard({
   loading,
   facturas,
+  estaAlDia,
+  unidadesEnMora,
   avalPortalUrl,
   multiUnidad,
 }: {
   loading: boolean;
+  /** Las vigentes que se pueden pagar: a lo sumo una por unidad. */
   facturas: Factura[];
+  estaAlDia: boolean;
+  unidadesEnMora: ReadonlySet<string>;
   avalPortalUrl: string | null;
   multiUnidad: boolean;
 }) {
@@ -346,11 +347,22 @@ function ProximoPagoCard({
   if (facturas.length === 0) {
     return (
       <LiquidGlassCard className="flex min-h-[180px] w-full flex-col items-center justify-center gap-2 p-6 text-center">
-        <CheckCircle2 className="h-9 w-9 text-emerald-600 dark:text-emerald-400" />
-        <p className="text-lg font-bold text-foreground">Estás al día</p>
-        <p className="text-sm text-muted-foreground">
-          No tienes pagos pendientes.
-        </p>
+        {estaAlDia ? (
+          <>
+            <CheckCircle2 className="h-9 w-9 text-emerald-600 dark:text-emerald-400" />
+            <p className="text-lg font-bold text-foreground">Estás al día</p>
+            <p className="text-sm text-muted-foreground">
+              No tienes pagos pendientes.
+            </p>
+          </>
+        ) : (
+          <>
+            <p className="text-lg font-bold text-foreground">Pago en línea no disponible</p>
+            <p className="text-sm text-muted-foreground">
+              Comunícate con la administración para revisar tu factura.
+            </p>
+          </>
+        )}
       </LiquidGlassCard>
     );
   }
@@ -399,7 +411,11 @@ function ProximoPagoCard({
   }
 
   const factura = facturas[0]!;
-  const meta = ESTADO_FACTURA[factura.estado];
+  /* La vigente de una unidad en mora se rotula como la cartera: puede seguir
+   * `pendiente` en la base porque ninguna factura posterior la ha juzgado. */
+  const meta = unidadesEnMora.has(factura.unidadId)
+    ? ESTADO_FACTURA.vencida
+    : ESTADO_FACTURA[factura.estado];
   const venc =
     factura.fechaVencimiento > FECHA_MIN
       ? fechaLarga(factura.fechaVencimiento)

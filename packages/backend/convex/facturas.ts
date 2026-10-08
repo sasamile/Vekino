@@ -3,7 +3,7 @@ import type { MutationCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
-import { requireCondominioRole, requireAppUser } from "./model/authz";
+import { requireCondominioRole, requireAppUser, getCurrentAppUser } from "./model/authz";
 import {
   carteraDeUnidad,
   estadoCuentaDeCadena,
@@ -498,6 +498,44 @@ const facturaInputValidator = v.object({
   ),
   pdfUrl: v.optional(v.string()),
   legacyId: v.optional(v.string()),
+});
+
+/**
+ * Si quien llama puede subir PDFs de facturas del conjunto cuyo `legacyId`
+ * es `condominioLegacyId`.
+ *
+ * La consulta `/api/facturas/upload` antes de leer el PDF y de escribir en
+ * S3, donde las llaves van por ese id: la ruta respondía a cualquiera, con o
+ * sin sesión. Pide los mismos roles que `bulkUpsert`, que es lo que se hace
+ * después con lo leído.
+ *
+ * Responde el motivo en vez de lanzar: la ruta decide 401 o 403 con él, y no
+ * con el texto de un error, que Convex puede ocultar fuera de desarrollo.
+ */
+export const permisoSubida = query({
+  args: { condominioLegacyId: v.string() },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{ allowed: true } | { allowed: false; motivo: "sin_sesion" | "sin_permiso" }> => {
+    const user = await getCurrentAppUser(ctx);
+    if (!user || !user.active) return { allowed: false, motivo: "sin_sesion" };
+    /* `condominios` no tiene índice por `legacyId`, y son pocos: uno por
+     * conjunto. Si dos compartieran el id, compartirían la carpeta de S3, así
+     * que se exige el rol en todos. */
+    const conjuntos = (await ctx.db.query("condominios").collect()).filter(
+      (c) => c.legacyId === args.condominioLegacyId,
+    );
+    if (conjuntos.length === 0) return { allowed: false, motivo: "sin_permiso" };
+    for (const c of conjuntos) {
+      try {
+        await requireCondominioRole(ctx, c._id, ["administrador", "contadora"]);
+      } catch {
+        return { allowed: false, motivo: "sin_permiso" };
+      }
+    }
+    return { allowed: true };
+  },
 });
 
 /**
