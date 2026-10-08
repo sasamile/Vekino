@@ -9,7 +9,8 @@
     "typecheck": "tsc --noEmit",
     "test": "bun run test:unit && bun run test:seguridad",
     "test:unit": "node --test --experimental-strip-types 'pruebas/*.prueba.ts'",
-    "test:seguridad": "vitest run"
+    "test:seguridad": "vitest run",
+    "test:facturacion": "vitest run --config vitest.facturacion.config.mts"
   },
   "exports": {
     "./incidenteEvidencias": {
