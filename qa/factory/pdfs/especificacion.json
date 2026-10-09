@@ -1,0 +1,145 @@
+[
+  {
+    "nombre": "factory-2026-08.pdf",
+    "facturas": [
+      {
+        "caso": "Casa C (103) agosto - vigente en mora",
+        "casa": "103", "nro": "91031", "fecha": "Agost. 01 / 2026",
+        "filas": [
+          { "prefijo": "*", "codigo": "001", "concepto": "CUOTA DE ADMINISTRACIÓN", "mes": "Agosto / 2026", "esteMes": 314000, "descto": 40000, "saldo": 314000 },
+          { "prefijo": "*", "codigo": "008", "concepto": "POZO PTTM Y CORMACARENA", "mes": "Agosto / 2026", "esteMes": 21000, "saldo": 21000 }
+        ],
+        "totales": { "saldoAnterior": 0, "mes": 335000, "total": 335000 },
+        "descuento": 40000, "conDescuento": 295000, "sinDescuento": 335000
+      },
+      {
+        "caso": "Casa E (105) agosto - historica cuando llegue septiembre",
+        "casa": "105", "nro": "91051", "fecha": "Agost. 01 / 2026",
+        "filas": [
+          { "prefijo": "*", "codigo": "001", "concepto": "CUOTA DE ADMINISTRACIÓN", "mes": "Agosto / 2026", "esteMes": 314000, "descto": 40000, "saldo": 314000 },
+          { "prefijo": "*", "codigo": "008", "concepto": "POZO PTTM Y CORMACARENA", "mes": "Agosto / 2026", "esteMes": 21000, "saldo": 21000 }
+        ],
+        "totales": { "saldoAnterior": 0, "mes": 335000, "total": 335000 },
+        "descuento": 40000, "conDescuento": 295000, "sinDescuento": 335000
+      }
+    ]
+  },
+  {
+    "nombre": "factory-2026-09.pdf",
+    "facturas": [
+      {
+        "caso": "Casa A (101) septiembre - pendiente sin descuento",
+        "casa": "101", "nro": "91012", "fecha": "Septi. 01 / 2026",
+        "filas": [
+          { "prefijo": "*", "codigo": "001", "concepto": "CUOTA DE ADMINISTRACIÓN", "mes": "Septiembre / 2026", "esteMes": 314000, "descto": 40000, "saldo": 314000 },
+          { "prefijo": "*", "codigo": "008", "concepto": "POZO PTTM Y CORMACARENA", "mes": "Septiembre / 2026", "esteMes": 21000, "saldo": 21000 }
+        ],
+        "totales": { "saldoAnterior": 0, "mes": 335000, "total": 335000 },
+        "descuento": 40000, "conDescuento": 295000, "sinDescuento": 335000
+      },
+      {
+        "caso": "Casa D (104) septiembre - total que NO cuadra (en revision)",
+        "casa": "104", "nro": "91042", "fecha": "Septi. 01 / 2026",
+        "filas": [
+          { "prefijo": "*", "codigo": "001", "concepto": "CUOTA DE ADMINISTRACIÓN", "mes": "Septiembre / 2026", "esteMes": 314000, "descto": 40000, "saldo": 314000 },
+          { "prefijo": "*", "codigo": "008", "concepto": "POZO PTTM Y CORMACARENA", "mes": "Septiembre / 2026", "esteMes": 21000, "saldo": 21000 }
+        ],
+        "totales": { "saldoAnterior": 0, "mes": 335000, "total": 335000 },
+        "descuento": 40000, "conDescuento": 315000, "sinDescuento": 355000
+      },
+      {
+        "caso": "Casa E (105) septiembre - arrastra agosto sin pagar",
+        "casa": "105", "nro": "91052", "fecha": "Septi. 01 / 2026",
+        "filas": [
+          { "codigo": "001", "concepto": "CUOTA DE ADMINISTRACIÓN", "saldoAnterior": 314000, "mes": "Agosto / 2026", "saldo": 314000 },
+          { "codigo": "008", "concepto": "POZO PTTM Y CORMACARENA", "saldoAnterior": 21000, "mes": "Agosto / 2026", "saldo": 21000 },
+          { "prefijo": "*", "codigo": "001", "concepto": "CUOTA DE ADMINISTRACIÓN", "mes": "Septiembre / 2026", "esteMes": 314000, "descto": 40000, "saldo": 314000 },
+          { "prefijo": "*", "codigo": "008", "concepto": "POZO PTTM Y CORMACARENA", "mes": "Septiembre / 2026", "esteMes": 21000, "saldo": 21000 }
+        ],
+        "totales": { "saldoAnterior": 335000, "mes": 335000, "total": 670000 },
+        "descuento": 40000, "conDescuento": 630000, "sinDescuento": 670000
+      }
+    ]
+  },
+  {
+    "nombre": "factory-2026-10.pdf",
+    "facturas": [
+      {
+        "caso": "Casa B (102) octubre - pendiente con descuento hasta el 15",
+        "casa": "102", "nro": "91023", "fecha": "Octub. 01 / 2026",
+        "filas": [
+          { "prefijo": "*", "codigo": "001", "concepto": "CUOTA DE ADMINISTRACIÓN", "mes": "Octubre / 2026", "esteMes": 314000, "descto": 40000, "saldo": 314000 },
+          { "prefijo": "*", "codigo": "008", "concepto": "POZO PTTM Y CORMACARENA", "mes": "Octubre / 2026", "esteMes": 21000, "saldo": 21000 }
+        ],
+        "totales": { "saldoAnterior": 0, "mes": 335000, "total": 335000 },
+        "descuento": 40000, "conDescuento": 295000, "sinDescuento": 335000
+      }
+    ]
+  },
+  {
+    "nombre": "despues/factory-2026-10-casaA-refleja-pago.pdf",
+    "facturas": [
+      {
+        "caso": "Casa A (101) octubre que REFLEJA el pago de septiembre (ronda de comprobantes)",
+        "casa": "101", "nro": "91013", "fecha": "Octub. 01 / 2026",
+        "filas": [
+          { "prefijo": "*", "codigo": "001", "concepto": "CUOTA DE ADMINISTRACIÓN", "mes": "Octubre / 2026", "esteMes": 314000, "descto": 40000, "saldo": 314000 },
+          { "prefijo": "*", "codigo": "008", "concepto": "POZO PTTM Y CORMACARENA", "mes": "Octubre / 2026", "esteMes": 21000, "saldo": 21000 }
+        ],
+        "totales": { "saldoAnterior": 0, "mes": 335000, "total": 335000 },
+        "descuento": 40000, "conDescuento": 295000, "sinDescuento": 335000
+      }
+    ]
+  },
+  {
+    "nombre": "despues/factory-2026-10-casaA-no-refleja-pago.pdf",
+    "facturas": [
+      {
+        "caso": "Casa A (101) octubre que NO refleja el pago de septiembre (ronda de comprobantes)",
+        "casa": "101", "nro": "91014", "fecha": "Octub. 01 / 2026",
+        "filas": [
+          { "codigo": "001", "concepto": "CUOTA DE ADMINISTRACIÓN", "saldoAnterior": 314000, "mes": "Septiembre / 2026", "saldo": 314000 },
+          { "codigo": "008", "concepto": "POZO PTTM Y CORMACARENA", "saldoAnterior": 21000, "mes": "Septiembre / 2026", "saldo": 21000 },
+          { "prefijo": "*", "codigo": "001", "concepto": "CUOTA DE ADMINISTRACIÓN", "mes": "Octubre / 2026", "esteMes": 314000, "descto": 40000, "saldo": 314000 },
+          { "prefijo": "*", "codigo": "008", "concepto": "POZO PTTM Y CORMACARENA", "mes": "Octubre / 2026", "esteMes": 21000, "saldo": 21000 }
+        ],
+        "totales": { "saldoAnterior": 335000, "mes": 335000, "total": 670000 },
+        "descuento": 40000, "conDescuento": 630000, "sinDescuento": 670000
+      }
+    ]
+  },
+  {
+    "nombre": "despues/factory-2026-09-casaC-no-refleja-pago.pdf",
+    "facturas": [
+      {
+        "caso": "Casa C (103) septiembre que NO refleja el pago de agosto (ronda de comprobantes)",
+        "casa": "103", "nro": "91032", "fecha": "Septi. 01 / 2026",
+        "filas": [
+          { "codigo": "001", "concepto": "CUOTA DE ADMINISTRACIÓN", "saldoAnterior": 314000, "mes": "Agosto / 2026", "saldo": 314000 },
+          { "codigo": "008", "concepto": "POZO PTTM Y CORMACARENA", "saldoAnterior": 21000, "mes": "Agosto / 2026", "saldo": 21000 },
+          { "prefijo": "*", "codigo": "001", "concepto": "CUOTA DE ADMINISTRACIÓN", "mes": "Septiembre / 2026", "esteMes": 314000, "descto": 40000, "saldo": 314000 },
+          { "prefijo": "*", "codigo": "008", "concepto": "POZO PTTM Y CORMACARENA", "mes": "Septiembre / 2026", "esteMes": 21000, "saldo": 21000 }
+        ],
+        "totales": { "saldoAnterior": 335000, "mes": 335000, "total": 670000 },
+        "descuento": 40000, "conDescuento": 630000, "sinDescuento": 670000
+      }
+    ]
+  },
+  {
+    "nombre": "despues/factory-2026-10-casaC-refleja-pago.pdf",
+    "facturas": [
+      {
+        "caso": "Casa C (103) octubre que SI refleja el pago de agosto, N+2 (ronda de comprobantes)",
+        "casa": "103", "nro": "91033", "fecha": "Octub. 01 / 2026",
+        "filas": [
+          { "codigo": "001", "concepto": "CUOTA DE ADMINISTRACIÓN", "saldoAnterior": 314000, "mes": "Septiembre / 2026", "saldo": 314000 },
+          { "codigo": "008", "concepto": "POZO PTTM Y CORMACARENA", "saldoAnterior": 21000, "mes": "Septiembre / 2026", "saldo": 21000 },
+          { "prefijo": "*", "codigo": "001", "concepto": "CUOTA DE ADMINISTRACIÓN", "mes": "Octubre / 2026", "esteMes": 314000, "descto": 40000, "saldo": 314000 },
+          { "prefijo": "*", "codigo": "008", "concepto": "POZO PTTM Y CORMACARENA", "mes": "Octubre / 2026", "esteMes": 21000, "saldo": 21000 }
+        ],
+        "totales": { "saldoAnterior": 335000, "mes": 335000, "total": 670000 },
+        "descuento": 40000, "conDescuento": 630000, "sinDescuento": 670000
+      }
+    ]
+  }
+]
