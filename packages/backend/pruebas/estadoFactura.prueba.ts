@@ -344,10 +344,18 @@ test("vencimiento nuevo: el último día del mes del período, a medianoche de C
   assert.equal(vencimientoDePeriodo("2026-09"), bogota("2026-09-30T00:00"));
   assert.equal(vencimientoDePeriodo("2026-12"), bogota("2026-12-31T00:00"));
   assert.equal(vencimientoDePeriodo("2028-02"), bogota("2028-02-29T00:00"));
-  /* Ese día todavía no es mora; el siguiente sí. */
+  /* Ese día todavía no es mora.
+   *
+   * CAMBIO DE LA FASE 4 (decisión B del responsable, docs/audits/
+   * FASE-4-FACTURACION.md): esta prueba decía que al día siguiente del fin de
+   * mes ya había mora. La decisión B la contradice: "el fin de mes es el
+   * plazo del precio completo… la mora empieza el día 16 del mes siguiente".
+   * Lo que protege —el último día del mes todavía se paga— sigue igual. */
   const c = (ahora: number) => carteraDeUnidad([cartera("2026-09", { fechaVencimiento: vencimientoDePeriodo("2026-09") })], ahora).estado;
   assert.equal(c(bogota("2026-09-30T18:00")), "pendiente");
-  assert.equal(c(bogota("2026-10-01T00:00")), "en_mora");
+  assert.equal(c(bogota("2026-10-01T00:00")), "pendiente");
+  assert.equal(c(bogota("2026-10-15T23:59")), "pendiente");
+  assert.equal(c(bogota("2026-10-16T00:00")), "en_mora");
 });
 
 // ─── Montos escritos y ambiente de la pasarela ───────────────────────────────

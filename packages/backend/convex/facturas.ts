@@ -3,11 +3,18 @@ import type { QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
-import { requireCondominioRole, requireAppUser, getCurrentAppUser } from "./model/authz";
+import {
+  requireCondominioRole,
+  requireAppUser,
+  getCurrentAppUser,
+  misUnidadIds,
+} from "./model/authz";
 import {
   carteraDeUnidad,
   enRevision,
   estadoCuentaDeCadena,
+  estadoVisibleDeFactura,
+  facturasDelResidente,
   formatoPesos,
   periodoSiguiente,
   periodosConsecutivos,
@@ -20,6 +27,13 @@ import {
   type MotivoRechazo,
 } from "./lib/lecturaFactura";
 import { planificarReproceso, type PlanUnidad } from "./lib/reproceso";
+import {
+  recaudoContablePorPeriodo,
+  recaudoVekinoPorPeriodo,
+  type FacturaRecaudo,
+  type RecaudoContable,
+  type RecaudoVekino,
+} from "./lib/recaudo";
 import {
   anotarEvento,
   pagosRegistrados,
@@ -268,24 +282,113 @@ export const listPage = query({
       });
       const limit = Math.min(args.paginationOpts.numItems || 30, 60);
       return {
-        page: filtered.slice(0, limit),
+        page: await conEstadoVisible(ctx, filtered.slice(0, limit)),
         isDone: true,
         continueCursor: "",
       };
     }
 
-    return await ctx.db
+    const pagina = await ctx.db
       .query("facturas")
       .withIndex("by_condominio_periodo", (q) =>
         q.eq("condominioId", args.condominioId).eq("periodo", args.periodo),
       )
       .order("desc")
       .paginate(args.paginationOpts);
+    return { ...pagina, page: await conEstadoVisible(ctx, pagina.page) };
   },
 });
 
 /**
- * Resumen de un período: total recaudado, pendientes, suma total a pagar
+ * Cada factura con el estado que se le MUESTRA (Fase 4, `estadoVisibleDeFactura`):
+ * una historica que quedo `pendiente` se ve "Sin verificar" —falta el estado
+ * de cuenta siguiente para saber si se pago—. Para saber si es historica basta
+ * el periodo mas reciente de su unidad. El campo `estado` no cambia.
+ */
+async function conEstadoVisible(ctx: QueryCtx, filas: Doc<"facturas">[]) {
+  const ultimoDe = new Map<string, string>();
+  for (const f of filas) {
+    if (ultimoDe.has(f.unidadId)) continue;
+    const ultima = await ctx.db
+      .query("facturas")
+      .withIndex("by_condominio_unidad_periodo", (q) =>
+        q.eq("condominioId", f.condominioId).eq("unidadId", f.unidadId),
+      )
+      .order("desc")
+      .first();
+    ultimoDe.set(f.unidadId, ultima?.periodo ?? f.periodo);
+  }
+  return filas.map((f) => ({
+    ...f,
+    estadoVisible: estadoVisibleDeFactura(f, [f, { periodo: ultimoDe.get(f.unidadId)! }]),
+  }));
+}
+
+/** Una factura como la necesita `lib/recaudo.ts`. */
+function aRecaudo(f: Doc<"facturas">): FacturaRecaudo {
+  return {
+    _id: f._id,
+    unidadId: f.unidadId,
+    periodo: f.periodo,
+    totalAPagar: f.totalAPagar,
+    lineas: f.lineas,
+    saldoAnteriorDocumento: f.saldoAnteriorDocumento,
+    lecturaDudosa: f.lecturaDudosa,
+  };
+}
+
+/** Los pagos aprobados y los comprobantes aprobados del conjunto (recaudo en Vekino). */
+async function evidenciaDelConjunto(ctx: QueryCtx, condominioId: Id<"condominios">) {
+  const pagos = (
+    await ctx.db
+      .query("pagos")
+      .withIndex("by_condominio", (q) => q.eq("condominioId", condominioId))
+      .collect()
+  ).filter((p) => p.estado === "aprobada");
+  const comprobantes = await ctx.db
+    .query("soportesPago")
+    .withIndex("by_condominio_estado", (q) =>
+      q.eq("condominioId", condominioId).eq("estado", "aprobado"),
+    )
+    .collect();
+  return {
+    pagos: pagos.map((p) => ({ facturaId: p.facturaId as string, monto: p.monto, estado: p.estado })),
+    comprobantes: comprobantes.map((c) => ({
+      facturaId: c.facturaId as string | undefined,
+      monto: c.monto,
+      estado: c.estado,
+    })),
+  };
+}
+
+/** Las dos cifras de recaudo de un periodo, con lo que no se pudo calcular. */
+function cifrasDeRecaudo(contable: RecaudoContable | undefined, vekino: RecaudoVekino | undefined) {
+  return {
+    /** Segun la contabilidad: total(N) − saldo anterior(N+1); `null` si ninguna unidad se pudo calcular. */
+    recaudoContable: contable?.monto ?? null,
+    recaudoContableUnidades: contable?.unidades ?? 0,
+    recaudoContableSinCalcular: {
+      sinSiguiente: contable?.sinSiguiente ?? 0,
+      mesFaltante: contable?.mesFaltante ?? 0,
+      enRevision: contable?.enRevision ?? 0,
+      noCuadra: contable?.noCuadra ?? 0,
+    },
+    /** Registrado en Vekino: pagos y comprobantes aprobados. */
+    recaudoVekino: vekino?.monto ?? 0,
+    recaudoVekinoPagos: vekino?.pagos ?? 0,
+    recaudoVekinoComprobantes: vekino?.comprobantes ?? 0,
+    comprobantesSinMonto: vekino?.comprobantesSinMonto ?? 0,
+  };
+}
+
+/**
+ * Resumen de un período: estados, cartera y las dos cifras de recaudo.
+ *
+ * Fase 4 (F-19): el recaudo ya no es "la suma del total de las pagadas" (que
+ * metia el arrastre y dejaba fuera los abonos). Son dos cifras, por separado:
+ * la de la contabilidad (con el mes siguiente) y la registrada en Vekino. Ver
+ * `lib/recaudo.ts`. `sumaPagado` se conserva para las pantallas anteriores,
+ * con su significado de siempre: no es recaudo.
  */
 export const resumenPeriodo = query({
   args: {
@@ -300,6 +403,16 @@ export const resumenPeriodo = query({
         q.eq("condominioId", args.condominioId).eq("periodo", args.periodo)
       )
       .collect();
+    /* El mes siguiente: su saldo anterior dice cuanto quedo debiendo cada
+     * unidad de este. */
+    const siguientes = PERIODO_VALIDO.test(args.periodo)
+      ? await ctx.db
+          .query("facturas")
+          .withIndex("by_condominio_periodo", (q) =>
+            q.eq("condominioId", args.condominioId).eq("periodo", periodoSiguiente(args.periodo)),
+          )
+          .collect()
+      : [];
 
     const total = rows.length;
     const pagadas = rows.filter((r) => r.estado === "pagada").length;
@@ -308,9 +421,20 @@ export const resumenPeriodo = query({
     const abonadas = rows.filter((r) => r.estado === "abonada").length;
     const saldoAFavorCount = rows.filter((r) => r.estado === "saldo_a_favor").length;
     const sumaTotalAPagar = rows.reduce((s, r) => s + r.totalAPagar, 0);
+    /** @deprecated (F-19) Suma del total de las pagadas: NO es recaudo. */
     const sumaPagado = rows
       .filter((r) => r.estado === "pagada")
       .reduce((s, r) => s + r.totalAPagar, 0);
+
+    const contable = recaudoContablePorPeriodo([...rows, ...siguientes].map(aRecaudo)).get(
+      args.periodo,
+    );
+    const evidencia = await evidenciaDelConjunto(ctx, args.condominioId);
+    const vekino = recaudoVekinoPorPeriodo(
+      new Map(rows.map((r) => [r._id as string, r.periodo])),
+      evidencia.pagos,
+      evidencia.comprobantes,
+    ).get(args.periodo);
 
     return {
       total,
@@ -321,6 +445,7 @@ export const resumenPeriodo = query({
       saldoAFavorCount,
       sumaTotalAPagar,
       sumaPagado,
+      ...cifrasDeRecaudo(contable, vekino),
     };
   },
 });
@@ -387,6 +512,7 @@ export const serie = query({
       e.sumaTotalAPagar += r.totalAPagar;
       if (r.estado === "pagada") {
         e.pagadas++;
+        /* @deprecated (F-19): suma del total de las pagadas; NO es recaudo. */
         e.sumaPagado += r.totalAPagar;
       } else if (r.estado === "pendiente") {
         e.pendientes++;
@@ -397,7 +523,18 @@ export const serie = query({
       }
     }
 
-    return [...map.values()].sort((a, b) => a.periodo.localeCompare(b.periodo));
+    /* Las dos cifras de recaudo por periodo (Fase 4, F-19; `lib/recaudo.ts`). */
+    const contable = recaudoContablePorPeriodo(rows.map(aRecaudo));
+    const evidencia = await evidenciaDelConjunto(ctx, args.condominioId);
+    const vekino = recaudoVekinoPorPeriodo(
+      new Map(rows.map((r) => [r._id as string, r.periodo])),
+      evidencia.pagos,
+      evidencia.comprobantes,
+    );
+
+    return [...map.values()]
+      .sort((a, b) => a.periodo.localeCompare(b.periodo))
+      .map((e) => ({ ...e, ...cifrasDeRecaudo(contable.get(e.periodo), vekino.get(e.periodo)) }));
   },
 });
 
@@ -1273,11 +1410,29 @@ export const createManual = mutation({
   },
 });
 
-/** Facturas de las unidades del usuario autenticado en este condominio. */
+/** Cuantas facturas devuelve `listMia`, ademas de las vigentes. */
+const LIMITE_LIST_MIA = 50;
+
+/**
+ * Facturas de las unidades del usuario autenticado en este condominio.
+ *
+ * Fase 4 (F-16):
+ * - Las unidades salen de `misUnidadIds`, la misma puerta de todo el acceso
+ *   del residente: solo vinculos VIGENTES (un arrendatario cuyo contrato
+ *   vencio ya no ve la casa, #55) y cada casa una vez, aunque tenga dos
+ *   vinculos (#54).
+ * - Cada factura sale una vez (por `_id`).
+ * - La VIGENTE de cada unidad —todas las del periodo mas reciente— llega
+ *   siempre, aunque el residente tenga mas de 50 facturas: se lee por unidad
+ *   y por periodo (`by_condominio_unidad_periodo`) y no se recorta. Antes el
+ *   recorte iba por fecha de carga entre todas las unidades, y una casa cuyas
+ *   facturas se cargaron antes podia quedarse sin la suya; el estado, los
+ *   botones de pago y el resumen se calculan sobre esta lista.
+ */
 export const listMia = query({
   args: { condominioId: v.id("condominios") },
   handler: async (ctx, args) => {
-    const { membership } = await requireCondominioRole(ctx, args.condominioId, []);
+    const { user, membership } = await requireCondominioRole(ctx, args.condominioId, []);
 
     let rows: Doc<"facturas">[];
 
@@ -1287,29 +1442,24 @@ export const listMia = query({
         .query("facturas")
         .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
         .order("desc")
-        .take(50);
+        .take(LIMITE_LIST_MIA);
     } else {
-      const links = await ctx.db
-        .query("usuarioUnidad")
-        .withIndex("by_membership", (q) => q.eq("membershipId", membership._id))
-        .collect();
+      const unidades = [...(await misUnidadIds(ctx, user._id, args.condominioId))];
+      if (unidades.length === 0) return [];
 
-      if (links.length === 0) return [];
-
-      const sets = await Promise.all(
-        links.map((l) =>
+      const porUnidad = await Promise.all(
+        unidades.map((unidadId) =>
           ctx.db
             .query("facturas")
-            .withIndex("by_unidad", (q) => q.eq("unidadId", l.unidadId))
+            .withIndex("by_condominio_unidad_periodo", (q) =>
+              q.eq("condominioId", args.condominioId).eq("unidadId", unidadId),
+            )
             .order("desc")
-            .take(50),
+            .take(LIMITE_LIST_MIA),
         ),
       );
 
-      rows = sets
-        .flat()
-        .sort((a, b) => b.fechaEmision - a.fechaEmision)
-        .slice(0, 50);
+      rows = facturasDelResidente(porUnidad, LIMITE_LIST_MIA);
     }
 
     const unidadCache = new Map<

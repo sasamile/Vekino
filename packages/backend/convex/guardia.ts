@@ -42,6 +42,17 @@ import { calcularCosto } from "./lib/costoReserva";
 import { validarCierreTurno } from "./lib/cierreTurno";
 import { nombreDeQuienInicia } from "./lib/inicioTurno";
 import { normalizarPlaca } from "./lib/placa";
+import {
+  agruparEnCobros,
+  gestionDeCobro,
+  periodoEnColombia,
+  periodoSiguiente,
+} from "./lib/cobroParqueadero";
+import {
+  agregarReporteACobro,
+  aplicarAccionCobro,
+  cobroDeReporte,
+} from "./model/cobroParqueadero";
 import { buscarCasas, ordenVinculo, type Ocupante } from "./lib/buscarCasa";
 import {
   cajaDeposito,
@@ -2298,6 +2309,8 @@ export const gestionarNovedad = mutation({
       v.literal("descartada"),
     ),
     nota: v.optional(v.string()),
+    /** Cuenta de cobro donde queda un cobro de parqueadero ("2026-10"). */
+    periodo: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const novedad = await ctx.db.get(args.novedadId);
@@ -2307,6 +2320,53 @@ export const gestionarNovedad = mutation({
       novedad.condominioId,
       [...ADMIN_ROLES],
     );
+
+    /* Un reporte de vehiculo es un cobro de parqueadero, y su estado es UNO
+     * con Cobros de parqueadero (F-08): "cobrada" aqui es "facturado" alla.
+     * Se mueve el cobro del mes entero, con sus transiciones validadas y su
+     * historia, no un campo de este reporte. */
+    if (novedad.vehiculoPlaca) {
+      const actor = { userId: user._id, nombre: user.name };
+      const cobro = await cobroDeReporte(ctx, novedad, actor, "vigilancia");
+      if (args.gestion === "cobrada") {
+        await aplicarAccionCobro(
+          ctx,
+          cobro,
+          "facturar",
+          {
+            periodoFactura: args.periodo?.trim() || periodoSiguiente(Date.now()),
+            reporteId: novedad._id,
+          },
+          actor,
+          "vigilancia",
+        );
+      } else if (args.gestion === "descartada") {
+        /* La pantalla de Vigilancia anterior no pedia el motivo. Se acepta,
+         * pero queda dicho en la historia del cobro, con quien y cuando. */
+        await aplicarAccionCobro(
+          ctx,
+          cobro,
+          "descartar",
+          {
+            nota: args.nota?.trim() || "Descartado desde Vigilancia sin escribir el motivo.",
+            reporteId: novedad._id,
+          },
+          actor,
+          "vigilancia",
+        );
+      } else {
+        await aplicarAccionCobro(
+          ctx,
+          cobro,
+          "devolver",
+          { nota: args.nota, reporteId: novedad._id },
+          actor,
+          "vigilancia",
+        );
+      }
+      return;
+    }
+
     await ctx.db.patch(args.novedadId, {
       gestion: args.gestion,
       gestionNota: args.nota?.trim() || undefined,
@@ -2359,12 +2419,51 @@ async function listarReportesGuardia(
           )
         : [];
 
+    /* El cobro de parqueadero de cada reporte de vehiculo (F-08). Vigilancia
+     * lee el mismo estado que Cobros de parqueadero: `gestion` se deriva del
+     * cobro, no del campo viejo del reporte. */
+    const conPlaca = reportes.filter((n) => n.vehiculoPlaca);
+    const cobroDe = new Map<string, ReturnType<typeof agruparEnCobros>[number]>();
+    if (conPlaca.length > 0) {
+      const cobros = await ctx.db
+        .query("cobrosParqueadero")
+        .withIndex("by_condominio", (q) => q.eq("condominioId", condominioId))
+        .collect();
+      const casaDeVehiculo = new Map<string, string>();
+      for (const id of new Set(conPlaca.map((n) => n.vehiculoId).filter(Boolean))) {
+        const veh = await ctx.db.get(id!);
+        if (veh) casaDeVehiculo.set(id as string, veh.unidadId as string);
+      }
+      const grupos = agruparEnCobros(
+        conPlaca.map((n) => ({ ...n, _id: n._id as string, cargoId: n.cargoId as string | undefined })),
+        cobros.map((c) => ({ ...c, _id: c._id as string, unidadId: c.unidadId as string | undefined })),
+        (n) => (n.vehiculoId ? casaDeVehiculo.get(n.vehiculoId) : null),
+      );
+      for (const g of grupos) for (const n of g.reportes) cobroDe.set(n._id, g);
+    }
+
     /* Bajo qué contexto reportó quien reportó, de su sello. */
     const contexto = lectorDeCoberturasHistoricas(ctx);
     return await Promise.all(
       reportes.map(async (n) => ({
         ...n,
         ...(await contexto(n)),
+        ...(cobroDe.has(n._id)
+          ? (() => {
+              const g = cobroDe.get(n._id)!;
+              return {
+                gestion: gestionDeCobro(g.estado),
+                cobro: {
+                  estado: g.estado,
+                  periodo: g.periodo,
+                  periodoFactura: g.periodoFactura ?? null,
+                  reportes: g.reportes.length,
+                  casa: g.casa?.numero ?? null,
+                  nota: g.nota ?? null,
+                },
+              };
+            })()
+          : {}),
         propietarios: propietariosDe(n),
         archivoUrl:
           (await resolveMediaUrl(ctx, {
@@ -2464,6 +2563,9 @@ export const reportarNovedad = mutation({
      * propietario reclama meses después. */
     let vehiculoPlaca: string | undefined;
     let vehiculoDescripcion: string | undefined;
+    /* La casa que responde por el vehiculo: a ella va el cobro del mes. */
+    let vehiculoUnidadId: Id<"unidades"> | undefined;
+    let vehiculoTipo: string | undefined;
     /* Se acumulan por id para no repetir una casa que llegue por dos vías
      * (señalada a mano y además dueña del vehículo). */
     const porUnidad = new Map<string, { unidadId: Id<"unidades">; numero: string }>();
@@ -2528,6 +2630,8 @@ export const reportarNovedad = mutation({
       vehiculoPlaca = veh.placa;
       vehiculoDescripcion =
         [veh.tipo, veh.marca, veh.color].filter(Boolean).join(" · ") || undefined;
+      vehiculoUnidadId = veh.unidadId;
+      vehiculoTipo = veh.tipo;
       // La casa del vehículo entra sola: es la que responde por el carro.
       await sumarUnidad(veh.unidadId);
     }
@@ -2552,10 +2656,10 @@ export const reportarNovedad = mutation({
       turnoId: turno?._id,
       rondaId: ronda?._id,
       ...(coberturaId ? { coberturaId } : {}),
-      /* Nace pendiente de cobrar cuando senala un vehiculo: es plata por
-       * cobrarle a una casa, y hasta que alguien diga lo contrario sigue
-       * debiendose. */
-      cobroEstado: vehiculoId ? ("pendiente" as const) : undefined,
+      /* El reporte de un vehiculo no lleva estado de cobro propio: entra al
+       * cobro del mes de esa casa y ese vehiculo (abajo), que nace pendiente
+       * —es plata por cobrarle a una casa, y hasta que alguien diga lo
+       * contrario sigue debiendose—. */
       titulo,
       descripcion,
       prioridad: args.prioridad,
@@ -2569,11 +2673,33 @@ export const reportarNovedad = mutation({
       ocurrioEn: args.ocurrioEn,
       fotos: args.fotos?.length ? args.fotos : undefined,
       // Nace pendiente: reportar no es cobrar, eso lo decide la administración.
-      gestion: "pendiente",
+      gestion: vehiculoPlaca ? undefined : "pendiente",
       reportadoPorUserId: user._id,
       reportadoPorNombre: user.name,
       createdAt: now,
     });
+
+    /* Un vehiculo reportado es plata por cobrarle a una casa: el reporte
+     * entra al cobro del mes (casa, placa, mes en hora de Colombia). Tres
+     * rondas que ven el mismo carro en el mes son un solo cobro (F-08); si
+     * ese cobro ya se facturo, el reporte queda como evidencia y no genera
+     * otro cargo. */
+    if (vehiculoId && vehiculoPlaca) {
+      const casa = vehiculoUnidadId ? porUnidad.get(vehiculoUnidadId) : undefined;
+      await agregarReporteACobro(
+        ctx,
+        id,
+        {
+          condominioId: args.condominioId,
+          casa: casa ? { unidadId: casa.unidadId, numero: casa.numero } : null,
+          periodo: periodoEnColombia(args.ocurrioEn ?? now),
+          placa: vehiculoPlaca,
+          vehiculoId,
+          tipoVehiculo: vehiculoTipo,
+        },
+        { userId: user._id, nombre: user.name },
+      );
+    }
     await logMinuta(ctx, {
       condominioId: args.condominioId,
       modulo: "novedades",

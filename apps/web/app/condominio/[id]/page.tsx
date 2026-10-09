@@ -136,7 +136,12 @@ export default function CondominioHome() {
     home.myRoles.includes("contadora") &&
     !home.myRoles.includes("administrador");
 
-  const recaudo = current?.sumaPagado ?? 0;
+  /* Fase 4 (F-19): el recaudo es el de la contabilidad —lo que la factura
+   * cobraba menos lo que el estado de cuenta siguiente dice que quedó
+   * debiendo—, no la suma del total de las facturas pagadas. Sin el mes
+   * siguiente cargado no se puede calcular, y se dice. */
+  const recaudoContable = current?.recaudoContable ?? null;
+  const recaudo = recaudoContable ?? 0;
   const carteraPendiente = current
     ? Math.max(0, current.sumaTotalAPagar - current.sumaPagado)
     : 0;
@@ -150,8 +155,8 @@ export default function CondominioHome() {
       : 0;
 
   const recaudoDelta =
-    prev && prev.sumaPagado > 0
-      ? Math.round(((recaudo - prev.sumaPagado) / prev.sumaPagado) * 100)
+    recaudoContable !== null && prev?.recaudoContable
+      ? Math.round(((recaudoContable - prev.recaudoContable) / prev.recaudoContable) * 100)
       : null;
   const carteraDelta =
     prev && prev.sumaTotalAPagar - prev.sumaPagado > 0
@@ -167,9 +172,9 @@ export default function CondominioHome() {
       ? serie.slice(0, selectedIdx + 1).slice(-6)
       : (serie ?? []).slice(-6);
   const barData = barSlice.map(
-    (p: { periodo: string; sumaPagado: number; sumaTotalAPagar: number }) => ({
+    (p: { periodo: string; sumaPagado: number; sumaTotalAPagar: number; recaudoContable: number | null }) => ({
       label: periodoCorto(p.periodo),
-      recaudo: p.sumaPagado,
+      recaudo: p.recaudoContable ?? 0,
       vencida: Math.max(0, p.sumaTotalAPagar - p.sumaPagado),
     }),
   );
@@ -208,18 +213,20 @@ export default function CondominioHome() {
             <StatCard
               icon={CircleDollarSign}
               tone="brand"
-              label={isContadoraOnly ? "% Recaudo del mes" : "Recaudo del mes"}
+              label={isContadoraOnly ? "% Recaudo del mes (contabilidad)" : "Recaudo del mes (contabilidad)"}
               value={
-                isContadoraOnly
-                  ? current
-                    ? `${pctRecaudo}%`
-                    : "—"
-                  : current
-                    ? compactCop(recaudo)
-                    : "—"
+                !current
+                  ? "—"
+                  : recaudoContable === null
+                    ? "Sin calcular"
+                    : isContadoraOnly
+                      ? `${pctRecaudo}%`
+                      : compactCop(recaudo)
               }
               badge={
-                isContadoraOnly
+                current && recaudoContable === null
+                  ? "Falta el mes siguiente"
+                  : isContadoraOnly
                   ? current
                     ? `${compactCop(recaudo)} de ${compactCop(current.sumaTotalAPagar)}`
                     : undefined

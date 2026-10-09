@@ -13,7 +13,10 @@ export type FilaAporte = {
   residenteNombre: string;
   placas: string[];
   meses: number;
+  /** Suma de los cargos del aporte de cada mes del rango. */
   valorTotal: number;
+  /** Lo que se debe del aporte segun la ultima factura del rango (Fase 4). */
+  deudaUltimaFactura?: number;
   enMora: boolean;
   color: string;
 };

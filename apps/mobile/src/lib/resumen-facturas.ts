@@ -1,7 +1,11 @@
 import {
+  ETIQUETA_SIN_VERIFICAR,
+  TEXTO_SIN_VERIFICAR,
   descuentoVigente,
   enRevision,
+  estadoVisibleDeFactura,
   fechaLimiteDescuentoDe,
+  inicioDeMora,
   montoAPagarHoy,
   resumenResidente,
   type FacturaCartera,
@@ -72,16 +76,44 @@ export function tarjetaFacturas<F extends FacturaTarjeta>(
  * revisión", diga lo que diga el estado guardado: no se paga hasta que la
  * confirmen (Fase 2, docs/audits/FASE-2-FACTURACION.md). Una con un pago en
  * verificación se ve así (Fase 3): pagó y la contabilidad aún no lo refleja.
+ *
+ * Fase 4: con `cadena` (las facturas de la misma unidad), una histórica que
+ * quedó `pendiente` se ve "sin verificar" —falta el estado de cuenta
+ * siguiente para saber si se pagó—. La regla es la del backend
+ * (`estadoVisibleDeFactura`); si la fila ya trae `estadoVisible` (la lista de
+ * la administración), manda ese.
  */
-export function estadoVisible(f: {
-  estado: string;
-  lecturaDudosa?: LecturaDudosa | null;
-  pagoEnVerificacion?: { monto: number } | null;
-}): string {
+export function estadoVisible(
+  f: {
+    periodo?: string;
+    estado: string;
+    lecturaDudosa?: LecturaDudosa | null;
+    pagoEnVerificacion?: { monto: number } | null;
+    estadoVisible?: string;
+  },
+  cadena?: readonly { periodo: string }[],
+): string {
+  if (f.estadoVisible) return f.estadoVisible;
+  if (cadena && f.periodo) return estadoVisibleDeFactura({ ...f, periodo: f.periodo }, cadena);
   if (enRevision(f)) return "en_revision";
   if (f.pagoEnVerificacion) return "en_verificacion";
   return f.estado;
 }
+
+/**
+ * Los plazos de una factura para mostrarlos (Fase 4, decisión B): hasta
+ * cuándo se paga el precio completo (`fechaVencimiento`) y desde cuándo
+ * cuenta como mora (el 16 del mes siguiente). `null` si no tiene fecha.
+ */
+export function plazosDe(f: {
+  periodo: string;
+  fechaVencimiento: number;
+}): { precioCompletoHasta: number; moraDesde: number } | null {
+  if (!(f.fechaVencimiento > 0)) return null;
+  return { precioCompletoHasta: f.fechaVencimiento, moraDesde: inicioDeMora(f) };
+}
+
+export { ETIQUETA_SIN_VERIFICAR, TEXTO_SIN_VERIFICAR };
 
 /**
  * El descuento por pronto pago de una factura, para mostrarlo: hasta cuándo

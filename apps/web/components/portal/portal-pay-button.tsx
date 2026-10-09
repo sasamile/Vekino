@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useAction } from "convex/react";
+import { useAction, useQuery } from "convex/react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
 import { ArrowRight, Loader2 } from "lucide-react";
@@ -57,6 +57,10 @@ function mensajeParaElResidente(e: unknown): string {
   if (/está en revisión/i.test(crudo)) {
     return "Esta factura está en revisión por la administración. Podrás pagarla cuando la confirmen.";
   }
+  /* Fase 4: la pasarela está en QA y esta unidad no es de prueba. */
+  if (/modo de pruebas/i.test(crudo)) {
+    return "El pago en línea todavía no está habilitado. Paga por los canales habituales del conjunto.";
+  }
   if (/Failed to fetch|NetworkError|network/i.test(crudo)) {
     return "No hay conexión con la pasarela. Revisa tu internet e intenta de nuevo.";
   }
@@ -95,6 +99,20 @@ export function PortalPayButton({
   const crearPago = useAction(api.pagos.crearPagoFactura);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /* Sin portal del banco, "Pagar" es la pasarela de Vekino. Si está en QA y
+   * la unidad no es de prueba (Fase 4), no se ofrece: se dice por qué. Con el
+   * portal del conjunto no aplica: ese cobra el banco directamente. */
+  const opciones = useQuery(
+    api.pagos.opcionesDePago,
+    avalPortalUrl ? "skip" : { facturaId },
+  );
+  if (!avalPortalUrl && opciones?.debe && !opciones.pasarela && opciones.motivo) {
+    return (
+      <p className="max-w-xs text-right text-[12px] leading-snug text-muted-foreground">
+        {opciones.motivo}
+      </p>
+    );
+  }
 
   async function pagar() {
     if (avalPortalUrl) {

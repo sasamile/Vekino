@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
-import { TrendingUp, Wallet, Building2, Users, PieChart } from "lucide-react";
+import { TrendingUp, Wallet, Building2, Users, PieChart, CheckCircle2 } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
 import { PageContainer } from "@/components/layout/page-container";
@@ -171,11 +171,17 @@ function ReportesContent({
     periodos[periodos.length - 1] ??
     null;
 
-  const totalRecaudo = periodos.reduce((s, p) => s + p.sumaPagado, 0);
-  const recaudoPct =
-    selected && selected.total > 0
-      ? Math.round((selected.pagadas / selected.total) * 100)
-      : 0;
+  /* Fase 4 (F-19): dos cifras de recaudo, por separado. La contable sale del
+   * saldo anterior del mes siguiente; la de Vekino, de los pagos y
+   * comprobantes aprobados. Antes "recaudo" era la suma del total de las
+   * facturas pagadas, que no es ninguna de las dos. */
+  const recaudoContable = selected?.recaudoContable ?? null;
+  const sinCalcular = selected
+    ? selected.recaudoContableSinCalcular.sinSiguiente +
+      selected.recaudoContableSinCalcular.mesFaltante +
+      selected.recaudoContableSinCalcular.enRevision +
+      selected.recaudoContableSinCalcular.noCuadra
+    : 0;
 
   const ocupadas = unidades.filter((u) => u.estado === "ocupada").length;
   const desocupadas = unidades.length - ocupadas;
@@ -227,7 +233,7 @@ function ReportesContent({
         </Select>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
         <StatCard
           icon={Wallet}
           label="Cartera del mes"
@@ -237,10 +243,28 @@ function ReportesContent({
         />
         <StatCard
           icon={TrendingUp}
-          label="Recaudo del mes"
-          value={selected ? cop(selected.sumaPagado) : "—"}
-          hint={`${recaudoPct}% pagado · acum. ${cop(totalRecaudo)}`}
+          label="Recaudo según la contabilidad"
+          value={recaudoContable !== null ? cop(recaudoContable) : "Sin calcular"}
+          hint={
+            selected
+              ? recaudoContable !== null
+                ? `${selected.recaudoContableUnidades} unidades${sinCalcular ? ` · ${sinCalcular} sin calcular` : ""}`
+                : selected.recaudoContableSinCalcular.sinSiguiente > 0
+                  ? "Falta cargar el estado de cuenta del mes siguiente"
+                  : `${sinCalcular} unidades sin calcular`
+              : undefined
+          }
           tone="success"
+        />
+        <StatCard
+          icon={CheckCircle2}
+          label="Registrado en Vekino"
+          value={selected ? cop(selected.recaudoVekino) : "—"}
+          hint={
+            selected
+              ? `${selected.recaudoVekinoPagos} pagos en línea · ${selected.recaudoVekinoComprobantes} comprobantes`
+              : undefined
+          }
         />
         <StatCard
           icon={Building2}
@@ -276,6 +300,56 @@ function ReportesContent({
               format={cop}
             />
           )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Recaudo por período</CardTitle>
+          <CardDescription>
+            Según la contabilidad: lo que cobraba la factura menos lo que el estado de cuenta
+            siguiente dice que quedó debiendo. Registrado en Vekino: pagos en línea y
+            comprobantes aprobados. Son cifras distintas: casi todo se paga por fuera de Vekino.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[30rem] text-sm">
+              <thead>
+                <tr className="text-left text-xs uppercase tracking-wide text-muted-foreground">
+                  <th className="pb-2 font-medium">Período</th>
+                  <th className="pb-2 text-right font-medium">Según la contabilidad</th>
+                  <th className="pb-2 text-right font-medium">Sin calcular</th>
+                  <th className="pb-2 text-right font-medium">Registrado en Vekino</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {[...periodos].reverse().map((p) => {
+                  const faltan =
+                    p.recaudoContableSinCalcular.sinSiguiente +
+                    p.recaudoContableSinCalcular.mesFaltante +
+                    p.recaudoContableSinCalcular.enRevision +
+                    p.recaudoContableSinCalcular.noCuadra;
+                  return (
+                    <tr key={p.periodo}>
+                      <td className="py-2 text-foreground">{periodoCorto(p.periodo)}</td>
+                      <td className="py-2 text-right tabular-nums text-foreground">
+                        {p.recaudoContable !== null ? cop(p.recaudoContable) : "—"}
+                      </td>
+                      <td className="py-2 text-right tabular-nums text-muted-foreground">
+                        {faltan > 0
+                          ? `${faltan} ${p.recaudoContableSinCalcular.sinSiguiente === faltan ? "(falta el mes siguiente)" : "unidades"}`
+                          : "—"}
+                      </td>
+                      <td className="py-2 text-right tabular-nums text-foreground">
+                        {cop(p.recaudoVekino)}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         </CardContent>
       </Card>
 

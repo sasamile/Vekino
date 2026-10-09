@@ -6,8 +6,12 @@ import { useQuery } from "convex/react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
 import {
+  ETIQUETA_SIN_VERIFICAR,
+  TEXTO_SIN_VERIFICAR,
   descuentoVigente,
+  estadoVisibleDeFactura,
   fechaLimiteDescuentoDe,
+  inicioDeMora,
   mensajePagoEnVerificacion,
   montoAPagarHoy as montoDeHoy,
   resumenResidente,
@@ -77,6 +81,15 @@ type Factura = {
  * período—, no hasta el vencimiento (Fase 3, F-06). La última factura ya
  * consolida saldos anteriores.
  */
+/**
+ * Los dos plazos de la vigente (Fase 4, decisión B): hasta cuándo se paga el
+ * precio completo (fin de mes) y desde cuándo cuenta como mora (el 16 del mes
+ * siguiente).
+ */
+function plazosEnTexto(f: Factura): string {
+  return `Precio completo hasta el ${fechaPlazo(f.fechaVencimiento)} · En mora desde el ${fechaPlazo(inicioDeMora(f))}`;
+}
+
 function montoAPagarHoy(f: Factura, ahora = Date.now()) {
   return montoDeHoy(f, ahora);
 }
@@ -131,8 +144,16 @@ export default function PortalInicio() {
   /* Con una sola unidad en mora, desde cuándo: la mora la marca el último
    * período vencido sin cubrir, que puede ser anterior a la vigente. */
   const enMora = resumen.unidades.filter((u) => u.cartera.estado === "en_mora");
+  /* Desde cuándo está en mora (Fase 4, decisión B): el 16 del mes siguiente
+   * al período en mora, no el día después del plazo del precio completo. */
+  const carteraEnMora = enMora.length === 1 ? enMora[0]!.cartera : null;
   const vencimientoEnMora =
-    enMora.length === 1 ? (enMora[0]!.cartera.vencimientoEnMora ?? null) : null;
+    carteraEnMora?.periodoEnMora && carteraEnMora.vencimientoEnMora
+      ? inicioDeMora({
+          periodo: carteraEnMora.periodoEnMora,
+          fechaVencimiento: carteraEnMora.vencimientoEnMora,
+        })
+      : null;
   /* Pagos que Vekino registró y la contabilidad aún no refleja (Fase 3). */
   const enVerificacion = resumen.unidades.reduce(
     (s, u) =>
@@ -270,6 +291,7 @@ export default function PortalInicio() {
               <FacturaRow
                 key={f._id}
                 factura={f}
+                cadena={lista.filter((x) => String(x.unidadId) === String(f.unidadId))}
                 showUnidad={multiUnidad}
               />
             ))
@@ -453,7 +475,7 @@ function DeudaAlert({
   } else if (vencida) {
     sub =
       vencimientoEnMora !== null && vencimientoEnMora > FECHA_MIN
-        ? `${periodo}${multiUnidad ? ` · ${etiquetaUnidad(f)}` : ""} · Vencida desde el ${fechaPlazo(vencimientoEnMora)}`
+        ? `${periodo}${multiUnidad ? ` · ${etiquetaUnidad(f)}` : ""} · En mora desde el ${fechaPlazo(vencimientoEnMora)}`
         : `${periodo}${multiUnidad ? ` · ${etiquetaUnidad(f)}` : ""} · Factura vencida`;
   } else if (prontoPago && limiteDescuento !== null) {
     /* La fecha real del descuento (la del documento, o el 15 del mes del
@@ -465,12 +487,12 @@ function DeudaAlert({
     f.totalConDescuento < f.totalAPagar
   ) {
     sub = `${periodo}${multiUnidad ? ` · ${etiquetaUnidad(f)}` : ""} · Sin descuento (venció el ${fechaPlazo(limiteDescuento)})${
-      f.fechaVencimiento > FECHA_MIN ? ` · Paga hasta el ${fechaPlazo(f.fechaVencimiento)}` : ""
+      f.fechaVencimiento > FECHA_MIN ? ` · ${plazosEnTexto(f)}` : ""
     }`;
   } else {
     sub =
       f.fechaVencimiento > FECHA_MIN
-        ? `${periodo}${multiUnidad ? ` · ${etiquetaUnidad(f)}` : ""} · Paga hasta el ${fechaPlazo(f.fechaVencimiento)}`
+        ? `${periodo}${multiUnidad ? ` · ${etiquetaUnidad(f)}` : ""} · ${plazosEnTexto(f)}`
         : `${periodo}${multiUnidad ? ` · ${etiquetaUnidad(f)}` : ""}`;
   }
 
@@ -527,12 +549,17 @@ function DeudaAlert({
 
 function FacturaRow({
   factura: f,
+  cadena,
   showUnidad,
 }: {
   factura: Factura;
+  /** Las facturas de la misma unidad: dicen si esta es historica. */
+  cadena: Factura[];
   showUnidad: boolean;
 }) {
-  const meta = ESTADO_FACTURA[f.estado];
+  /* Una historica `pendiente` no se sabe si se pagó (Fase 4): "Sin verificar". */
+  const sinVerificar = estadoVisibleDeFactura(f, cadena) === "sin_verificar";
+  const meta = sinVerificar ? null : ESTADO_FACTURA[f.estado];
   const Icon = meta?.icon;
   const periodo = periodoHumano(f.periodo || f.periodoLabel);
   const unidadTxt = showUnidad ? etiquetaUnidad(f) : null;
@@ -548,11 +575,13 @@ function FacturaRow({
             </p>
           ) : null}
           <p className="mt-0.5 text-sm text-foreground/65">
-            {f.fechaVencimiento > FECHA_MIN
-              ? f.estado === "vencida"
-                ? `Venció el ${fechaPlazo(f.fechaVencimiento)}`
-                : `Vence el ${fechaPlazo(f.fechaVencimiento)}`
-              : f.numeroFactura}
+            {sinVerificar
+              ? TEXTO_SIN_VERIFICAR
+              : f.fechaVencimiento > FECHA_MIN
+                ? f.estado === "vencida"
+                  ? `Venció el ${fechaPlazo(f.fechaVencimiento)}`
+                  : `Precio completo hasta el ${fechaPlazo(f.fechaVencimiento)}`
+                : f.numeroFactura}
           </p>
         </div>
         <p className="text-[15px] font-semibold tabular-nums text-foreground">
@@ -567,6 +596,7 @@ function FacturaRow({
             {meta.label}
           </Badge>
         ) : null}
+        {sinVerificar ? <Badge tone="neutral">{ETIQUETA_SIN_VERIFICAR}</Badge> : null}
         {f.pdfUrl ? (
           <div className="ml-auto">
             <Button

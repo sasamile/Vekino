@@ -23,10 +23,13 @@ function Inner() {
   const detail = useQuery(api.condominios.detail, condominioId ? { condominioId } : "skip");
 
   const ultimo = (serie ?? [])[(serie ?? []).length - 1];
-  const recaudoData = (serie ?? []).map((s) => ({ periodo: s.periodo, value: s.sumaPagado }));
+  /* Fase 4 (F-19): el recaudo de la contabilidad y el registrado en Vekino,
+   * por separado; ya no la suma del total de las facturas pagadas. */
+  const recaudoData = (serie ?? []).map((s) => ({ periodo: s.periodo, value: s.recaudoContable ?? 0 }));
   const carteraData = (serie ?? []).map((s) => ({ periodo: s.periodo, value: s.sumaTotalAPagar }));
 
-  const totalRecaudo = (serie ?? []).reduce((s, r) => s + r.sumaPagado, 0);
+  const totalRecaudo = (serie ?? []).reduce((s, r) => s + (r.recaudoContable ?? 0), 0);
+  const totalVekino = (serie ?? []).reduce((s, r) => s + r.recaudoVekino, 0);
   const unidadCount = detail?.unidadCount ?? 0;
   const pctOcup =
     unidadCount > 0 ? Math.round(((detail?.occupiedCount ?? 0) / unidadCount) * 100) : 0;
@@ -39,7 +42,8 @@ function Inner() {
         <>
           {/* KPIs */}
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10, marginBottom: 16 }}>
-            <Kpi label="Recaudo total" value={cop(totalRecaudo)} icon="cash-outline" wide />
+            <Kpi label="Recaudo (contabilidad)" value={cop(totalRecaudo)} icon="cash-outline" wide />
+            <Kpi label="Registrado en Vekino" value={cop(totalVekino)} icon="checkmark-circle-outline" wide />
             <Kpi label="Cartera último período" value={ultimo ? cop(ultimo.sumaTotalAPagar) : "—"} icon="wallet-outline" wide />
             <Kpi label="Residentes" value={String(detail?.memberCount ?? 0)} icon="people-outline" />
             <Kpi label="Unidades" value={String(unidadCount)} icon="business-outline" />
@@ -48,7 +52,7 @@ function Inner() {
 
           {/* Recaudo */}
           <GlassCard style={{ padding: 18, marginBottom: 16 }}>
-            <Text style={{ color: C.textSoft, fontSize: 12, fontWeight: "700", letterSpacing: 0.5, marginBottom: 12 }}>RECAUDO POR PERÍODO</Text>
+            <Text style={{ color: C.textSoft, fontSize: 12, fontWeight: "700", letterSpacing: 0.5, marginBottom: 12 }}>RECAUDO POR PERÍODO (CONTABILIDAD)</Text>
             <MiniBarChart data={recaudoData} />
           </GlassCard>
 

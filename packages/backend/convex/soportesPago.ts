@@ -9,7 +9,12 @@ import {
   getCurrentAppUser,
   misUnidadIds,
 } from "./model/authz";
-import { facturaVigente, formatoPesos, montoAPagarHoy } from "./lib/cartera";
+import {
+  estadoVisibleDeFactura,
+  facturaVigente,
+  formatoPesos,
+  montoAPagarHoy,
+} from "./lib/cartera";
 import { recalcularCadena } from "./model/estadoFactura";
 
 /**
@@ -269,6 +274,30 @@ export const facturaVigenteDeUnidad = internalQuery({
         .collect()
     ).filter((f) => f.condominioId === unidad.condominioId);
     return facturaVigente(cadena);
+  },
+});
+
+/**
+ * Las facturas viejas de la unidad que se muestran "Sin verificar" (Fase 4):
+ * historicas que quedaron `pendiente` porque ninguna factura siguiente pudo
+ * juzgarlas (falta el mes siguiente). El bot y el agente las nombran para no
+ * dar a entender que se deben: lo que se debe hoy esta en la vigente.
+ */
+export const sinVerificarDeUnidad = internalQuery({
+  args: { unidadId: v.id("unidades") },
+  handler: async (ctx, args) => {
+    const unidad = await ctx.db.get(args.unidadId);
+    if (!unidad) return [];
+    const cadena = (
+      await ctx.db
+        .query("facturas")
+        .withIndex("by_unidad", (q) => q.eq("unidadId", args.unidadId))
+        .collect()
+    ).filter((f) => f.condominioId === unidad.condominioId);
+    return cadena
+      .filter((f) => estadoVisibleDeFactura(f, cadena) === "sin_verificar")
+      .sort((a, b) => a.periodo.localeCompare(b.periodo))
+      .map((f) => ({ periodo: f.periodo, periodoLabel: f.periodoLabel }));
   },
 });
 

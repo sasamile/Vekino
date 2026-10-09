@@ -45,6 +45,8 @@ const ESTADO_TONE: Record<
   vencida: "red",
   abonada: "blue",
   en_revision: "blue",
+  en_verificacion: "blue",
+  sin_verificar: "neutral",
 };
 const ESTADO_LABEL: Record<string, string> = {
   pendiente: "Pendiente",
@@ -52,6 +54,9 @@ const ESTADO_LABEL: Record<string, string> = {
   vencida: "Vencida",
   abonada: "Abonada",
   en_revision: "En revisión",
+  en_verificacion: "Pago en verificación",
+  /* Fase 4: histórica que quedó pendiente; falta el estado de cuenta siguiente. */
+  sin_verificar: "Sin verificar",
 };
 
 const ESTADO_ICON: Record<
@@ -496,7 +501,10 @@ function ResidentHome({
               ) : (
                 <View style={{ gap: SoftUI.space.md }}>
                   {facturas.slice(0, 3).map((f) => {
-                    const estado = estadoVisible(f);
+                    const estado = estadoVisible(
+                      f,
+                      facturas.filter((x) => x.unidadId === f.unidadId),
+                    );
                     const iconMeta =
                       ESTADO_ICON[estado] ?? ESTADO_ICON.abonada;
                     return (

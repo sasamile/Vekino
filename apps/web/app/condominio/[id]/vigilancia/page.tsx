@@ -757,6 +757,22 @@ function NovedadesTab({ condominioId }: { condominioId: Id<"condominios"> }) {
   );
 }
 
+/** "2026-10": el mes siguiente al de hoy en Colombia, donde cae un cobro nuevo. */
+function periodoSiguienteBogota(): string {
+  const d = new Date(Date.now() - 5 * 60 * 60 * 1000);
+  const s = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1));
+  return `${s.getUTCFullYear()}-${String(s.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+/** "2026-09" → "septiembre de 2026". */
+function mesEnPalabras(periodo: string): string {
+  const [a, m] = periodo.split("-").map(Number);
+  if (!a || !m) return periodo;
+  return new Date(Date.UTC(a, m - 1, 15)).toLocaleDateString("es-CO", {
+    month: "long", year: "numeric", timeZone: "America/Bogota",
+  });
+}
+
 /**
  * Una novedad vista por la administración.
  *
@@ -774,12 +790,27 @@ function NovedadCard({
 }) {
   const gestionar = useMutation(api.guardia.gestionarNovedad);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  /* Un reporte de vehículo es un cobro de parqueadero (Fase 4): "cobrada"
+   * pide la cuenta de cobro donde queda y "Descartar" el motivo, igual que
+   * en Cobros de parqueadero, porque es el MISMO estado. */
+  const cobro = n.cobro;
+  const [abierto, setAbierto] = useState<null | "cobrada" | "descartada">(null);
+  const [periodo, setPeriodo] = useState(periodoSiguienteBogota());
+  const [nota, setNota] = useState("");
   const estado = n.gestion ?? "pendiente";
 
-  async function marcar(gestion: "pendiente" | "cobrada" | "descartada") {
+  async function marcar(
+    gestion: "pendiente" | "cobrada" | "descartada",
+    extra: { periodo?: string; nota?: string } = {},
+  ) {
     setBusy(true);
+    setError(null);
     try {
-      await gestionar({ novedadId: n._id, gestion });
+      await gestionar({ novedadId: n._id, gestion, ...extra });
+      setAbierto(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudo guardar.");
     } finally {
       setBusy(false);
     }
@@ -861,20 +892,70 @@ function NovedadCard({
         )}
       </div>
 
+      {cobro && (
+        <p className="mt-2 text-xs text-muted-foreground">
+          Cobro de parqueadero de {mesEnPalabras(cobro.periodo)}
+          {cobro.casa ? ` a la casa ${cobro.casa}` : ""}
+          {cobro.reportes > 1 ? ` · ${cobro.reportes} reportes del mismo vehículo` : ""}
+          {cobro.periodoFactura ? ` · en la cuenta de ${cobro.periodoFactura}` : ""}
+          {cobro.estado === "descartado" && cobro.nota ? ` · no se cobra: ${cobro.nota}` : ""}
+        </p>
+      )}
+
       {/* Solo se ofrece cobrar cuando hay a quién: sin unidad no hay a quién
           pasarle el cargo, y un botón que no lleva a nada confunde más que
           ayudar. */}
-      {n.unidades.length > 0 && estado === "pendiente" && (
+      {n.unidades.length > 0 && estado === "pendiente" && abierto === null && (
         <div className="mt-3 flex flex-wrap gap-2 border-t border-border pt-3">
-          <Button size="sm" disabled={busy} onClick={() => marcar("cobrada")}>
+          <Button
+            size="sm"
+            disabled={busy}
+            onClick={() => (cobro ? setAbierto("cobrada") : marcar("cobrada"))}
+          >
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-            Marcar cobrada a {n.unidades.length === 1
-              ? `la casa ${n.unidades[0]!.numero}`
-              : `${n.unidades.length} casas`}
+            Marcar cobrada a {cobro?.casa
+              ? `la casa ${cobro.casa}`
+              : n.unidades.length === 1
+                ? `la casa ${n.unidades[0]!.numero}`
+                : `${n.unidades.length} casas`}
           </Button>
-          <Button variant="ghost" size="sm" disabled={busy} onClick={() => marcar("descartada")}>
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={busy}
+            onClick={() => (cobro ? setAbierto("descartada") : marcar("descartada"))}
+          >
             Descartar
           </Button>
+        </div>
+      )}
+      {abierto === "cobrada" && (
+        <div className="mt-3 flex flex-wrap items-end gap-2 border-t border-border pt-3">
+          <div className="space-y-1">
+            <label className="block text-xs text-muted-foreground">Cuenta de cobro (período)</label>
+            <Input value={periodo} onChange={(e) => setPeriodo(e.target.value)} placeholder="2026-10" className="w-32" />
+          </div>
+          <Button size="sm" disabled={busy} onClick={() => marcar("cobrada", { periodo })}>
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} Confirmar
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setAbierto(null)}>Cancelar</Button>
+        </div>
+      )}
+      {abierto === "descartada" && (
+        <div className="mt-3 flex flex-wrap items-end gap-2 border-t border-border pt-3">
+          <div className="min-w-[220px] flex-1 space-y-1">
+            <label className="block text-xs text-muted-foreground">¿Por qué no se cobra?</label>
+            <Input value={nota} onChange={(e) => setNota(e.target.value)} placeholder="El residente demostró que sí pagó" />
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={busy || !nota.trim()}
+            onClick={() => marcar("descartada", { nota: nota.trim() })}
+          >
+            No cobrar
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setAbierto(null)}>Cancelar</Button>
         </div>
       )}
       {estado !== "pendiente" && (
@@ -887,6 +968,7 @@ function NovedadCard({
           Reabrir
         </button>
       )}
+      {error && <p className="mt-2 text-[13px] text-destructive">{error}</p>}
     </Card>
   );
 }

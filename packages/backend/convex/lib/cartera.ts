@@ -15,10 +15,11 @@
  * pagar, la unidad sigue debiendo). `pagada` y `saldo_a_favor` estan saldadas.
  *
  * ── Como se miden los dias ───────────────────────────────────────────────
- * Contra el vencimiento, no contra la emision: una factura de septiembre que
- * vence el 15 de octubre no lleva un mes de mora el 20 de septiembre, lleva
- * cero. Y contra la MAS ANTIGUA sin pagar de las que ya vencieron, porque esa
- * es la que responde "cuanto lleva debiendo".
+ * Contra el inicio de la mora, no contra la emision: una factura de
+ * septiembre no lleva un mes de mora el 20 de septiembre, lleva cero. Desde
+ * la Fase 4 la mora empieza el dia 16 del mes siguiente al del periodo
+ * (`inicioDeMora`, decision B): el fin de mes es el plazo del precio completo
+ * que se le muestra al residente, no el inicio de la mora.
  *
  * ── Que NO hace ──────────────────────────────────────────────────────────
  * No bloquea nada. Devuelve informacion para que la administracion decida:
@@ -83,9 +84,11 @@ export type FacturaCartera = {
   periodo: string;
   estado: EstadoFactura;
   /**
-   * Timestamp: el ultimo dia para pagar, a medianoche de Colombia. Desde la
-   * Fase 3, el ultimo dia del mes del periodo (`vencimientoDePeriodo`); las
-   * cargadas antes llevan el dia 15 del mes siguiente.
+   * Timestamp: el ultimo dia para pagar el precio completo, a medianoche de
+   * Colombia. Desde la Fase 3, el ultimo dia del mes del periodo
+   * (`vencimientoDePeriodo`); las cargadas antes llevan el dia 15 del mes
+   * siguiente. La mora no empieza al dia siguiente sino el 16 del mes
+   * siguiente (`inicioDeMora`, Fase 4).
    */
   fechaVencimiento: number;
   /** La deuda acumulada que reclama esta factura. */
@@ -232,7 +235,11 @@ export type CarteraUnidad = {
   diasMora: number;
   /** El periodo que provoca la mora actual. */
   periodoEnMora: string | null;
-  /** Su vencimiento. */
+  /**
+   * Su vencimiento: el plazo del precio completo que se le mostro. Desde
+   * cuando esta en mora lo dice `inicioDeMora({ periodo: periodoEnMora,
+   * fechaVencimiento: vencimientoEnMora })`.
+   */
   vencimientoEnMora: number | null;
   /** Solo con `en_revision`. */
   motivoRevision?: MotivoRevision;
@@ -551,18 +558,18 @@ export function carteraDeUnidad(
     };
   }
 
-  /* Los periodos que ya vencieron, del mas viejo al mas nuevo. Se ordena por
-   * vencimiento y no por el orden en que entraron a la base: lo que define
-   * "el ultimo" es la fecha de la obligacion, no cuando alguien la cargo. El
-   * periodo desempata para que dos vencimientos iguales no bailen.
+  /* Los periodos cuya mora ya empezo (`inicioDeMora`: el 16 del mes
+   * siguiente, decision B de la Fase 4), del mas viejo al mas nuevo. Se
+   * ordena por esa fecha y no por el orden en que entraron a la base: lo que
+   * define "el ultimo" es la fecha de la obligacion, no cuando alguien la
+   * cargo. El periodo desempata para que dos fechas iguales no bailen.
    *
    * Las migradas con `fechaVencimiento` en 0 (`backfillFechas` las arregla)
    * quedan fuera: sin fecha no se puede decir si vencieron ni cuando. */
   const yaVencidas = facturas
-    .filter((f) => f.fechaVencimiento > 0 && diasDesde(f.fechaVencimiento, ahora) >= 1)
+    .filter((f) => f.fechaVencimiento > 0 && ahora >= inicioDeMora(f))
     .sort(
-      (a, b) =>
-        a.fechaVencimiento - b.fechaVencimiento || a.periodo.localeCompare(b.periodo),
+      (a, b) => inicioDeMora(a) - inicioDeMora(b) || a.periodo.localeCompare(b.periodo),
     );
 
   const ultimoVencido = yaVencidas[yaVencidas.length - 1];
@@ -589,10 +596,14 @@ export function carteraDeUnidad(
     return { ...base, estado: "en_revision", motivoRevision: "mes_faltante" };
   }
 
+  /* Los dias se cuentan desde la vispera del inicio de la mora: el 16 es el
+   * dia 1. Para las facturas con el vencimiento viejo (15 del mes siguiente)
+   * es exactamente la cuenta de siempre. */
+  const inicio = inicioDeMora(ultimoVencido);
   return {
     ...base,
     estado: "en_mora",
-    diasMora: diasDesde(ultimoVencido.fechaVencimiento, ahora),
+    diasMora: diasDesde(inicio - DIA, ahora),
     periodoEnMora: ultimoVencido.periodo,
     vencimientoEnMora: ultimoVencido.fechaVencimiento,
   };
@@ -792,9 +803,10 @@ export function montoAPagarHoy(
  * El vencimiento de una factura NUEVA (decision de la administracion para la
  * Fase 3): "Pagar con descuento hasta el 15 del presente mes, del 16 a 30 se
  * paga el precio completo". Es decir, el ultimo dia del mes del periodo, a
- * medianoche de Colombia —la misma convencion de siempre: ese dia todavia se
- * puede pagar, la mora empieza al siguiente—. El "30" se lee como el ultimo
- * dia del mes (28 o 29 en febrero, 31 donde lo hay).
+ * medianoche de Colombia: ese dia todavia se paga el precio completo. La mora
+ * NO empieza al dia siguiente sino el 16 del mes siguiente (`inicioDeMora`,
+ * decision B de la Fase 4). El "30" se lee como el ultimo dia del mes (28 o
+ * 29 en febrero, 31 donde lo hay).
  *
  * Solo para lo que se carga desde ahora: las facturas ya guardadas conservan
  * el suyo (dia 15 del mes siguiente) hasta que se autorice re-fecharlas.
@@ -803,4 +815,183 @@ export function vencimientoDePeriodo(periodo: string): number {
   const [a, m] = periodo.split("-").map(Number) as [number, number];
   /* Dia 0 del mes siguiente = ultimo dia de este. */
   return Date.UTC(a, m, 0, BOGOTA_UTC_HORAS);
+}
+
+// ─────────────────────────────────────────────────────────────
+// Cuando empieza la mora (Fase 4, decision B del responsable)
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * El dia del mes SIGUIENTE al del periodo en que empieza la mora.
+ *
+ * Decision del responsable para la Fase 4 (opcion B): "El fin de mes es el
+ * plazo del precio completo, que es lo que se le muestra al residente. Para
+ * Vekino, la mora empieza el dia 16 del mes siguiente".
+ *
+ * Por que: con el vencimiento a fin de mes (Fase 3), entre el dia 1 y la
+ * carga del PDF siguiente la vigente ya habia vencido y Vekino todavia no veia
+ * los pagos hechos por fuera (banco, portal): de 8 a 16 dias al mes, la
+ * mayoria de las casas se veian en mora sin estarlo (Fase 3, Anexo V1). Las
+ * facturas de Ciudad del Campo llegan antes del 16, asi que la mora se decide
+ * ya con el documento que dice si se pago.
+ */
+export const DIA_INICIO_MORA = 16;
+
+/**
+ * Desde cuando una factura sin pagar cuenta como mora: la medianoche
+ * (Colombia) del dia 16 del mes siguiente al del periodo, o el dia despues de
+ * su vencimiento si este es posterior.
+ *
+ * - Facturas nuevas (vencen el ultimo dia del mes): el 16 del mes siguiente.
+ * - Las ya guardadas (vencen el 15 del mes siguiente): el 16, como siempre.
+ *   No se re-fecha nada: la regla sale del periodo.
+ * - Una factura con un plazo propio mas largo (la manual, por ejemplo) no
+ *   entra en mora antes de su plazo.
+ */
+export function inicioDeMora(f: { periodo: string; fechaVencimiento: number }): number {
+  const dia16 = medianocheDelPeriodo(periodoSiguiente(f.periodo), DIA_INICIO_MORA);
+  return Math.max(dia16, f.fechaVencimiento + DIA);
+}
+
+const MESES = [
+  "enero", "febrero", "marzo", "abril", "mayo", "junio",
+  "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
+];
+
+/**
+ * "16 de noviembre de 2026": el dia, en hora de Colombia. Sin `Intl`, para
+ * que dé lo mismo en el servidor, la web, el movil y las pruebas.
+ */
+export function fechaEnPalabras(ts: number): string {
+  const d = new Date(ts - BOGOTA_UTC_HORAS * 60 * 60 * 1000);
+  return `${d.getUTCDate()} de ${MESES[d.getUTCMonth()]} de ${d.getUTCFullYear()}`;
+}
+
+export type PlazosFactura = {
+  /** Ultimo instante con descuento, si la factura lo tiene. */
+  descuentoHasta: number | null;
+  /** El plazo del precio completo que se le muestra al residente (`fechaVencimiento`). */
+  precioCompletoHasta: number;
+  /** Desde cuando cuenta como mora (`inicioDeMora`). */
+  moraDesde: number;
+};
+
+/** Los tres plazos de una factura, en un solo lugar. */
+export function plazosDeFactura(f: {
+  periodo: string;
+  fechaVencimiento: number;
+  totalConDescuento?: number | null;
+  fechaLimiteDescuento?: number | null;
+}): PlazosFactura {
+  return {
+    descuentoHasta: fechaLimiteDescuentoDe(f),
+    precioCompletoHasta: f.fechaVencimiento,
+    moraDesde: inicioDeMora(f),
+  };
+}
+
+/**
+ * Lo que se le dice al residente sobre sus plazos, igual en la web, el movil,
+ * el bot y el agente:
+ *
+ *   "Con descuento hasta el 15 de octubre de 2026"   (si tiene descuento)
+ *   "Precio completo hasta el 31 de octubre de 2026"
+ *   "En mora desde el 16 de noviembre de 2026"
+ *
+ * Sin fecha de vencimiento (migradas sin `backfillFechas`) no se dice nada:
+ * inventar un plazo seria peor que no darlo.
+ */
+export function textosDePlazos(f: {
+  periodo: string;
+  fechaVencimiento: number;
+  totalConDescuento?: number | null;
+  fechaLimiteDescuento?: number | null;
+}): string[] {
+  if (!(f.fechaVencimiento > 0)) return [];
+  const p = plazosDeFactura(f);
+  return [
+    ...(p.descuentoHasta !== null ? [`Con descuento hasta el ${fechaEnPalabras(p.descuentoHasta)}`] : []),
+    `Precio completo hasta el ${fechaEnPalabras(p.precioCompletoHasta)}`,
+    `En mora desde el ${fechaEnPalabras(p.moraDesde)}`,
+  ];
+}
+
+// ─────────────────────────────────────────────────────────────
+// Lo que se muestra de cada factura (Fase 4): "Sin verificar"
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * El estado que se MUESTRA de una factura. El campo `estado` no cambia.
+ *
+ * - `en_revision`: su lectura esta en revision (Fase 2).
+ * - `en_verificacion`: tiene un pago registrado que la contabilidad aun no
+ *   refleja (Fase 3; solo la vigente).
+ * - `sin_verificar`: es HISTORICA y quedo `pendiente`. Una historica
+ *   pendiente es una que ninguna factura siguiente pudo juzgar —falta el mes
+ *   siguiente (julio en Ciudad del Campo, mayo en parte de Arboleda) o se
+ *   cargo antes de tiempo—: no se sabe si se pago. Mostrarla "Pendiente"
+ *   decia que se debe, y lo que se debe hoy ya esta en la vigente.
+ * - Cualquier otra: su estado.
+ *
+ * `cadena` son las facturas de la misma unidad (con la factura incluida).
+ */
+export type EstadoVisible = EstadoFactura | "en_revision" | "en_verificacion" | "sin_verificar";
+
+export function estadoVisibleDeFactura(
+  f: {
+    periodo: string;
+    estado: EstadoFactura | string;
+    lecturaDudosa?: LecturaDudosa | null;
+    pagoEnVerificacion?: PagoEnVerificacion | null;
+  },
+  cadena: readonly { periodo: string }[],
+): EstadoVisible {
+  if (enRevision(f)) return "en_revision";
+  if (f.pagoEnVerificacion) return "en_verificacion";
+  const ultimas = delUltimoPeriodo(cadena);
+  const historica =
+    ultimas.length > 0 && f.periodo.localeCompare(ultimas[0]!.periodo) < 0;
+  if (historica && f.estado === "pendiente") return "sin_verificar";
+  return f.estado as EstadoFactura;
+}
+
+export const ETIQUETA_SIN_VERIFICAR = "Sin verificar";
+export const TEXTO_SIN_VERIFICAR =
+  "Falta el estado de cuenta del mes siguiente para saber si se pagó.";
+
+// ─────────────────────────────────────────────────────────────
+// La lista del residente (Fase 4, F-16)
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Las facturas que se le entregan al residente, de una o varias unidades.
+ *
+ * `porUnidad`: las de cada unidad, de la mas reciente a la mas vieja por
+ * periodo. Salen siempre TODAS las del periodo mas reciente de cada unidad
+ * —la vigente, y su gemela si la hubiera, para que `facturaVigente` detecte
+ * el empate—, y el resto hasta `limite`, de lo mas reciente a lo mas viejo.
+ * Cada factura una sola vez.
+ *
+ * Antes se recortaba a 50 por fecha de carga entre todas las unidades: con
+ * muchas facturas, la vigente de una casa podia quedarse por fuera, y con ella
+ * el estado, el boton de pago y el resumen.
+ */
+export function facturasDelResidente<
+  F extends { _id: string; periodo: string; fechaEmision?: number },
+>(porUnidad: readonly (readonly F[])[], limite: number): F[] {
+  const vistas = new Set<string>();
+  const vigentes: F[] = [];
+  const resto: F[] = [];
+  for (const lista of porUnidad) {
+    const ultimas = new Set(delUltimoPeriodo(lista).map((f) => f._id));
+    for (const f of lista) {
+      if (vistas.has(f._id)) continue;
+      vistas.add(f._id);
+      (ultimas.has(f._id) ? vigentes : resto).push(f);
+    }
+  }
+  const reciente = (a: F, b: F) =>
+    b.periodo.localeCompare(a.periodo) || (b.fechaEmision ?? 0) - (a.fechaEmision ?? 0);
+  resto.sort(reciente);
+  return [...vigentes, ...resto.slice(0, Math.max(0, limite - vigentes.length))].sort(reciente);
 }

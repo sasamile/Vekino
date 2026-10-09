@@ -102,3 +102,44 @@ export function ambienteAval(env: Record<string, string | undefined>): AmbienteA
       : 'Falta AVAL_AMBIENTE ("qa" o "prod") en el deployment. No se envía nada al banco.',
   );
 }
+
+/**
+ * Las unidades de prueba declaradas para la pasarela en QA (Fase 4).
+ *
+ * `AVAL_UNIDADES_PRUEBA`: ids de `unidades` separados por comas, espacios o
+ * saltos de linea. Ids y no numeros de casa: "999" puede existir en otro
+ * conjunto, y un id no se confunde. Sin la variable, ninguna.
+ */
+export function unidadesDePruebaAval(env: Record<string, string | undefined>): Set<string> {
+  return new Set(
+    (env.AVAL_UNIDADES_PRUEBA ?? "")
+      .split(/[\s,;]+/)
+      .map((s) => s.trim())
+      .filter(Boolean),
+  );
+}
+
+/**
+ * Si la pasarela puede cobrarle a esta unidad (Fase 4).
+ *
+ * Con `AVAL_AMBIENTE=qa` la pasarela es la de pruebas del banco: no mueve
+ * plata. Ofrecerle "Pagar en linea" a una casa real era hacerle creer que
+ * pago —el deployment que usan los residentes esta en `qa` (Fase 1, §9.6)—.
+ * En `qa` solo se opera sobre las unidades declaradas de prueba
+ * (`AVAL_UNIDADES_PRUEBA`); sin la lista, sobre ninguna.
+ *
+ * Con `prod`, todas, como en la Fase 3. Sin `AVAL_AMBIENTE` no se decide
+ * aqui: la pasarela ya se niega a crear o consultar transacciones
+ * (`ambienteAval`).
+ */
+export function pasarelaPermitida(
+  env: Record<string, string | undefined>,
+  unidadId: string,
+): boolean {
+  if (env.AVAL_AMBIENTE?.trim() !== "qa") return true;
+  return unidadesDePruebaAval(env).has(unidadId);
+}
+
+/** Lo que se le responde a una unidad real mientras la pasarela esta en QA. Estable. */
+export const MENSAJE_PASARELA_DE_PRUEBAS =
+  "El pago en línea todavía no está habilitado: la pasarela está en modo de pruebas. Paga por los canales habituales del conjunto y, si quieres, envía el comprobante.";

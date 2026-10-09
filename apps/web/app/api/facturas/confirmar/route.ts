@@ -3,6 +3,7 @@ import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
 import { finDelDiaDelPeriodo, vencimientoDePeriodo } from "@vekino/backend/cartera";
+import { numeroFacturaDe } from "@vekino/backend/lecturaFactura";
 import { fetchAuthMutation } from "@/lib/auth-server";
 import { hashDe, leerPdf, pdfDeFactura } from "../lectura";
 import { rechazoDePermiso, rechazoSinSesion } from "../permiso";
@@ -204,7 +205,9 @@ export async function POST(req: NextRequest) {
       return {
         condominioId,
         unidadId: c.unidadId,
-        numeroFactura: `FAC-${periodo}-${String(i + 1).padStart(4, "0")}`,
+        /* Del período y la casa del documento, no de la posición en el lote
+         * (Fase 4, F-17): el mismo documento, el mismo número. */
+        numeroFactura: numeroFacturaDe(periodo, f.unitIdentifier, i + 1),
         numeroInterno: f.numeroInterno,
         periodo,
         periodoLabel: f.periodoLabel,

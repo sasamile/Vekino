@@ -36,13 +36,24 @@ import {
   GlassSection,
 } from "@/components/ui/glass";
 import { cop, fmtPeriodo } from "@/lib/utils";
-import { descuentoDe, estadoVisible, tarjetaFacturas } from "@/lib/resumen-facturas";
+import {
+  ETIQUETA_SIN_VERIFICAR,
+  TEXTO_SIN_VERIFICAR,
+  descuentoDe,
+  estadoVisible,
+  plazosDe,
+  tarjetaFacturas,
+} from "@/lib/resumen-facturas";
 import { AuthUI } from "@/lib/auth-ui";
 import { SoftUI, softShadow } from "@/lib/soft-ui";
 
 type Estado = "pendiente" | "pagada" | "vencida" | "abonada" | "saldo_a_favor";
-/** Lo que se muestra: el estado guardado, o "en revisión" si la lectura no se ha verificado. */
-type EstadoVisible = Estado | "en_revision" | "en_verificacion";
+/**
+ * Lo que se muestra: el estado guardado, o "en revisión" si la lectura no se
+ * ha verificado, "pago en verificación" (Fase 3) o "sin verificar" (Fase 4:
+ * histórica que quedó pendiente; falta el estado de cuenta siguiente).
+ */
+type EstadoVisible = Estado | "en_revision" | "en_verificacion" | "sin_verificar";
 
 const ESTADO_TONE: Record<EstadoVisible, "yellow" | "green" | "red" | "neutral" | "blue"> = {
   pendiente: "yellow",
@@ -52,6 +63,7 @@ const ESTADO_TONE: Record<EstadoVisible, "yellow" | "green" | "red" | "neutral" 
   saldo_a_favor: "blue",
   en_revision: "blue",
   en_verificacion: "blue",
+  sin_verificar: "neutral",
 };
 
 const ESTADO_LABEL: Record<EstadoVisible, string> = {
@@ -63,6 +75,8 @@ const ESTADO_LABEL: Record<EstadoVisible, string> = {
   en_revision: "En revisión",
   /* Fase 3: pagó y la contabilidad aún no lo refleja. */
   en_verificacion: "Pago en verificación",
+  /* Fase 4: histórica que nadie pudo juzgar. */
+  sin_verificar: ETIQUETA_SIN_VERIFICAR,
 };
 
 const ESTADO_ICON: Record<
@@ -88,10 +102,15 @@ const ESTADO_ICON: Record<
   },
   en_revision: { name: "search-outline", bg: SoftUI.infoSoft, fg: SoftUI.blue },
   en_verificacion: { name: "hourglass-outline", bg: SoftUI.infoSoft, fg: SoftUI.blue },
+  sin_verificar: { name: "help-circle-outline", bg: SoftUI.bgSecondary, fg: SoftUI.textSecondary },
 };
 
 type FacturaRow = {
   _id: Id<"facturas">;
+  /** La unidad (lista del residente): sirve para saber si es histórica. */
+  unidadId?: string;
+  /** El estado que se muestra, si ya lo calculó el backend (lista de la administración). */
+  estadoVisible?: string;
   periodo: string;
   periodoLabel: string;
   residenteNombre: string;
@@ -202,15 +221,18 @@ function PeriodoSelect({
 
 function FacturaListCard({
   f,
+  cadena,
   onPress,
   showResident,
 }: {
   f: FacturaRow;
+  /** Las facturas de la misma unidad (Fase 4: "sin verificar"). */
+  cadena?: FacturaRow[];
   onPress: () => void;
   showResident?: boolean;
 }) {
   const { theme } = useCondominio();
-  const estado = estadoVisible(f);
+  const estado = estadoVisible(f, cadena);
   const iconMeta = ESTADO_ICON[estado] ?? ESTADO_ICON.abonada;
   /* El descuento vale hasta SU fecha (la del documento, o el 15 del mes del
    * período), no hasta el vencimiento (Fase 3, F-06). */
@@ -239,9 +261,10 @@ function FacturaListCard({
               label={ESTADO_LABEL[estado as EstadoVisible] ?? estado}
               tone={ESTADO_TONE[estado as EstadoVisible] ?? "neutral"}
             />
-            {!showResident && (
+            {!showResident && estado !== "sin_verificar" && (
               <Text style={styles.facturaDue}>
-                Vence{" "}
+                {/* Fase 4: el fin de mes es el plazo del precio completo. */}
+                Precio completo hasta el{" "}
                 {new Date(f.fechaVencimiento).toLocaleDateString("es-CO", {
                   day: "numeric",
                   month: "short",
@@ -250,6 +273,9 @@ function FacturaListCard({
               </Text>
             )}
           </View>
+          {estado === "sin_verificar" ? (
+            <Text style={styles.facturaDue}>{TEXTO_SIN_VERIFICAR}</Text>
+          ) : null}
           {!showResident && descuento?.vigente && estado === "pendiente" ? (
             <View style={styles.descuentoRow}>
               <Ionicons name="pricetag" size={12} color={SoftUI.success} />
@@ -475,6 +501,9 @@ function ResidentFacturasView({
   const filtered = (facturas ?? []).filter(
     (f) => !estadoFiltro || f.estado === estadoFiltro,
   ) as FacturaRow[];
+  /* Las facturas de la misma unidad: dicen si una es histórica (Fase 4). */
+  const cadenaDe = (f: FacturaRow) =>
+    ((facturas ?? []) as FacturaRow[]).filter((x) => x.unidadId === f.unidadId);
 
   // Misma regla de cartera que la web y la administración (lib/resumen-facturas).
   const tarjeta = tarjetaFacturas(facturas ?? [], Date.now());
@@ -533,6 +562,7 @@ function ResidentFacturasView({
                   <FacturaListCard
                     key={f._id}
                     f={f}
+                    cadena={cadenaDe(f)}
                     onPress={() => setDetalle(f)}
                   />
                 ))}
@@ -544,6 +574,7 @@ function ResidentFacturasView({
 
       <FacturaDetalleModal
         detalle={detalle}
+        cadena={detalle ? cadenaDe(detalle) : undefined}
         condominioId={condominioId}
         onClose={() => setDetalle(null)}
       />
@@ -1052,10 +1083,13 @@ function CrearFacturaSheet({
 /* ── Modal de detalle (hoja suave) ───────────────────────────── */
 function FacturaDetalleModal({
   detalle,
+  cadena,
   condominioId,
   onClose,
 }: {
   detalle: FacturaRow | null;
+  /** Las facturas de la misma unidad (Fase 4: "sin verificar" y la mora). */
+  cadena?: FacturaRow[];
   condominioId?: Id<"condominios">;
   onClose: () => void;
 }) {
@@ -1078,16 +1112,26 @@ function FacturaDetalleModal({
   const [datosPago, setDatosPago] = useState<{ monto: string; fecha: string } | null>(null);
   useEffect(() => setDatosPago(null), [detalle?._id]);
 
-  /* "Pagar" (y "Ya pagué") solo donde el backend aceptaría iniciar el pago:
-   * la factura VIGENTE de una unidad suya y con saldo. Se le pregunta al
-   * servidor (`pagos.puedePagar`, la misma validación de `crearPagoFactura`)
-   * en vez de deducirlo del estado: una factura vieja `vencida`, cuyo saldo
-   * ya va dentro de la siguiente, ya no se ofrece para pagar otra vez. */
-  const pagable = useQuery(
-    api.pagos.puedePagar,
+  /* "Pagar" y "Ya pagué" solo donde el backend lo aceptaría: la factura
+   * VIGENTE de una unidad suya y con saldo. Se le pregunta al servidor en vez
+   * de deducirlo del estado: una factura vieja `vencida`, cuyo saldo ya va
+   * dentro de la siguiente, no se ofrece para pagar otra vez.
+   *
+   * Fase 4: `opcionesDePago` separa las dos cosas. Con la pasarela en QA, a
+   * una casa real no se le abre una transacción de prueba, pero la factura
+   * sigue debiéndose: se paga por el portal del banco (si el conjunto lo
+   * tiene) y el comprobante se puede enviar. Antes las dos dependían de
+   * `pagos.puedePagar`, que ahora dice que no en ese caso. */
+  const opciones = useQuery(
+    api.pagos.opcionesDePago,
     detalle ? { facturaId: detalle._id } : "skip",
   );
-  const puedePagar = detalle != null && pagable === true;
+  const portalBanco =
+    condo?.avalPortalUrl?.trim() || avalPortalFallback(condo?.subdomain) || null;
+  const debe = detalle != null && opciones?.debe === true;
+  const puedePagar = debe && (portalBanco !== null || opciones?.pasarela === true);
+  /* Sin portal del banco y con la pasarela en QA: se dice por qué no hay "Pagar". */
+  const sinPagoEnLinea = debe && !puedePagar ? (opciones?.motivo ?? null) : null;
 
   // Comprobante más reciente que el residente ya envió por esta factura.
   const soporte = detalle
@@ -1297,8 +1341,8 @@ function FacturaDetalleModal({
               ) : null}
             </View>
             <GlassBadge
-              label={ESTADO_LABEL[estadoVisible(detalle) as EstadoVisible] ?? detalle.estado}
-              tone={ESTADO_TONE[estadoVisible(detalle) as EstadoVisible] ?? "neutral"}
+              label={ESTADO_LABEL[estadoVisible(detalle, cadena) as EstadoVisible] ?? detalle.estado}
+              tone={ESTADO_TONE[estadoVisible(detalle, cadena) as EstadoVisible] ?? "neutral"}
             />
           </View>
 
@@ -1477,6 +1521,33 @@ function FacturaDetalleModal({
             </GlassCard>
           ) : null}
 
+          {(() => {
+            /* Fase 4: desde cuándo cuenta como mora (el 16 del mes siguiente,
+             * decisión B), "sin verificar" en una histórica que nadie pudo
+             * juzgar, y por qué no hay "Pagar" con la pasarela en pruebas. */
+            const plazos = plazosDe(detalle);
+            const visible = estadoVisible(detalle, cadena);
+            const esVigente = !(cadena ?? []).some((x) => x.periodo > detalle.periodo);
+            const sinPagar = ["pendiente", "vencida", "abonada"].includes(detalle.estado);
+            const nota = { color: SoftUI.textSecondary, fontSize: SoftUI.type.caption.size, fontFamily: AuthUI.font.regular };
+            return (
+              <View style={{ gap: SoftUI.space.xs, marginBottom: SoftUI.space.base }}>
+                {plazos && esVigente && sinPagar && visible !== "sin_verificar" ? (
+                  <Text style={nota}>
+                    En mora desde el{" "}
+                    {new Date(plazos.moraDesde).toLocaleDateString("es-CO", {
+                      day: "numeric",
+                      month: "long",
+                      timeZone: "America/Bogota",
+                    })}
+                  </Text>
+                ) : null}
+                {visible === "sin_verificar" ? <Text style={nota}>{TEXTO_SIN_VERIFICAR}</Text> : null}
+                {sinPagoEnLinea ? <Text style={nota}>{sinPagoEnLinea}</Text> : null}
+              </View>
+            );
+          })()}
+
           <View style={{ gap: SoftUI.space.sm }}>
             {puedePagar ? (
               <GlassButton
@@ -1490,7 +1561,7 @@ function FacturaDetalleModal({
                 disabled={pagando || condo === undefined}
               />
             ) : null}
-            {puedePagar && soporte?.estado !== "pendiente_revision" ? (
+            {debe && soporte?.estado !== "pendiente_revision" ? (
               <GlassButton
                 label={
                   subiendo

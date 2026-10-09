@@ -6,7 +6,8 @@ import { requireCondominioRole } from "./model/authz";
 import {
   SIGNIFICADO,
   TARIFAS_POR_DEFECTO,
-  aporteDeFactura,
+  cargoAporteDeFactura,
+  deudaAporteDeFactura,
   estadoAporte,
   type TarifasAporte,
 } from "./lib/aporte";
@@ -83,7 +84,10 @@ export const consultarPlaca = query({
     const unidad = await ctx.db.get(veh.unidadId);
     const factura = await ultimaFactura(ctx, veh.unidadId);
     const tarifas = await tarifasDe(ctx, args.condominioId);
-    const monto = factura ? aporteDeFactura(factura.lineas) : 0;
+    /* Lo que la casa debe del aporte segun su ultima factura (el `total` de
+     * la linea), reconocido por el TEXTO del concepto: el "Parqueadero
+     * visitante" de Arboleda ya no pinta a nadie (F-10). */
+    const monto = factura ? deudaAporteDeFactura(factura.lineas, tarifas.conceptos) : 0;
     const estado = estadoAporte(monto, tipoTarifa(veh.tipo), tarifas);
 
     /* Cuantos vehiculos de la casa comparten el cupo. Si pago un cupo y hay
@@ -156,19 +160,36 @@ export const reporte = query({
       (f) => f.periodo >= args.desde && f.periodo <= args.hasta,
     );
 
-    // Aporte por unidad y por periodo.
+    /* Por unidad: el CARGO del aporte de cada mes (`actual`), que es lo que
+     * se suma, y la DEUDA segun su ultima factura del rango (`total`), que no
+     * se suma (F-10). Antes se sumaba el `total` de cada mes, que trae el
+     * arrastre: el mismo aporte se contaba una vez por cada mes que seguia
+     * sin pagarse. */
     const porUnidad = new Map<
       string,
-      { periodos: { periodo: string; monto: number }[]; total: number }
+      {
+        periodos: { periodo: string; monto: number }[];
+        total: number;
+        ultima: { periodo: string; deuda: number } | null;
+      }
     >();
     for (const f of enRango) {
-      const monto = aporteDeFactura(f.lineas);
-      if (monto <= 0) continue;
       const k = f.unidadId as string;
-      const e = porUnidad.get(k) ?? { periodos: [], total: 0 };
-      e.periodos.push({ periodo: f.periodo, monto });
-      e.total += monto;
+      const e = porUnidad.get(k) ?? { periodos: [], total: 0, ultima: null };
+      const cargo = cargoAporteDeFactura(f.lineas, tarifas.conceptos);
+      if (cargo > 0) {
+        e.periodos.push({ periodo: f.periodo, monto: cargo });
+        e.total += cargo;
+      }
+      if (!e.ultima || f.periodo > e.ultima.periodo) {
+        e.ultima = { periodo: f.periodo, deuda: deudaAporteDeFactura(f.lineas, tarifas.conceptos) };
+      }
       porUnidad.set(k, e);
+    }
+    /* Solo las casas con aporte en el rango: un cargo en algun mes o una
+     * deuda del concepto en su ultima factura. */
+    for (const [k, e] of porUnidad) {
+      if (e.total <= 0 && (e.ultima?.deuda ?? 0) <= 0) porUnidad.delete(k);
     }
 
     const vehiculos = await ctx.db
@@ -195,11 +216,10 @@ export const reporte = query({
           : suyos.some((x) => x.tipo === "moto")
             ? ("moto" as const)
             : null;
-        const estado = estadoAporte(
-          periodos[periodos.length - 1]?.monto ?? 0,
-          tipo,
-          tarifas,
-        );
+        /* El color sale de la DEUDA de la ultima factura, como el del guarda
+         * (`consultarPlaca`): la misma regla en los dos lados. */
+        const deuda = datos.ultima?.deuda ?? 0;
+        const estado = estadoAporte(deuda, tipo, tarifas);
 
         return {
           unidadId,
@@ -211,7 +231,11 @@ export const reporte = query({
           meses: periodos.length,
           desde: periodos[0]?.periodo ?? null,
           hasta: periodos[periodos.length - 1]?.periodo ?? null,
+          /** Suma de los cargos del aporte de cada mes del rango (`actual`). */
           valorTotal: datos.total,
+          /** Lo que debe del aporte segun su ultima factura del rango. */
+          deudaUltimaFactura: deuda,
+          periodoUltimaFactura: datos.ultima?.periodo ?? null,
           color: estado.color,
           enMora: estado.enMora,
         };
@@ -236,6 +260,7 @@ export const reporte = query({
       resumen: {
         casas: filas.length,
         valorTotal: filas.reduce((s, f) => s + f.valorTotal, 0),
+        deudaUltimaFactura: filas.reduce((s, f) => s + f.deudaUltimaFactura, 0),
         enMora: filas.filter((f) => f.enMora).length,
         sinVehiculo: filas.filter((f) => f.placas.length === 0).length,
       },
@@ -252,6 +277,11 @@ export const configurar = mutation({
     tarifaCarro: v.number(),
     tarifaMoto: v.number(),
     mesesParaMora: v.number(),
+    /**
+     * Como se llama el aporte en las facturas de este conjunto, si no es el
+     * nombre de siempre. Ausente: se conserva lo que hubiera.
+     */
+    conceptos: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
     await requireCondominioRole(ctx, args.condominioId, [...ADMIN_ROLES]);
@@ -261,11 +291,16 @@ export const configurar = mutation({
     if (args.mesesParaMora < 1) {
       throw new Error("El umbral de mora es de al menos un mes.");
     }
+    const actual = (await ctx.db.get(args.condominioId))?.aporteVoluntario;
+    const conceptos = (args.conceptos ?? actual?.conceptos ?? [])
+      .map((c) => c.trim())
+      .filter(Boolean);
     await ctx.db.patch(args.condominioId, {
       aporteVoluntario: {
         tarifaCarro: args.tarifaCarro,
         tarifaMoto: args.tarifaMoto,
         mesesParaMora: args.mesesParaMora,
+        ...(conceptos.length > 0 ? { conceptos } : {}),
       },
       updatedAt: Date.now(),
     });
@@ -282,6 +317,7 @@ export const configurar = mutation({
 export const diagnostico = internalQuery({
   args: { condominioId: v.id("condominios") },
   handler: async (ctx, args) => {
+    const tarifas = await tarifasDe(ctx, args.condominioId);
     const facturas = await ctx.db
       .query("facturas")
       .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
@@ -289,17 +325,21 @@ export const diagnostico = internalQuery({
 
     const porPeriodo = new Map<
       string,
-      { facturas: number; conAporte: number; total: number }
+      { facturas: number; conAporte: number; total: number; deuda: number }
     >();
     const conceptos = new Map<string, number>();
 
     for (const f of facturas) {
-      const e = porPeriodo.get(f.periodo) ?? { facturas: 0, conAporte: 0, total: 0 };
+      const e = porPeriodo.get(f.periodo) ?? { facturas: 0, conAporte: 0, total: 0, deuda: 0 };
       e.facturas += 1;
-      const monto = aporteDeFactura(f.lineas);
-      if (monto > 0) {
+      /* `total` del periodo = cargos del mes; `deuda` = lo que se debia del
+       * concepto con esa factura (no se suma entre periodos). */
+      const cargo = cargoAporteDeFactura(f.lineas, tarifas.conceptos);
+      const deuda = deudaAporteDeFactura(f.lineas, tarifas.conceptos);
+      if (cargo > 0 || deuda > 0) {
         e.conAporte += 1;
-        e.total += monto;
+        e.total += cargo;
+        e.deuda += deuda;
       }
       porPeriodo.set(f.periodo, e);
       for (const l of f.lineas) {

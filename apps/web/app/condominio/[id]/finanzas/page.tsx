@@ -27,7 +27,12 @@ import { usePersistedPeriodo } from "@/hooks/use-persisted-periodo";
 import { cop } from "@/lib/utils";
 import { periodoDe } from "@vekino/backend/periodos";
 import { MENSAJE_LECTURA, type MotivoLectura } from "@vekino/backend/lecturaFactura";
-import { fechaLimiteDescuentoDe, leerMontoPesos } from "@vekino/backend/cartera";
+import {
+  ETIQUETA_SIN_VERIFICAR,
+  TEXTO_SIN_VERIFICAR,
+  fechaLimiteDescuentoDe,
+  leerMontoPesos,
+} from "@vekino/backend/cartera";
 import { PagosPorRevisar } from "@/components/finanzas/pagos-por-revisar";
 import { MesesFaltantes } from "@/components/finanzas/meses-faltantes";
 import { HistorialFactura } from "@/components/finanzas/historial-factura";
@@ -45,6 +50,8 @@ const VEREDICTO_LABEL: Record<string, string> = {
 const PAGE_SIZE = 30;
 
 const ESTADO_TONE: Record<string, React.ComponentProps<typeof Badge>["tone"]> = {
+  /* Historica que quedo pendiente: no se sabe si se pago (Fase 4). */
+  sin_verificar: "neutral",
   pendiente: "warning",
   pagada: "success",
   vencida: "destructive",
@@ -52,6 +59,7 @@ const ESTADO_TONE: Record<string, React.ComponentProps<typeof Badge>["tone"]> = 
   saldo_a_favor: "violet",
 };
 const ESTADO_LABEL: Record<string, string> = {
+  sin_verificar: ETIQUETA_SIN_VERIFICAR,
   pendiente: "Pendiente",
   pagada: "Pagada",
   vencida: "Vencida",
@@ -59,7 +67,13 @@ const ESTADO_LABEL: Record<string, string> = {
   saldo_a_favor: "Saldo a favor",
 };
 
-type Factura = Doc<"facturas">;
+/** La fila de la tabla: la factura y el estado que se muestra (Fase 4). */
+type Factura = Doc<"facturas"> & { estadoVisible?: string };
+
+/** "Sin verificar" en vez de "Pendiente" para una historica (Fase 4); si no, el estado. */
+function estadoMostrado(f: Factura): string {
+  return f.estadoVisible === "sin_verificar" ? "sin_verificar" : f.estado;
+}
 
 function useDebounced(value: string, ms: number) {
   const [v, setV] = useState(value);
@@ -203,7 +217,18 @@ export default function FinanzasPage() {
           <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
             <StatCard icon={TrendingUp} label="Total cartera" value={cop(resumen.sumaTotalAPagar)} hint="Facturado en el período" />
             <StatCard icon={Clock} label="Pendientes" value={resumen.pendientes} hint={`de ${resumen.total} facturas`} tone="warning" />
-            <StatCard icon={CheckCircle2} label="Pagadas" value={resumen.pagadas} hint={cop(resumen.sumaPagado)} tone="success" />
+            <StatCard
+              icon={CheckCircle2}
+              label="Pagadas"
+              value={resumen.pagadas}
+              hint={
+                /* Fase 4 (F-19): recaudo de la contabilidad, no el total de las pagadas. */
+                resumen.recaudoContable !== null
+                  ? `Recaudo (contabilidad): ${cop(resumen.recaudoContable)} · En Vekino: ${cop(resumen.recaudoVekino)}`
+                  : `Recaudo: falta el mes siguiente · En Vekino: ${cop(resumen.recaudoVekino)}`
+              }
+              tone="success"
+            />
             <StatCard icon={PiggyBank} label="Abonadas" value={resumen.abonadas ?? 0} hint="Pago parcial" tone="primary" />
             <StatCard icon={AlertTriangle} label="Vencidas" value={resumen.vencidas} hint="Con mora" tone="destructive" />
             {(resumen.saldoAFavorCount ?? 0) > 0 ? (
@@ -306,8 +331,11 @@ export default function FinanzasPage() {
                       </TD>
                       <TD>
                         <div className="flex flex-wrap items-center gap-1">
-                          <Badge tone={ESTADO_TONE[f.estado] ?? "neutral"}>
-                            {ESTADO_LABEL[f.estado] ?? f.estado}
+                          <Badge
+                            tone={ESTADO_TONE[estadoMostrado(f)] ?? "neutral"}
+                            title={estadoMostrado(f) === "sin_verificar" ? TEXTO_SIN_VERIFICAR : undefined}
+                          >
+                            {ESTADO_LABEL[estadoMostrado(f)] ?? f.estado}
                           </Badge>
                           {f.lecturaDudosa && !f.lecturaDudosa.confirmada ? (
                             <Badge tone="warning">En revisión</Badge>
@@ -397,9 +425,12 @@ export default function FinanzasPage() {
           }
         >
           <div className="mb-3 flex justify-end">
-            <Badge tone={ESTADO_TONE[facturaDetalle.estado] ?? "neutral"}>
-              {ESTADO_LABEL[facturaDetalle.estado] ?? facturaDetalle.estado}
+            <Badge tone={ESTADO_TONE[estadoMostrado(facturaDetalle)] ?? "neutral"}>
+              {ESTADO_LABEL[estadoMostrado(facturaDetalle)] ?? facturaDetalle.estado}
             </Badge>
+            {estadoMostrado(facturaDetalle) === "sin_verificar" ? (
+              <span className="ml-2 text-xs text-muted-foreground">{TEXTO_SIN_VERIFICAR}</span>
+            ) : null}
           </div>
           <div className="overflow-hidden rounded-xl border border-border">
             <table className="w-full text-sm">

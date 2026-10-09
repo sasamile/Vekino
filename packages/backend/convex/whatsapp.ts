@@ -22,14 +22,18 @@ import {
   parseRangoHorasFlexible,
 } from "./lib/fechaTexto";
 import {
+  ETIQUETA_SIN_VERIFICAR,
   MENSAJE_NO_PAGABLE,
+  TEXTO_SIN_VERIFICAR,
   descuentoVigente,
   fechaLimiteDescuentoDe,
   leerMontoPesos,
   mensajePagoEnVerificacion,
   montoAPagarHoy,
   motivoNoPagable,
+  textosDePlazos,
 } from "./lib/cartera";
+import { MENSAJE_PASARELA_DE_PRUEBAS, pasarelaPermitida } from "./lib/avalProduccion";
 
 /**
  * Bot de WhatsApp (YCloud).
@@ -1174,8 +1178,22 @@ export const procesarEntrante = internalAction({
               ? ` (con descuento por pronto pago hasta el ${fechaLarga(limiteDescuento, timezone)})`
               : ""
           }`,
-          `Vence: ${fechaLarga(factura.fechaVencimiento, timezone)}`,
+          /* Los plazos, iguales en la web, el móvil y el agente (Fase 4,
+           * decisión B): el fin de mes es el plazo del precio completo y la
+           * mora empieza el 16 del mes siguiente. */
+          ...textosDePlazos(factura).filter((t) => !t.startsWith("Con descuento")),
         ];
+        /* Meses viejos que nadie pudo juzgar (Fase 4): "Sin verificar", no
+         * deuda. Lo que se debe hoy ya está en esta factura. */
+        const sinVerificar: { periodo: string; periodoLabel: string }[] = await ctx.runQuery(
+          internal.soportesPago.sinVerificarDeUnidad,
+          { unidadId: unidad._id },
+        );
+        if (sinVerificar.length > 0) {
+          lineas.push(
+            `ℹ️ ${sinVerificar.map((s) => s.periodoLabel || s.periodo).join(", ")}: *${ETIQUETA_SIN_VERIFICAR}*. ${TEXTO_SIN_VERIFICAR} Lo que debes hoy ya está en esta factura.`,
+          );
+        }
         /* Es la vigente: si no se puede pagar es porque ya está saldada
          * (pagada, saldo a favor o sin saldo), porque su lectura está en
          * revisión, o porque hay un pago en verificación. No se busca otra
@@ -1205,7 +1223,13 @@ export const procesarEntrante = internalAction({
           await enviar(msgTexto(to, `${lineas.join("\n")}\n\n✅ Estás al día. ¡Gracias!`));
           return;
         }
-        await enviar(msgTexto(to, lineas.join("\n")));
+        /* Con la pasarela en QA (la de pruebas del banco) a una casa real no
+         * se le ofrece "Pagar en línea" (Fase 4): paga por los canales del
+         * conjunto y manda el comprobante. */
+        const enLinea = pasarelaPermitida(process.env, factura.unidadId);
+        await enviar(
+          msgTexto(to, enLinea ? lineas.join("\n") : `${lineas.join("\n")}\n\n${MENSAJE_PASARELA_DE_PRUEBAS}`),
+        );
         if (factura.pdfUrl) {
           await enviar(
             msgDocumento(to, factura.pdfUrl, {
@@ -1216,7 +1240,7 @@ export const procesarEntrante = internalAction({
         }
         await enviar(
           msgBotones(to, "¿Qué desea hacer?", [
-            { id: `pagar:${factura._id}`, title: "💳 Pagar en línea" },
+            ...(enLinea ? [{ id: `pagar:${factura._id}`, title: "💳 Pagar en línea" }] : []),
             { id: "menu:comprobante", title: "🧾 Ya pagué" },
             { id: "menu:inicio", title: "Volver al menú" },
           ]),
@@ -1254,6 +1278,8 @@ export const procesarEntrante = internalAction({
                     ? "Esa factura no tiene saldo por pagar. ✅"
                     : motivo.includes(MENSAJE_NO_PAGABLE.pago_en_verificacion)
                       ? "🔎 Tu pago anterior está registrado y la contabilidad aún no lo refleja. No te cobro en línea mientras la administración lo verifica, para no cobrarte dos veces."
+                    : motivo.includes(MENSAJE_PASARELA_DE_PRUEBAS)
+                      ? MENSAJE_PASARELA_DE_PRUEBAS
                     : motivo.includes(MENSAJE_NO_PAGABLE.vigente_ambigua) ||
                         motivo.includes(MENSAJE_NO_PAGABLE.en_revision)
                       ? "No puedo generar el pago en línea de esa factura: está en revisión por la administración."

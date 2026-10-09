@@ -8,6 +8,9 @@ import {
   misUnidadIds,
 } from "./model/authz";
 import {
+  ETIQUETA_SIN_VERIFICAR,
+  TEXTO_SIN_VERIFICAR,
+  estadoVisibleDeFactura,
   montoAPagarHoy,
   motivoNoPagable,
   sinPagar,
@@ -90,11 +93,12 @@ export const feed = query({
       for (const f of facturas) {
         if (!unidadIds.has(f.unidadId) || f.createdAt < desde) continue;
         if (items.filter((i) => i.tipo === "factura").length >= POR_FUENTE) break;
+        const cadena = cadenas.get(f.unidadId) ?? [f];
         items.push({
           id: f._id,
           tipo: "factura",
           titulo: `Factura de ${f.periodoLabel}`,
-          detalle: detalleFactura(f, motivoNoPagable(cadenas.get(f.unidadId) ?? [f], f)),
+          detalle: detalleFactura(f, cadena, motivoNoPagable(cadena, f)),
           createdAt: f.createdAt,
           ruta: "/(app)/(tabs)/facturas",
         });
@@ -288,10 +292,15 @@ function formatoCOP(valor: number): string {
  */
 function detalleFactura(
   f: Doc<"facturas">,
+  cadena: readonly Doc<"facturas">[],
   motivo: MotivoNoPagable | null,
 ): string {
   if (motivo === null) return `Por pagar · ${formatoCOP(montoAPagarHoy(f, Date.now()))}`;
   if (motivo === "pagada") return "Pagada";
+  /* Una historica que nadie pudo juzgar (Fase 4): no se sabe si se pago. */
+  if (motivo === "historica" && estadoVisibleDeFactura(f, cadena) === "sin_verificar") {
+    return `${ETIQUETA_SIN_VERIFICAR} · ${TEXTO_SIN_VERIFICAR}`;
+  }
   if (motivo === "historica" && sinPagar(f.estado)) {
     return "Su saldo pasó a la factura siguiente";
   }

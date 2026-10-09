@@ -90,6 +90,15 @@ export default defineSchema({
          * la tarifa. Configurable porque la regla exacta esta por confirmar.
          */
         mesesParaMora: v.number(),
+        /**
+         * Como se llama el aporte en las facturas de este conjunto, si no es
+         * el nombre de siempre (Fase 4, F-10). Textos del concepto, sin
+         * importar mayusculas, tildes ni puntuacion. Ausente: se reconoce por
+         * el texto ("CONT. VOL. AREAS COMUNES", "CONTRIBUCION VOLUNTARIA",
+         * "APORTE VOLUNTARIO"), nunca solo por el codigo: el codigo 5 de
+         * Arboleda es "Parqueadero visitante". Ver `lib/aporte.ts`.
+         */
+        conceptos: v.optional(v.array(v.string())),
       }),
     ),
 
@@ -2192,11 +2201,110 @@ export default defineSchema({
     reportadoPorUserId: v.id("users"),
     reportadoPorNombre: v.string(),
     createdAt: v.number(),
+
+    /**
+     * El cobro de parqueadero al que pertenece el reporte (Fase 4).
+     *
+     * Varios reportes del mismo vehiculo, de la misma casa y del mismo mes
+     * son UN cobro (`cobrosParqueadero`): el estado vive alli, no aqui. Los
+     * reportes anteriores no lo tienen; se agrupan por la misma identidad al
+     * leerlos (`lib/cobroParqueadero.ts`) y quedan enlazados la primera vez
+     * que alguien los gestiona, o con `parqueadero.agruparReportes`.
+     */
+    cargoId: v.optional(v.id("cobrosParqueadero")),
   })
     .index("by_condominio", ["condominioId"])
     .index("by_condominio_fecha", ["condominioId", "createdAt"])
     // Historial de un vehiculo: "esta placa ya lleva tres veces este mes".
-    .index("by_vehiculo", ["vehiculoId"]),
+    .index("by_vehiculo", ["vehiculoId"])
+    .index("by_cargo", ["cargoId"]),
+
+  /**
+   * Cobro de parqueadero: lo que se le pasa a una casa por un vehiculo en un
+   * mes (Fase 4, F-08).
+   *
+   * Antes cada reporte del guarda era un cargo, con dos estados que no se
+   * hablaban (`gestion` en Vigilancia y `cobroEstado` en Cobros de
+   * parqueadero): tres rondas que veian el mismo carro eran tres cobros, y
+   * "cobrada" en una pantalla seguia "pendiente" en la otra.
+   *
+   * Identidad: (casa, placa, mes en hora de Colombia), en `clave`. Un solo
+   * estado, que mueven las dos pantallas, con transiciones validadas y su
+   * historia en `cobroParqueaderoEventos`.
+   */
+  cobrosParqueadero: defineTable({
+    condominioId: v.id("condominios"),
+    /** "unidadId|PLACA|AAAA-MM" (`claveCobro`). Una por conjunto. */
+    clave: v.string(),
+    /** La casa que responde por el vehiculo cuando se reporto. */
+    unidadId: v.optional(v.id("unidades")),
+    unidadNumero: v.optional(v.string()),
+    vehiculoId: v.optional(v.id("vehiculos")),
+    placa: v.string(),
+    /** "carro" | "moto"…: decide la tarifa propuesta. */
+    tipoVehiculo: v.optional(v.string()),
+    /** El mes en que se parqueo, en hora de Colombia. "2026-09". */
+    periodo: v.string(),
+    estado: v.union(
+      v.literal("pendiente"),
+      v.literal("facturado"),
+      v.literal("descartado"),
+    ),
+    /** La cuenta de cobro donde quedo, cuando se facturo. "2026-10". */
+    periodoFactura: v.optional(v.string()),
+    /** El valor con el que se facturo, si se fijo uno. */
+    monto: v.optional(v.number()),
+    /** Por que no se cobra, cuando se descarta. */
+    nota: v.optional(v.string()),
+    actualizadoPorUserId: v.optional(v.id("users")),
+    actualizadoPorNombre: v.optional(v.string()),
+    actualizadoEn: v.optional(v.number()),
+    createdAt: v.number(),
+  })
+    .index("by_condominio", ["condominioId"])
+    .index("by_condominio_clave", ["condominioId", "clave"]),
+
+  /**
+   * Historia de cada cobro de parqueadero: quien lo movio, cuando, de que
+   * estado a cual y con que periodo o motivo. Es historia: no se edita.
+   */
+  cobroParqueaderoEventos: defineTable({
+    cargoId: v.id("cobrosParqueadero"),
+    condominioId: v.id("condominios"),
+    accion: v.union(
+      v.literal("crear"),
+      v.literal("agregar_reporte"),
+      v.literal("facturar"),
+      v.literal("descartar"),
+      v.literal("devolver"),
+      v.literal("agrupar"),
+    ),
+    /** Ausente al crear. */
+    estadoAntes: v.optional(
+      v.union(v.literal("pendiente"), v.literal("facturado"), v.literal("descartado")),
+    ),
+    estadoDespues: v.union(
+      v.literal("pendiente"),
+      v.literal("facturado"),
+      v.literal("descartado"),
+    ),
+    periodoFacturaAntes: v.optional(v.string()),
+    periodoFactura: v.optional(v.string()),
+    montoAntes: v.optional(v.number()),
+    monto: v.optional(v.number()),
+    nota: v.optional(v.string()),
+    /** Desde donde: Cobros de parqueadero, Vigilancia, la ronda o el agrupamiento. */
+    origen: v.union(
+      v.literal("cobros"),
+      v.literal("vigilancia"),
+      v.literal("reporte"),
+      v.literal("migracion"),
+    ),
+    reporteId: v.optional(v.id("guardiaNovedadReportes")),
+    actorUserId: v.optional(v.id("users")),
+    actorNombre: v.string(),
+    at: v.number(),
+  }).index("by_cargo", ["cargoId"]),
 
   /**
    * Depósito / garantía de una reserva de zona común.

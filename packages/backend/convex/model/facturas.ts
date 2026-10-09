@@ -228,6 +228,10 @@ export async function escribirFactura(
   };
 
   for (const campo of CAMPOS_DOCUMENTO) {
+    /* El numero de una factura que ya existe no cambia (Fase 4, F-17): era la
+     * posicion en el lote, y re-subir el mismo documento le daba otro. Solo
+     * el reemplazo de una manual por su PDF toma el del documento. */
+    if (campo === "numeroFactura" && !reemplazaManual) continue;
     const valor = e[campo];
     if (valor === undefined && (opciones.soloDefinidos || SOLO_SI_VIENEN.has(campo))) continue;
     poner(campo, valor);

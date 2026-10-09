@@ -38,6 +38,10 @@ const OPERACION = {
   paquetes: "Paqueteria",
   novedades: "Novedades (residentes)",
   guardiaNovedadReportes: "Novedades (guardia)",
+  /* Los cobros de parqueadero salen de los reportes del guarda (Fase 4): se
+   * van con ellos, para no dejar cobros sin su evidencia. */
+  cobrosParqueadero: "Cobros de parqueadero",
+  cobroParqueaderoEventos: "Historia de cobros de parqueadero",
   minutaEventos: "Minuta digital",
   guardiaTurnos: "Turnos de guardia",
   guardiaRondas: "Rondas",

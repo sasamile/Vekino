@@ -60,19 +60,25 @@ export function ReporteAportePanel({
    * filas y así responde mientras se escribe, sin una consulta por tecla. */
   const filas = data ? filtrar(data.filas, busqueda, estado) : [];
   const resumen = resumir(filas);
+  /* Se suma entre CASAS (cada una con su última factura); lo que no se suma
+   * es la deuda de una misma casa mes a mes. */
+  const deudaVisible = filas.reduce((s, f) => s + (f.deudaUltimaFactura ?? 0), 0);
   const periodos = data?.periodosDisponibles ?? [];
   const filtrando = busqueda.trim() !== "" || estado !== "todas";
 
   function descargar() {
     if (!data) return;
-    const cab = ["Casa", "Torre", "Residente", "Placas", "Meses", "Desde", "Hasta", "Valor total", "Estado"];
+    const cab = [
+      "Casa", "Torre", "Residente", "Placas", "Meses", "Desde", "Hasta",
+      "Cargos del rango", "Deuda en la última factura", "Estado",
+    ];
     /* Comillas siempre: los nombres traen comas y sin esto las columnas se
        corren al abrirlo en Excel. */
     const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
     const filasCsv = filas.map((f) => [
       f.unidadNumero, f.unidadTorre ?? "", f.residenteNombre,
       f.placas.join(" / "), f.meses, f.desde ?? "", f.hasta ?? "",
-      f.valorTotal, f.enMora ? "En mora" : "Al día",
+      f.valorTotal, f.deudaUltimaFactura ?? 0, f.enMora ? "En mora" : "Al día",
     ]);
     const csv = [cab, ...filasCsv].map((r) => r.map(esc).join(",")).join("\n");
     const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" });
@@ -183,19 +189,28 @@ export function ReporteAportePanel({
             {/* Los totales son de lo que se ve. Si al filtrar por mora el total
                 siguiera siendo el de todas, el numero de arriba contradiria la
                 tabla de abajo. */}
-            <div className="grid grid-cols-3 gap-3">
+            {/* Dos números distintos, a propósito: lo cobrado mes a mes en el
+                rango (se suma) y lo que se debe hoy según la última factura
+                (no se suma entre meses: ya trae lo anterior). */}
+            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
               <Dato
                 valor={String(resumen.casas)}
                 etiqueta={filtrando ? `Casas (de ${data.resumen.casas})` : "Casas con aporte"}
               />
-              <Dato valor={cop(resumen.valorTotal)} etiqueta="Total facturado" />
+              <Dato valor={cop(resumen.valorTotal)} etiqueta="Cargos del aporte en el rango" />
+              <Dato
+                valor={cop(deudaVisible)}
+                etiqueta="Deuda del aporte en la última factura"
+              />
               <Dato valor={String(resumen.enMora)} etiqueta="En mora" alerta={resumen.enMora > 0} />
             </div>
 
             <div className="max-h-[55vh] overflow-auto rounded-xl border border-border">
               <Table>
                 <THead>
-                  <TR><TH>Casa</TH><TH>Placas</TH><TH>Meses</TH><TH>Total</TH></TR>
+                  <TR>
+                    <TH>Casa</TH><TH>Placas</TH><TH>Meses</TH><TH>Cargos</TH><TH>Deuda hoy</TH>
+                  </TR>
                 </THead>
                 <TBody>
                   {filas.map((f) => (
@@ -225,6 +240,14 @@ export function ReporteAportePanel({
                         </span>
                       </TD>
                       <TD>{cop(f.valorTotal)}</TD>
+                      <TD>
+                        {cop(f.deudaUltimaFactura ?? 0)}
+                        {f.periodoUltimaFactura && (
+                          <span className="block text-xs text-muted-foreground">
+                            factura {f.periodoUltimaFactura}
+                          </span>
+                        )}
+                      </TD>
                     </TR>
                   ))}
                 </TBody>

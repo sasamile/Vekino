@@ -6,12 +6,17 @@ import { useQuery, useAction } from "convex/react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
 import {
+  ETIQUETA_SIN_VERIFICAR,
+  TEXTO_SIN_VERIFICAR,
   descuentoVigente,
   enRevision,
+  estadoVisibleDeFactura,
   fechaLimiteDescuentoDe,
+  inicioDeMora,
   mensajePagoEnVerificacion,
   montoAPagarHoy as montoDeHoy,
   resumenResidente,
+  sinPagar,
 } from "@vekino/backend/cartera";
 import {
   Download,
@@ -249,6 +254,7 @@ export default function MisFacturas() {
               <FacturaRow
                 key={f._id}
                 factura={f}
+                cadena={listaAll.filter((x) => String(x.unidadId) === String(f.unidadId))}
                 avalPortalUrl={avalPortalUrl}
                 pagable={pagableIds.has(f._id)}
                 showUnidad={multiUnidad && unidadFiltro === ""}
@@ -465,6 +471,9 @@ function ProximoPagoCard({
     factura.fechaVencimiento > FECHA_MIN
       ? fechaPlazo(factura.fechaVencimiento)
       : null;
+  /* Fase 4, decisión B: el fin de mes es el plazo del precio completo; la
+   * mora empieza el 16 del mes siguiente. Las dos fechas, dichas claro. */
+  const moraDesde = venc ? fechaPlazo(inicioDeMora(factura)) : null;
   const limiteDescuento = fechaLimiteDescuentoDe(factura);
 
   return (
@@ -486,7 +495,12 @@ function ProximoPagoCard({
         </p>
         <p className="text-xs text-muted-foreground">{factura.numeroFactura}</p>
         {venc ? (
-          <p className="mt-1 text-xs text-muted-foreground">Vence: {venc}</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Precio completo hasta el {venc}
+          </p>
+        ) : null}
+        {moraDesde ? (
+          <p className="text-xs text-muted-foreground">En mora desde el {moraDesde}</p>
         ) : null}
       </div>
       <div className="flex shrink-0 flex-col items-start gap-2 sm:items-end">
@@ -514,19 +528,30 @@ function ProximoPagoCard({
 
 function FacturaRow({
   factura,
+  cadena,
   avalPortalUrl,
   pagable,
   showUnidad,
 }: {
   factura: Factura;
+  /** Las facturas de la misma unidad: dicen si esta es historica. */
+  cadena: Factura[];
   avalPortalUrl: string | null;
   pagable: boolean;
   showUnidad: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const meta = ESTADO_FACTURA[factura.estado];
+  /* Una historica que quedó `pendiente` no se sabe si se pagó: falta el
+   * estado de cuenta siguiente (Fase 4). No se rotula "Pendiente". */
+  const visible = estadoVisibleDeFactura(factura, cadena);
+  const sinVerificar = visible === "sin_verificar";
+  const meta = sinVerificar ? null : ESTADO_FACTURA[factura.estado];
   const isPagada = factura.estado === "pagada";
   const venc = factura.fechaVencimiento > FECHA_MIN ? fechaPlazo(factura.fechaVencimiento) : null;
+  /* La mora solo se anuncia en la vigente sin pagar (decisión B, Fase 4). */
+  const esVigente = !cadena.some((x) => x.periodo > factura.periodo);
+  const moraDesde =
+    venc && esVigente && sinPagar(factura.estado) ? fechaPlazo(inicioDeMora(factura)) : null;
   const periodo = periodoHumano(factura.periodo || factura.periodoLabel);
   const limiteDescuento = fechaLimiteDescuentoDe(factura);
 
@@ -543,6 +568,7 @@ function FacturaRow({
               {periodo}
             </span>
             {meta && <Badge tone={meta.tone}>{meta.label}</Badge>}
+            {sinVerificar && <Badge tone="neutral">{ETIQUETA_SIN_VERIFICAR}</Badge>}
             {enRevision(factura) && <Badge tone="info">En revisión</Badge>}
             {factura.pagoEnVerificacion ? (
               <Badge tone="info">Pago en verificación</Badge>
@@ -562,7 +588,15 @@ function FacturaRow({
             {factura.numeroFactura}
           </p>
           {venc && (
-            <p className="text-xs font-medium text-muted-foreground">Vence: {venc}</p>
+            <p className="text-xs font-medium text-muted-foreground">
+              Precio completo hasta el {venc}
+            </p>
+          )}
+          {moraDesde && (
+            <p className="text-xs text-muted-foreground">En mora desde el {moraDesde}</p>
+          )}
+          {sinVerificar && (
+            <p className="mt-1 text-xs text-muted-foreground">{TEXTO_SIN_VERIFICAR}</p>
           )}
           {factura.pagoEnVerificacion ? (
             <p className="mt-1 text-xs text-muted-foreground">
@@ -698,6 +732,15 @@ function PayButton({
 }) {
   const crearPago = useAction(api.pagos.crearPagoFactura);
   const [loading, setLoading] = useState(false);
+  /* Igual que en portal-pay-button (Fase 4): sin portal del banco, con la
+   * pasarela en QA y una unidad real, no se ofrece pagar en línea. */
+  const opciones = useQuery(
+    api.pagos.opcionesDePago,
+    avalPortalUrl ? "skip" : { facturaId: factura._id },
+  );
+  if (!avalPortalUrl && opciones?.debe && !opciones.pasarela && opciones.motivo) {
+    return <span className="max-w-[14rem] text-xs text-muted-foreground">{opciones.motivo}</span>;
+  }
 
   async function pagar() {
     if (avalPortalUrl) {

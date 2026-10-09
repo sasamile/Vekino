@@ -49,7 +49,9 @@ export function AdminCondominioHome({
 
   const pctPagadas =
     resumen && resumen.total > 0 ? Math.round((resumen.pagadas / resumen.total) * 100) : 0;
-  const chartData = (serie ?? []).map((s) => ({ periodo: s.periodo, value: s.sumaPagado }));
+  /* Fase 4 (F-19): recaudo de la contabilidad (total del mes menos el saldo
+   * anterior del siguiente), no la suma del total de las facturas pagadas. */
+  const chartData = (serie ?? []).map((s) => ({ periodo: s.periodo, value: s.recaudoContable ?? 0 }));
   const loadingResumen = !!periodo && resumen === undefined;
 
   return (
@@ -82,15 +84,25 @@ export function AdminCondominioHome({
 
         <View style={styles.kpiCard}>
           <View style={styles.kpiHalf}>
-            <Text style={styles.kpiLabel}>Recaudo del período</Text>
+            <Text style={styles.kpiLabel}>Recaudo (contabilidad)</Text>
             {loadingResumen ? (
               <View style={styles.kpiSkeleton} />
             ) : (
               <Text style={styles.kpiValue} numberOfLines={1}>
-                {resumen ? cop(resumen.sumaPagado) : "—"}
+                {resumen
+                  ? resumen.recaudoContable !== null
+                    ? cop(resumen.recaudoContable)
+                    : "Sin calcular"
+                  : "—"}
               </Text>
             )}
-            {periodo ? <Text style={styles.kpiHint}>{fmtPeriodo(periodo)}</Text> : null}
+            {periodo ? (
+              <Text style={styles.kpiHint}>
+                {resumen && resumen.recaudoContable === null
+                  ? "Falta el mes siguiente"
+                  : fmtPeriodo(periodo)}
+              </Text>
+            ) : null}
           </View>
           <View style={styles.kpiVLine} />
           <View style={styles.kpiHalf}>

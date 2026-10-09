@@ -5,13 +5,16 @@ import { textoAccesoWhatsApp } from "./lib/mensajesAcceso";
 import type { Id } from "./_generated/dataModel";
 import { GUIAS_VEKINO } from "./lib/guiasVekino";
 import {
+  TEXTO_SIN_VERIFICAR,
   descuentoVigente,
   enRevision,
   fechaLimiteDescuentoDe,
+  inicioDeMora,
   mensajePagoEnVerificacion,
   montoAPagarHoy,
   motivoNoPagable,
 } from "./lib/cartera";
+import { MENSAJE_PASARELA_DE_PRUEBAS, pasarelaPermitida } from "./lib/avalProduccion";
 
 /** "2026-09-15": el día en Colombia (UTC−5) de un instante. */
 function diaEnColombia(ts: number): string {
@@ -50,7 +53,7 @@ const HERRAMIENTAS: Herramienta[] = [
   {
     name: "ver_estado_cuenta",
     description:
-      "Consulta la factura de administración vigente de la unidad del residente: número, período, total a pagar hoy, hasta qué día vale el descuento por pronto pago, fecha de vencimiento, si está pagada y si tiene un pago en verificación. Úsala cuando pregunte cuánto debe, por su factura, su saldo o su estado de cuenta.",
+      "Consulta la factura de administración vigente de la unidad del residente: número, período, total a pagar hoy, hasta qué día vale el descuento por pronto pago, hasta qué día se paga el precio completo (precioCompletoHasta), desde qué día cuenta como mora (enMoraDesde), si está pagada, si tiene un pago en verificación y si hoy se puede pagar en línea (pagoEnLineaDisponible). Úsala cuando pregunte cuánto debe, por su factura, su saldo o su estado de cuenta.",
     input_schema: { type: "object", properties: {}, required: [] },
   },
   {
@@ -320,7 +323,18 @@ async function ejecutar(
         /* El descuento vale hasta SU fecha, no hasta el vencimiento (F-06). */
         const ahora = Date.now();
         const limite = fechaLimiteDescuentoDe(f);
+        /* Meses viejos "Sin verificar" (Fase 4): no son deuda. */
+        const sinVerificar: { periodo: string; periodoLabel: string }[] = await ctx.runQuery(
+          internal.soportesPago.sinVerificarDeUnidad,
+          { unidadId: args.unidadId },
+        );
         return {
+          ...(sinVerificar.length > 0
+            ? {
+                mesesSinVerificar: sinVerificar.map((s) => s.periodoLabel || s.periodo),
+                sobreMesesSinVerificar: `${TEXTO_SIN_VERIFICAR} No son deuda aparte: lo que debe hoy ya está en la factura vigente. No digas que los debe ni que los pagó.`,
+              }
+            : {}),
           numeroFactura: f.numeroFactura,
           periodo: f.periodoLabel,
           estado: f.estado,
@@ -336,7 +350,13 @@ async function ejecutar(
           totalAPagar: pesos.format(montoAPagarHoy(f, ahora)),
           aplicaDescuentoProntoPago: descuentoVigente(f, ahora),
           descuentoHasta: limite !== null ? diaEnColombia(limite) : null,
+          /* Fase 4, decisión B: el fin de mes es el plazo del precio
+           * completo; la mora empieza el 16 del mes siguiente. */
+          precioCompletoHasta: diaEnColombia(f.fechaVencimiento),
           venceEl: diaEnColombia(f.fechaVencimiento),
+          enMoraDesde: f.fechaVencimiento > 0 ? diaEnColombia(inicioDeMora(f)) : null,
+          /* Con la pasarela en QA no se ofrece pagar en línea a una casa real. */
+          pagoEnLineaDisponible: pasarelaPermitida(process.env, f.unidadId),
           tienePdf: !!f.pdfUrl,
         };
       }
@@ -365,6 +385,14 @@ async function ejecutar(
           };
         }
         if (noPagable) return { alDia: true, sinSaldoPorPagar: true };
+        /* Pasarela en QA y casa real (Fase 4): no se genera un enlace de
+         * pruebas, que no mueve plata y le haría creer que pagó. */
+        if (!pasarelaPermitida(process.env, f.unidadId)) {
+          return {
+            pagoEnLineaNoDisponible: true,
+            queDecir: `${MENSAJE_PASARELA_DE_PRUEBAS} No generes ni inventes enlaces de pago.`,
+          };
+        }
         const pago = await ctx.runAction(internal.pagos.crearPagoFacturaBot, {
           facturaId: f._id,
           userId: args.userId,

@@ -9,17 +9,20 @@ import {
 import type { ActionCtx, QueryCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { getCurrentAppUser, requireAppUser } from "./model/authz";
+import { getCurrentAppUser, requireAppUser, vigentes } from "./model/authz";
 import { etiquetaUnidad, referenciaPago } from "./lib/referenciaPago";
 import {
   ambienteAval,
   faltantesParaProduccion,
+  MENSAJE_PASARELA_DE_PRUEBAS,
+  pasarelaPermitida,
   QA_AUTH_BASIC,
   QA_ENDPOINT,
 } from "./lib/avalProduccion";
 import { credencialesConvenio } from "./lib/avalConvenio";
 import { MENSAJE_NO_PAGABLE, formatoPesos, montoAPagarHoy, motivoNoPagable } from "./lib/cartera";
 import { recalcularCadena } from "./model/estadoFactura";
+import { exigirAccesoAPagos, pagoPublico, puedeVerPagosDeUnidad } from "./model/accesoPagos";
 
 // ─────────────────────────────────────────────────────────────
 // Integración con la Pasarela de Pagos Aval (AV Villas / Grupo Aval)
@@ -305,12 +308,14 @@ async function armarDatosTrn(
     if (!membership || !membership.isActive) {
       throw new Error("No pertenece a este condominio.");
     }
-    const link = await ctx.db
+    /* Solo vinculos VIGENTES (Fase 4): un arrendatario cuyo contrato vencio
+     * ya no ve las facturas de la casa (F-16), y tampoco las paga. */
+    const links = await ctx.db
       .query("usuarioUnidad")
       .withIndex("by_membership", (q) => q.eq("membershipId", membership!._id))
       .filter((q) => q.eq(q.field("unidadId"), factura.unidadId))
-      .first();
-    if (!link) {
+      .collect();
+    if (vigentes(links).length === 0) {
       throw new Error("Esta factura no corresponde a una de sus unidades.");
     }
   }
@@ -331,6 +336,13 @@ async function armarDatosTrn(
   ).filter((f) => f.condominioId === factura.condominioId);
   const noPagable = motivoNoPagable(cadena, factura);
   if (noPagable) throw new Error(MENSAJE_NO_PAGABLE[noPagable]);
+
+  /* Con la pasarela en QA (la de pruebas del banco, que no mueve plata) solo
+   * se opera sobre las unidades de prueba declaradas (Fase 4). A una casa
+   * real no se le abre una transaccion de mentira: creeria que pago. */
+  if (!pasarelaPermitida(process.env, factura.unidadId)) {
+    throw new Error(MENSAJE_PASARELA_DE_PRUEBAS);
+  }
 
   /* Monto a pagar: con descuento solo dentro de SU plazo —el que trae el
    * documento, o el día 15 del mes del período—, no hasta el vencimiento
@@ -610,6 +622,42 @@ export const puedePagar = query({
       return true;
     } catch {
       return false;
+    }
+  },
+});
+
+/**
+ * Que se le puede ofrecer al residente para esta factura (Fase 4).
+ *
+ * `puedePagar` responde una sola cosa —si la pasarela aceptaria la
+ * transaccion— y la app movil la usaba tambien para "Ya pagué". Con la
+ * pasarela en QA, a una casa real la pasarela le dice que no, pero la factura
+ * sigue siendo la que hay que pagar (por el banco o el portal) y su
+ * comprobante se puede enviar. Aqui va separado:
+ *
+ * - `debe`: es la vigente, de una unidad suya, con saldo, sin revision ni pago
+ *   en verificacion (la regla de `motivoNoPagable`). Habilita "Ya pagué" y el
+ *   pago por el portal del banco.
+ * - `pasarela`: ademas, la pasarela de Vekino acepta cobrarla hoy.
+ * - `motivo`: el mensaje estable de por que no (`MENSAJE_NO_PAGABLE` o
+ *   `MENSAJE_PASARELA_DE_PRUEBAS`), o `null`.
+ */
+export const opcionesDePago = query({
+  args: { facturaId: v.id("facturas") },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{ debe: boolean; pasarela: boolean; motivo: string | null }> => {
+    const user = await getCurrentAppUser(ctx);
+    if (!user || !user.active) return { debe: false, pasarela: false, motivo: null };
+    try {
+      await armarDatosTrn(ctx, user, args.facturaId, true);
+      return { debe: true, pasarela: true, motivo: null };
+    } catch (e) {
+      const motivo = e instanceof Error ? e.message : String(e);
+      /* El unico rechazo que deja la deuda en pie es el de la pasarela en QA:
+       * se valida DESPUES de la vigencia, el saldo y la revision. */
+      return { debe: motivo === MENSAJE_PASARELA_DE_PRUEBAS, pasarela: false, motivo };
     }
   },
 });
@@ -1268,15 +1316,37 @@ export const consultarEstadoPorPmt = internalAction({
 // API pública para la UI
 // ─────────────────────────────────────────────────────────────
 
-/** Fuerza una consulta inmediata del estado (botón "Actualizar" del comprobante). */
+/**
+ * Un pago, para quien puede verlo (`model/accesoPagos.ts`), sin las
+ * respuestas crudas del banco. `null` si no existe.
+ */
+export const pagoParaUsuario = internalQuery({
+  args: { pagoId: v.id("pagos") },
+  handler: async (ctx, args) => {
+    const user = await requireAppUser(ctx);
+    const pago = await ctx.db.get(args.pagoId);
+    if (!pago) return null;
+    await exigirAccesoAPagos(ctx, user, pago.condominioId, pago.unidadId);
+    return pagoPublico(pago);
+  },
+});
+
+/**
+ * Fuerza una consulta inmediata del estado (botón "Actualizar" del comprobante).
+ *
+ * Fase 4 (F-20): antes no validaba nada —cualquiera con el id de un pago lo
+ * hacia consultar al banco y recibia el registro entero, con las respuestas
+ * crudas (`trnRaw`, `basicDataRaw`)—. Ahora valida quien pregunta ANTES de
+ * hablar con el banco, con la misma regla de `listPorFactura`, y devuelve el
+ * pago sin los datos crudos.
+ */
 export const verificarPago = action({
   args: { pagoId: v.id("pagos") },
-  handler: async (ctx, args): Promise<Doc<"pagos"> | null> => {
-    // La consulta interna valida existencia; la lectura pública valida acceso.
+  handler: async (ctx, args): Promise<ReturnType<typeof pagoPublico> | null> => {
+    const antes = await ctx.runQuery(internal.pagos.pagoParaUsuario, { pagoId: args.pagoId });
+    if (!antes) return null;
     await ctx.runAction(internal.pagos.consultarEstado, { pagoId: args.pagoId });
-    return await ctx.runQuery(internal.pagos.getPagoInterno, {
-      pagoId: args.pagoId,
-    });
+    return await ctx.runQuery(internal.pagos.pagoParaUsuario, { pagoId: args.pagoId });
   },
 });
 
@@ -1288,24 +1358,10 @@ export const estadoPago = query({
     const pago = await ctx.db.get(args.pagoId);
     if (!pago) return null;
 
-    const esPlataforma =
-      user.platformRole === "superadmin" || user.platformRole === "admin";
-    if (!esPlataforma && pago.userId && pago.userId !== user._id) {
-      // Permitir también a cualquier miembro vinculado a la unidad de la factura.
-      const membership = await ctx.db
-        .query("memberships")
-        .withIndex("by_condominio_user", (q) =>
-          q.eq("condominioId", pago.condominioId).eq("userId", user._id),
-        )
-        .unique();
-      const link = membership
-        ? await ctx.db
-            .query("usuarioUnidad")
-            .withIndex("by_membership", (q) => q.eq("membershipId", membership._id))
-            .filter((q) => q.eq(q.field("unidadId"), pago.unidadId))
-            .first()
-        : null;
-      if (!link) throw new Error("No autorizado para ver este pago.");
+    /* La misma regla de todos los pagos (Fase 4): antes un pago sin `userId`
+     * no se validaba, y un vinculo vencido seguia dando acceso. */
+    if (!(await puedeVerPagosDeUnidad(ctx, user, pago.condominioId, pago.unidadId))) {
+      throw new Error("No autorizado para ver este pago.");
     }
 
     return {
@@ -1335,23 +1391,9 @@ export const estadoPagoPorPmt = query({
       .first();
     if (!pago) return null;
 
-    const esPlataforma =
-      user.platformRole === "superadmin" || user.platformRole === "admin";
-    if (!esPlataforma && pago.userId && pago.userId !== user._id) {
-      const membership = await ctx.db
-        .query("memberships")
-        .withIndex("by_condominio_user", (q) =>
-          q.eq("condominioId", pago.condominioId).eq("userId", user._id),
-        )
-        .unique();
-      const link = membership
-        ? await ctx.db
-            .query("usuarioUnidad")
-            .withIndex("by_membership", (q) => q.eq("membershipId", membership._id))
-            .filter((q) => q.eq(q.field("unidadId"), pago.unidadId))
-            .first()
-        : null;
-      if (!link) return null;
+    /* La misma regla de todos los pagos (Fase 4, `model/accesoPagos.ts`). */
+    if (!(await puedeVerPagosDeUnidad(ctx, user, pago.condominioId, pago.unidadId))) {
+      return null;
     }
 
     return {
@@ -1367,15 +1409,26 @@ export const estadoPagoPorPmt = query({
   },
 });
 
-/** Historial de pagos de una factura (para la UI del propietario/admin). */
+/**
+ * Historial de pagos de una factura (para la UI del propietario/admin).
+ *
+ * Fase 4 (F-20): solo para quien tiene un vinculo vigente con la unidad de la
+ * factura o lleva las cuentas del conjunto (`model/accesoPagos.ts`); antes
+ * bastaba con tener sesion, y el vecino de la 202 listaba los pagos de la 101
+ * (#36). Sin las respuestas crudas del banco.
+ */
 export const listPorFactura = query({
   args: { facturaId: v.id("facturas") },
   handler: async (ctx, args) => {
-    await requireAppUser(ctx);
-    return await ctx.db
+    const user = await requireAppUser(ctx);
+    const factura = await ctx.db.get(args.facturaId);
+    if (!factura) return [];
+    await exigirAccesoAPagos(ctx, user, factura.condominioId, factura.unidadId);
+    const pagos = await ctx.db
       .query("pagos")
       .withIndex("by_factura", (q) => q.eq("facturaId", args.facturaId))
       .order("desc")
       .collect();
+    return pagos.map(pagoPublico);
   },
 });

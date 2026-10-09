@@ -252,3 +252,23 @@ export function estadoDeCarga(f: {
     ? "saldo_a_favor"
     : "pendiente";
 }
+
+/**
+ * El numero de una factura NUEVA: "FAC-2026-10-104" (Fase 4, F-17).
+ *
+ * Antes era la posicion en el lote ("FAC-2026-10-0158"): el mismo documento
+ * cambiaba de numero segun el orden en que viniera el PDF. Ahora sale del
+ * periodo y de la casa que dice el documento —la identidad de la factura es
+ * (conjunto, unidad, periodo)—: el mismo documento da siempre el mismo
+ * numero. Las facturas que ya existen conservan el suyo (`escribirFactura`
+ * no lo cambia al actualizar).
+ *
+ * Sin casa legible se usa la posicion, como antes.
+ */
+export function numeroFacturaDe(periodo: string, casa: string | null | undefined, posicion: number): string {
+  const ident = (casa ?? "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return ident ? `FAC-${periodo}-${ident}` : `FAC-${periodo}-${String(posicion).padStart(4, "0")}`;
+}

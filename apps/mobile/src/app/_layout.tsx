@@ -8,6 +8,7 @@ import {
   type AuthClient,
 } from "@convex-dev/better-auth/react";
 import { authClient } from "@/lib/auth-client";
+import { AvisoVersionMinima } from "@/components/aviso-version-minima";
 import { useAuthFonts } from "@/lib/use-auth-fonts";
 
 // Fuerza modo claro a nivel JS/RN para que el tab bar nativo
@@ -37,6 +38,8 @@ export default function RootLayout() {
         <Stack.Screen name="(auth)" />
         <Stack.Screen name="(app)" />
       </Stack>
+      {/* Encima de todo: una versión que ya no sirve pide actualizar (Fase 4). */}
+      <AvisoVersionMinima />
     </ConvexBetterAuthProvider>
   );
 }

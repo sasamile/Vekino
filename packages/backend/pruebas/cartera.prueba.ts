@@ -96,7 +96,10 @@ test("caso 2 — la ultima vencida: deuda vigente y dias de mora", () => {
   const c = carteraDeUnidad([factura("vencida", 35, "2026-07", 400800)], AHORA);
   assert.equal(c.estado, "en_mora");
   assert.equal(c.saldoActual, 400800);
-  assert.equal(c.diasMora, 35);
+  /* Fase 4, decision B (docs/audits/FASE-4-FACTURACION.md): la mora de julio
+   * empieza el 16 de agosto aunque su plazo guardado fuera antes (el 4). El 8
+   * de septiembre lleva 24 dias, no 35. */
+  assert.equal(c.diasMora, 24);
   assert.equal(c.periodoEnMora, "2026-07");
 });
 
@@ -189,8 +192,12 @@ test("un solo periodo vencido despues de meses pagando: en mora", () => {
 });
 
 test("las pagadas viejas no arrastran mora aunque sean viejisimas", () => {
+  /* Fase 4, decision B: la vencida es de JULIO (antes "2026-08"). Una de
+   * agosto no esta en mora el 8 de septiembre —su mora empieza el 16—, y la
+   * prueba dejaria de medir lo que mide: que la mora la cuenta la reciente y
+   * no la pagada de hace 400 dias. */
   const c = carteraDeUnidad(
-    [factura("pagada", 400, "2025-07"), factura("vencida", 20, "2026-08")],
+    [factura("pagada", 400, "2025-07"), factura("vencida", 20, "2026-07")],
     AHORA,
   );
   assert.equal(c.diasMora, 20);
@@ -231,12 +238,15 @@ test("una factura migrada sin fecha debe, pero no inventa dias de mora", () => {
 });
 
 test("sin fecha en una, pero con fecha en otra: manda la que si la tiene", () => {
+  /* Fase 4, decision B: la de fecha es de JULIO (antes "2026-08", que el 8 de
+   * septiembre todavia no esta en mora). Su mora empieza el 16 de agosto: 24
+   * dias el 8 de septiembre. */
   const c = carteraDeUnidad(
-    [suelta("2024-01", "vencida", 250000, 0), factura("vencida", 25, "2026-08", 900000)],
+    [suelta("2024-01", "vencida", 250000, 0), factura("vencida", 25, "2026-07", 900000)],
     AHORA,
   );
   assert.equal(c.estado, "en_mora");
-  assert.equal(c.diasMora, 25);
+  assert.equal(c.diasMora, 24);
   assert.equal(c.saldoActual, 900000);
 });
 

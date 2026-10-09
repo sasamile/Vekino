@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useMutation, useQuery } from "convex/react";
+import type { FunctionReturnType } from "convex/server";
 import {
   Camera, Check, Download, FileSpreadsheet, Loader2, RotateCcw, Search, Settings2, X,
 } from "lucide-react";
@@ -190,24 +191,47 @@ function Vacio({ estado }: { estado: Estado }) {
   );
 }
 
+type FilaCobro = FunctionReturnType<typeof api.parqueadero.listar>["filas"][number];
+
+const ACCION_HISTORIA: Record<string, string> = {
+  crear: "Se abrió el cobro",
+  agrupar: "Se agruparon los reportes del mes",
+  agregar_reporte: "Llegó otro reporte",
+  facturar: "Facturado",
+  descartar: "No se cobra",
+  devolver: "Devuelto a pendiente",
+};
+
+/** Mes en palabras: "2026-09" → "septiembre de 2026". */
+function mesLargo(periodo: string): string {
+  const [a, m] = periodo.split("-").map(Number);
+  if (!a || !m) return periodo;
+  return new Date(Date.UTC(a, m - 1, 15)).toLocaleDateString("es-CO", {
+    month: "long", year: "numeric", timeZone: "America/Bogota",
+  });
+}
+
+/**
+ * Un cobro: una casa, un vehículo, un mes.
+ *
+ * Varias rondas que ven el mismo carro en el mes son UN cobro (antes, uno por
+ * reporte, y se cobraba la tarifa mensual dos, tres o cuatro veces). Su
+ * estado es el mismo que ve Vigilancia, y cada cambio queda en su historia.
+ */
 function Fila({
   fila,
   periodoSugerido,
 }: {
-  fila: {
-    _id: Id<"guardiaNovedadReportes">;
-    placa: string; descripcion: string | null; casas: string[];
-    titulo: string; ocurrioEn: number; estado: string; monto: number;
-    periodo: string | null; cobradoPor: string | null; nota: string | null;
-    fotos: (string | null)[];
-  };
+  fila: FilaCobro;
   periodoSugerido: string;
 }) {
   const marcar = useMutation(api.parqueadero.marcarFacturado);
   const descartar = useMutation(api.parqueadero.descartar);
   const devolver = useMutation(api.parqueadero.devolverAPendiente);
 
-  const [abierto, setAbierto] = useState<null | "facturar" | "descartar">(null);
+  const [abierto, setAbierto] = useState<null | "facturar" | "descartar" | "devolver">(null);
+  const [verHistoria, setVerHistoria] = useState(false);
+  const historia = useQuery(api.parqueadero.historial, verHistoria ? { reporteId: fila._id } : "skip");
   const [periodo, setPeriodo] = useState(periodoSugerido);
   const [nota, setNota] = useState("");
   const [busy, setBusy] = useState(false);
@@ -230,7 +254,15 @@ function Fila({
           <div className="flex flex-wrap items-center gap-2">
             <span className="font-mono text-sm font-semibold text-foreground">{fila.placa}</span>
             <span className="text-sm text-foreground">
-              {fila.casas.length ? `Casa ${fila.casas.join(", ")}` : "sin casa asignada"}
+              {fila.casaPorDefinir
+                ? fila.casas.length
+                  ? `Casas ${fila.casas.join(", ")} · definir a cuál se cobra`
+                  : "sin casa asignada"
+                : `Casa ${fila.casas.join(", ")}`}
+            </span>
+            <span className="rounded bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
+              {mesLargo(fila.periodoParqueo)}
+              {fila.reportes > 1 ? ` · ${fila.reportes} reportes` : ""}
             </span>
             {et && (
               <span className={cn("rounded px-2 py-0.5 text-[11px] font-medium", et.clase)}>
@@ -239,15 +271,20 @@ function Fila({
             )}
             {fila.periodo && (
               <span className="rounded bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
-                {fila.periodo}
+                en la cuenta de {fila.periodo}
               </span>
             )}
           </div>
           <p className="mt-1 text-[13px] text-muted-foreground">{fila.titulo}</p>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            {new Date(fila.ocurrioEn).toLocaleString("es-CO", {
-              day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit",
-            })}
+            {fila.ocurrencias
+              .map((t) =>
+                new Date(t).toLocaleString("es-CO", {
+                  day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit",
+                  timeZone: "America/Bogota",
+                }),
+              )
+              .join(" · ")}
             {fila.descripcion ? ` · ${fila.descripcion}` : ""}
             {fotos.length > 0 && (
               <span className="ml-2 inline-flex items-center gap-1">
@@ -259,6 +296,40 @@ function Fila({
             <p className="mt-1 text-xs text-muted-foreground">
               <span className="font-medium">No se cobra:</span> {fila.nota}
             </p>
+          )}
+          {fila.mezclado && (
+            <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">
+              Los reportes de este mes tenían marcas distintas antes de agruparse. Revisa su historia.
+            </p>
+          )}
+          <button
+            type="button"
+            onClick={() => setVerHistoria((v) => !v)}
+            className="mt-1 text-xs text-muted-foreground underline-offset-2 hover:underline"
+          >
+            {verHistoria ? "Ocultar historia" : "Ver historia"}
+          </button>
+          {verHistoria && (
+            <ul className="mt-1 space-y-0.5 text-xs text-muted-foreground">
+              {historia === undefined ? (
+                <li>Cargando…</li>
+              ) : historia.length === 0 ? (
+                <li>Sin cambios todavía.</li>
+              ) : (
+                historia.map((e) => (
+                  <li key={e._id}>
+                    {new Date(e.at).toLocaleString("es-CO", { timeZone: "America/Bogota" })} ·{" "}
+                    {ACCION_HISTORIA[e.accion] ?? e.accion}
+                    {e.estadoAntes && e.estadoAntes !== e.estadoDespues
+                      ? ` (${ETIQUETA_ESTADO_PARQUEADERO[e.estadoAntes as keyof typeof ETIQUETA_ESTADO_PARQUEADERO] ?? e.estadoAntes} → ${ETIQUETA_ESTADO_PARQUEADERO[e.estadoDespues as keyof typeof ETIQUETA_ESTADO_PARQUEADERO] ?? e.estadoDespues})`
+                      : ""}
+                    {e.periodoFactura ? ` · cuenta ${e.periodoFactura}` : ""}
+                    {e.periodoFacturaAntes && !e.periodoFactura ? ` · estaba en ${e.periodoFacturaAntes}` : ""}
+                    {e.nota ? ` · ${e.nota}` : ""} · {e.actorNombre}
+                  </li>
+                ))
+              )}
+            </ul>
           )}
         </div>
 
@@ -277,7 +348,7 @@ function Fila({
             <Button
               size="sm"
               variant="ghost"
-              onClick={() => accion(() => devolver({ reporteId: fila._id }))}
+              onClick={() => setAbierto("devolver")}
               disabled={busy}
               title="Devolver a pendiente"
             >
@@ -326,6 +397,23 @@ function Fila({
           <Button size="sm" variant="outline" disabled={busy}
                   onClick={() => accion(() => descartar({ reporteId: fila._id, nota }))}>
             No cobrar
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setAbierto(null)}>Cancelar</Button>
+        </div>
+      )}
+
+      {abierto === "devolver" && (
+        <div className="mt-3 flex flex-wrap items-end gap-2 border-t border-border pt-3">
+          <div className="min-w-[220px] flex-1 space-y-1">
+            <label className="block text-xs text-muted-foreground">
+              ¿Por qué vuelve a pendiente? (queda en la historia)
+            </label>
+            <Input value={nota} onChange={(e) => setNota(e.target.value)}
+                   placeholder="Quedó en la cuenta de cobro equivocada" />
+          </div>
+          <Button size="sm" variant="outline" disabled={busy}
+                  onClick={() => accion(() => devolver({ reporteId: fila._id, nota: nota.trim() || undefined }))}>
+            Devolver a pendiente
           </Button>
           <Button size="sm" variant="ghost" onClick={() => setAbierto(null)}>Cancelar</Button>
         </div>
