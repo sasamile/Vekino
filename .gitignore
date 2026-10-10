@@ -31,3 +31,5 @@ coverage
 migrate/
 evidencias/
 respaldo-limpieza/
+
+qa/factory/
