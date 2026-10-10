@@ -83,11 +83,9 @@ function motivoRechazo(m: string): string {
 
 export function UploadFacturas({
   condominioId,
-  condominioLegacyId,
   onDone,
 }: {
   condominioId: Id<"condominios">;
-  condominioLegacyId: string;
   onDone: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -127,7 +125,7 @@ export function UploadFacturas({
 
     const form = new FormData();
     form.append("pdf", file);
-    form.append("condominioLegacyId", condominioLegacyId);
+    form.append("condominioId", condominioId);
 
     try {
       const res = await fetch("/api/facturas/upload", { method: "POST", body: form });
@@ -183,7 +181,6 @@ export function UploadFacturas({
     const form = new FormData();
     form.append("pdf", archivo);
     form.append("condominioId", condominioId);
-    form.append("condominioLegacyId", condominioLegacyId);
     form.append("periodo", periodo);
     form.append("hash", hash);
     form.append("soloNuevas", soloNuevas ? "true" : "false");

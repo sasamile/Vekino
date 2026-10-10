@@ -45,7 +45,8 @@ mock.module("@/lib/auth-server", () => ({
   getToken: async () => "token",
   isAuthenticated: async () => true,
   preloadAuthQuery: async () => ({}),
-  fetchAuthQuery: async () => ({ allowed: true }),
+  /* `facturas.destinoCarga` (Hallazgo 2): el conjunto migrado de la prueba y su carpeta. */
+  fetchAuthQuery: async () => ({ allowed: true, condominioId: "condo-1", carpeta: "conjunto-de-prueba" }),
   fetchAuthAction: async () => null,
   fetchAuthMutation: async (fn, args) => {
     const nombre = getFunctionName(fn);

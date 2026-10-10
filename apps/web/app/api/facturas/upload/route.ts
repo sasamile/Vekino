@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { MENSAJE_LECTURA } from "@vekino/backend/lecturaFactura";
 import { leerPdf } from "../lectura";
-import { rechazoDePermiso, rechazoSinSesion } from "../permiso";
+import { idsDelConjunto, rechazoSinSesion, validarDestino } from "../permiso";
 
 /**
  * VISTA PREVIA de un PDF de cuentas de cobro.
@@ -14,6 +14,9 @@ import { rechazoDePermiso, rechazoSinSesion } from "../permiso";
  * Antes esta ruta subía cada PDF a S3 al leerlo, con una llave fija por
  * período y casa: la vista previa de un PDF equivocado pisaba los publicados
  * aunque se cancelara (auditoría de facturación, F-07).
+ *
+ * El conjunto llega como `condominioId` (o `condominioLegacyId`, de la web
+ * anterior) y el permiso se valida igual que al confirmar (`validarDestino`).
  */
 export async function POST(req: NextRequest) {
   try {
@@ -22,12 +25,15 @@ export async function POST(req: NextRequest) {
 
     const form = await req.formData();
     const file = form.get("pdf") as File | null;
-    const condominioLegacyId = form.get("condominioLegacyId") as string | null;
-    if (!file || !condominioLegacyId) {
-      return NextResponse.json({ error: "Faltan campos: pdf, condominioLegacyId" }, { status: 400 });
+    const ids = idsDelConjunto(form);
+    if (!file || !ids) {
+      return NextResponse.json(
+        { error: "Faltan campos: pdf, condominioId (o condominioLegacyId)" },
+        { status: 400 },
+      );
     }
 
-    const rechazo = await rechazoDePermiso(condominioLegacyId);
+    const { rechazo } = await validarDestino(ids);
     if (rechazo) return rechazo;
 
     const leido = await leerPdf(new Uint8Array(await file.arrayBuffer()));

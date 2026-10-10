@@ -6,7 +6,7 @@ import { finDelDiaDelPeriodo, vencimientoDePeriodo } from "@vekino/backend/carte
 import { numeroFacturaDe } from "@vekino/backend/lecturaFactura";
 import { fetchAuthMutation } from "@/lib/auth-server";
 import { hashDe, leerPdf, pdfDeFactura } from "../lectura";
-import { rechazoDePermiso, rechazoSinSesion } from "../permiso";
+import { idsDelConjunto, rechazoSinSesion, validarDestino } from "../permiso";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -15,7 +15,10 @@ export const maxDuration = 60;
  * CONFIRMACIÓN de un PDF de cuentas de cobro: lo único que publica en S3 y
  * escribe en la base.
  *
- *   1. Misma sesión y permiso que la vista previa (Fase 1).
+ *   1. Misma sesión, permiso y conjunto que la vista previa: el backend
+ *      (`facturas.destinoCarga`) resuelve el conjunto y su carpeta de S3
+ *      —`legacyId` si es migrado, `_id` si no— y rechaza un
+ *      `condominioLegacyId` y un `condominioId` de conjuntos distintos.
  *   2. Vuelve a leer el PDF EN EL SERVIDOR y comprueba por hash que es el
  *      mismo de la vista previa: lo que se guarda son los números que lee
  *      el servidor, no los que mande el navegador.
@@ -51,14 +54,14 @@ const LOTE = 20;
 const PARALELO = 6;
 
 function llaveDe(
-  legacyId: string,
+  carpeta: string,
   periodo: string,
   importacionId: string,
   unidad: string,
   bytes: Uint8Array,
 ): string {
   const casa = (unidad || "sin-unidad").replace(/[^A-Za-z0-9-]/g, "_");
-  return `condominios/facturas/${legacyId}/${periodo}/${importacionId}/unidad-${casa}-${hashDe(bytes).slice(0, 12)}.pdf`;
+  return `condominios/facturas/${carpeta}/${periodo}/${importacionId}/unidad-${casa}-${hashDe(bytes).slice(0, 12)}.pdf`;
 }
 
 /**
@@ -118,20 +121,21 @@ export async function POST(req: NextRequest) {
 
     const form = await req.formData();
     const file = form.get("pdf") as File | null;
-    const condominioLegacyId = form.get("condominioLegacyId") as string | null;
-    const condominioId = form.get("condominioId") as Id<"condominios"> | null;
+    const ids = idsDelConjunto(form);
     const periodo = form.get("periodo") as string | null;
     const hash = form.get("hash") as string | null;
     const soloNuevas = form.get("soloNuevas") !== "false";
-    if (!file || !condominioLegacyId || !condominioId || !periodo || !hash) {
+    if (!file || !ids || !periodo || !hash) {
       return NextResponse.json(
-        { error: "Faltan campos: pdf, condominioLegacyId, condominioId, periodo, hash" },
+        { error: "Faltan campos: pdf, condominioId (o condominioLegacyId), periodo, hash" },
         { status: 400 },
       );
     }
 
-    const rechazo = await rechazoDePermiso(condominioLegacyId);
-    if (rechazo) return rechazo;
+    const permiso = await validarDestino(ids);
+    if (permiso.rechazo) return permiso.rechazo;
+    /* El conjunto y la carpeta salen del backend, no del formulario. */
+    const { condominioId, carpeta } = permiso.destino;
 
     const bytes = new Uint8Array(await file.arrayBuffer());
     if (hashDe(bytes) !== hash) {
@@ -181,7 +185,7 @@ export async function POST(req: NextRequest) {
     await enParalelo(aPublicar, PARALELO, async (p) => {
       const f = leido.facturas[p.indice]!;
       const pdf = await pdfDeFactura(leido.doc, f.paginas);
-      const key = llaveDe(condominioLegacyId, periodo, importacionId!, f.unitIdentifier, pdf);
+      const key = llaveDe(carpeta, periodo, importacionId!, f.unitIdentifier, pdf);
       await publicar(key, pdf);
       urls.set(p.indice, `https://${BUCKET}.s3.${REGION}.amazonaws.com/${key}`);
     });

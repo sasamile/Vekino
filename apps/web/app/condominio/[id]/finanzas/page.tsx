@@ -159,11 +159,14 @@ export default function FinanzasPage() {
         condominioId={condominioId}
         defaultPeriodo={periodoActivo}
       />
-      {condominioData?.allowed && condominioData.condominio.legacyId && (
+      {/* Para cualquier conjunto, tenga o no `legacyId` (Hallazgo 2). La ve
+          quien entra al área de administración (`adminHome`: administración,
+          contadora y plataforma), los mismos que `facturas.destinoCarga`
+          deja cargar. */}
+      {condominioData?.allowed && (
         <UploadFacturas
           key={uploadKey}
           condominioId={condominioId}
-          condominioLegacyId={condominioData.condominio.legacyId}
           onDone={() => setUploadKey((k) => k + 1)}
         />
       )}
@@ -182,7 +185,6 @@ export default function FinanzasPage() {
       periodoActivo,
       uploadKey,
       condominioData?.allowed,
-      condominioData?.condominio?.legacyId,
       (periodos ?? []).join("|"),
     ],
   );

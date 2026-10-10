@@ -23,7 +23,7 @@ const PDF = readFileSync(join(import.meta.dir, "facturacion", "fixtures", "cdc-c
 let subidas = [];
 let consultas = [];
 let haySesion = true;
-/** Lo que responde Convex a `facturas.permisoSubida`. */
+/** Lo que responde Convex a `facturas.destinoCarga` (antes, `permisoSubida`). */
 let permiso = async () => ({ allowed: true });
 
 mock.module("@aws-sdk/client-s3", () => ({
@@ -123,8 +123,11 @@ describe("F07 · /api/facturas/upload exige sesión y permiso sobre el conjunto"
   test("con permiso: pregunta por ESE conjunto y lee el PDF, sin publicar nada (S3 solo al confirmar)", async () => {
     const { status, cuerpo } = await subir();
     expect(status).toBe(200);
+    /* Hallazgo 2: la ruta pregunta por `facturas.destinoCarga` (por
+     * `condominioId` o, como aquí, por `condominioLegacyId`), no por
+     * `permisoSubida`, que solo resuelve por `legacyId`. */
     expect(consultas).toEqual([
-      { nombre: "facturas:permisoSubida", args: { condominioLegacyId: "conjunto-de-prueba" } },
+      { nombre: "facturas:destinoCarga", args: { condominioLegacyId: "conjunto-de-prueba" } },
     ]);
     expect(cuerpo.invoices).toHaveLength(1);
     expect(cuerpo.hash).toMatch(/^[0-9a-f]{64}$/);

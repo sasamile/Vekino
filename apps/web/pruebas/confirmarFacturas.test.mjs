@@ -123,7 +123,9 @@ beforeEach(() => {
   publicados = [];
   enS3 = new Set();
   haySesion = true;
-  permiso = async () => ({ allowed: true });
+  /* Lo que responde `facturas.destinoCarga` (Hallazgo 2) para el conjunto
+   * migrado de la prueba: su id y su carpeta, que es su `legacyId`. */
+  permiso = async () => ({ allowed: true, condominioId: "condo-1", carpeta: "conjunto-de-prueba" });
   llamadas = [];
   importaciones = new Map();
   existentes = new Set();

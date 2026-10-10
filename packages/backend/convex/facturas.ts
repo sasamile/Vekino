@@ -639,6 +639,95 @@ export const permisoSubida = query({
 });
 
 /**
+ * Carpeta de S3 de los PDF de facturas de un conjunto: su `legacyId` si lo
+ * tiene —las llaves de los migrados (CDC, Arboleda) no cambian— y su `_id`
+ * si no. Un `legacyId` vacío cuenta como ausente.
+ */
+function carpetaDeFacturas(c: Doc<"condominios">): string {
+  return c.legacyId || c._id;
+}
+
+/**
+ * Permiso y destino de una carga de PDFs de facturas, por conjunto.
+ *
+ * `permisoSubida` resuelve el conjunto por `legacyId`, que solo tienen los
+ * conjuntos migrados: uno creado desde la plataforma no podía cargar PDFs.
+ * Esta consulta lo resuelve por `condominioId` —o por `condominioLegacyId`,
+ * que sigue mandando la web anterior— y devuelve, con el permiso, el conjunto
+ * y su carpeta de S3. Las dos rutas (`/api/facturas/upload` y `/confirmar`)
+ * usan esta misma resolución y no calculan nada por su cuenta.
+ *
+ *   · Pide los roles de `bulkUpsert` en cada conjunto nombrado, antes de
+ *     decir nada más: quien no puede cargar en uno no se entera de si los
+ *     identificadores coinciden.
+ *   · Si llegan los dos identificadores, tienen que ser del mismo conjunto.
+ *   · La carpeta tiene que ser solo de ese conjunto. Si otro la comparte (un
+ *     `legacyId` repetido, o igual al `_id` de otro), no se carga: sus PDF
+ *     quedarían mezclados en la misma carpeta pública.
+ *
+ * El `condominioId` llega como texto y se normaliza aquí: un id mal formado
+ * es "sin permiso", no un error de validación.
+ *
+ * Responde el motivo en vez de lanzar, como `permisoSubida`.
+ */
+export const destinoCarga = query({
+  args: {
+    condominioId: v.optional(v.string()),
+    condominioLegacyId: v.optional(v.string()),
+  },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<
+    | { allowed: true; condominioId: Id<"condominios">; carpeta: string }
+    | {
+        allowed: false;
+        motivo: "sin_sesion" | "sin_permiso" | "sin_conjunto" | "no_coinciden" | "carpeta_compartida";
+      }
+  > => {
+    const user = await getCurrentAppUser(ctx);
+    if (!user || !user.active) return { allowed: false, motivo: "sin_sesion" };
+    if (args.condominioId === undefined && args.condominioLegacyId === undefined) {
+      return { allowed: false, motivo: "sin_conjunto" };
+    }
+
+    /* Son pocos (uno por conjunto) y no hay índice por `legacyId`. Además
+     * hay que verlos todos para saber si la carpeta es de uno solo. */
+    const todos = await ctx.db.query("condominios").collect();
+
+    let porId: Doc<"condominios"> | undefined;
+    if (args.condominioId !== undefined) {
+      const id = ctx.db.normalizeId("condominios", args.condominioId);
+      porId = id ? todos.find((c) => c._id === id) : undefined;
+      if (!porId) return { allowed: false, motivo: "sin_permiso" };
+    }
+    let porLegacy: Doc<"condominios">[] | undefined;
+    if (args.condominioLegacyId !== undefined) {
+      porLegacy = todos.filter((c) => c.legacyId === args.condominioLegacyId);
+      if (porLegacy.length === 0) return { allowed: false, motivo: "sin_permiso" };
+    }
+
+    for (const c of [...(porId ? [porId] : []), ...(porLegacy ?? [])]) {
+      try {
+        await requireCondominioRole(ctx, c._id, [...CARGA_ROLES]);
+      } catch {
+        return { allowed: false, motivo: "sin_permiso" };
+      }
+    }
+
+    const conjunto = (porId ?? porLegacy?.[0])!;
+    if (porLegacy && !porLegacy.some((c) => c._id === conjunto._id)) {
+      return { allowed: false, motivo: "no_coinciden" };
+    }
+    const carpeta = carpetaDeFacturas(conjunto);
+    if (todos.some((c) => c._id !== conjunto._id && carpetaDeFacturas(c) === carpeta)) {
+      return { allowed: false, motivo: "carpeta_compartida" };
+    }
+    return { allowed: true, condominioId: conjunto._id, carpeta };
+  },
+});
+
+/**
  * Inserta o actualiza un lote de facturas desde la UI (subida de PDF bulk).
  * Idempotente por (condominioId, unidadId, periodo).
  * Con skipExisting=true solo inserta facturas nuevas (no pisa las que ya existen).
