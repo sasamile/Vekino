@@ -5,7 +5,7 @@ import { useParams } from "next/navigation";
 import { useQuery, useMutation, usePaginatedQuery } from "convex/react";
 import {
   ReceiptText, FileText, Loader2, Check, X, Link2,
-  MessageCircle, Smartphone, ExternalLink, Search,
+  MessageCircle, Smartphone, Globe, ExternalLink, Search,
 } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
@@ -253,6 +253,9 @@ function SoporteCard({
             )}
             {s.origen === "app" && (
               <Badge tone="info"><Smartphone className="h-3 w-3" />App</Badge>
+            )}
+            {s.origen === "web" && (
+              <Badge tone="info"><Globe className="h-3 w-3" />Web</Badge>
             )}
             {!pendiente && (
               <Badge tone={ESTADO_META[s.estado].tone}>{ESTADO_META[s.estado].label}</Badge>

@@ -57,6 +57,7 @@ import type * as lib_cloudflareRealtime from "../lib/cloudflareRealtime.js";
 import type * as lib_coberturas from "../lib/coberturas.js";
 import type * as lib_cobroParqueadero from "../lib/cobroParqueadero.js";
 import type * as lib_codigoAsistencia from "../lib/codigoAsistencia.js";
+import type * as lib_comprobantes from "../lib/comprobantes.js";
 import type * as lib_costoReserva from "../lib/costoReserva.js";
 import type * as lib_depositoReserva from "../lib/depositoReserva.js";
 import type * as lib_disponibilidad from "../lib/disponibilidad.js";
@@ -217,6 +218,7 @@ declare const fullApi: ApiFromModules<{
   "lib/coberturas": typeof lib_coberturas;
   "lib/cobroParqueadero": typeof lib_cobroParqueadero;
   "lib/codigoAsistencia": typeof lib_codigoAsistencia;
+  "lib/comprobantes": typeof lib_comprobantes;
   "lib/costoReserva": typeof lib_costoReserva;
   "lib/depositoReserva": typeof lib_depositoReserva;
   "lib/disponibilidad": typeof lib_disponibilidad;

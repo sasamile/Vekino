@@ -6,18 +6,20 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { v } from "convex/values";
 import { action, internalAction } from "./_generated/server";
 import { api } from "./_generated/api";
+import { bucketPublico, carpetaComprobantes, urlPublica, vTipoComprobante } from "./lib/comprobantes";
 
 function requireS3Env() {
-  const region = process.env.AWS_REGION ?? "us-east-1";
-  const bucket = process.env.AWS_S3_BUCKET_NAME;
+  /* Bucket y región como los lee `crearMio` para validar la URL de un
+   * comprobante (`lib/comprobantes.ts`): una sola lectura para las dos. */
+  const destino = bucketPublico(process.env);
   const accessKeyId = process.env.AWS_ACCESS_KEY_ID;
   const secretAccessKey = process.env.AWS_SECRET_ACCESS_KEY;
-  if (!bucket || !accessKeyId || !secretAccessKey) {
+  if (!destino || !accessKeyId || !secretAccessKey) {
     throw new Error(
       "Faltan variables AWS_S3_BUCKET_NAME / AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY en Convex.",
     );
   }
-  return { region, bucket, accessKeyId, secretAccessKey };
+  return { ...destino, accessKeyId, secretAccessKey };
 }
 
 function s3Client() {
@@ -30,7 +32,7 @@ function s3Client() {
 
 function publicUrlFor(key: string) {
   const { region, bucket } = requireS3Env();
-  return `https://${bucket}.s3.${region}.amazonaws.com/${key}`;
+  return urlPublica({ bucket, region }, key);
 }
 
 function sanitizeFileName(name: string) {
@@ -67,6 +69,31 @@ function buildObjectKey(folderArg: string, fileNameArg?: string) {
   const rawName = fileNameArg?.trim() || "file";
   const safe = sanitizeFileName(rawName);
   return `${folder}/${Date.now()}-${randomUUID().slice(0, 8)}-${safe}`;
+}
+
+/**
+ * Sube bytes al bucket con una llave nueva (`buildObjectKey`). La usan
+ * `uploadBytes`, el bot (`uploadFromUrl`) y los comprobantes de la web
+ * (`subirComprobante`).
+ */
+async function subirAlBucket(
+  folder: string,
+  fileName: string | undefined,
+  contentType: string,
+  body: Buffer,
+): Promise<{ key: string; publicUrl: string }> {
+  const { bucket } = requireS3Env();
+  const client = s3Client();
+  const key = buildObjectKey(folder, fileName);
+  await client.send(
+    new PutObjectCommand({
+      Bucket: bucket,
+      Key: key,
+      ContentType: contentType,
+      Body: body,
+    }),
+  );
+  return { key, publicUrl: publicUrlFor(key) };
 }
 
 /**
@@ -132,20 +159,12 @@ export const uploadBytes = action({
       throw new Error("El archivo supera el límite de 15 MB.");
     }
 
-    const { bucket } = requireS3Env();
-    const client = s3Client();
-    const key = buildObjectKey(args.folder, args.fileName);
-
-    await client.send(
-      new PutObjectCommand({
-        Bucket: bucket,
-        Key: key,
-        ContentType: args.contentType || "application/octet-stream",
-        Body: Buffer.from(args.bytes),
-      }),
+    return await subirAlBucket(
+      args.folder,
+      args.fileName,
+      args.contentType || "application/octet-stream",
+      Buffer.from(args.bytes),
     );
-
-    return { key, publicUrl: publicUrlFor(key) };
   },
 });
 
@@ -273,19 +292,35 @@ export const uploadFromUrl = internalAction({
       response.headers.get("content-type") ||
       "application/octet-stream";
 
-    const { bucket } = requireS3Env();
-    const client = s3Client();
-    const key = buildObjectKey(args.folder, args.fileName);
+    return await subirAlBucket(args.folder, args.fileName, contentType, bytes);
+  },
+});
 
-    await client.send(
-      new PutObjectCommand({
-        Bucket: bucket,
-        Key: key,
-        ContentType: contentType,
-        Body: bytes,
-      }),
+/**
+ * El archivo de un comprobante que el residente envió desde la web
+ * (`soportesPago.enviarMio`), ya validado allí: reglas, tamaño y tipo por
+ * contenido.
+ *
+ * Llega por el almacenamiento interno de Convex y no como argumento: una
+ * acción Node solo recibe 5 MiB de argumentos, y un comprobante puede pesar
+ * 10 MB. La carpeta y la llave las decide el servidor; el `ContentType` es el
+ * tipo detectado.
+ */
+export const subirComprobante = internalAction({
+  args: {
+    storageId: v.id("_storage"),
+    condominioId: v.id("condominios"),
+    nombreArchivo: v.optional(v.string()),
+    contentType: vTipoComprobante,
+  },
+  handler: async (ctx, args): Promise<{ key: string; publicUrl: string }> => {
+    const archivo = await ctx.storage.get(args.storageId);
+    if (!archivo) throw new Error("No se encontró el archivo del comprobante.");
+    return await subirAlBucket(
+      carpetaComprobantes(args.condominioId),
+      args.nombreArchivo,
+      args.contentType,
+      Buffer.from(await archivo.arrayBuffer()),
     );
-
-    return { key, publicUrl: publicUrlFor(key) };
   },
 });

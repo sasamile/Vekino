@@ -7,6 +7,7 @@ import type { Id } from "@vekino/backend/dataModel";
 import { ArrowRight, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { ErrorBoundary } from "@/components/ui/error-boundary";
 
 type FacturaPay = {
   _id: Id<"facturas">;
@@ -79,15 +80,7 @@ function mensajeParaElResidente(e: unknown): string {
   return limpio;
 }
 
-export function PortalPayButton({
-  facturaId,
-  avalPortalUrl,
-  label = "Pagar ahora",
-  size = "default",
-  variant = "brand",
-  className,
-  showArrow = false,
-}: {
+type PortalPayButtonProps = {
   facturaId: Id<"facturas">;
   avalPortalUrl?: string | null;
   label?: string;
@@ -95,7 +88,39 @@ export function PortalPayButton({
   variant?: "brand" | "outline";
   className?: string;
   showArrow?: boolean;
-}) {
+};
+
+/** Lo que se muestra si `opcionesDePago` falla: la factura y la página siguen. */
+export function PagoNoDisponible() {
+  return (
+    <p className="max-w-xs text-right text-[12px] leading-snug text-muted-foreground">
+      No se pudo consultar el pago en línea. Intenta más tarde.
+    </p>
+  );
+}
+
+/**
+ * Sin portal del banco, el botón consulta `opcionesDePago`, y `useQuery` lanza
+ * el error al pintar. Este borde lo deja en el botón: antes, una falla de esa
+ * consulta tumbaba "Mis facturas" y el inicio.
+ */
+export function PortalPayButton(props: PortalPayButtonProps) {
+  return (
+    <ErrorBoundary resetKey={props.facturaId} fallback={() => <PagoNoDisponible />}>
+      <BotonPagoPortal {...props} />
+    </ErrorBoundary>
+  );
+}
+
+function BotonPagoPortal({
+  facturaId,
+  avalPortalUrl,
+  label = "Pagar ahora",
+  size = "default",
+  variant = "brand",
+  className,
+  showArrow = false,
+}: PortalPayButtonProps) {
   const crearPago = useAction(api.pagos.crearPagoFactura);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);

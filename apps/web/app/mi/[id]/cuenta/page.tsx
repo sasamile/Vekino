@@ -29,7 +29,9 @@ import { Spinner } from "@/components/ui/spinner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { LiquidGlassCard } from "@/components/portal/liquid-glass-card";
-import { PortalPayButton } from "@/components/portal/portal-pay-button";
+import { PagoNoDisponible, PortalPayButton } from "@/components/portal/portal-pay-button";
+import { ComprobantePago } from "@/components/portal/comprobante-pago";
+import { ErrorBoundary } from "@/components/ui/error-boundary";
 import { cop, cn } from "@/lib/utils";
 import {
   ESTADO_FACTURA,
@@ -253,6 +255,7 @@ export default function MisFacturas() {
             {lista.map((f) => (
               <FacturaRow
                 key={f._id}
+                condominioId={condominioId}
                 factura={f}
                 cadena={listaAll.filter((x) => String(x.unidadId) === String(f.unidadId))}
                 avalPortalUrl={avalPortalUrl}
@@ -527,12 +530,14 @@ function ProximoPagoCard({
 /* ───────────────────────── Fila de factura ───────────────────────── */
 
 function FacturaRow({
+  condominioId,
   factura,
   cadena,
   avalPortalUrl,
   pagable,
   showUnidad,
 }: {
+  condominioId: Id<"condominios">;
   factura: Factura;
   /** Las facturas de la misma unidad: dicen si esta es historica. */
   cadena: Factura[];
@@ -634,6 +639,15 @@ function FacturaRow({
         </div>
       </div>
 
+      {/* "Ya pagué" en la vigente, y los comprobantes enviados de cualquiera
+          (Hallazgo 1). Fuera de la cabecera: tocarlo no abre el desglose. */}
+      <ComprobantePago
+        condominioId={condominioId}
+        factura={factura}
+        vigente={esVigente}
+        className="border-t border-border px-4 py-3"
+      />
+
       {/* Desglose (acordeón) */}
       {open && (
         <div className="border-t border-border bg-muted/20 px-4 py-4">
@@ -719,17 +733,29 @@ function FacturaRow({
 
 /* ───────────────────────── Botón de pago (deep-link Aval o API) ───────────────────────── */
 
-function PayButton({
-  factura,
-  avalPortalUrl,
-  size = "default",
-  className,
-}: {
+type PayButtonProps = {
   factura: Factura;
   avalPortalUrl: string | null;
   size?: "default" | "sm";
   className?: string;
-}) {
+};
+
+/* Como `PortalPayButton`: si `opcionesDePago` falla, queda una nota en la
+ * fila y la página sigue. */
+function PayButton(props: PayButtonProps) {
+  return (
+    <ErrorBoundary resetKey={props.factura._id} fallback={() => <PagoNoDisponible />}>
+      <PayButtonContenido {...props} />
+    </ErrorBoundary>
+  );
+}
+
+function PayButtonContenido({
+  factura,
+  avalPortalUrl,
+  size = "default",
+  className,
+}: PayButtonProps) {
   const crearPago = useAction(api.pagos.crearPagoFactura);
   const [loading, setLoading] = useState(false);
   /* Igual que en portal-pay-button (Fase 4): sin portal del banco, con la

@@ -33,6 +33,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { Button } from "@/components/ui/button";
 import { LiquidGlassCard } from "@/components/portal/liquid-glass-card";
 import { PortalPayButton } from "@/components/portal/portal-pay-button";
+import { ComprobantePago } from "@/components/portal/comprobante-pago";
 import { cop, cn } from "@/lib/utils";
 import {
   ESTADO_FACTURA,
@@ -213,6 +214,7 @@ export default function PortalInicio() {
       ) : (
         <DeudaAlert
           base={base}
+          condominioId={condominioId}
           estaAlDia={estaAlDia}
           enMora={resumen.estado === "en_mora"}
           vencimientoEnMora={vencimientoEnMora}
@@ -391,6 +393,7 @@ function AvisoFijado({
 
 function DeudaAlert({
   base,
+  condominioId,
   estaAlDia,
   enMora,
   vencimientoEnMora,
@@ -401,6 +404,7 @@ function DeudaAlert({
   avalPortalUrl,
 }: {
   base: string;
+  condominioId: Id<"condominios">;
   estaAlDia: boolean;
   /** Mora ACTUAL según la cartera, no "alguna factura vencida en el historial". */
   enMora: boolean;
@@ -543,6 +547,15 @@ function DeudaAlert({
           )}
         </div>
       </div>
+      {/* "Ya pagué" junto a "Pagar ahora" (Hallazgo 1). Con varias unidades
+          con saldo, cada una se envía desde "Mis facturas", como el pago. */}
+      {!varias ? (
+        <ComprobantePago
+          condominioId={condominioId}
+          factura={f}
+          className="mt-4 border-t border-border/60 pt-4"
+        />
+      ) : null}
     </LiquidGlassCard>
   );
 }
