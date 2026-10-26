@@ -70,7 +70,12 @@ export function GuardiaHome({
     refresco ? { condominioId, refresco } : { condominioId },
   );
   const visitantes = useQuery(api.guardia.listVisitantes, { condominioId });
-  const turno = useQuery(api.guardia.turnoActivo, { condominioId });
+  /* El turno bajo el que opera: el de la portería de siempre o, con turnos
+   * independientes, el suyo (`guardia.turnosActivos`). */
+  const porteria = useQuery(api.guardia.turnosActivos, { condominioId });
+  const turno = porteria?.turno;
+  /* Sin turno propio y sin cupo: en la Minuta elige qué turno cerrar. */
+  const sinCupo = !!porteria && !porteria.turno && porteria.libres === 0;
   const paquetes = useQuery(api.guardia.listPaquetes, { condominioId });
   const reservasHoy = useQuery(api.guardia.listReservasDia, {
     condominioId,
@@ -142,9 +147,13 @@ export function GuardiaHome({
             <GlassCard style={styles.turnoCard}>
               <Ionicons name="play-circle-outline" size={28} color={AuthUI.text} />
               <View style={{ flex: 1, gap: 2 }}>
-                <Text style={styles.actionLabel}>Iniciar turno</Text>
+                <Text style={styles.actionLabel}>
+                  {sinCupo ? "No hay cupos disponibles" : "Iniciar turno"}
+                </Text>
                 <Text style={styles.actionHint}>
-                  Checklist de dotación para abrir la jornada.
+                  {sinCupo
+                    ? `Los ${porteria.capacidad} turnos de la portería están abiertos. Ver turnos abiertos.`
+                    : "Checklist de dotación para abrir la jornada."}
                 </Text>
               </View>
               <Ionicons name="chevron-forward" size={18} color={AuthUI.textMuted} />

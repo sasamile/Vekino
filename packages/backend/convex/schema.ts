@@ -102,6 +102,24 @@ export default defineSchema({
       }),
     ),
 
+    /**
+     * Vigilancia del conjunto (`guardia.configurarVigilancia`).
+     *
+     * `maxTurnosActivos`: cuántos celadores pueden tener turno abierto a la
+     * vez. Con 1 la portería trabaja como siempre, con un turno que comparten
+     * todos; con 2 o más cada celador abre, opera y cierra el suyo
+     * (`model/minuta.ts`, `capacidadDeTurnos`). Ausente = 1: los conjuntos que
+     * no lo configuran siguen exactamente igual.
+     */
+    vigilancia: v.optional(
+      v.object({
+        maxTurnosActivos: v.number(),
+        /** Quién y cuándo la cambió por última vez. */
+        actualizadoPorUserId: v.optional(v.id("users")),
+        actualizadoEn: v.optional(v.number()),
+      }),
+    ),
+
     // Plan / límites
     subscriptionPlan: v.optional(subscriptionPlanValidator),
     unitLimit: v.optional(v.number()),
@@ -1884,8 +1902,9 @@ export default defineSchema({
   // Guardia — turnos, checklist, rondas, minuta digital
   //
   // Réplica de la lógica de VekinoApi: el turno gobierna la operación
-  // (sin turno abierto no hay minuta ni rondas); solo puede existir UN
-  // turno abierto por condominio; el cierre es la "entrega" del turno
+  // (sin turno abierto no hay minuta ni rondas); puede haber tantos turnos
+  // abiertos como diga `condominios.vigilancia.maxTurnosActivos` (uno si no
+  // se configura); el cierre es la "entrega" del turno
   // (novedades de los elementos del checklist + quién recibe + consignas +
   // observaciones generales). La minuta es append-only: cada acción
   // del guardia genera un evento automáticamente.

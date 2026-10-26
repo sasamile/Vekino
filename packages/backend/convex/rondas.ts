@@ -4,7 +4,13 @@ import type { QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { requireCondominioRole } from "./model/authz";
 import { exigirAcceso, resolverAcceso } from "./model/acceso";
-import { logMinuta, rondaEnCurso, turnoAbierto } from "./model/minuta";
+import {
+  administraLaPorteria,
+  capacidadDeTurnos,
+  logMinuta,
+  operacionDe,
+  sonTurnosIndependientes,
+} from "./model/minuta";
 import { coberturaQueAmpara, lectorDeCoberturasHistoricas } from "./model/cobertura";
 import {
   contar,
@@ -45,19 +51,6 @@ const GUARD_ROLES = ["guardia", "administrador", "junta_directiva"] as const;
  * pasando por `requireCondominioRole`, intacto.
  */
 
-/** Solo una ronda abierta a la vez por condominio. */
-async function exigirSinRondaAbierta(
-  ctx: QueryCtx,
-  condominioId: Id<"condominios">,
-) {
-  const abierta = await rondaEnCurso(ctx, condominioId);
-  if (abierta) {
-    throw new Error(
-      `Ya hay una ronda en curso (${abierta.zona}). Ciérrala antes de empezar otra.`,
-    );
-  }
-}
-
 /** Cuenta cuantas rondas lleva el condominio, para numerar la siguiente. */
 async function siguienteNumero(
   ctx: QueryCtx,
@@ -78,6 +71,13 @@ async function siguienteNumero(
  *
  * La especificacion es explicita en que no se puedan escribir a mano: una
  * ronda cuya hora de inicio la teclea quien la hizo no prueba nada.
+ *
+ * Cuelga del turno de quien la abre y se permite una en curso a la vez
+ * (`operacionDe`): en la portería de siempre, una por conjunto, como hasta
+ * ahora; con turnos independientes, una por celador dentro de su turno, así
+ * que la ronda de un compañero no bloquea la suya. La comprobación y el
+ * insert van en la misma mutación: dos clics seguidos del mismo celador
+ * acaban en una ronda, y dos celadores a la vez, en dos con números seguidos.
  */
 export const iniciar = mutation({
   args: {
@@ -91,12 +91,21 @@ export const iniciar = mutation({
     ]);
 
     /* Sin turno abierto no hay ronda: la ronda cuelga del turno, y permitirla
-     * suelta dejaria recorridos que no pertenecen a ninguna jornada. */
-    const turno = await turnoAbierto(ctx, args.condominioId);
+     * suelta dejaria recorridos que no pertenecen a ninguna jornada. Con
+     * turnos independientes, sin turno PROPIO. */
+    const { turno, ronda: abierta, independientes } = await operacionDe(
+      ctx,
+      args.condominioId,
+      user._id,
+    );
     if (!turno) {
       throw new Error("Abre el turno antes de iniciar una ronda.");
     }
-    await exigirSinRondaAbierta(ctx, args.condominioId);
+    if (abierta) {
+      throw new Error(
+        `${independientes ? "Ya tienes" : "Ya hay"} una ronda en curso (${abierta.zona}). Ciérrala antes de empezar otra.`,
+      );
+    }
 
     let zona = args.zona?.trim() || "";
     if (args.zonaId) {
@@ -149,6 +158,11 @@ export const iniciar = mutation({
  * A partir de aqui no admite mas registros. Es lo que convierte la bitacora
  * en evidencia: una ronda que se puede seguir editando despues de cerrada no
  * demuestra a que hora ocurrio nada.
+ *
+ * Con turnos independientes la finaliza quien la hace o la administración: un
+ * compañero que la cerrara cortaría el recorrido de otro. En la portería de
+ * siempre, cualquiera de la portería, como hasta ahora; y las rondas viejas,
+ * que no dicen quién las hizo, también.
  */
 export const finalizar = mutation({
   args: {
@@ -158,11 +172,19 @@ export const finalizar = mutation({
   handler: async (ctx, args) => {
     const ronda = await ctx.db.get(args.rondaId);
     if (!ronda) throw new Error("Ronda no encontrada.");
-    const { user } = await requireCondominioRole(ctx, ronda.condominioId, [
+    const { user, membership } = await requireCondominioRole(ctx, ronda.condominioId, [
       ...GUARD_ROLES,
     ]);
     if (estadoDeRonda(ronda.estado) === "finalizada") {
       throw new Error("Esa ronda ya está cerrada.");
+    }
+    if (
+      ronda.guardiaUserId &&
+      ronda.guardiaUserId !== user._id &&
+      sonTurnosIndependientes(capacidadDeTurnos(await ctx.db.get(ronda.condominioId))) &&
+      !administraLaPorteria(user, membership)
+    ) {
+      throw new Error("Solo quien hace la ronda o la administración puede finalizarla.");
     }
 
     const ahora = Date.now();
@@ -188,12 +210,18 @@ export const finalizar = mutation({
   },
 });
 
-/** La ronda abierta, para que el guarda vea que la tiene corriendo. */
+/**
+ * La ronda abierta, para que el guarda vea que la tiene corriendo.
+ *
+ * La de quien consulta (`operacionDe`): en la portería de siempre, la del
+ * conjunto; con turnos independientes, la suya. La de un compañero no se le
+ * muestra como si fuera suya.
+ */
 export const activa = query({
   args: { condominioId: v.id("condominios") },
   handler: async (ctx, args) => {
-    await exigirAcceso(ctx, args.condominioId, "porteria.ver");
-    const r = await rondaEnCurso(ctx, args.condominioId);
+    const acceso = await exigirAcceso(ctx, args.condominioId, "porteria.ver");
+    const { ronda: r } = await operacionDe(ctx, args.condominioId, acceso.user._id);
     if (!r) return null;
     return {
       _id: r._id,

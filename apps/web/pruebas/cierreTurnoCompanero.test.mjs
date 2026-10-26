@@ -10,7 +10,7 @@ const { createRoot } = await import("react-dom/client");
  * y qué dice con lo que responde. */
 let llamadas, responder, contenedor, root;
 mock.module("convex/react", () => ({ useMutation: () => async (args) => { llamadas.push(args); return await responder(args); } }));
-const { AvisoTurnoDeCompanero, CerrarTurnoCompaneroModal } = await import("../components/guardia/cerrar-turno-companero");
+const { AvisoTurnoDeCompanero, CerrarTurnoCompaneroModal, TurnosSinCupo } = await import("../components/guardia/cerrar-turno-companero");
 
 const turno = {
   _id: "turno-ana", _creationTime: 0, condominioId: "norte", guardiaUserId: "ana", guardiaNombre: "Ana Guarda",
@@ -107,5 +107,46 @@ describe("La confirmación del cierre", () => {
     await act(async () => { soltar({ ok: true }); });
     expect(llamadas).toHaveLength(1);
     expect(cerrados2).toBe(1);
+  });
+
+  test("con un turno ajeno de datos mínimos no inventa checklist ni rondas", async () => {
+    const ajeno = { _id: "turno-camilo", guardiaNombre: "Camilo Guarda", guardiaSecundarioNombre: null, fechaInicio: turno.fechaInicio };
+    await act(() => root.render(createElement(CerrarTurnoCompaneroModal, {
+      turno: ajeno, condominioId: "norte", onClose: () => {}, onCerrado: () => {},
+    })));
+    expect(texto()).toContain("Vas a cerrar el turno de Camilo Guarda, no uno tuyo.");
+    expect(texto()).toContain("Abierto desde19/10/2026 06:02");
+    expect(texto()).not.toContain("Checklist");
+    expect(texto()).not.toContain("Rondas");
+    await click(boton("Sí, cerrar su turno"));
+    expect(llamadas).toEqual([{ turnoId: "turno-camilo", condominioId: "norte" }]);
+  });
+});
+
+describe("La portería sin cupo, con turnos independientes", () => {
+  const otros = [
+    { _id: "turno-yeison", guardiaNombre: "Yeison Guarda", guardiaSecundarioNombre: null, fechaInicio: Date.parse("2026-10-19T06:00:00-05:00"), cierraComo: "companero" },
+    { _id: "turno-camilo", guardiaNombre: "Camilo Guarda", guardiaSecundarioNombre: "Luis", fechaInicio: Date.parse("2026-10-19T07:30:00-05:00"), cierraComo: "companero" },
+  ];
+
+  test("lista cada turno con su propio cierre y elige solo el que se toca", async () => {
+    const elegidos = [];
+    await act(() => root.render(createElement(TurnosSinCupo, { capacidad: 2, otros, onCerrar: (t) => elegidos.push(t._id) })));
+    expect(texto()).toContain("No hay cupos disponibles");
+    expect(texto()).toContain("Los 2 turnos de esta portería están abiertos.");
+    expect(texto()).toContain("Turno de Yeison GuardaAbierto desde 19/10/2026 06:00");
+    expect(texto()).toContain("Turno de Camilo Guarda y LuisAbierto desde 19/10/2026 07:30");
+    await click(boton("Cerrar turno de Camilo Guarda"));
+    expect(elegidos).toEqual(["turno-camilo"]);
+    // Elegir no cierra nada: el cierre se confirma aparte.
+    expect(llamadas).toEqual([]);
+  });
+
+  test("a la administración no le ofrece el cierre asistido: cierra por la vía de siempre", async () => {
+    await act(() => root.render(createElement(TurnosSinCupo, {
+      capacidad: 2, otros: otros.map((o) => ({ ...o, cierraComo: "propio" })), onCerrar: () => {},
+    })));
+    expect(texto()).toContain("Turno de Yeison Guarda");
+    expect(boton("Cerrar turno de Yeison Guarda")).toBeUndefined();
   });
 });

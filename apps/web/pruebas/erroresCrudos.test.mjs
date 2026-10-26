@@ -122,10 +122,13 @@ describe("Editar persona", () => {
   });
 });
 
+const PORTERIA_SIN_TURNO = { capacidad: 1, independientes: false, ocupados: 0, libres: 1, turno: null, otros: [] };
+
 // ─────────────────────────────────────────────────────────────
 describe("Iniciar turno", () => {
   async function abrirModal() {
-    respuestas["guardia:turnoActivo"] = null;
+    /* La portería de siempre, sin turno abierto (`guardia.turnosActivos`). */
+    respuestas["guardia:turnosActivos"] = PORTERIA_SIN_TURNO;
     respuestas["guardia:listMinuta"] = [];
     respuestas["guardia:listChecklistTemplate"] = [];
     await act(() => root.render(createElement(GuardiaMinutaHome)));
@@ -158,7 +161,8 @@ describe("Iniciar turno", () => {
 // ─────────────────────────────────────────────────────────────
 describe("Iniciar turno simplificado", () => {
   async function abrirModal() {
-    respuestas["guardia:turnoActivo"] = null;
+    /* La portería de siempre, sin turno abierto (`guardia.turnosActivos`). */
+    respuestas["guardia:turnosActivos"] = PORTERIA_SIN_TURNO;
     respuestas["guardia:listMinuta"] = [];
     respuestas["guardia:listChecklistTemplate"] = [];
     await act(() => root.render(createElement(GuardiaMinutaHome)));

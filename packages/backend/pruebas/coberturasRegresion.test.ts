@@ -205,6 +205,10 @@ describe("Fase 8: sin cobertura, la portería responde igual que antes", () => {
     }))!;
     expect(cierraComo).toBe("propio");
     salida["turnoActivo tras abrir"] = turnoTrasAbrir;
+    /* El texto de este rechazo se cambió a propósito el 2026-10-26 (turnos
+     * simultáneos): ya no nombra al guarda del turno abierto. Es la única
+     * línea de la instantánea editada a mano; el resto sigue siendo la del
+     * código anterior a la Fase 8. */
     salida["iniciarTurno repetido"] = await respuesta(
       e.como("mateo").mutation(api.guardia.iniciarTurno, { condominioId: e.alamos, checklist: CHECKLIST }),
     );

@@ -235,10 +235,12 @@ function Guard({ children }: { children: React.ReactNode }) {
   );
 }
 
+/* El turno bajo el que opera: el de la portería de siempre o, con turnos
+ * independientes, el suyo. La misma consulta que la Minuta: Convex la comparte. */
 function TurnoChip({ condominioId }: { condominioId: Id<"condominios"> }) {
-  const turno = useQuery(api.guardia.turnoActivo, { condominioId });
-  if (turno === undefined) return null;
-  const abierto = turno !== null;
+  const porteria = useQuery(api.guardia.turnosActivos, { condominioId });
+  if (porteria === undefined) return null;
+  const abierto = porteria.turno !== null;
   return (
     <span
       className={cn(
@@ -254,7 +256,7 @@ function TurnoChip({ condominioId }: { condominioId: Id<"condominios"> }) {
           abierto ? "animate-pulse bg-emerald-500" : "bg-muted-foreground/50",
         )}
       />
-      {abierto ? "Turno abierto" : "Sin turno"}
+      {abierto ? (porteria.independientes ? "Tu turno abierto" : "Turno abierto") : "Sin turno"}
     </span>
   );
 }

@@ -198,7 +198,7 @@ describe("caso 1 — inicio normal: la identidad sale de la sesión", () => {
         condominioId: e.norte,
         checklist: CHECKLIST,
       }),
-    ).rejects.toThrow(/Ya hay un turno abierto \(Ana Guarda\)/);
+    ).rejects.toThrow(/No hay cupos disponibles: ya hay un turno abierto en esta portería/);
   });
 });
 

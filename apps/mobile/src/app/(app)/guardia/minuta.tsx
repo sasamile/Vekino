@@ -105,10 +105,14 @@ function Inner() {
   const router = useRouter();
   const { condominioId, isGuardia, canManage, isLoading } = useCondominio();
 
-  const turno = useQuery(
-    api.guardia.turnoActivo,
+  /* La portería ahora: el turno bajo el que opera —el de la portería de
+   * siempre, o el suyo con turnos independientes—, los cupos y los turnos de
+   * los demás, para el cierre asistido (`guardia.turnosActivos`). */
+  const porteria = useQuery(
+    api.guardia.turnosActivos,
     condominioId ? { condominioId } : "skip",
   );
+  const turno = porteria === undefined ? undefined : porteria.turno;
   const minuta = useQuery(
     api.guardia.listMinuta,
     condominioId ? { condominioId, limit: 100 } : "skip",
@@ -123,12 +127,18 @@ function Inner() {
   const deCompanero = turno?.cierraComo === "companero";
 
   /* Confirmación explícita: dice de quién es el turno y que el cierre quedará
-   * a su nombre. Cerrado, sigue el flujo de siempre: iniciar el suyo. */
-  function confirmarCierreDeCompanero() {
-    if (!turno || !condominioId) return;
+   * a su nombre. Cerrado, sigue el flujo de siempre: iniciar el suyo. Con
+   * turnos independientes, el que eligió de la lista, y solo ese: el servidor
+   * vuelve a comprobarlo, y si otro lo cerró antes lo dice. */
+  function confirmarCierreDeCompanero(elegido: {
+    _id: Id<"guardiaTurnos">;
+    guardiaNombre: string;
+    fechaInicio: number;
+  }) {
+    if (!condominioId) return;
     Alert.alert(
       "Cerrar el turno de otro guarda",
-      `Vas a cerrar el turno de ${turno.guardiaNombre}, abierto desde el ${etiquetaHasta(turno.fechaInicio)}. ` +
+      `Vas a cerrar el turno de ${elegido.guardiaNombre}, abierto desde el ${etiquetaHasta(elegido.fechaInicio)}. ` +
         "Hazlo solo si ya terminó su jornada y olvidó cerrarlo. En la minuta quedará que lo cerraste tú, como compañero.",
       [
         { text: "Cancelar", style: "cancel" },
@@ -137,7 +147,7 @@ function Inner() {
           style: "destructive",
           onPress: async () => {
             try {
-              await cerrarDeCompanero({ turnoId: turno._id, condominioId });
+              await cerrarDeCompanero({ turnoId: elegido._id, condominioId });
               setModal("iniciar");
             } catch (e) {
               const raw = e instanceof Error ? e.message : "";
@@ -207,8 +217,38 @@ function Inner() {
               Control de turno y bitácora de portería
             </Text>
 
-            {turno === undefined ? (
+            {turno === undefined || porteria === undefined ? (
               <ActivityIndicator color={C.brand} />
+            ) : turno === null && porteria.libres === 0 ? (
+              /* Con turnos independientes y sin cupo: cada turno abierto con su
+                 propio cierre asistido. */
+              <GlassCard style={styles.noTurno}>
+                <Ionicons name="people-outline" size={40} color={C.brand} />
+                <Text style={styles.noTurnoTitle}>No hay cupos disponibles</Text>
+                <Text style={styles.noTurnoHint}>
+                  Los {porteria.capacidad} turnos de esta portería están abiertos. Para
+                  iniciar el tuyo, primero debe cerrarse uno. Si alguno de estos guardas ya
+                  terminó su jornada y olvidó cerrarlo, puedes cerrarlo tú.
+                </Text>
+                {porteria.otros.map((t) => (
+                  <View key={t._id} style={styles.turnoAjeno}>
+                    <Text style={styles.turnoName}>
+                      Turno de {t.guardiaNombre}
+                      {t.guardiaSecundarioNombre ? ` · con ${t.guardiaSecundarioNombre}` : ""}
+                    </Text>
+                    <Text style={styles.turnoMeta}>Inició {fmtFechaHora(t.fechaInicio)}</Text>
+                    {t.cierraComo === "companero" ? (
+                      <Tap
+                        onPress={() => confirmarCierreDeCompanero(t)}
+                        style={[styles.closeBtn, { marginTop: 8, marginBottom: 0 }]}
+                      >
+                        <Ionicons name="stop-circle-outline" size={18} color="#fff" />
+                        <Text style={styles.closeBtnText}>Cerrar turno de {t.guardiaNombre}</Text>
+                      </Tap>
+                    ) : null}
+                  </View>
+                ))}
+              </GlassCard>
             ) : turno === null ? (
               <GlassCard style={styles.noTurno}>
                 <Ionicons name="play-circle-outline" size={40} color={C.brand} />
@@ -217,6 +257,11 @@ function Inner() {
                   Inicia tu turno con el checklist de dotación para habilitar la
                   minuta, las rondas y el control.
                 </Text>
+                {porteria.independientes ? (
+                  <Text style={styles.turnoMeta}>
+                    Turnos abiertos en la portería: {porteria.ocupados} de {porteria.capacidad}
+                  </Text>
+                ) : null}
                 <Tap
                   onPress={() => setModal("iniciar")}
                   style={styles.primaryBtn}
@@ -240,6 +285,11 @@ function Inner() {
                         Inició {fmtFechaHora(turno.fechaInicio)} · Checklist{" "}
                         {turno.checklist.length} ítems
                       </Text>
+                      {porteria.independientes ? (
+                        <Text style={styles.turnoMeta}>
+                          Turnos abiertos en la portería: {porteria.ocupados} de {porteria.capacidad}
+                        </Text>
+                      ) : null}
                     </View>
                   </View>
                   {deCompanero ? (
@@ -285,7 +335,7 @@ function Inner() {
                 </View>
                 <Tap
                   onPress={
-                    deCompanero ? confirmarCierreDeCompanero : () => setModal("cerrar")
+                    deCompanero ? () => confirmarCierreDeCompanero(turno) : () => setModal("cerrar")
                   }
                   style={styles.closeBtn}
                 >
@@ -784,6 +834,14 @@ const styles = StyleSheet.create({
   },
   turnoName: { fontSize: 15, fontFamily: AuthUI.font.semibold, color: AuthUI.text },
   turnoMeta: { fontSize: 12, color: AuthUI.textMuted, marginTop: 2 },
+  turnoAjeno: {
+    alignSelf: "stretch",
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(245,158,11,0.35)",
+    backgroundColor: "rgba(245,158,11,0.06)",
+  },
   companeroHint: {
     fontSize: 13,
     lineHeight: 18,

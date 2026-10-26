@@ -9,7 +9,6 @@ import {
   getMembership,
   requireAppUser,
   requireCondominioRole,
-  hasPlatformRole,
   vigentes,
 } from "./model/authz";
 import {
@@ -30,7 +29,19 @@ import {
   viasOperativasEnConjunto,
   type ContextoOperativoGuardia,
 } from "./model/vias";
-import { logMinuta, rondaEnCurso, turnoAbierto } from "./model/minuta";
+import {
+  administraLaPorteria,
+  CAPACIDAD_MAXIMA,
+  capacidadDeTurnos,
+  esDelTurno,
+  logMinuta,
+  operacionDe,
+  rondasEnCurso,
+  sonTurnosIndependientes,
+  turnoDelActorEntre,
+  turnosAbiertos,
+} from "./model/minuta";
+import { duracionTexto } from "./lib/ronda";
 import {
   esVisitanteVigente,
   ventanaDiaBogota,
@@ -180,8 +191,28 @@ export const home = query({
 // Turnos — el turno gobierna la operación
 // ─────────────────────────────────────────────────────────────
 
+async function contarRondas(ctx: QueryCtx, turnoId: Id<"guardiaTurnos">): Promise<number> {
+  const rondas = await ctx.db
+    .query("guardiaRondas")
+    .withIndex("by_turno", (q) => q.eq("turnoId", turnoId))
+    .collect();
+  return rondas.length;
+}
+
 /**
- * Turno abierto del condominio (o null). Solo puede haber uno a la vez.
+ * El turno bajo el que opera quien consulta (o null).
+ *
+ * En la portería de siempre (capacidad 1) es el turno abierto del conjunto,
+ * sea de quien sea: es de la portería. Con turnos independientes es el suyo
+ * (`turnoDelActorEntre`).
+ *
+ * Es lo único que conocen las apps sin actualizar, así que con turnos
+ * independientes responde lo que esas apps necesitan para no ofrecer lo que el
+ * servidor rechaza: sin turno propio y con cupo, null —la app ofrece "Iniciar
+ * turno", que el servidor acepta—; sin turno propio y sin cupo, el abierto más
+ * antiguo, para que la app ofrezca su cierre asistido. Ese turno es de otro
+ * celador y sale sin su checklist ni sus observaciones. Las pantallas nuevas
+ * leen `turnosActivos`.
  *
  * `cierraComo` dice por qué vía lo cierra quien consulta: `propio` si es del
  * turno o administra (`cerrarTurno`), `companero` si es otro guarda de la
@@ -195,18 +226,71 @@ export const turnoActivo = query({
     const { user, membership } = await requireCondominioRole(ctx, args.condominioId, [
       ...GUARD_ROLES,
     ]);
-    const turno = await turnoAbierto(ctx, args.condominioId);
+    const [condominio, abiertos] = await Promise.all([
+      ctx.db.get(args.condominioId),
+      turnosAbiertos(ctx, args.condominioId),
+    ]);
+    const capacidad = capacidadDeTurnos(condominio);
+    const suyo = turnoDelActorEntre(abiertos, capacidad, user._id);
+    const turno = suyo ?? (abiertos.length >= capacidad ? abiertos[0] : undefined);
     if (!turno) return null;
-    const rondas = await ctx.db
-      .query("guardiaRondas")
-      .withIndex("by_turno", (q) => q.eq("turnoId", turno._id))
-      .collect();
-    return {
+    const conCierre = {
       ...turno,
-      rondasCount: rondas.length,
-      cierraComo: cierraComoPropio(user, membership, turno)
-        ? ("propio" as const)
-        : ("companero" as const),
+      rondasCount: await contarRondas(ctx, turno._id),
+      cierraComo: cierraComo(user, membership, turno),
+    };
+    if (suyo) return conCierre;
+    const { observacionesInicio: _deOtro, ...sinObservaciones } = conCierre;
+    return { ...sinObservaciones, checklist: [] };
+  },
+});
+
+/**
+ * LA PORTERÍA AHORA: los cupos, el turno de quien consulta y los demás.
+ *
+ * Lo que leen las pantallas que conocen los turnos independientes.
+ *   - `turno`: el mismo de `turnoActivo` cuando es suyo o es el de la portería
+ *     de siempre. Con turnos independientes, nunca el de otro.
+ *   - `otros`: el resto de los abiertos, cada uno con su vía de cierre, para
+ *     el cierre asistido: el celador elige cuál cerrar. Solo lo necesario para
+ *     reconocerlo —de quién es y desde cuándo—; su checklist y sus
+ *     observaciones no son de quien mira.
+ * Lo que se elija se vuelve a comprobar en el cierre, contra la base: entre
+ * esta lectura y la confirmación otro puede haberlo cerrado.
+ */
+export const turnosActivos = query({
+  args: { condominioId: v.id("condominios") },
+  handler: async (ctx, args) => {
+    const { user, membership } = await requireCondominioRole(ctx, args.condominioId, [
+      ...GUARD_ROLES,
+    ]);
+    const [condominio, abiertos] = await Promise.all([
+      ctx.db.get(args.condominioId),
+      turnosAbiertos(ctx, args.condominioId),
+    ]);
+    const capacidad = capacidadDeTurnos(condominio);
+    const turno = turnoDelActorEntre(abiertos, capacidad, user._id);
+    return {
+      capacidad,
+      independientes: sonTurnosIndependientes(capacidad),
+      ocupados: abiertos.length,
+      libres: Math.max(0, capacidad - abiertos.length),
+      turno: turno
+        ? {
+            ...turno,
+            rondasCount: await contarRondas(ctx, turno._id),
+            cierraComo: cierraComo(user, membership, turno),
+          }
+        : null,
+      otros: abiertos
+        .filter((t) => t._id !== turno?._id)
+        .map((t) => ({
+          _id: t._id,
+          guardiaNombre: t.guardiaNombre,
+          guardiaSecundarioNombre: t.guardiaSecundarioNombre ?? null,
+          fechaInicio: t.fechaInicio,
+          cierraComo: cierraComo(user, membership, t),
+        })),
     };
   },
 });
@@ -257,11 +341,28 @@ export const equipo = query({
   },
 });
 
+/** El rechazo por falta de cupo. No nombra a nadie: los turnos abiertos son de otros. */
+function mensajeSinCupos(capacidad: number): string {
+  return capacidad === 1
+    ? "No hay cupos disponibles: ya hay un turno abierto en esta portería. Debe cerrarse antes de iniciar otro."
+    : `No hay cupos disponibles: los ${capacidad} turnos de esta portería están ocupados. Debe cerrarse uno antes de iniciar otro.`;
+}
+
 /**
  * Inicia turno con checklist de dotación.
- * Reglas: un solo turno abierto por condominio; checklist con al
- * menos 1 ítem. Quién lo toma sale de la sesión (`lib/inicioTurno.ts`);
- * el compañero, en texto libre.
+ *
+ * Reglas: tantos turnos abiertos como la capacidad del conjunto
+ * (`capacidadDeTurnos`, uno si no se configuró); quien inicia —y su compañero
+ * vinculado, si lo trae— no puede estar ya en un turno abierto de esta
+ * portería; checklist con al menos 1 ítem. Quién lo toma sale de la sesión
+ * (`lib/inicioTurno.ts`); el compañero, en texto libre.
+ *
+ * El cupo se cuenta en esta misma mutación, que lee el conjunto y TODOS los
+ * turnos abiertos antes de insertar el suyo. Si dos celadores piden el último
+ * cupo a la vez, o la administración cambia la capacidad mientras tanto,
+ * Convex repite una de las mutaciones sobre lo que dejó la otra: el segundo
+ * encuentra la portería llena y se rechaza sin escribir nada. Un turno
+ * compartido es un turno y ocupa un cupo.
  */
 export const iniciarTurno = mutation({
   args: {
@@ -290,12 +391,15 @@ export const iniciarTurno = mutation({
       );
     }
 
-    const abierto = await turnoAbierto(ctx, args.condominioId);
-    if (abierto) {
-      throw new Error(
-        `Ya hay un turno abierto (${abierto.guardiaNombre}). Debe cerrarse antes de iniciar otro.`,
-      );
+    const [condominio, abiertos] = await Promise.all([
+      ctx.db.get(args.condominioId),
+      turnosAbiertos(ctx, args.condominioId),
+    ]);
+    if (abiertos.some((t) => esDelTurno(t, user._id))) {
+      throw new Error("Ya estás en un turno abierto de esta portería. Ciérralo antes de iniciar otro.");
     }
+    const capacidad = capacidadDeTurnos(condominio);
+    if (abiertos.length >= capacidad) throw new Error(mensajeSinCupos(capacidad));
     if (args.checklist.length === 0) {
       throw new Error("El checklist de inicio necesita al menos un ítem.");
     }
@@ -326,6 +430,11 @@ export const iniciarTurno = mutation({
       );
       if (!primeraVia(secVias, "membership")?.roles.includes("guardia")) {
         throw new Error("El guardia secundario no tiene rol de guardia en este conjunto.");
+      }
+      /* Con turnos independientes el compañero puede tener ya el suyo: no se
+       * le mete en un segundo turno. */
+      if (abiertos.some((t) => esDelTurno(t, sec._id))) {
+        throw new Error("El guardia secundario ya está en un turno abierto de esta portería.");
       }
       secundarioNombre = secundarioNombre || displayNameFromUser(sec);
     } else {
@@ -377,26 +486,25 @@ export const iniciarTurno = mutation({
   },
 });
 
-function esDelTurno(turno: Doc<"guardiaTurnos">, userId: Id<"users">): boolean {
-  return turno.guardiaUserId === userId || turno.guardiaSecundarioUserId === userId;
-}
-
 /**
  * Si lo cierra por la vía de siempre (`cerrarTurno`): es del turno, titular o
  * secundario, o administra el conjunto. Cualquier otro guarda de la portería
- * lo cierra como compañero (`cerrarTurnoDeCompanero`). Lo comparten el cierre
- * y `turnoActivo`.
+ * lo cierra como compañero (`cerrarTurnoDeCompanero`). Lo comparten el cierre,
+ * `turnoActivo` y `turnosActivos`.
  */
 function cierraComoPropio(
   user: Doc<"users">,
   membership: Doc<"memberships"> | null,
   turno: Doc<"guardiaTurnos">,
 ): boolean {
-  const esAdmin =
-    hasPlatformRole(user, "superadmin", "admin") ||
-    (membership?.roles ?? []).some((r) => (ADMIN_ROLES as readonly string[]).includes(r));
-  return esAdmin || esDelTurno(turno, user._id);
+  return administraLaPorteria(user, membership) || esDelTurno(turno, user._id);
 }
+
+const cierraComo = (
+  user: Doc<"users">,
+  membership: Doc<"memberships"> | null,
+  turno: Doc<"guardiaTurnos">,
+) => (cierraComoPropio(user, membership, turno) ? ("propio" as const) : ("companero" as const));
 
 /** Lo que cada cierre puede dejar escrito en el turno, además de quién y cuándo. */
 type CamposDeCierre = Partial<
@@ -423,6 +531,13 @@ type CamposDeCierre = Partial<
  *
  * Quien cierra es siempre `ejecutor`, el de la sesión. El titular del turno
  * (`guardiaUserId`, `guardiaNombre`) no se toca.
+ *
+ * Las rondas que el turno deja EN CURSO se finalizan con él, en la misma
+ * mutación y con su "Fin de ronda" en la minuta a nombre de quien cierra: una
+ * ronda abierta sin turno ya no recorre nada, y con turnos independientes
+ * seguiría captando lo que su celador registre en el turno siguiente. Solo
+ * las de ESTE turno: las de los compañeros, que cuelgan de los suyos, siguen
+ * como estaban. Cerrar un turno nunca toca otro turno.
  */
 async function sellarCierreDeTurno(
   ctx: MutationCtx,
@@ -437,6 +552,25 @@ async function sellarCierreDeTurno(
 ): Promise<void> {
   if (turno.estado !== "abierto") throw new Error("El turno ya está cerrado.");
   const now = Date.now();
+  for (const ronda of await rondasEnCurso(ctx, turno.condominioId)) {
+    if (ronda.turnoId !== turno._id) continue;
+    await ctx.db.patch(ronda._id, {
+      estado: "finalizada",
+      fechaCierre: now,
+      observacionesCierre: "Finalizada al cerrar el turno.",
+    });
+    const duracion = duracionTexto(ronda.fechaInicio, now);
+    await logMinuta(ctx, {
+      condominioId: turno.condominioId,
+      modulo: "minuta",
+      tipo: "Fin de ronda",
+      unidad: ronda.zona,
+      resumen: `Ronda #${ronda.numero ?? "—"} finalizada al cerrar el turno${duracion ? ` · duró ${duracion}` : ""}.`,
+      actorUserId: cierre.ejecutor._id,
+      actorNombre: cierre.ejecutorNombre,
+      turnoId: turno._id,
+    });
+  }
   await ctx.db.patch(turno._id, {
     ...cierre.campos,
     cerradoPorUserId: cierre.ejecutor._id,
@@ -552,10 +686,13 @@ async function turnoHuerfanoDe(
     )
   ).flat();
   const conjuntos = new Set(coberturas.map((c) => c.condominioId));
+  /* Todos los abiertos de cada conjunto, no el primero: con turnos
+   * independientes el suyo puede estar detrás del de un compañero. */
   for (const condominioId of conjuntos) {
-    const turno = await turnoAbierto(ctx, condominioId);
-    if (turno && turno.guardiaUserId === userId && (await esTurnoHuerfano(ctx, turno))) {
-      return turno;
+    for (const turno of await turnosAbiertos(ctx, condominioId)) {
+      if (turno.guardiaUserId === userId && (await esTurnoHuerfano(ctx, turno))) {
+        return turno;
+      }
     }
   }
   return null;
@@ -644,11 +781,11 @@ async function turnoPermanentePendiente(
       .map((via) => via.condominioId),
   );
   for (const condominioId of conjuntos) {
-    const turno = await turnoAbierto(ctx, condominioId);
-    if (!turno || !(await puedeCerrarloPorCobertura(ctx, userId, turno, contexto))) {
-      continue;
+    for (const turno of await turnosAbiertos(ctx, condominioId)) {
+      if (await puedeCerrarloPorCobertura(ctx, userId, turno, contexto)) {
+        return await conDatosDeCierre(ctx, turno);
+      }
     }
-    return await conDatosDeCierre(ctx, turno);
   }
   return null;
 }
@@ -773,10 +910,19 @@ const MOTIVO_CIERRE_COMPANERO = "Cierre por compañero (turno olvidado)";
  * EL TURNO QUE UN COMPAÑERO DEJÓ ABIERTO.
  *
  * El guarda A termina su jornada sin cerrar el turno; llega B y no puede abrir
- * el suyo, porque en la portería solo hay un turno abierto a la vez
- * (`iniciarTurno`) y `cerrarTurno` solo lo cierra el guarda del turno o la
- * administración. Esta es la vía explícita para que B lo cierre. `cerrarTurno`
- * no se afloja: un cierre normal sigue diciendo que lo cerró su guarda.
+ * el suyo, porque la portería no tiene cupo (`iniciarTurno`: uno en la de
+ * siempre, la capacidad con turnos independientes) y `cerrarTurno` solo lo
+ * cierra el guarda del turno o la administración. Esta es la vía explícita
+ * para que B lo cierre: el cierre asistido del relevo. `cerrarTurno` no se
+ * afloja: un cierre normal sigue diciendo que lo cerró su guarda.
+ *
+ * Con varios turnos abiertos, B elige CUÁL (`turnosActivos.otros`) y solo ese
+ * se cierra: `turnoId` es uno, y nada aquí toca los demás. Si mientras B
+ * elegía otro lo cerró, o lo cerró y se abrió uno nuevo, las comprobaciones
+ * de abajo se hacen de nuevo contra la base: el viejo responde "ya está
+ * cerrado" y el nuevo no se toca. Qué turno es olvidado y cuál sigue en uso
+ * no lo decide el sistema —no hay cierre por inactividad—: lo decide B, que
+ * está en la portería, y lo firma.
  *
  * Todo se comprueba aquí, contra la base y no contra lo que diga el cliente:
  *   - quien cierra tiene HOY una vía de guarda en el conjunto que tiene
@@ -919,19 +1065,20 @@ export const turnosHuerfanosDeCompania = query({
     );
     const filas = [];
     for (const condominioId of conjuntos) {
-      const turno = await turnoAbierto(ctx, condominioId);
-      if (!turno?.coberturaId) continue;
-      const cobertura = await ctx.db.get(turno.coberturaId);
-      if (cobertura?.companiaId !== args.companiaId) continue;
-      if (!(await esTurnoHuerfano(ctx, turno))) continue;
-      const condominio = await ctx.db.get(condominioId);
-      filas.push({
-        turnoId: turno._id,
-        coberturaId: turno.coberturaId,
-        guardaNombre: turno.guardiaNombre,
-        condominioNombre: condominio?.name ?? "",
-        desde: turno.fechaInicio,
-      });
+      for (const turno of await turnosAbiertos(ctx, condominioId)) {
+        if (!turno.coberturaId) continue;
+        const cobertura = await ctx.db.get(turno.coberturaId);
+        if (cobertura?.companiaId !== args.companiaId) continue;
+        if (!(await esTurnoHuerfano(ctx, turno))) continue;
+        const condominio = await ctx.db.get(condominioId);
+        filas.push({
+          turnoId: turno._id,
+          coberturaId: turno.coberturaId,
+          guardaNombre: turno.guardiaNombre,
+          condominioNombre: condominio?.name ?? "",
+          desde: turno.fechaInicio,
+        });
+      }
     }
     return filas.sort((a, b) => a.desde - b.desde);
   },
@@ -1023,7 +1170,13 @@ export const getTurno = query({
 // Rondas de control
 // ─────────────────────────────────────────────────────────────
 
-/** Registra una ronda (requiere turno abierto propio; máximo 5 fotos). */
+/**
+ * Registra una ronda (requiere turno abierto; máximo 5 fotos).
+ *
+ * Es la ronda rápida, sin principio ni fin, que sigue usando la app móvil. El
+ * turno es el de quien la registra (`operacionDe`): con turnos independientes,
+ * el suyo, y sin turno propio no la registra.
+ */
 export const registrarRonda = mutation({
   args: {
     condominioId: v.id("condominios"),
@@ -1035,7 +1188,7 @@ export const registrarRonda = mutation({
   handler: async (ctx, args) => {
     const { user } = await requireCondominioRole(ctx, args.condominioId, [...GUARD_ROLES]);
 
-    const turno = await turnoAbierto(ctx, args.condominioId);
+    const { turno, independientes } = await operacionDe(ctx, args.condominioId, user._id);
     if (!turno) throw new Error("Debes iniciar turno antes de registrar rondas.");
     if (args.fotos.length > 5) throw new Error("Máximo 5 fotos por ronda.");
     await exigirArchivosSubidos(
@@ -1061,6 +1214,12 @@ export const registrarRonda = mutation({
       condominioId: args.condominioId,
       turnoId: turno._id,
       ...(coberturaId ? { coberturaId } : {}),
+      /* Con turnos independientes varios celadores la registran a la vez en el
+       * mismo conjunto, así que la ronda dice quién la hizo, como la de
+       * `rondas.iniciar`. En la portería de siempre conserva su forma de
+       * antes (Fase 11, `trazabilidadRegresion`); quién la hizo lo dice su
+       * entrada de minuta. */
+      ...(independientes ? { guardiaUserId: user._id, guardiaNombre: user.name } : {}),
       zonaId: args.zonaId,
       zona,
       novedad: args.novedad?.trim() || undefined,
@@ -1079,6 +1238,81 @@ export const registrarRonda = mutation({
       actorNombre: user.name,
       turnoId: turno._id,
     });
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// Configuración (admin): capacidad de turnos
+// ─────────────────────────────────────────────────────────────
+
+/** "un turno abierto" / "3 turnos abiertos". */
+const turnosAbiertosTexto = (n: number) => (n === 1 ? "un turno abierto" : `${n} turnos abiertos`);
+
+/**
+ * CUÁNTOS TURNOS PUEDE HABER ABIERTOS A LA VEZ, lo decide la administración.
+ *
+ * Se valida aquí, contra los turnos abiertos AHORA, y no en el formulario:
+ *   - un entero entre 1 y `CAPACIDAD_MAXIMA`;
+ *   - nunca por debajo de los turnos abiertos: configurar no cierra ninguno,
+ *     así que la capacidad nueva tiene que caberlos;
+ *   - y no se pasa de la portería de siempre (1) a turnos independientes
+ *     (2 o más), ni al revés, con turnos abiertos: cambiaría las reglas bajo
+ *     las que siguen trabajando —a qué turno cae lo que registran, quién abre
+ *     el suyo— y reinterpretaría a mitad de jornada un turno compartido.
+ *
+ * Lee el conjunto y los turnos abiertos y escribe el conjunto: si a la vez
+ * alguien abre o cierra un turno, Convex repite una de las dos mutaciones con
+ * lo que dejó la otra, así que la comprobación nunca se hace sobre un conteo
+ * viejo. Los turnos abiertos no se tocan.
+ */
+export const configurarVigilancia = mutation({
+  args: {
+    condominioId: v.id("condominios"),
+    maxTurnosActivos: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireCondominioRole(ctx, args.condominioId, [...ADMIN_ROLES]);
+    const nueva = args.maxTurnosActivos;
+    if (!Number.isInteger(nueva) || nueva < 1 || nueva > CAPACIDAD_MAXIMA) {
+      throw new Error(
+        `La cantidad de turnos simultáneos debe ser un número entero entre 1 y ${CAPACIDAD_MAXIMA}.`,
+      );
+    }
+    const [condominio, abiertos] = await Promise.all([
+      ctx.db.get(args.condominioId),
+      turnosAbiertos(ctx, args.condominioId),
+    ]);
+    if (!condominio) throw new Error("Condominio no encontrado.");
+    const actual = capacidadDeTurnos(condominio);
+    if (nueva === actual) return { maxTurnosActivos: actual };
+
+    const n = abiertos.length;
+    if (n > nueva) {
+      throw new Error(
+        `Hay ${turnosAbiertosTexto(n)} y la capacidad no puede quedar por debajo. ` +
+          `Para bajarla a ${nueva} deben cerrarse antes ${n - nueva === 1 ? "un turno" : `${n - nueva} turnos`}.`,
+      );
+    }
+    if (n > 0 && sonTurnosIndependientes(actual) !== sonTurnosIndependientes(nueva)) {
+      throw new Error(
+        (sonTurnosIndependientes(nueva)
+          ? "Pasar a turnos independientes cambia cómo opera la portería"
+          : "Volver a un solo turno compartido cambia cómo opera la portería") +
+          ` y hay ${turnosAbiertosTexto(n)}. Deben cerrarse todos antes de hacer el cambio.`,
+      );
+    }
+
+    const now = Date.now();
+    await ctx.db.patch(args.condominioId, {
+      vigilancia: {
+        ...condominio.vigilancia,
+        maxTurnosActivos: nueva,
+        actualizadoPorUserId: user._id,
+        actualizadoEn: now,
+      },
+      updatedAt: now,
+    });
+    return { maxTurnosActivos: nueva };
   },
 });
 
@@ -1393,7 +1627,8 @@ export const registrarEventoMinuta = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireCondominioRole(ctx, args.condominioId, [...GUARD_ROLES]);
-    const turno = await turnoAbierto(ctx, args.condominioId);
+    /* Con turnos independientes, el suyo: sin turno propio no anota. */
+    const { turno } = await operacionDe(ctx, args.condominioId, user._id);
     if (!turno) throw new Error("Debes iniciar turno para registrar en la minuta.");
     const resumen = args.resumen.trim();
     if (!resumen) throw new Error("El detalle del evento es obligatorio.");
@@ -2815,11 +3050,12 @@ export const reportarNovedad = mutation({
       a.numero.localeCompare(b.numero, undefined, { numeric: true }),
     );
 
-    const turno = await turnoAbierto(ctx, args.condominioId);
-    /* Si hay ronda en curso, el reporte queda colgado de ella. No se le
-     * pregunta al guarda: la especificación pide que la asociación sea
-     * automática, y a las 2 a. m. nadie se acuerda de marcar una casilla. */
-    const ronda = await rondaEnCurso(ctx, args.condominioId);
+    /* El turno y la ronda de quien reporta (`operacionDe`): con turnos
+     * independientes, los suyos y nunca los de un compañero. Si hay ronda en
+     * curso, el reporte queda colgado de ella. No se le pregunta al guarda:
+     * la especificación pide que la asociación sea automática, y a las 2 a. m.
+     * nadie se acuerda de marcar una casilla. */
+    const { turno, ronda } = await operacionDe(ctx, args.condominioId, user._id);
     /* El contexto bajo el que se hace, sellado ahora y para siempre (ver
      * `coberturaQueAmpara`). Solo si opera aquí por una cobertura. */
     const coberturaId = await coberturaQueAmpara(ctx, user._id, args.condominioId);

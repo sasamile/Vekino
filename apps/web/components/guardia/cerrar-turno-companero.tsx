@@ -11,20 +11,29 @@ import { Modal } from "@/components/ui/modal";
 import { mensajeErrorUsuario } from "@/lib/utils";
 
 /*
- * El turno que otro guarda dejó abierto en la portería. Mientras siga abierto
- * no se puede iniciar otro (solo hay uno a la vez), así que el aviso explica
- * el bloqueo y dice de quién es el turno, y el cierre se confirma aparte,
- * diciendo que no es suyo. Quién puede cerrarlo lo decide el servidor
+ * El turno que otro guarda dejó abierto en la portería. Mientras la portería
+ * no tenga cupo no se puede iniciar otro, así que el aviso explica el bloqueo
+ * y dice de quién es cada turno, y el cierre se confirma aparte, diciendo que
+ * no es suyo. Quién puede cerrarlo lo decide el servidor
  * (`guardia.cerrarTurnoDeCompanero`); esto solo lo enseña.
+ *
+ * En la portería de siempre hay un turno abierto y es el que se ve
+ * (`AvisoTurnoDeCompanero`). Con turnos independientes puede haber varios: se
+ * listan todos (`TurnosSinCupo`) y el guarda elige cuál cerrar. Solo ese.
  */
 
-type Turno = Doc<"guardiaTurnos"> & { rondasCount: number };
+/** Lo mínimo para reconocer un turno ajeno. El checklist y las rondas, si se tienen. */
+export type TurnoAjeno = Pick<Doc<"guardiaTurnos">, "_id" | "guardiaNombre" | "fechaInicio"> & {
+  guardiaSecundarioNombre?: string | null;
+  checklist?: unknown[];
+  rondasCount?: number;
+};
 
-function deQuien(turno: Turno): string {
+function deQuien(turno: TurnoAjeno): string {
   return turno.guardiaNombre + (turno.guardiaSecundarioNombre ? ` y ${turno.guardiaSecundarioNombre}` : "");
 }
 
-export function AvisoTurnoDeCompanero({ turno, onCerrar }: { turno: Turno; onCerrar: () => void }) {
+export function AvisoTurnoDeCompanero({ turno, onCerrar }: { turno: TurnoAjeno; onCerrar: () => void }) {
   return (
     <section
       aria-label="Turno abierto por otro guarda"
@@ -41,10 +50,51 @@ export function AvisoTurnoDeCompanero({ turno, onCerrar }: { turno: Turno; onCer
   );
 }
 
+/**
+ * La portería sin cupo, con turnos independientes: cada turno abierto con su
+ * propio cierre. No sugiere cuál está olvidado —no hay forma de saberlo desde
+ * aquí—: lo decide el guarda que está en la portería, y lo firma.
+ */
+export function TurnosSinCupo({
+  capacidad, otros, onCerrar,
+}: {
+  capacidad: number;
+  otros: (TurnoAjeno & { cierraComo: "propio" | "companero" })[];
+  onCerrar: (turno: TurnoAjeno) => void;
+}) {
+  return (
+    <section aria-label="Turnos abiertos en la portería" className="space-y-3 rounded-2xl border border-amber-500/30 bg-amber-500/5 p-5">
+      <div>
+        <p className="font-semibold text-foreground">No hay cupos disponibles</p>
+        <p className="mt-1 max-w-xl text-[13px] text-muted-foreground">
+          Los {capacidad} turnos de esta portería están abiertos. Para iniciar el tuyo, primero debe
+          cerrarse uno. Si alguno de estos guardas ya terminó su jornada y olvidó cerrar su turno, puedes
+          cerrarlo tú.
+        </p>
+      </div>
+      <ul className="divide-y divide-border rounded-xl border border-border bg-card">
+        {otros.map((t) => (
+          <li key={t._id} className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 text-sm">
+            <div>
+              <p className="font-medium text-foreground">Turno de {deQuien(t)}</p>
+              <p className="text-xs tabular-nums text-muted-foreground">Abierto desde {etiquetaInstante(t.fechaInicio)}</p>
+            </div>
+            {t.cierraComo === "companero" && (
+              <Button size="sm" variant="destructive" onClick={() => onCerrar(t)}>
+                <StopCircle className="h-4 w-4" /> Cerrar turno de {t.guardiaNombre}
+              </Button>
+            )}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 export function CerrarTurnoCompaneroModal({
   turno, condominioId, onClose, onCerrado,
 }: {
-  turno: Turno;
+  turno: TurnoAjeno;
   /** El conjunto seleccionado. El servidor comprueba que el turno sea de él. */
   condominioId: Id<"condominios">;
   onClose: () => void;
@@ -92,14 +142,20 @@ export function CerrarTurnoCompaneroModal({
             <dt className="text-[11px] uppercase tracking-wide text-muted-foreground">Abierto desde</dt>
             <dd className="tabular-nums text-foreground">{etiquetaInstante(turno.fechaInicio)}</dd>
           </div>
-          <div>
-            <dt className="text-[11px] uppercase tracking-wide text-muted-foreground">Checklist</dt>
-            <dd className="text-foreground">{turno.checklist.length} ítems</dd>
-          </div>
-          <div>
-            <dt className="text-[11px] uppercase tracking-wide text-muted-foreground">Rondas</dt>
-            <dd className="tabular-nums text-foreground">{turno.rondasCount}</dd>
-          </div>
+          {/* Con turnos independientes el turno es de otro celador y no trae
+              su checklist: se reconoce por quién y desde cuándo. */}
+          {turno.checklist !== undefined && turno.checklist.length > 0 && (
+            <div>
+              <dt className="text-[11px] uppercase tracking-wide text-muted-foreground">Checklist</dt>
+              <dd className="text-foreground">{turno.checklist.length} ítems</dd>
+            </div>
+          )}
+          {turno.rondasCount !== undefined && (
+            <div>
+              <dt className="text-[11px] uppercase tracking-wide text-muted-foreground">Rondas</dt>
+              <dd className="tabular-nums text-foreground">{turno.rondasCount}</dd>
+            </div>
+          )}
         </dl>
         <p className="flex gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-[13px] text-foreground">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />

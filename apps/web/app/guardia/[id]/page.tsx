@@ -23,7 +23,12 @@ import { StatCard } from "@/components/layout/stat-card";
 import { cn, mensajeErrorUsuario } from "@/lib/utils";
 import { EtiquetaRonda } from "@/components/guardia/etiqueta-ronda";
 import { CerrarTurnoModal } from "@/components/guardia/cerrar-turno-modal";
-import { AvisoTurnoDeCompanero, CerrarTurnoCompaneroModal } from "@/components/guardia/cerrar-turno-companero";
+import {
+  AvisoTurnoDeCompanero,
+  CerrarTurnoCompaneroModal,
+  TurnosSinCupo,
+  type TurnoAjeno,
+} from "@/components/guardia/cerrar-turno-companero";
 import { useUploadToS3 } from "@/hooks/use-upload-s3";
 import Link from "next/link";
 
@@ -65,10 +70,18 @@ export default function GuardiaMinutaHome() {
   const params = useParams<{ id: string }>();
   const condominioId = params.id as Id<"condominios">;
 
-  const turno = useQuery(api.guardia.turnoActivo, { condominioId });
+  /* La portería ahora: el turno bajo el que opera —el de la portería de
+   * siempre, o el suyo con turnos independientes—, los cupos y los turnos de
+   * los demás, para el cierre asistido (`guardia.turnosActivos`). */
+  const porteria = useQuery(api.guardia.turnosActivos, { condominioId });
+  const turno = porteria === undefined ? undefined : porteria.turno;
   const minuta = useQuery(api.guardia.listMinuta, { condominioId, limit: 150 });
 
-  const [modal, setModal] = useState<"iniciar" | "cerrar" | "cerrar-companero" | "ronda" | "nota" | null>(null);
+  const [modal, setModal] = useState<
+    "iniciar" | "cerrar" | "cerrar-companero" | "cerrar-elegido" | "ronda" | "nota" | null
+  >(null);
+  /* El turno ajeno que eligió cerrar, cuando la portería no tiene cupo. */
+  const [elegido, setElegido] = useState<TurnoAjeno | null>(null);
   /* El turno abierto es de otro guarda: no lo cierra por la vía de siempre y
    * no puede abrir el suyo hasta que se cierre (`turnoActivo.cierraComo`). */
   const deCompanero = turno?.cierraComo === "companero";
@@ -115,8 +128,16 @@ export default function GuardiaMinutaHome() {
         />
 
       {/* Estado del turno */}
-      {turno === undefined ? (
+      {turno === undefined || porteria === undefined ? (
         <Skeleton className="h-28 rounded-2xl" />
+      ) : turno === null && porteria.libres === 0 ? (
+        /* Con turnos independientes y sin cupo: cada turno abierto, con su
+           cierre asistido. El servidor vuelve a comprobar el elegido. */
+        <TurnosSinCupo
+          capacidad={porteria.capacidad}
+          otros={porteria.otros}
+          onCerrar={(t) => { setElegido(t); setModal("cerrar-elegido"); }}
+        />
       ) : turno === null ? (
         <Card className="flex flex-col items-center gap-3 border-dashed p-8 text-center">
           <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-brand/10 text-brand">
@@ -127,6 +148,11 @@ export default function GuardiaMinutaHome() {
             <p className="mx-auto max-w-md text-sm text-muted-foreground">
               Inicia tu turno con el checklist de dotación para habilitar la minuta, las rondas y el control de portería.
             </p>
+            {porteria.independientes && (
+              <p className="mt-2 text-xs tabular-nums text-muted-foreground">
+                Turnos abiertos en la portería: {porteria.ocupados} de {porteria.capacidad}
+              </p>
+            )}
           </div>
           <Button onClick={() => setModal("iniciar")}>
             <PlayCircle className="h-4 w-4" /> Iniciar turno
@@ -152,6 +178,11 @@ export default function GuardiaMinutaHome() {
                       <span className="ml-1 text-amber-600">· con novedades en dotación</span>
                     )}
                   </p>
+                  {porteria.independientes && (
+                    <p className="text-xs tabular-nums text-muted-foreground">
+                      Turnos abiertos en la portería: {porteria.ocupados} de {porteria.capacidad}
+                    </p>
+                  )}
                 </div>
               </div>
             </div>
@@ -192,6 +223,16 @@ export default function GuardiaMinutaHome() {
           condominioId={condominioId}
           onClose={() => setModal(null)}
           onCerrado={() => setModal("iniciar")}
+        />
+      )}
+      {/* Solo el elegido. Si mientras confirmaba lo cerró otro, el servidor lo
+          dice y la lista de arriba ya se actualizó sola. */}
+      {modal === "cerrar-elegido" && elegido && (
+        <CerrarTurnoCompaneroModal
+          turno={elegido}
+          condominioId={condominioId}
+          onClose={() => { setModal(null); setElegido(null); }}
+          onCerrado={() => { setElegido(null); setModal("iniciar"); }}
         />
       )}
       {modal === "nota" && <NotaModal condominioId={condominioId} onClose={() => setModal(null)} />}

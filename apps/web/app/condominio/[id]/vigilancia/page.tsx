@@ -22,7 +22,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Input, Select } from "@/components/ui/input";
 import { EtiquetaRonda } from "@/components/guardia/etiqueta-ronda";
 import { TablaRondas } from "@/components/vigilancia/tabla-rondas";
-import { cn } from "@/lib/utils";
+import { cn, mensajeErrorUsuario } from "@/lib/utils";
 
 type Modulo = Doc<"minutaEventos">["modulo"];
 
@@ -89,6 +89,10 @@ function fmtFechaHora(ts?: number) {
  * El tipo es `boolean` explícito y no el literal `false` para que el resto del
  * archivo compile igual con el interruptor en cualquiera de las dos
  * posiciones.
+ *
+ * La pestaña sí se muestra, con lo que se pidió después: cuántos turnos puede
+ * haber abiertos a la vez (`CapacidadTurnosConfig`). El interruptor solo
+ * esconde los tres catálogos.
  */
 const MOSTRAR_CONFIGURACION: boolean = false;
 
@@ -102,10 +106,6 @@ const TABS = [
 ] as const;
 type TabKey = (typeof TABS)[number]["key"];
 
-/** Lo que se pinta hoy. `TABS` sigue completo para no perder el tipo. */
-const TABS_VISIBLES = TABS.filter(
-  (t) => t.key !== "config" || MOSTRAR_CONFIGURACION,
-);
 
 /**
  * VIGILANCIA DEL CONJUNTO.
@@ -127,7 +127,10 @@ export default function VigilanciaConjuntoPage() {
   const condominioId = params.id as Id<"condominios">;
   const [tab, setTab] = useState<TabKey>("personal");
 
-  const turnoActivo = useQuery(api.guardia.turnoActivo, { condominioId });
+  /* La ocupación de la portería: el turno de siempre o, con turnos
+   * independientes, cuántos de los cupos están ocupados. */
+  const porteria = useQuery(api.guardia.turnosActivos, { condominioId });
+  const turnoActivo = porteria?.turno ?? null;
   const minuta = useQuery(api.guardia.listMinuta, { condominioId, limit: 200 });
   /* Quién cubre esta portería. La consulta ya existía para responder justo
    * esta pregunta desde el conjunto ("¿quién está autorizado a entrar?") y
@@ -167,12 +170,21 @@ export default function VigilanciaConjuntoPage() {
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
           {/* Turno actual y Personal NO dependen del período: dicen qué pasa
               ahora mismo en la portería, no cuánto pasó en unas fechas. */}
-          <StatCard
-            icon={ShieldCheck}
-            label="Turno actual"
-            value={turnoActivo ? turnoActivo.guardiaNombre.split(" ")[0] ?? "Abierto" : "Sin turno"}
-            tone={turnoActivo ? "success" : "neutral"}
-          />
+          {porteria?.independientes ? (
+            <StatCard
+              icon={ShieldCheck}
+              label="Turnos activos"
+              value={`${porteria.ocupados} de ${porteria.capacidad}`}
+              tone={porteria.ocupados > 0 ? "success" : "neutral"}
+            />
+          ) : (
+            <StatCard
+              icon={ShieldCheck}
+              label="Turno actual"
+              value={turnoActivo ? turnoActivo.guardiaNombre.split(" ")[0] ?? "Abierto" : "Sin turno"}
+              tone={turnoActivo ? "success" : "neutral"}
+            />
+          )}
           <StatCard
             icon={Users}
             label="Personal asignado"
@@ -196,7 +208,7 @@ export default function VigilanciaConjuntoPage() {
         </div>
 
         <nav className="flex items-center gap-1 overflow-x-auto rounded-xl border border-border bg-card p-1">
-          {TABS_VISIBLES.map((t) => {
+          {TABS.map((t) => {
             const Icon = t.icon;
             const active = tab === t.key;
             return (
@@ -219,9 +231,7 @@ export default function VigilanciaConjuntoPage() {
         {tab === "minuta" && <MinutaTab minuta={minuta} />}
         {tab === "turnos" && <TurnosTab condominioId={condominioId} />}
         {tab === "novedades" && <NovedadesTab condominioId={condominioId} />}
-        {tab === "config" && MOSTRAR_CONFIGURACION && (
-          <ConfigTab condominioId={condominioId} />
-        )}
+        {tab === "config" && <ConfigTab condominioId={condominioId} />}
       </div>
     </PageContainer>
   );
@@ -1105,14 +1115,91 @@ function MotivosVehiculoConfig({ condominioId }: { condominioId: Id<"condominios
   );
 }
 
-/* ───────── Configuración (catálogos) ───────── */
+/* ───────── Configuración (capacidad y catálogos) ───────── */
 function ConfigTab({ condominioId }: { condominioId: Id<"condominios"> }) {
   return (
     <div className="grid gap-4 lg:grid-cols-2">
-      <ChecklistConfig condominioId={condominioId} />
-      <ZonasConfig condominioId={condominioId} />
-      <MotivosVehiculoConfig condominioId={condominioId} />
+      <CapacidadTurnosConfig condominioId={condominioId} />
+      {MOSTRAR_CONFIGURACION && (
+        <>
+          <ChecklistConfig condominioId={condominioId} />
+          <ZonasConfig condominioId={condominioId} />
+          <MotivosVehiculoConfig condominioId={condominioId} />
+        </>
+      )}
     </div>
+  );
+}
+
+/**
+ * Cuántos turnos puede haber abiertos a la vez.
+ *
+ * Lo que vale lo decide el servidor (`guardia.configurarVigilancia`): el
+ * rango, que no quede por debajo de los turnos abiertos y que no cambie de
+ * modo con turnos abiertos. Aquí solo se pide el número y se muestra, tal
+ * cual, por qué no se pudo; la ocupación que se ve es la de ahora mismo, y se
+ * actualiza sola.
+ */
+function CapacidadTurnosConfig({ condominioId }: { condominioId: Id<"condominios"> }) {
+  const porteria = useQuery(api.guardia.turnosActivos, { condominioId });
+  const configurar = useMutation(api.guardia.configurarVigilancia);
+  const [valor, setValor] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [guardado, setGuardado] = useState(false);
+
+  if (porteria === undefined) return <Skeleton className="h-40 rounded-xl" />;
+  const actual = String(porteria.capacidad);
+  const escrito = valor ?? actual;
+  const numero = Number(escrito);
+  const valido = escrito.trim() !== "" && Number.isInteger(numero) && numero >= 1 && numero <= 50;
+
+  async function guardar() {
+    setBusy(true); setError(null); setGuardado(false);
+    try {
+      await configurar({ condominioId, maxTurnosActivos: numero });
+      setValor(null);
+      setGuardado(true);
+    } catch (e) {
+      setError(mensajeErrorUsuario(e, "No se pudo guardar la capacidad."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card className="p-5">
+      <h3 className="mb-1 flex items-center gap-2 font-semibold text-foreground">
+        <Users className="h-4 w-4 text-brand" /> Turnos simultáneos
+      </h3>
+      <p className="mb-3 text-xs text-muted-foreground">
+        Cuántos celadores pueden tener su turno abierto a la vez. Con 1, la portería trabaja con un solo turno,
+        como siempre. Con 2 o más, cada celador abre, opera y cierra el suyo, con sus propias rondas.
+      </p>
+      <div className="mb-3 flex items-center gap-2">
+        <Input
+          type="number"
+          min={1}
+          max={50}
+          step={1}
+          value={escrito}
+          onChange={(e) => { setValor(e.target.value); setGuardado(false); setError(null); }}
+          className="w-24 text-center"
+          aria-label="Turnos simultáneos"
+        />
+        <Button onClick={guardar} disabled={busy || !valido || escrito === actual}>
+          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} Guardar
+        </Button>
+      </div>
+      <p className="text-xs tabular-nums text-muted-foreground">
+        Ahora: {porteria.ocupados} de {porteria.capacidad} {porteria.capacidad === 1 ? "turno abierto" : "turnos abiertos"}.
+        {" "}No se puede bajar por debajo de los turnos abiertos, ni pasar de 1 a 2 o más (o al revés) mientras haya
+        turnos abiertos.
+      </p>
+      {!valido && <p className="mt-2 text-sm text-destructive">Escribe un número entero entre 1 y 50.</p>}
+      {error && <p role="alert" className="mt-2 text-sm text-destructive">{error}</p>}
+      {guardado && <p className="mt-2 text-sm text-emerald-600">Guardado.</p>}
+    </Card>
   );
 }
 

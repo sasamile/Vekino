@@ -139,7 +139,8 @@ describe("un guarda cierra el turno que su compañero dejó abierto", () => {
       expect(turno!.cierraComo, quien).toBe("propio");
     }
     // Y mientras siga abierto, Beto no puede abrir el suyo: el bloqueo de siempre.
-    await expect(abrir(t, "beto", e.norte)).rejects.toThrow(/ya hay un turno abierto \(Ana Guarda\)/i);
+    // El rechazo ya no nombra a nadie: el turno abierto es de otro celador.
+    await expect(abrir(t, "beto", e.norte)).rejects.toThrow(/no hay cupos disponibles: ya hay un turno abierto/i);
   });
 
   test("lo cierra, el turno sigue siendo de Ana y el cierre queda a nombre de Beto", async () => {
